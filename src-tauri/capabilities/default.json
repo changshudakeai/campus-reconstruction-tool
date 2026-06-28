@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Desktop reconstruction workflow capabilities",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

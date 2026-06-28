@@ -1,0 +1,5 @@
+# Separate official 3D captures from field photographs
+
+Detailed Building Mode stores Official 3D Reference Captures and Field Building Photographs as different evidence classes because rendered map imagery and real-world photos have different uncertainty. A single image may create only a low-confidence editable suggestion; consistent independent views may raise confidence, but every inferred material, window, entrance, or wall-articulation feature remains human-reviewed and neither evidence class may alter known building massing.
+
+Conflicting images never use a latest-image-wins rule. Agreement between independent views raises confidence; disagreement between official rendered imagery and field photography becomes a Visual Evidence Conflict requiring the user to choose the trustworthy evidence. Transient states such as people, opened windows, blinds, advertisements, and vegetation are excluded from construction rules. An unresolved conflict leaves the deterministic Arnis or selected-template baseline unchanged.
