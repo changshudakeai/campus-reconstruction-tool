@@ -28,12 +28,12 @@ block the atomic cutover required by ADR 0031.
 | Detailed | Preserve measured footprint, height, floors, and roof | Native measurement editor; Arnis regression tests preserve massing | Shipped |
 | Detailed | Complete fixed Arnis appearance categories | All 19 upstream categories are exposed in Slint and tested for distinct output | Shipped |
 | Detailed | Generate a building and open native orbit/zoom preview | Arnis core generation; independent `campus-preview` process | Shipped |
-| Detailed | Inspect selected block type and integer coordinates | Preview emits selection events, shown in the main status area | **Partial** |
+| Detailed | Inspect selected block type and integer coordinates | Preview selection returns through typed IPC into Desktop Application State and a dedicated Slint summary | Shipped |
 | Detailed | Batch palette replacement with validation | Native replacement fields and generated-model rewrite | Shipped |
-| Detailed | Single-block editing and semantic feature preservation controls | Not exposed by the native workbench | **Gap** |
+| Detailed | Single-block editing and semantic feature preservation controls | Selected-coordinate RLE editing is native and provenance-recorded; semantic feature annotations remain absent | **Partial** |
 | Detailed | Observed evidence and generated-interpretation comparison | Not exposed by the native workbench | **Gap** |
 | Detailed | External-model and source-conflict review | Not exposed by the native workbench | **Gap** |
-| Detailed | Confirmed, versioned Building Slot refinements | Selected slot and generated path persist; refinement confirmation/history is absent | **Partial** |
+| Detailed | Confirmed, versioned Building Slot refinements | Every generation creates a retained versioned draft; explicit confirmation archives the prior confirmed version and marks the slot refined | Shipped |
 | Detailed | Export the edited Detailed building schematic | Native Detailed export action | Shipped |
 | Packaging | Separate supervised map/preview processes with authenticated named-pipe IPC | Integration tests for both helper processes | Shipped |
 | Packaging | Installer, uninstall registration, recovery/offline operation, and <50 MB size | NSIS script and size gate exist; interactive install/uninstall and extended offline run remain unrecorded | **Partial** |

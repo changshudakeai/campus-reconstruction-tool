@@ -167,6 +167,20 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     };
     ui.set_project_name(project.name.clone().into());
     ui.set_campus_name(project.campus_name.clone().into());
+    ui.set_tool_status(state.tool_status.clone().unwrap_or_default().into());
+    ui.set_selected_block_summary(
+        state
+            .selected_preview_block
+            .as_ref()
+            .map(|selection| {
+                format!(
+                    "{} · ({}, {}, {})",
+                    selection.block, selection.x, selection.y, selection.z
+                )
+            })
+            .unwrap_or_else(|| "尚未在预览中选择方块".into())
+            .into(),
+    );
     ui.set_detailed_active(project.mode == DesktopMode::Detailed);
     ui.set_active_step(
         FoundationStep::ALL
@@ -266,6 +280,25 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .unwrap_or(0);
     ui.set_selected_slot(selected_slot as i32);
     let selected_measurements = project.building_slots.get(selected_slot);
+    let latest_refinement =
+        selected_measurements.and_then(|slot| project.latest_refinement(&slot.id));
+    ui.set_refinement_summary(
+        latest_refinement
+            .map(|refinement| {
+                format!(
+                    "v{} · {} · {}",
+                    refinement.version,
+                    refinement.status.label(),
+                    refinement.style_preset.label()
+                )
+            })
+            .unwrap_or_else(|| "尚无生成版本".into())
+            .into(),
+    );
+    ui.set_can_confirm_refinement(
+        latest_refinement
+            .is_some_and(|refinement| refinement.status == campus_state::RefinementStatus::Draft),
+    );
     ui.set_measured_height(
         selected_measurements
             .and_then(|slot| slot.height_m)
@@ -357,7 +390,7 @@ fn generate_foundation_preview(
 fn generate_detailed_model(
     state: &Rc<RefCell<DesktopApplicationState>>,
 ) -> Result<(PathBuf, String), String> {
-    let (slot, style, density, depth, scale) = {
+    let (slot, style, density, depth, scale, version) = {
         let borrowed = state.borrow();
         let project = borrowed.project.as_ref().ok_or("请先创建项目")?;
         let slot = project
@@ -368,12 +401,14 @@ fn generate_detailed_model(
             .or_else(|| project.building_slots.first())
             .cloned()
             .ok_or("请先在地基模式接受至少一个建筑候选")?;
+        let version = project.next_refinement_version(&slot.id);
         (
             slot,
             project.detailed.style_preset,
             project.detailed.window_density,
             project.detailed.wall_depth,
             project.blocks_per_meter,
+            version,
         )
     };
     let generated = arnis_core::generate_building(GenerateBuildingRequest {
@@ -414,7 +449,7 @@ fn generate_detailed_model(
             }
         })
         .collect::<String>();
-    let path = generated_model_dir().join(format!("{safe_id}.arnis.json"));
+    let path = generated_model_dir().join(format!("{safe_id}-v{version}.arnis.json"));
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&generated).map_err(|error| error.to_string())?,
@@ -422,14 +457,7 @@ fn generate_detailed_model(
     .map_err(|error| error.to_string())?;
     state.borrow_mut().mutate_project(|project| {
         project.detailed.selected_slot_id = Some(slot.id.clone());
-        project.detailed.generated_path = Some(path.clone());
-        if let Some(target) = project
-            .building_slots
-            .iter_mut()
-            .find(|target| target.id == slot.id)
-        {
-            target.refined = true;
-        }
+        project.record_refinement_draft(&slot.id, version, path.clone());
     });
     Ok((path, slot.name))
 }
@@ -532,8 +560,98 @@ fn replace_generated_block(path: &PathBuf, source: &str, target: &str) -> Result
     Ok(replaced)
 }
 
+fn replace_generated_block_at(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    z: i32,
+    target: &str,
+) -> Result<String, String> {
+    let target = normalize_minecraft_block(target)?;
+    let mut generated: arnis_core::GeneratedBuilding =
+        serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    if x < 0
+        || y < 0
+        || z < 0
+        || x as usize >= generated.width
+        || y as usize >= generated.height
+        || z as usize >= generated.length
+    {
+        return Err("所选坐标超出生成模型".into());
+    }
+    let target_linear =
+        x as usize + z as usize * generated.width + y as usize * generated.width * generated.length;
+    let target_index = generated
+        .palette
+        .iter()
+        .position(|block| *block == target)
+        .unwrap_or_else(|| {
+            generated.palette.push(target.clone());
+            generated.palette.len() - 1
+        }) as u16;
+    let mut cursor = 0usize;
+    let mut replaced_block = None;
+    let mut edited = Vec::with_capacity(generated.block_runs.len() + 2);
+    for run in generated.block_runs {
+        let run_start = cursor;
+        let run_end = cursor + run.run_length as usize;
+        if replaced_block.is_none() && (run_start..run_end).contains(&target_linear) {
+            let before = target_linear - run_start;
+            let after = run_end - target_linear - 1;
+            if before > 0 {
+                edited.push(arnis_core::BlockRun {
+                    palette_index: run.palette_index,
+                    run_length: before as u32,
+                });
+            }
+            replaced_block = generated.palette.get(run.palette_index as usize).cloned();
+            edited.push(arnis_core::BlockRun {
+                palette_index: target_index,
+                run_length: 1,
+            });
+            if after > 0 {
+                edited.push(arnis_core::BlockRun {
+                    palette_index: run.palette_index,
+                    run_length: after as u32,
+                });
+            }
+        } else {
+            edited.push(run);
+        }
+        cursor = run_end;
+    }
+    let replaced_block = replaced_block.ok_or("无法定位所选方块")?;
+    let mut merged: Vec<arnis_core::BlockRun> = Vec::with_capacity(edited.len());
+    for run in edited {
+        if let Some(previous) = merged.last_mut() {
+            if previous.palette_index == run.palette_index {
+                previous.run_length += run.run_length;
+                continue;
+            }
+        }
+        merged.push(run);
+    }
+    generated.block_runs = merged;
+    generated.report.correction_notes.push(format!(
+        "single block edit: ({x}, {y}, {z}) {replaced_block} -> {target}"
+    ));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&generated).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(replaced_block)
+}
+
 enum ToolUpdate {
     Status(String),
+    PreviewBlockSelected {
+        x: i32,
+        y: i32,
+        z: i32,
+        block: String,
+    },
     MapCamera {
         center: GeoPoint,
         zoom: f64,
@@ -753,7 +871,7 @@ impl ToolSupervisor {
     #[cfg(target_os = "windows")]
     fn launch_preview(
         &self,
-        ui: slint::Weak<AppWindow>,
+        _ui: slint::Weak<AppWindow>,
         model_path: PathBuf,
         title: String,
     ) -> Result<(), String> {
@@ -774,12 +892,13 @@ impl ToolSupervisor {
             .lock()
             .map_err(|_| "tool child lock poisoned")?
             .push(child);
+        let updates = self.updates.clone();
         thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("preview supervisor runtime");
-            let error_ui = ui.clone();
+            let event_updates = updates.clone();
             let result: Result<(), String> = runtime.block_on(async move {
                 let mut server = server;
                 server.connect().await.map_err(|error| error.to_string())?;
@@ -802,30 +921,22 @@ impl ToolSupervisor {
                 .await?;
                 loop {
                     let event: ToolEvent = read_message(&mut server).await?;
-                    let message = match event {
-                        ToolEvent::Ready { .. } => "原生 3D 预览已连接".to_string(),
+                    let update = match event {
+                        ToolEvent::Ready { .. } => ToolUpdate::Status("原生 3D 预览已连接".into()),
                         ToolEvent::PreviewBlockSelected { x, y, z, block } => {
-                            format!("方块 {block} · {x}, {y}, {z}")
+                            ToolUpdate::PreviewBlockSelected { x, y, z, block }
                         }
-                        ToolEvent::Error { message } => format!("预览错误：{message}"),
-                        ToolEvent::Closed { .. } => "原生预览已关闭".to_string(),
+                        ToolEvent::Error { message } => {
+                            ToolUpdate::Status(format!("预览错误：{message}"))
+                        }
+                        ToolEvent::Closed { .. } => ToolUpdate::Status("原生预览已关闭".into()),
                         _ => continue,
                     };
-                    let weak = ui.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak.upgrade() {
-                            ui.set_save_status(message.into());
-                        }
-                    });
+                    let _ = event_updates.send(update);
                 }
             });
             if let Err(error) = result {
-                let weak = error_ui;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak.upgrade() {
-                        ui.set_save_status(format!("预览连接失败：{error}").into());
-                    }
-                });
+                let _ = updates.send(ToolUpdate::Status(format!("预览连接失败：{error}")));
             }
         });
         Ok(())
@@ -967,8 +1078,23 @@ fn main() -> Result<(), slint::PlatformError> {
                 while let Ok(update) = receiver.borrow_mut().try_recv() {
                     match update {
                         ToolUpdate::Status(message) => {
+                            state.borrow_mut().tool_status = Some(message.clone());
                             if let Some(ui) = weak.upgrade() {
-                                ui.set_save_status(message.into());
+                                ui.set_tool_status(message.into());
+                            }
+                        }
+                        ToolUpdate::PreviewBlockSelected { x, y, z, block } => {
+                            state.borrow_mut().selected_preview_block =
+                                Some(campus_state::PreviewBlockSelection {
+                                    x,
+                                    y,
+                                    z,
+                                    block: block.clone(),
+                                });
+                            if let Some(ui) = weak.upgrade() {
+                                ui.set_selected_block_summary(
+                                    format!("{block} · ({x}, {y}, {z})").into(),
+                                );
                             }
                         }
                         ToolUpdate::MapCamera {
@@ -1174,6 +1300,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                     sync_ui(&ui, &state.borrow());
                 }
+                state.borrow_mut().active_preview_path = Some(path.clone());
                 if let Err(error) = tools.launch_preview(weak.clone(), path, title) {
                     if let Some(ui) = weak.upgrade() {
                         ui.set_save_status(
@@ -1490,9 +1617,43 @@ fn main() -> Result<(), slint::PlatformError> {
                         .map(|slot| slot.name.clone())
                 })
                 .unwrap_or_else(|| "精细建筑".into());
+            state.borrow_mut().active_preview_path = Some(model.clone());
             if let Err(error) = tools.launch_preview(weak.clone(), model, title) {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_save_status(format!("预览启动失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_confirm_refinement(move || {
+            let result = {
+                let mut state = state.borrow_mut();
+                let mut confirmed = None;
+                state.mutate_project(|project| {
+                    let slot_id = project
+                        .detailed
+                        .selected_slot_id
+                        .clone()
+                        .or_else(|| project.building_slots.first().map(|slot| slot.id.clone()));
+                    if let Some(slot_id) = slot_id {
+                        confirmed = project.confirm_latest_refinement(&slot_id);
+                    }
+                });
+                confirmed.ok_or("当前建筑没有可确认的生成版本")
+            };
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(version) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_save_status(format!("已确认建筑 refinement v{version}").into());
+                        }
+                    }
+                    Err(error) => ui.set_save_status(error.into()),
                 }
             }
         });
@@ -1510,6 +1671,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                     sync_ui(&ui, &state.borrow());
                 }
+                state.borrow_mut().active_preview_path = Some(path.clone());
                 if let Err(error) = tools.launch_preview(weak.clone(), path, title) {
                     if let Some(ui) = weak.upgrade() {
                         ui.set_save_status(format!("生成成功，预览启动失败：{error}").into());
@@ -1519,6 +1681,53 @@ fn main() -> Result<(), slint::PlatformError> {
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_save_status(format!("生成失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_replace_selected_block(move |target| {
+            let snapshot = {
+                let state = state.borrow();
+                state
+                    .active_preview_path
+                    .clone()
+                    .zip(state.selected_preview_block.clone())
+            };
+            let result = snapshot
+                .ok_or_else(|| "请先在原生预览中选择一个方块".to_string())
+                .and_then(|(path, selection)| {
+                    replace_generated_block_at(
+                        &path,
+                        selection.x,
+                        selection.y,
+                        selection.z,
+                        target.as_str(),
+                    )
+                    .map(|previous| (selection, previous))
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok((selection, previous)) => {
+                        let normalized = normalize_minecraft_block(target.as_str())
+                            .unwrap_or_else(|_| target.to_string());
+                        state.borrow_mut().selected_preview_block =
+                            Some(campus_state::PreviewBlockSelection {
+                                block: normalized.clone(),
+                                ..selection
+                            });
+                        sync_ui(&ui, &state.borrow());
+                        ui.set_save_status(
+                            format!(
+                                "已编辑 ({}, {}, {})：{previous} → {normalized}",
+                                selection.x, selection.y, selection.z
+                            )
+                            .into(),
+                        );
+                    }
+                    Err(error) => ui.set_save_status(format!("单点编辑失败：{error}").into()),
                 }
             }
         });
@@ -1662,6 +1871,15 @@ mod tests {
             .palette
             .iter()
             .any(|block| block == "minecraft:purple_concrete"));
+        let _previous =
+            replace_generated_block_at(&path, 0, 0, 0, "minecraft:diamond_block").unwrap();
+        let point_edited: arnis_core::GeneratedBuilding =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(point_edited
+            .report
+            .correction_notes
+            .iter()
+            .any(|note| note.contains("single block edit")));
         let _ = std::fs::remove_file(path);
     }
 }

@@ -53,6 +53,7 @@ export component AppWindow inherits Window {
     in-out property <string> project-name: "未命名项目";
     in-out property <string> campus-name: "华东师范大学普陀校区";
     in-out property <string> save-status: "未保存";
+    in-out property <string> tool-status: "";
     in-out property <string> page-title: "选择学校与具体校区";
     in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
     in-out property <string> project-summary: "尚未建立项目";
@@ -85,6 +86,10 @@ export component AppWindow inherits Window {
     in-out property <string> measured-floors: "";
     in-out property <string> measured-roof: "";
     in-out property <string> palette-summary: "尚未生成模型";
+    in-out property <string> refinement-summary: "尚无生成版本";
+    in-out property <bool> can-confirm-refinement: false;
+    in-out property <string> selected-block-summary: "尚未在预览中选择方块";
+    in-out property <string> selected-block-target: "";
     in-out property <string> replace-source: "";
     in-out property <string> replace-target: "";
 
@@ -107,6 +112,7 @@ export component AppWindow inherits Window {
     callback preview-foundation();
     callback choose-slot(int);
     callback generate-building();
+    callback confirm-refinement();
     callback export-building();
     callback export-project();
     callback save-map-settings(string, string);
@@ -115,6 +121,7 @@ export component AppWindow inherits Window {
     callback redo();
     callback update-building-measurements(string, string, string);
     callback replace-generated-block(string, string);
+    callback replace-selected-block(string);
 
     shortcut-scope := FocusScope {
       VerticalLayout {
@@ -131,6 +138,11 @@ export component AppWindow inherits Window {
                 Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Text { text: root.save-status; color: root.save-status == "保存失败" ? #a54836 : #4c665b; vertical-alignment: center; }
+                if root.tool-status != "" : Text {
+                    text: root.tool-status;
+                    color: #617068;
+                    vertical-alignment: center;
+                }
                 Button { text: "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
                 Button { text: "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
                 Button { text: "地图设置"; clicked => { root.settings-visible = true; } }
@@ -337,7 +349,36 @@ export component AppWindow inherits Window {
                             Text { text: round(root.wall-depth) + "%"; width: 48px; vertical-alignment: center; }
                         }
                         Button { text: "生成并打开原生预览"; clicked => { root.generate-building(); } }
+                        HorizontalLayout {
+                            Text {
+                                text: root.refinement-summary;
+                                color: #506058;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button {
+                                text: "确认此版本";
+                                enabled: root.can-confirm-refinement;
+                                clicked => { root.confirm-refinement(); }
+                            }
+                        }
                         Button { text: "打开上次生成的预览"; clicked => { root.open-preview(); } }
+                        Text {
+                            text: "预览选择：" + root.selected-block-summary;
+                            color: #506058;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit {
+                                text <=> root.selected-block-target;
+                                placeholder-text: "选中方块的新 ID";
+                            }
+                            Button {
+                                text: "替换选中方块";
+                                clicked => { root.replace-selected-block(root.selected-block-target); }
+                            }
+                        }
                         SectionLabel { text: "批量方块替换"; }
                         Text { text: root.palette-summary; color: #506058; wrap: word-wrap; }
                         HorizontalLayout {

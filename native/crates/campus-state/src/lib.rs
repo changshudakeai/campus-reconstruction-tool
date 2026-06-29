@@ -258,6 +258,47 @@ pub struct BuildingSlot {
     pub refined: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementStatus {
+    Draft,
+    Confirmed,
+    Archived,
+}
+
+impl RefinementStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Draft => "草稿",
+            Self::Confirmed => "已确认",
+            Self::Archived => "已归档",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildingRefinement {
+    pub id: String,
+    pub slot_id: String,
+    pub version: u32,
+    pub status: RefinementStatus,
+    pub generated_path: PathBuf,
+    pub style_preset: ArnisStylePreset,
+    pub wall_block: Option<String>,
+    pub window_density: u8,
+    pub wall_depth: u8,
+    pub created_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewBlockSelection {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub block: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArnisStylePreset {
@@ -364,6 +405,8 @@ pub struct DetailedBuildingState {
     pub window_density: u8,
     pub wall_depth: u8,
     pub generated_path: Option<PathBuf>,
+    #[serde(default)]
+    pub refinements: Vec<BuildingRefinement>,
 }
 
 impl Default for DetailedBuildingState {
@@ -375,6 +418,7 @@ impl Default for DetailedBuildingState {
             window_density: 50,
             wall_depth: 50,
             generated_path: None,
+            refinements: Vec::new(),
         }
     }
 }
@@ -487,6 +531,80 @@ impl CampusProject {
         }
     }
 
+    pub fn next_refinement_version(&self, slot_id: &str) -> u32 {
+        self.detailed
+            .refinements
+            .iter()
+            .filter(|refinement| refinement.slot_id == slot_id)
+            .map(|refinement| refinement.version)
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    pub fn record_refinement_draft(
+        &mut self,
+        slot_id: &str,
+        version: u32,
+        generated_path: PathBuf,
+    ) {
+        for refinement in self.detailed.refinements.iter_mut().filter(|refinement| {
+            refinement.slot_id == slot_id && refinement.status == RefinementStatus::Draft
+        }) {
+            refinement.status = RefinementStatus::Archived;
+        }
+        let created_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.detailed.refinements.push(BuildingRefinement {
+            id: format!("{slot_id}:v{version}"),
+            slot_id: slot_id.to_string(),
+            version,
+            status: RefinementStatus::Draft,
+            generated_path: generated_path.clone(),
+            style_preset: self.detailed.style_preset,
+            wall_block: self.detailed.wall_block.clone(),
+            window_density: self.detailed.window_density,
+            wall_depth: self.detailed.wall_depth,
+            created_at_unix_ms,
+        });
+        self.detailed.generated_path = Some(generated_path);
+    }
+
+    pub fn latest_refinement(&self, slot_id: &str) -> Option<&BuildingRefinement> {
+        self.detailed
+            .refinements
+            .iter()
+            .filter(|refinement| refinement.slot_id == slot_id)
+            .max_by_key(|refinement| refinement.version)
+    }
+
+    pub fn confirm_latest_refinement(&mut self, slot_id: &str) -> Option<u32> {
+        let index = self
+            .detailed
+            .refinements
+            .iter()
+            .enumerate()
+            .filter(|(_, refinement)| refinement.slot_id == slot_id)
+            .max_by_key(|(_, refinement)| refinement.version)
+            .map(|(index, _)| index)?;
+        for refinement in self.detailed.refinements.iter_mut().filter(|refinement| {
+            refinement.slot_id == slot_id && refinement.status == RefinementStatus::Confirmed
+        }) {
+            refinement.status = RefinementStatus::Archived;
+        }
+        self.detailed.refinements[index].status = RefinementStatus::Confirmed;
+        if let Some(slot) = self
+            .building_slots
+            .iter_mut()
+            .find(|slot| slot.id == slot_id)
+        {
+            slot.refined = true;
+        }
+        Some(self.detailed.refinements[index].version)
+    }
+
     pub fn reject_candidate(&mut self, id: &str) -> bool {
         let Some(candidate) = self.candidates.iter_mut().find(|item| item.id == id) else {
             return false;
@@ -529,6 +647,9 @@ pub struct DesktopApplicationState {
     pub last_error: Option<String>,
     pub candidate_filter: CandidateConfidenceFilter,
     pub candidate_page: usize,
+    pub tool_status: Option<String>,
+    pub selected_preview_block: Option<PreviewBlockSelection>,
+    pub active_preview_path: Option<PathBuf>,
     undo_stack: Vec<CampusProject>,
     redo_stack: Vec<CampusProject>,
 }
@@ -541,6 +662,9 @@ impl DesktopApplicationState {
         self.last_error = None;
         self.candidate_filter = CandidateConfidenceFilter::All;
         self.candidate_page = 0;
+        self.tool_status = None;
+        self.selected_preview_block = None;
+        self.active_preview_path = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -653,6 +777,9 @@ impl DesktopApplicationState {
         self.last_error = None;
         self.candidate_filter = CandidateConfidenceFilter::All;
         self.candidate_page = 0;
+        self.tool_status = None;
+        self.selected_preview_block = None;
+        self.active_preview_path = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
@@ -947,5 +1074,33 @@ mod tests {
             project.foundation_style_preset,
             FoundationStylePreset::ModernCampus
         );
+    }
+
+    #[test]
+    fn detailed_refinements_are_versioned_and_confirmed_explicitly() {
+        let mut project = CampusProject::new("test", "campus");
+        project.building_slots.push(BuildingSlot {
+            id: "library".into(),
+            name: "Library".into(),
+            footprint: Vec::new(),
+            height_m: Some(24.0),
+            floors: Some(6),
+            roof_shape: Some("flat".into()),
+            refined: false,
+        });
+        project.record_refinement_draft("library", 1, PathBuf::from("library-v1.json"));
+        project.record_refinement_draft("library", 2, PathBuf::from("library-v2.json"));
+        assert_eq!(project.next_refinement_version("library"), 3);
+        assert_eq!(
+            project.detailed.refinements[0].status,
+            RefinementStatus::Archived
+        );
+        assert!(!project.building_slots[0].refined);
+        assert_eq!(project.confirm_latest_refinement("library"), Some(2));
+        assert_eq!(
+            project.latest_refinement("library").unwrap().status,
+            RefinementStatus::Confirmed
+        );
+        assert!(project.building_slots[0].refined);
     }
 }
