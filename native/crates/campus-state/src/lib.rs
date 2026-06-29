@@ -1050,6 +1050,63 @@ impl CampusProject {
         true
     }
 
+    pub fn add_manual_feature(
+        &mut self,
+        kind: FeatureKind,
+        points: Vec<GeoPoint>,
+    ) -> Result<String, String> {
+        let minimum = if kind == FeatureKind::Road { 2 } else { 3 };
+        if points.len() < minimum {
+            return Err(format!("手绘地物至少需要 {minimum} 个节点"));
+        }
+        let id = format!(
+            "manual:{}:{}",
+            match kind {
+                FeatureKind::Building => "building",
+                FeatureKind::Road => "road",
+                FeatureKind::Water => "water",
+                FeatureKind::Vegetation => "vegetation",
+                FeatureKind::Sports => "sports",
+            },
+            now_unix_ms()
+        );
+        let name = format!(
+            "手绘{} {}",
+            match kind {
+                FeatureKind::Building => "建筑",
+                FeatureKind::Road => "道路",
+                FeatureKind::Water => "水域",
+                FeatureKind::Vegetation => "植被",
+                FeatureKind::Sports => "体育设施",
+            },
+            self.features
+                .iter()
+                .filter(|feature| feature.kind == kind && feature.source_id.is_none())
+                .count()
+                + 1
+        );
+        self.features.push(MapFeature {
+            id: id.clone(),
+            name: name.clone(),
+            kind,
+            points: points.clone(),
+            block: self.foundation_style_preset.block(kind).into(),
+            source_id: None,
+        });
+        if kind == FeatureKind::Building {
+            self.building_slots.push(BuildingSlot {
+                id: id.clone(),
+                name,
+                footprint: points,
+                height_m: None,
+                floors: None,
+                roof_shape: None,
+                refined: false,
+            });
+        }
+        Ok(id)
+    }
+
     pub fn confirm_step(&mut self) {
         if !self.completed_steps.contains(&self.foundation_step) {
             self.completed_steps.push(self.foundation_step);
@@ -1717,6 +1774,26 @@ mod tests {
         assert_eq!(project.candidates[0].review, ReviewDecision::Pending);
         assert!(project.features.is_empty());
         assert!(project.building_slots.is_empty());
+        let manual_id = project
+            .add_manual_feature(
+                FeatureKind::Building,
+                vec![
+                    GeoPoint { lng: 1.0, lat: 2.0 },
+                    GeoPoint {
+                        lng: 1.001,
+                        lat: 2.0,
+                    },
+                    GeoPoint {
+                        lng: 1.001,
+                        lat: 1.999,
+                    },
+                ],
+            )
+            .unwrap();
+        assert!(manual_id.starts_with("manual:building:"));
+        assert_eq!(project.features.len(), 1);
+        assert_eq!(project.building_slots.len(), 1);
+        assert_eq!(project.features[0].source_id, None);
     }
 
     #[test]

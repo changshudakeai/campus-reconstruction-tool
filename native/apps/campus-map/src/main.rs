@@ -200,6 +200,7 @@ mod windows {
             boundary,
             purpose,
             overlays,
+            feature_kind,
         } = command
         else {
             return "<h1>Invalid map request</h1>".into();
@@ -212,20 +213,37 @@ mod windows {
         let security = serde_json::to_string(security_code).unwrap();
         let boundary = serde_json::to_string(boundary).unwrap();
         let overlays = serde_json::to_string(overlays).unwrap();
-        let (bar, editing_script) = if *purpose == MapPurpose::CampusReview {
-            (
-                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="capture">截取并识别当前视野</button>"#,
+        let initial_points = if *purpose == MapPurpose::FoundationFeatureDrawing {
+            "[]".to_string()
+        } else {
+            boundary.clone()
+        };
+        let feature_kind =
+            serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
+        let (bar, editing_script) = match purpose {
+            MapPurpose::CampusReview => (
+                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="capture">截取并识别当前视野</button>"#.to_string(),
                 r#"
 document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';};
 document.getElementById('clear').onclick=()=>{points=[];redraw();};
 document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
-document.getElementById('capture').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};"#,
-            )
-        } else {
-            (
-                r#"<span class="hint">绿色轮廓：已审核开放地理数据 · 高德 3D：人工视觉证据</span>"#,
-                "",
-            )
+document.getElementById('capture').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};"#.to_string(),
+            ),
+            MapPurpose::FoundationFeatureDrawing => (
+                r#"<button id="draw" class="secondary">开始点选</button><button id="clear" class="secondary">清空</button><button id="save">保存手绘地物</button><span class="hint">单击依次添加节点；道路至少 2 点，区域至少 3 点</span>"#.to_string(),
+                format!(
+                    r#"
+const featureKind={feature_kind};
+drawing=true;
+document.getElementById('draw').onclick=()=>{{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'继续点选';}};
+document.getElementById('clear').onclick=()=>{{points=[];redraw();}};
+document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'?2:3;if(points.length>=minimum)post({{type:'mapFeatureDrawn',kind:featureKind,points:points.map(p=>({{lng:p[0],lat:p[1]}}))}});}};"#
+                ),
+            ),
+            MapPurpose::BuildingEvidence => (
+                r#"<span class="hint">绿色轮廓：已审核开放地理数据 · 高德 3D：人工视觉证据</span>"#.to_string(),
+                String::new(),
+            ),
         };
         format!(
             r#"<!doctype html><html><head><meta charset="utf-8">
@@ -239,7 +257,7 @@ button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e
 const post=(value)=>window.ipc.postMessage(JSON.stringify(value));
 const map=new AMap.Map('map',{{viewMode:'3D',zoom:{zoom},pitch:{pitch},rotation:{rotation},center:[{center_lng},{center_lat}],showLabel:false}});
 let drawing=false;
-let points={boundary}.map(p=>[p.lng,p.lat]);
+let points={initial_points}.map(p=>[p.lng,p.lat]);
 let polygon=null;
 const redraw=()=>{{if(polygon)map.remove(polygon);polygon=points.length>=2?new AMap.Polygon({{path:points,strokeColor:'#a54836',strokeWeight:4,fillColor:'#a54836',fillOpacity:.14}}):null;if(polygon)map.add(polygon);}};
 redraw();

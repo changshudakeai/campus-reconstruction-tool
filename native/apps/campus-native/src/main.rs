@@ -1044,6 +1044,10 @@ enum ToolUpdate {
     },
     MapPoint(GeoPoint),
     MapBoundary(Vec<GeoPoint>),
+    ManualFeature {
+        kind: FeatureKind,
+        points: Vec<GeoPoint>,
+    },
     MapCapture {
         south_west: GeoPoint,
         north_east: GeoPoint,
@@ -1065,6 +1069,7 @@ struct MapLaunchRequest {
     security_code: String,
     purpose: MapPurpose,
     overlays: Vec<MapOverlay>,
+    feature_kind: Option<String>,
 }
 
 impl ToolSupervisor {
@@ -1144,6 +1149,7 @@ impl ToolSupervisor {
                             .collect(),
                         purpose: request.purpose,
                         overlays: request.overlays,
+                        feature_kind: request.feature_kind,
                     },
                 )
                 .await?;
@@ -1185,6 +1191,32 @@ impl ToolSupervisor {
                                     .collect(),
                             ));
                             format!("校区边界已保存 · {count} 个节点")
+                        }
+                        ToolEvent::MapFeatureDrawn { kind, points } => {
+                            let kind = match kind.as_str() {
+                                "building" => FeatureKind::Building,
+                                "road" => FeatureKind::Road,
+                                "water" => FeatureKind::Water,
+                                "vegetation" => FeatureKind::Vegetation,
+                                "sports" => FeatureKind::Sports,
+                                _ => {
+                                    let _ =
+                                        updates.send(ToolUpdate::Status("手绘地物类型无效".into()));
+                                    continue;
+                                }
+                            };
+                            let count = points.len();
+                            let _ = updates.send(ToolUpdate::ManualFeature {
+                                kind,
+                                points: points
+                                    .into_iter()
+                                    .map(|point| GeoPoint {
+                                        lng: point.lng,
+                                        lat: point.lat,
+                                    })
+                                    .collect(),
+                            });
+                            format!("已接收手绘地物 · {count} 个节点")
                         }
                         ToolEvent::MapCaptureRequested {
                             south_west_lng,
@@ -1674,6 +1706,29 @@ fn main() -> Result<(), slint::PlatformError> {
                             });
                             changed = true;
                         }
+                        ToolUpdate::ManualFeature { kind, points } => {
+                            let mut result = Ok(String::new());
+                            state.borrow_mut().mutate_project(|project| {
+                                result = project.add_manual_feature(kind, points);
+                            });
+                            match result {
+                                Ok(id) => {
+                                    if let Some(ui) = weak.upgrade() {
+                                        ui.set_tool_status(
+                                            format!("手绘地物已加入审核结果 · {id}").into(),
+                                        );
+                                    }
+                                    changed = true;
+                                }
+                                Err(error) => {
+                                    if let Some(ui) = weak.upgrade() {
+                                        ui.set_tool_status(
+                                            format!("手绘地物保存失败：{error}").into(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         ToolUpdate::MapCapture {
                             south_west,
                             north_east,
@@ -2157,10 +2212,86 @@ fn main() -> Result<(), slint::PlatformError> {
                     security_code: credentials.security_code,
                     purpose: MapPurpose::CampusReview,
                     overlays: Vec::new(),
+                    feature_kind: None,
                 },
             ) {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_save_status(format!("地图启动失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let tools = tools.clone();
+        let state = state.clone();
+        let map_credentials = map_credentials.clone();
+        let weak = ui.as_weak();
+        ui.on_draw_foundation_feature(move || {
+            let snapshot = {
+                let state = state.borrow();
+                state.project.as_ref().and_then(|project| {
+                    let (kind, slug, label) = match project.foundation_step {
+                        FoundationStep::Building => (FeatureKind::Building, "building", "建筑"),
+                        FoundationStep::Road => (FeatureKind::Road, "road", "道路"),
+                        FoundationStep::Water => (FeatureKind::Water, "water", "水域"),
+                        FoundationStep::Vegetation => {
+                            (FeatureKind::Vegetation, "vegetation", "植被")
+                        }
+                        FoundationStep::Sports => (FeatureKind::Sports, "sports", "体育设施"),
+                        _ => return None,
+                    };
+                    let overlays = if project.boundary.len() >= 3 {
+                        vec![MapOverlay {
+                            label: "校区边界".into(),
+                            points: project
+                                .boundary
+                                .iter()
+                                .map(|point| MapCoordinate {
+                                    lng: point.lng,
+                                    lat: point.lat,
+                                })
+                                .collect(),
+                        }]
+                    } else {
+                        Vec::new()
+                    };
+                    Some((
+                        kind,
+                        slug.to_string(),
+                        label.to_string(),
+                        project.campus_name.clone(),
+                        project.map_view.clone(),
+                        overlays,
+                    ))
+                })
+            };
+            let Some((_kind, slug, label, campus_name, view, overlays)) = snapshot else {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_save_status("当前步骤不支持手绘地物".into());
+                }
+                return;
+            };
+            let credentials = map_credentials.borrow().clone();
+            if credentials.js_api_key.trim().is_empty() {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_settings_visible(true);
+                    ui.set_save_status("请先配置高德 Web JS API 密钥".into());
+                }
+                return;
+            }
+            let request = MapLaunchRequest {
+                title: format!("{campus_name} · 手绘{label}"),
+                view,
+                boundary: Vec::new(),
+                js_api_key: credentials.js_api_key,
+                security_code: credentials.security_code,
+                purpose: MapPurpose::FoundationFeatureDrawing,
+                overlays,
+                feature_kind: Some(slug),
+            };
+            if let Err(error) = tools.launch_map(weak.clone(), request) {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_save_status(format!("手绘地图启动失败：{error}").into());
                 }
             }
         });
@@ -2232,6 +2363,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         })
                         .collect(),
                 }],
+                feature_kind: None,
             };
             if let Err(error) = tools.launch_map(weak.clone(), request) {
                 if let Some(ui) = weak.upgrade() {

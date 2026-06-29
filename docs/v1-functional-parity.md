@@ -17,7 +17,7 @@ block the atomic cutover required by ADR 0031.
 | Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |
 | Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Confidence queues, pagination, source/confidence summary, confirm/reject/revoke are native; full provenance detail remains absent | **Partial** |
 | Foundation | Batch accept/reject and batch-review undo | Current-kind pending candidates support one-operation accept/reject; global undo restores the batch snapshot | Shipped |
-| Foundation | Human-drawn correction for missing/incorrect feature geometry | Boundary drawing exists; non-boundary feature drawing is absent | **Gap** |
+| Foundation | Human-drawn correction for missing/incorrect feature geometry | Map protocol v2 has a dedicated feature-drawing purpose for all five kinds; accepted manual geometry is separately traceable and manual buildings create valid Building Slots | Shipped |
 | Foundation | Label-free visual capture and deterministic gap recovery | Viewport capture currently triggers structured OSM/Overture retrieval, not image recovery | **Gap** |
 | Foundation | Campus Building Directory naming and suppression | Not exposed by the native workbench | **Gap** |
 | Foundation | Four fixed Foundation style packs and advanced style-pack import | Four legacy-compatible presets now drive persisted palette/road width and export; custom JSON import remains absent | **Partial** |

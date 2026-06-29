@@ -16,6 +16,7 @@ pub struct MapCoordinate {
 pub enum MapPurpose {
     #[default]
     CampusReview,
+    FoundationFeatureDrawing,
     BuildingEvidence,
 }
 
@@ -52,6 +53,8 @@ pub enum ToolCommand {
         purpose: MapPurpose,
         #[serde(default)]
         overlays: Vec<MapOverlay>,
+        #[serde(default)]
+        feature_kind: Option<String>,
     },
     OpenPreview {
         model_path: String,
@@ -90,6 +93,10 @@ pub enum ToolEvent {
         lat: f64,
     },
     MapBoundaryChanged {
+        points: Vec<MapCoordinate>,
+    },
+    MapFeatureDrawn {
+        kind: String,
         points: Vec<MapCoordinate>,
     },
     MapCaptureRequested {

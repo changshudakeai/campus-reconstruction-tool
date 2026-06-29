@@ -133,6 +133,7 @@ export component AppWindow inherits Window {
     callback change-candidate-page(int);
     callback open-map();
     callback open-detailed-map();
+    callback draw-foundation-feature();
     callback open-preview();
     callback choose-style(int, float, float);
     callback choose-foundation-style(int);
@@ -276,6 +277,11 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button {
+                                text: "手绘当前类型";
+                                enabled: root.active-step > 2;
+                                clicked => { root.draw-foundation-feature(); }
+                            }
                             Button { text: "在地图中编辑"; clicked => { root.open-map(); } }
                         }
                         HorizontalLayout {
