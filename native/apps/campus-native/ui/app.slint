@@ -1,0 +1,363 @@
+import { AboutSlint, Button, ComboBox, LineEdit, Slider } from "std-widgets.slint";
+
+export struct CandidateRow {
+    id: string,
+    name: string,
+    meta: string,
+    status: string,
+}
+
+component SectionLabel inherits Text {
+    color: #a54836;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+component Rule inherits Rectangle {
+    height: 1px;
+    background: #b7ad9a;
+}
+
+component CandidateItem inherits Rectangle {
+    in property <CandidateRow> candidate;
+    callback decide(string, bool);
+    height: 72px;
+    background: #f7f3e9;
+    border-color: #c7bca8;
+    border-width: 1px;
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: candidate.name; font-weight: 700; color: #17251f; }
+            Text { text: candidate.meta; font-size: 12px; color: #617068; }
+        }
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+        Text { text: candidate.status; color: #a54836; vertical-alignment: center; }
+        Button { text: "拒绝"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, false); } }
+        Button { text: "接受"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, true); } }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Minecraft 校园复刻工具";
+    width: 1280px;
+    height: 820px;
+    background: #f4f0e5;
+    default-font-family: "Microsoft YaHei UI";
+    forward-focus: shortcut-scope;
+
+    in-out property <string> project-name: "未命名项目";
+    in-out property <string> campus-name: "华东师范大学普陀校区";
+    in-out property <string> save-status: "未保存";
+    in-out property <string> page-title: "选择学校与具体校区";
+    in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
+    in-out property <string> project-summary: "尚未建立项目";
+    in-out property <bool> detailed-active: false;
+    in-out property <int> active-step: 0;
+    in-out property <[string]> step-labels: ["校区", "边界", "朝向", "建筑", "道路", "水域", "植被", "体育", "导出"];
+    in-out property <[CandidateRow]> candidates: [];
+    in-out property <[string]> building-slots: ["暂无已审核建筑"];
+    in-out property <int> selected-slot: 0;
+    in-out property <[string]> arnis-styles: [];
+    in-out property <int> selected-style: 8;
+    in-out property <float> window-density: 50;
+    in-out property <float> wall-depth: 50;
+    in-out property <string> primary-label: "确认校区并继续";
+    in-out property <bool> settings-visible: false;
+    in-out property <bool> about-visible: false;
+    in-out property <string> gaode-key: "";
+    in-out property <string> gaode-security: "";
+    in-out property <float> orientation-degrees: 0;
+    in-out property <float> blocks-per-meter: 1;
+    in-out property <bool> can-undo: false;
+    in-out property <bool> can-redo: false;
+    in-out property <string> measured-height: "";
+    in-out property <string> measured-floors: "";
+    in-out property <string> measured-roof: "";
+    in-out property <string> palette-summary: "尚未生成模型";
+    in-out property <string> replace-source: "";
+    in-out property <string> replace-target: "";
+
+    callback create-project(string, string);
+    callback open-project();
+    callback save-project();
+    callback save-project-as();
+    callback switch-mode(bool);
+    callback select-step(int);
+    callback confirm-step();
+    callback review-candidate(string, bool);
+    callback open-map();
+    callback open-preview();
+    callback choose-style(int, float, float);
+    callback choose-slot(int);
+    callback generate-building();
+    callback export-building();
+    callback export-project();
+    callback save-map-settings(string, string);
+    callback set-foundation-metrics(float, float);
+    callback undo();
+    callback redo();
+    callback update-building-measurements(string, string, string);
+    callback replace-generated-block(string, string);
+
+    shortcut-scope := FocusScope {
+      VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 66px;
+            background: #eee6d6;
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 18px;
+                spacing: 10px;
+                Text { text: "MC 校园复刻"; font-size: 22px; font-weight: 700; color: #17251f; vertical-alignment: center; }
+                Rectangle { width: 1px; height: 30px; background: #b7ad9a; }
+                Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: root.save-status; color: root.save-status == "保存失败" ? #a54836 : #4c665b; vertical-alignment: center; }
+                Button { text: "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
+                Button { text: "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
+                Button { text: "地图设置"; clicked => { root.settings-visible = true; } }
+                Button { text: "关于"; clicked => { root.about-visible = true; } }
+                Button { text: "打开"; clicked => { root.open-project(); } }
+                Button { text: "另存为"; clicked => { root.save-project-as(); } }
+                Button { text: "保存"; clicked => { root.save-project(); } }
+            }
+        }
+        Rectangle { height: 2px; background: #23362e; }
+
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 244px;
+                background: #ece4d3;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    SectionLabel { text: "工作模式"; }
+                    Button { text: "地基与校区"; enabled: root.detailed-active; clicked => { root.switch-mode(false); } }
+                    Button { text: "精细建筑"; enabled: !root.detailed-active; clicked => { root.switch-mode(true); } }
+                    Rule {}
+                    if !root.detailed-active : VerticalLayout {
+                        spacing: 5px;
+                        SectionLabel { text: "工作步骤"; }
+                        for label[index] in root.step-labels: Button {
+                            text: (index + 1) + ". " + label;
+                            enabled: root.active-step != index;
+                            clicked => { root.select-step(index); }
+                        }
+                    }
+                    if root.detailed-active : VerticalLayout {
+                        spacing: 8px;
+                        SectionLabel { text: "建筑清单"; }
+                        Text { text: root.project-summary; color: #506058; wrap: word-wrap; }
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+            Rectangle { width: 1px; background: #948a78; }
+
+            Rectangle {
+                background: #faf8f1;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+                    SectionLabel { text: root.detailed-active ? "精细建筑" : "地基与校区"; }
+                    Text { text: root.page-title; font-size: 28px; font-weight: 700; color: #17251f; }
+                    Text { text: root.page-help; font-size: 15px; color: #5b665f; wrap: word-wrap; }
+                    Rule {}
+
+                    if !root.detailed-active && root.active-step == 0 : Rectangle {
+                        height: 270px;
+                        background: #f4f0e5;
+                        border-color: #23362e;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 10px;
+                            SectionLabel { text: "本地项目"; }
+                            LineEdit { text <=> root.project-name; placeholder-text: "项目名称"; }
+                            LineEdit { text <=> root.campus-name; placeholder-text: "学校与校区"; }
+                            Button { text: "在高德中选择校区"; clicked => { root.open-map(); } }
+                            Button { text: "创建本地项目"; clicked => { root.create-project(root.project-name, root.campus-name); } }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step == 2 : Rectangle {
+                        height: 220px;
+                        background: #f4f0e5;
+                        border-color: #c7bca8;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 14px;
+                            SectionLabel { text: "坐标转换"; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: "校园主轴"; width: 90px; vertical-alignment: center; }
+                                Slider { value <=> root.orientation-degrees; minimum: -180; maximum: 180; }
+                                Text { text: round(root.orientation-degrees) + "°"; width: 60px; vertical-alignment: center; }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: "方块 / 米"; width: 90px; vertical-alignment: center; }
+                                Slider { value <=> root.blocks-per-meter; minimum: 0.25; maximum: 4; }
+                                Text { text: round(root.blocks-per-meter * 100) / 100; width: 60px; vertical-alignment: center; }
+                            }
+                            Button {
+                                text: "应用朝向与比例";
+                                clicked => { root.set-foundation-metrics(root.orientation-degrees, root.blocks-per-meter); }
+                            }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step > 0 && root.active-step < 8 && root.active-step != 2 : VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: "在地图中编辑"; clicked => { root.open-map(); } }
+                        }
+                        for candidate in root.candidates: CandidateItem {
+                            candidate: candidate;
+                            decide(id, accepted) => { root.review-candidate(id, accepted); }
+                        }
+                        if root.candidates.length == 0 : Rectangle {
+                            height: 120px;
+                            background: #f4f0e5;
+                            border-color: #c7bca8;
+                            border-width: 1px;
+                            Text {
+                                text: "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
+                                color: #68756e; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step == 8 : VerticalLayout {
+                        spacing: 14px;
+                        Text { text: root.project-summary; color: #33463d; }
+                        Button { text: "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
+                    }
+
+                    if root.detailed-active : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: "目标建筑"; }
+                        slot-box := ComboBox {
+                            model: root.building-slots;
+                            current-index <=> root.selected-slot;
+                            selected(value) => { root.choose-slot(slot-box.current-index); }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { text <=> root.measured-height; placeholder-text: "实测高度（米）"; }
+                            LineEdit { text <=> root.measured-floors; placeholder-text: "实测楼层"; }
+                            LineEdit { text <=> root.measured-roof; placeholder-text: "屋顶形状（flat/gabled/hipped）"; }
+                            Button {
+                                text: "保存实测值";
+                                clicked => { root.update-building-measurements(root.measured-height, root.measured-floors, root.measured-roof); }
+                            }
+                        }
+                        SectionLabel { text: "Arnis 外观预设"; }
+                        style-box := ComboBox {
+                            model: root.arnis-styles;
+                            current-index <=> root.selected-style;
+                            selected(value) => { root.choose-style(style-box.current-index, root.window-density, root.wall-depth); }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "窗户密度"; width: 90px; vertical-alignment: center; }
+                            Slider { value <=> root.window-density; minimum: 0; maximum: 100; }
+                            Text { text: round(root.window-density) + "%"; width: 48px; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "墙面层次"; width: 90px; vertical-alignment: center; }
+                            Slider { value <=> root.wall-depth; minimum: 0; maximum: 100; }
+                            Text { text: round(root.wall-depth) + "%"; width: 48px; vertical-alignment: center; }
+                        }
+                        Button { text: "生成并打开原生预览"; clicked => { root.generate-building(); } }
+                        Button { text: "打开上次生成的预览"; clicked => { root.open-preview(); } }
+                        SectionLabel { text: "批量方块替换"; }
+                        Text { text: root.palette-summary; color: #506058; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { text <=> root.replace-source; placeholder-text: "原方块，例如 minecraft:bricks"; }
+                            LineEdit { text <=> root.replace-target; placeholder-text: "新方块，例如 minecraft:white_concrete"; }
+                            Button {
+                                text: "全部替换";
+                                clicked => { root.replace-generated-block(root.replace-source, root.replace-target); }
+                            }
+                        }
+                        Button { text: "导出当前精细建筑 .schem"; clicked => { root.export-building(); } }
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                    if !root.detailed-active : HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Button { text: root.primary-label; clicked => { root.confirm-step(); } }
+                    }
+                }
+            }
+        }
+      }
+      KeyBinding { keys: @keys(Control + S); activated => { root.save-project(); } }
+      KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }
+      KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }
+    }
+
+    if root.settings-visible : Rectangle {
+        x: 360px;
+        y: 170px;
+        width: 560px;
+        height: 330px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            SectionLabel { text: "高德地图服务"; }
+            Text { text: "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
+            LineEdit { text <=> root.gaode-key; placeholder-text: "Web JS API Key"; }
+            LineEdit { text <=> root.gaode-security; placeholder-text: "安全密钥 Security JS Code"; }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            HorizontalLayout {
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: "取消"; clicked => { root.settings-visible = false; } }
+                Button {
+                    text: "安全保存";
+                    clicked => {
+                        root.save-map-settings(root.gaode-key, root.gaode-security);
+                        root.settings-visible = false;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.about-visible : Rectangle {
+        x: 420px;
+        y: 190px;
+        width: 440px;
+        height: 300px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            SectionLabel { text: "关于 Campus Reconstruction Tool"; }
+            Text { text: "V1 · 原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
+            AboutSlint {}
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            Button { text: "关闭"; clicked => { root.about-visible = false; } }
+        }
+    }
+}

@@ -284,8 +284,12 @@ The new desktop/web application architecture for the First Vertical Slice, repla
 _Avoid_: refreshed old UI, legacy web app
 
 **Tauri React Shell**:
-The chosen Modern App Shell stack: Tauri for the desktop container, React and TypeScript for product UI, and Three.js for the Schematic Previewer.
-_Avoid_: desktop app, web app stack
+The superseded compatibility stack: Tauri for the desktop container, React and TypeScript for product UI, and Three.js for the Schematic Previewer. It remains source reference for the future Cloud Web Companion but is not a V1 desktop runtime.
+_Avoid_: current desktop app, native workbench
+
+**Native Slint Workbench**:
+The V1 desktop product: a Rust/Slint main application with one Desktop Application State, plus isolated Gaode WebView2 and native wgpu preview tool processes.
+_Avoid_: web wrapper, Tauri shell, embedded website
 
 **Online Map Query**:
 The primary Foundation Mode data path that uses live map services and open geodata, including Arnis-style sources and the user's Gaode API access, to search, identify, and draft Map Candidates before user review.
@@ -347,6 +351,10 @@ _Avoid_: finished building model, fixed schematic, source building clone
 The bundled collection of maintainer-authored and community-contributed Parametric Building Templates organised primarily by architectural period and construction language rather than university name. Every entry is versioned in the project repository and retains its reference lineage, license obligations, template version, and optional university case labels. Users may browse it directly or retrieve photo-matched templates from a Visual Evidence Crop.
 _Avoid_: live GitHub search, external template marketplace, unreviewed model folder
 
+**Arnis Style Preset**:
+A fixed V1 exterior-generation choice mapped directly to one complete, version-pinned upstream Arnis Building Category and its material, window, wall-depth, decoration, parapet, and roof behavior. Its user-facing label may be translated for clarity but must not claim an unsupported Chinese architectural period or school-specific style.
+_Avoid_: Chinese campus template, photo-trained style, renamed invented Arnis category
+
 **Template Application**:
 A Generated Building Interpretation that applies one Parametric Building Template to a Building Slot while preserving all known Observed Building Evidence. It may change block choice, block arrangement, fenestration, and wall depth, but not measured building massing.
 _Avoid_: geometry replacement, footprint fitting, building rescaling
@@ -366,6 +374,18 @@ _Avoid_: annotation checklist, direct block proposal, automatic final appearance
 **Building Template Matcher**:
 The project-distributed visual retrieval model that compares a user-confirmed Visual Evidence Crop with rendered references from the Building Template Catalog. It is fine-tuned from a permissively licensed Chinese multimodal embedding model, runs inside the desktop application without a separate model server, and ranks templates by photo match.
 _Avoid_: Ollama model, online inference API, architectural style chatbot
+
+**Cloud Web Companion**:
+The independently deployed browser edition of the Campus Reconstruction Tool. It may reuse migrated web presentation code but is not embedded into, used as a fallback by, or required to operate the native desktop application.
+_Avoid_: desktop WebView shell, hosted desktop UI, legacy workflow fallback
+
+**Desktop Application State**:
+The single authoritative state of the native desktop workflow, including the open Campus Reconstruction Project, review progress, selected candidates, generation results, and tool-window messages. Presentation surfaces may display it and submit user intentions but never own competing copies.
+_Avoid_: React hook state, duplicated UI state, WebView-owned project
+
+**Desktop Tool Process**:
+A purpose-specific child process launched and supervised by the native desktop application to host either the Gaode 3D Reference or native schematic preview. It receives immutable work snapshots and returns typed interaction results without owning Desktop Application State.
+_Avoid_: second application, independent project editor, embedded full web UI
 
 **Contributed Training Crop**:
 A Visual Evidence Crop that a user separately and explicitly submits for improving the Building Template Matcher, together with its selected template and a confirmed reuse licence. Photos remain local by default. Contribution removes EXIF metadata and masks identifiable faces and vehicle plates before upload.

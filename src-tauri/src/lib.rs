@@ -1141,6 +1141,9 @@ mod tests {
             materials: arnis_core::MaterialOverrides::default(),
             correction_notes: vec!["live Putuo library validation".into()],
             parts: library.parts.clone(),
+            style_preset: "school".into(),
+            window_density: 55,
+            wall_depth: 40,
         })
         .unwrap();
         assert_eq!(generated.report.building_part_count, library.parts.len());

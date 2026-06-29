@@ -1,4 +1,4 @@
-name: verify
+name: verify-v1
 
 on:
   push:
@@ -6,7 +6,25 @@ on:
   pull_request:
 
 jobs:
-  web-and-contracts:
+  native-v1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            src-tauri/crates/arnis-core
+      - run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
+      - run: cargo fmt --manifest-path src-tauri/crates/arnis-core/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path native/Cargo.toml --workspace
+      - run: cargo test --manifest-path src-tauri/crates/arnis-core/Cargo.toml
+      - run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path src-tauri/crates/arnis-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --manifest-path native/Cargo.toml --workspace --release
+
+  web-reference:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,18 +33,5 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm run test:workflow-revision
-      - run: npm run test:visual-recovery
-      - run: npm run test:arnis-rust-core
-
-  rust:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: cargo build --release --manifest-path src-tauri/Cargo.toml
+      - run: npm run web:build
+      - run: npm run test:offline-contracts

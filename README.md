@@ -1,107 +1,74 @@
-# Campus Reconstruction Tool
+# Campus Reconstruction Tool V1
 
-Native-first desktop tool for the ECNU Putuo Campus Minecraft reconstruction workflow.
+面向 Minecraft 校园复刻的 Windows 原生工作台。V1 主程序使用 Slint/Rust，不是网页外壳；只有必须使用高德 Web JS API 的地图工具运行在独立 WebView2 子进程中，方块模型预览是独立 Rust/wgpu 子进程。
 
-> Architecture transition: the current Tauri/React UI is the compatibility implementation. V1 is migrating application workflow to a Rust-native Slint shell; only Gaode 3D and the voxel renderer remain isolated web graphics surfaces. See [`docs/adr/0031-use-a-native-desktop-shell-with-isolated-web-graphics.md`](docs/adr/0031-use-a-native-desktop-shell-with-isolated-web-graphics.md).
+## V1 功能
 
-## Current Slice
+- 九步地基流程：校区、边界、朝向、建筑、道路、水域、植被、体育、导出。
+- 高德 3D 半自动取景：隐藏地图标签，用户自行调整缩放、俯仰和平移，再按“截取并识别当前视野”。
+- 地图视角、取景范围和手绘边界随项目自动保存，下次打开继续上次状态。
+- OSM/Overpass 校区地物识别；配置云端 Overture 服务后合并更完整的建筑轮廓。
+- 候选接受/拒绝是主流程，不再放在补缺或高级折叠区；没有右侧地基清单卡片。
+- 精细建筑使用 Arnis 2.9.0 的 19 类固定外观规则。实测轮廓、高度和楼层不被模板修改；模板只改变方块、窗户、墙面层次、屋顶线和装饰。
+- 原生 wgpu 方块预览；Foundation 与精细建筑均可导出 gzip 压缩的 Sponge V3 `.schem`。
+- 原子自动保存、恢复副本、撤销/重做、Ctrl+S/Ctrl+Z/Ctrl+Y。
+- 可导入旧 React/Tauri V1 便携项目 JSON。
 
-- Foundation Mode and Detailed Building Mode are the primary app structure.
-- The first target is ECNU Putuo Campus.
-- The first representative building is the Putuo Campus Library.
-- The app uses React, TypeScript, Three.js-ready dependencies, and Tauri configuration.
-- The Minimal Arnis Adapter contract outputs Building Geometry before `.schem` generation.
-- The product starts by confirming a Campus Target through Gaode; canonical names and aliases share one campus scope used by both modes.
-- Foundation Mode runs campus-scoped live map queries that produce editable Map Candidates with source, confidence, geometry, and provenance.
-- Foundation Mode can accept or reject Map Candidates, add a manual closed boundary, and build a reviewed Foundation Manifest with Building Slots.
-- Detailed Building Mode can generate a Putuo Campus Library schematic model from Building Geometry, preserving a non-rectangular footprint and hipped roof hint.
-- The schematic path writes a minimal Sponge v2 NBT byte structure with palette and varint block data for the later Axiom export flow.
-- Detailed Building Mode includes a first Three.js Schematic Previewer with orbit controls, block inspection, batch block replacement, and updated `.schem` export.
-- The web UI has a language selector with English and Simplified Chinese labels for the main Foundation Mode and Detailed Building Mode flows.
-- Online Map Query has live Gaode POI and OSM/Overpass providers; fixtures are available only through the explicit offline test flag.
-- Overpass queries retry against alternate nodes with progressively smaller bounded radii and cache successful results.
-- Foundation Mode can export a reviewed Foundation Manifest into an Axiom-Compatible `.schem` by rasterizing campus, building, road, vegetation, water, and sports Map Features.
-- Foundation Mode includes a first SVG Geometry Editor for loading candidate geometry, adding points, nudging selected points, and closing a draft into a reviewed manual Map Feature.
-- Foundation Mode includes road-width and per-feature block style controls that affect the reviewed Manifest and Foundation `.schem` export.
-- Online Map Query includes provider-level in-memory caching plus a provenance debug panel for cache hit/miss, provider role, raw IDs, and notes.
-- Foundation Mode previews estimated export dimensions, total block volume, non-air block count, palette size, and size risk before downloading the `.schem`.
-- Foundation Mode exports the reviewed Foundation Manifest JSON alongside the Foundation `.schem` so Detailed Building Mode has a stable handoff file.
-- Foundation Manifest handoff records selected blocks, coordinates, approximate dimensions, confidence, and provenance for Map Features and Building Slots.
-- The Foundation Manifest explicitly marks the Putuo Campus Library as the representative Building Slot, including Chinese `图书馆` name matching, so Detailed Building Mode does not depend on slot order.
-- Detailed Building Mode now consumes the selected Building Slot from the Foundation Manifest, converts it into a Building Target, and shows the slot handoff summary before generation.
-- The Minimal Arnis Adapter path now includes a Foundation Manifest Slot Handoff provider, so Building Geometry provenance records the selected slot, source feature, selected block, raw ID, and fallback footprint.
-- Detailed Building Mode now presents an explainable Building Geometry summary with footprint, height, floors, roof and facade hints, per-field confidence, source priority, used sources, missing fields, provenance notes, and Foundation Manifest handoff details.
-- Detailed Building Mode queries the local Overture GeoJSON bridge and OSM/Overpass for live candidates. If both sources fail, generation is blocked with an explicit recoverable error; it never silently substitutes a fixture.
-- Detailed Building Mode begins with a campus-building naming stage. It loads campus-bounded Overture footprints, shows ten source objects per page, and lets users focus each footprint in Gaode 3D before saving a recognizable name.
-- Automatic naming uses four concurrent Gaode reverse-geocode calls for the current page. Every success, no-match, and failure is cached by campus and source ID so repeated visits do not consume another API call.
-- Reverse-geocoded names must begin with the selected school, canonical campus, or campus alias. Other objects are stored as local suppression tombstones and removed from future campus candidate loads; users may also delete incorrect candidates locally.
-- Campus Building Directory records merge bundled/shared JSON, the desktop app-data annotation file, and browser-local records. Saved names immediately participate in campus building search and can be exported as a GitHub-ready campus annotation file.
-- OSM and Overture candidates with different IDs reuse reviewed names or exclusions through a bounded WGS-84 center match, so nearby Arnis cards do not lose names solely because the provider changed.
-- Gaode and nearby Arnis candidates are paged at ten items. Arnis cards can focus their location in Gaode 3D and save a human name into the campus-scoped Building Directory.
-- Campus selection filters Gaode results to campus-level POIs only; parking lots, gates, canteens, departments, and individual buildings are excluded.
-- Building search results are constrained by both the confirmed campus radius and campus/school identity text, so nearby off-campus POIs cannot enter the confirmation list.
-- Candidate acquisition shows an elapsed-time, provider-stage progress panel while Rust queries OSM and the local Overture cache, avoiding an ambiguous blank wait.
-- Building identity uses the confirmed Gaode POI name first, then OSM/Overture names. When providers omit names, the single nearest footprint within 120 metres is promoted as a location-based review candidate, never auto-accepted. Duplicate OSM/Overture footprints are collapsed.
-- The evidence workspace stacks an enlarged Gaode 3D reference above Arnis candidates, and the Foundation Manifest sidebar can collapse so the main workspace expands.
-- Foundation and Detailed exports open a native folder chooser and save `.schem` plus the matching manifest/provenance JSON through the Rust backend. Exported `.schem` files are gzip-compressed Sponge v2 NBT.
-- Detailed Building Mode now queries OSM/Overpass after Overture and before Foundation Manifest data, filling missing height, floors, roof, facade, or footprint fields without overriding higher-priority values.
-- Detailed Building Mode now supports explicit manual overrides for height, floors, roof and facade hints, plus switching to the reviewed Building Slot footprint; applying a correction regenerates the schematic and records `manual_correction` provenance.
-- The current Detailed Mode handoff from reviewed Building Slot through Building Geometry into a fresh previewable `SchematicModel` is covered by an end-to-end regression test, including regeneration after manual correction.
-- The Three.js preview renders generated models with palette-grouped `InstancedMesh` blocks and on-demand redraws, capped device pixel ratio, low-power WebGL preference, orbit controls, selection highlighting, and complete GPU resource cleanup.
-- Clicking a visible preview block shows its Minecraft block type, integer `x/y/z` coordinates, and palette index in an accessible live inspection panel.
-- Batch Block Replacement shows the current match count, replaces every instance immutably, permits replacing a solid block with air, and blocks expensive air-source or same-type no-op operations.
-- A completed Batch Block Replacement immediately feeds the new model identity back into the Three.js preview, clears stale inspection state, and announces the replacement count as a status message.
-- Detailed Building Mode exports the current edited model through a validated Sponge v2 `.schem` contract and reports the filename, dimensions, palette size, and NBT byte count.
-- Detailed export preserves source priority, used providers, missing fields, notes, Foundation Slot handoff, manual corrections, and Batch Block Replacement history in compact NBT metadata plus a readable `.provenance.json` companion file.
-- PRD stories 31-35 are closed with documented legacy lineage, live/offline provider paths, typed architecture seams, and a complete offline First Vertical Slice acceptance test.
+照片匹配、中国高校风格模型训练与模板在线推荐属于 V2，不在 V1 中虚构实现。
 
-## Environment
+## 本地与服务端边界
 
-Create a local `.env` from `.env.example` when using live Gaode POI search. Configure Overture on the Tauri process so its endpoint and release stay outside browser code:
+必须留在本地：
 
-```bash
-VITE_GAODE_WEB_SERVICE_KEY=your_gaode_web_service_key
-VITE_GAODE_POI_ENDPOINT=https://restapi.amap.com/v3/place/text
-VITE_GAODE_REGEOCODE_ENDPOINT=https://restapi.amap.com/v3/geocode/regeo
-VITE_OVERTURE_BUILDING_ENDPOINT=http://127.0.0.1:8765/overture/buildings
-VITE_CAMPUS_ANNOTATION_BASE_URL=/campus-building-annotations
-OVERTURE_BUILDING_ENDPOINT=https://your-local-service.example/overture/buildings
-OVERTURE_RELEASE_ID=2026-05-20.0
-```
+- 项目、审核决定、生成模型和 `.schem`；
+- Arnis 规则与生成器；
+- Slint UI、wgpu 预览；
+- 高德密钥（Windows 凭据管理器）。
 
-`VITE_GAODE_POI_ENDPOINT` can point to a local or Tauri-backed proxy if direct browser calls are blocked by CORS or key exposure policy.
+适合放在云端：
 
-The repository includes a local Overture bridge. It reads the current official Overture Parquet release with HTTP range requests, stores only the intersecting row groups under `.cache/overture`, and returns GeoJSON to Tauri. It does not download a complete release. The first query in a new region can take about 1–3 minutes depending on the network; repeated queries in that region use the local cache.
+- Overture GeoParquet 查询与共享缓存；
+- 模板/应用版本清单；
+- 可选的共享校园标注；
+- 未来独立网页伴侣。
 
-The Python bridge is a development/reference service, not part of the V1 installer. Production Overture querying and shared caching belong to the hosted data service described in [`docs/deployment-boundary.md`](docs/deployment-boundary.md).
+云端不可用时，已有项目仍能打开、编辑、生成和导出。详见 [deployment-boundary.md](docs/deployment-boundary.md)。
 
-On Windows, configure or run the development bridge separately with:
+## 开发
+
+要求 Windows 10/11 x64 和 Rust stable：
 
 ```powershell
-npm run overture:setup
-npm run overture:serve
-```
-
-Its health endpoint is `http://127.0.0.1:8765/health` and its building endpoint is `http://127.0.0.1:8765/overture/buildings`. The desktop launcher starts this service automatically. The bridge accepts `lng`, `lat`, `radius_m`, `bbox`, `limit`, and optional `release` parameters, and exposes read-only CORS headers for the local development UI. Tauri bounds requests to 250 metres and 200 features, applies response-size limits, and records release, query bounds, feature IDs, MultiPolygon parts, and interior rings in export provenance.
-
-Shareable campus building names are stored in `public/campus-building-annotations/`. Add one campus JSON file and register it in `index.json`; after a Campus Target is confirmed, the matching file is loaded automatically. Desktop edits are also persisted under the app-data `campus-building-annotations` directory and can be exported from the naming stage for later review and contribution.
-
-## Commands
-
-```bash
-npm install
+npm run dev
 npm test
 npm run build
-npm run dev
-npm run desktop:dev
 ```
 
-On Windows, double-click `start-app.cmd` for the same desktop startup. It starts the local Overture bridge first, injects the backend endpoint, and then starts Tauri. Keep its terminal window open while using the desktop application.
+网页兼容实现不再是桌面入口，仅供未来云端伴侣迁移参考：
 
-Open the dev server at:
-
-```text
-http://127.0.0.1:1420
+```powershell
+npm run web:dev
+npm run web:build
 ```
 
-Tauri desktop startup also requires the Rust toolchain (`rustc`, `cargo`, and `rustup`) to be installed locally.
+高德密钥在应用内“地图设置”保存。可选云端 Overture 地址通过 `CAMPUS_DATA_SERVICE_URL` 或 `OVERTURE_BUILDING_ENDPOINT` 配置。
+
+## 打包
+
+```powershell
+npm run bundle:v1
+```
+
+安装包输出到 `artifacts/installer/`。安装包只包含三个 release 可执行文件与第三方声明，不包含 `target/`、Rust 工具链、Node.js、Python、模型权重或构建缓存。
+
+## 代码布局
+
+- `native/apps/campus-native`：Slint 主程序与唯一应用状态入口。
+- `native/apps/campus-map`：独立 WebView2 高德工具。
+- `native/apps/campus-preview`：独立 wgpu 原生预览。
+- `native/crates/campus-state`：项目、自动保存、兼容导入、撤销/重做。
+- `native/crates/campus-services`：OSM 与可选 Overture 查询。
+- `native/crates/campus-export`：Sponge V3 `.schem`。
+- `src-tauri/crates/arnis-core`：固定上游版本的 Arnis 建筑规则移植。
+- `services/`：开发/云端 Overture 查询服务。
+- `src/`：旧网页兼容实现，非 V1 桌面运行时依赖。
