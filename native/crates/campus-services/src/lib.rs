@@ -204,6 +204,14 @@ async fn query_overture_buildings(
                 .get("roof_shape")
                 .and_then(|value| value.as_str())
                 .map(str::to_owned),
+            tags: properties
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_string()))
+                })
+                .collect(),
             review: ReviewDecision::Pending,
         });
     }
@@ -305,6 +313,7 @@ fn parse_overpass(response: OverpassResponse) -> Vec<MapCandidate> {
                 .and_then(|value| parse_number(value))
                 .map(|value| value.max(1.0) as u32),
             roof_shape: element.tags.get("roof:shape").cloned(),
+            tags: element.tags.into_iter().collect(),
             review: ReviewDecision::Pending,
         });
     }

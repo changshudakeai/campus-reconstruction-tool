@@ -2,8 +2,10 @@
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, CandidateConfidenceFilter, DesktopApplicationState, DesktopMode, FeatureKind,
-    FoundationStep, FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
+    ArnisStylePreset, CandidateConfidenceFilter, DesktopApplicationState, DesktopMode,
+    ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePreset, GeoPoint,
+    MapCandidate, MapViewState, ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind,
+    SemanticFeatureSide, SemanticHeightBand, SemanticStrength, SourceConflictDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
@@ -280,6 +282,142 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .unwrap_or(0);
     ui.set_selected_slot(selected_slot as i32);
     let selected_measurements = project.building_slots.get(selected_slot);
+    let selected_slot_id = selected_measurements.map(|slot| slot.id.as_str());
+    let external_models = project
+        .detailed
+        .external_models
+        .iter()
+        .filter(|review| Some(review.slot_id.as_str()) == selected_slot_id)
+        .collect::<Vec<_>>();
+    let external_index = state
+        .selected_external_model
+        .min(external_models.len().saturating_sub(1));
+    ui.set_external_models(ModelRc::new(VecModel::from(
+        if external_models.is_empty() {
+            vec![SharedString::from("暂无外部模型候选")]
+        } else {
+            external_models
+                .iter()
+                .map(|review| SharedString::from(format!("{} · {}", review.source, review.title)))
+                .collect()
+        },
+    )));
+    ui.set_selected_external_model(external_index as i32);
+    if let Some(review) = external_models.get(external_index) {
+        ui.set_external_model_summary(
+            format!(
+                "{} · {} · 作者 {} · 许可 {} · {} · 尺寸 {}×{}×{}m · {}",
+                review.source,
+                review.source_url,
+                if review.author.is_empty() {
+                    "未知"
+                } else {
+                    review.author.as_str()
+                },
+                review.license_name.as_deref().unwrap_or("缺失"),
+                review.eligibility.label(),
+                review
+                    .width_m
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "?".into()),
+                review
+                    .height_m
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "?".into()),
+                review
+                    .length_m
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "?".into()),
+                review.decision.label()
+            )
+            .into(),
+        );
+        ui.set_selected_external_decision(
+            ExternalModelDecision::ALL
+                .iter()
+                .position(|decision| *decision == review.decision)
+                .unwrap_or(0) as i32,
+        );
+    } else {
+        ui.set_external_model_summary("当前建筑来源对象没有 3DMR/Wikidata 模型标签。".into());
+        ui.set_selected_external_decision(0);
+    }
+    let source_conflicts = project
+        .detailed
+        .source_conflicts
+        .iter()
+        .filter(|conflict| Some(conflict.slot_id.as_str()) == selected_slot_id)
+        .collect::<Vec<_>>();
+    let conflict_index = state
+        .selected_source_conflict
+        .min(source_conflicts.len().saturating_sub(1));
+    ui.set_source_conflicts(ModelRc::new(VecModel::from(
+        if source_conflicts.is_empty() {
+            vec![SharedString::from("暂无来源冲突")]
+        } else {
+            source_conflicts
+                .iter()
+                .map(|conflict| {
+                    SharedString::from(format!("{} · {}", conflict.severity, conflict.kind))
+                })
+                .collect()
+        },
+    )));
+    ui.set_selected_source_conflict(conflict_index as i32);
+    if let Some(conflict) = source_conflicts.get(conflict_index) {
+        ui.set_source_conflict_summary(
+            format!(
+                "{} · {} · {}",
+                conflict.summary,
+                conflict.decision.label(),
+                if conflict.decision_reason.is_empty() {
+                    "尚无决策理由"
+                } else {
+                    conflict.decision_reason.as_str()
+                }
+            )
+            .into(),
+        );
+        ui.set_selected_source_conflict_decision(
+            SourceConflictDecision::ALL
+                .iter()
+                .position(|decision| *decision == conflict.decision)
+                .unwrap_or(0) as i32,
+        );
+    } else {
+        ui.set_source_conflict_summary("当前建筑没有待处理的来源冲突。".into());
+        ui.set_selected_source_conflict_decision(0);
+    }
+    ui.set_observed_evidence_summary(
+        selected_measurements
+            .map(|slot| {
+                let source = project
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.id == slot.id)
+                    .map(|candidate| {
+                        format!(
+                            "{} · {}置信度 · {}",
+                            candidate.source, candidate.confidence, candidate.id
+                        )
+                    })
+                    .unwrap_or_else(|| "项目审核槽位".into());
+                format!(
+                    "轮廓 {} 点 · 高度 {} · 楼层 {} · 屋顶 {} · 来源 {}",
+                    slot.footprint.len(),
+                    slot.height_m
+                        .map(|value| format!("{value:.2}m"))
+                        .unwrap_or_else(|| "未知".into()),
+                    slot.floors
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "未知".into()),
+                    slot.roof_shape.as_deref().unwrap_or("未知"),
+                    source
+                )
+            })
+            .unwrap_or_else(|| "尚未选择建筑槽位".into())
+            .into(),
+    );
     let latest_refinement =
         selected_measurements.and_then(|slot| project.latest_refinement(&slot.id));
     ui.set_refinement_summary(
@@ -298,6 +436,58 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_can_confirm_refinement(
         latest_refinement
             .is_some_and(|refinement| refinement.status == campus_state::RefinementStatus::Draft),
+    );
+    ui.set_semantic_feature_summary(
+        latest_refinement
+            .map(|refinement| {
+                let records = project
+                    .detailed
+                    .semantic_features
+                    .iter()
+                    .filter(|record| record.refinement_id == refinement.id)
+                    .collect::<Vec<_>>();
+                if records.is_empty() {
+                    "尚未标注识别特征".into()
+                } else {
+                    format!(
+                        "{} 项 · {}",
+                        records.len(),
+                        records
+                            .iter()
+                            .rev()
+                            .take(3)
+                            .map(|record| record.label.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    )
+                }
+            })
+            .unwrap_or_else(|| "请先生成一个 refinement 草稿".into())
+            .into(),
+    );
+    ui.set_generated_interpretation_summary(
+        project
+            .detailed
+            .generated_path
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice::<arnis_core::GeneratedBuilding>(&bytes).ok())
+            .map(|generated| {
+                format!(
+                    "{}×{}×{} · {} 非空气方块 · {} · 比例 {:.2} · {} 层 · {} 屋顶 · {} 条修正记录",
+                    generated.width,
+                    generated.height,
+                    generated.length,
+                    generated.report.non_air_blocks,
+                    generated.report.generator,
+                    generated.report.blocks_per_meter,
+                    generated.report.floor_count,
+                    generated.report.roof_shape,
+                    generated.report.correction_notes.len()
+                )
+            })
+            .unwrap_or_else(|| "尚未生成解释结果".into())
+            .into(),
     );
     ui.set_measured_height(
         selected_measurements
@@ -642,6 +832,199 @@ fn replace_generated_block_at(
     )
     .map_err(|error| error.to_string())?;
     Ok(replaced_block)
+}
+
+#[derive(Clone, Copy)]
+struct OccupiedBounds {
+    min_x: usize,
+    max_x: usize,
+    min_y: usize,
+    max_y: usize,
+    min_z: usize,
+    max_z: usize,
+}
+
+fn apply_semantic_feature(
+    path: &PathBuf,
+    kind: SemanticFeatureKind,
+    side: SemanticFeatureSide,
+    height_band: SemanticHeightBand,
+    strength: SemanticStrength,
+    label: &str,
+    reason: &str,
+) -> Result<(usize, String), String> {
+    if label.trim().is_empty() || reason.trim().is_empty() {
+        return Err("语义特征需要名称和证据理由".into());
+    }
+    let mut generated: arnis_core::GeneratedBuilding =
+        serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let total = generated.width * generated.height * generated.length;
+    let mut blocks = Vec::with_capacity(total);
+    for run in &generated.block_runs {
+        blocks.extend(std::iter::repeat_n(
+            run.palette_index,
+            run.run_length as usize,
+        ));
+    }
+    if blocks.len() != total {
+        return Err("生成模型 RLE 尺寸无效".into());
+    }
+    let mut bounds = OccupiedBounds {
+        min_x: generated.width,
+        max_x: 0,
+        min_y: generated.height,
+        max_y: 0,
+        min_z: generated.length,
+        max_z: 0,
+    };
+    let mut occupied = false;
+    for (index, palette_index) in blocks.iter().enumerate() {
+        if *palette_index == 0 {
+            continue;
+        }
+        occupied = true;
+        let x = index % generated.width;
+        let z = (index / generated.width) % generated.length;
+        let y = index / (generated.width * generated.length);
+        bounds.min_x = bounds.min_x.min(x);
+        bounds.max_x = bounds.max_x.max(x);
+        bounds.min_y = bounds.min_y.min(y);
+        bounds.max_y = bounds.max_y.max(y);
+        bounds.min_z = bounds.min_z.min(z);
+        bounds.max_z = bounds.max_z.max(z);
+    }
+    if !occupied {
+        return Err("生成模型没有可标注的非空气方块".into());
+    }
+    let preferred = match kind {
+        SemanticFeatureKind::WindowBand => "minecraft:glass",
+        SemanticFeatureKind::EntranceEmphasis => {
+            if generated
+                .palette
+                .iter()
+                .any(|block| block == "minecraft:dark_oak_door")
+            {
+                "minecraft:dark_oak_door"
+            } else {
+                "minecraft:polished_andesite"
+            }
+        }
+        SemanticFeatureKind::RoofRidge => {
+            if generated.report.roof_shape == "flat" {
+                "minecraft:polished_andesite"
+            } else {
+                "minecraft:dark_oak_slab"
+            }
+        }
+        SemanticFeatureKind::Cornice | SemanticFeatureKind::Frame => "minecraft:polished_andesite",
+    };
+    let palette_index = generated
+        .palette
+        .iter()
+        .position(|block| block == preferred)
+        .unwrap_or_else(|| {
+            generated.palette.push(preferred.into());
+            generated.palette.len() - 1
+        }) as u16;
+    let span_y = bounds.max_y.saturating_sub(bounds.min_y);
+    let base_y = match height_band {
+        SemanticHeightBand::Lower => bounds.min_y + span_y / 4,
+        SemanticHeightBand::Middle => bounds.min_y + span_y / 2,
+        SemanticHeightBand::Upper => bounds.min_y + span_y * 3 / 4,
+        SemanticHeightBand::Roof => bounds.max_y,
+    };
+    let feature_width = match strength {
+        SemanticStrength::Subtle => 3,
+        SemanticStrength::Visible => 5,
+        SemanticStrength::Strong => 7,
+    };
+    let half = feature_width / 2;
+    let mut cells = Vec::new();
+    if kind == SemanticFeatureKind::RoofRidge {
+        let z = (bounds.min_z + bounds.max_z) / 2;
+        cells.extend((bounds.min_x..=bounds.max_x).map(|x| (x, bounds.max_y, z)));
+    } else if matches!(side, SemanticFeatureSide::East | SemanticFeatureSide::West) {
+        let x = if side == SemanticFeatureSide::East {
+            bounds.max_x
+        } else {
+            bounds.min_x
+        };
+        let center = (bounds.min_z + bounds.max_z) / 2;
+        for z in center.saturating_sub(half)..=(center + half).min(bounds.max_z) {
+            add_semantic_vertical_cells(&mut cells, x, base_y, z, kind, generated.height);
+        }
+    } else {
+        let z = match side {
+            SemanticFeatureSide::North => bounds.min_z,
+            SemanticFeatureSide::South => bounds.max_z,
+            _ => (bounds.min_z + bounds.max_z) / 2,
+        };
+        let center = (bounds.min_x + bounds.max_x) / 2;
+        for x in center.saturating_sub(half)..=(center + half).min(bounds.max_x) {
+            add_semantic_vertical_cells(&mut cells, x, base_y, z, kind, generated.height);
+        }
+    }
+    cells.sort_unstable();
+    cells.dedup();
+    let mut affected = 0usize;
+    for (x, y, z) in cells {
+        let index = x + z * generated.width + y * generated.width * generated.length;
+        if blocks[index] != palette_index {
+            blocks[index] = palette_index;
+            affected += 1;
+        }
+    }
+    generated.block_runs = compress_palette_indices(&blocks);
+    generated.report.correction_notes.push(format!(
+        "semantic feature: {} · {} · {} block(s) · {}",
+        kind.label(),
+        affected,
+        label.trim(),
+        reason.trim()
+    ));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&generated).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((affected, preferred.into()))
+}
+
+fn add_semantic_vertical_cells(
+    cells: &mut Vec<(usize, usize, usize)>,
+    x: usize,
+    y: usize,
+    z: usize,
+    kind: SemanticFeatureKind,
+    model_height: usize,
+) {
+    let offsets: &[i32] = match kind {
+        SemanticFeatureKind::EntranceEmphasis => &[0, 1, 2],
+        SemanticFeatureKind::WindowBand => &[-1, 0, 1],
+        _ => &[0],
+    };
+    for offset in offsets {
+        let target_y = (y as i32 + offset).clamp(0, model_height.saturating_sub(1) as i32) as usize;
+        cells.push((x, target_y, z));
+    }
+}
+
+fn compress_palette_indices(blocks: &[u16]) -> Vec<arnis_core::BlockRun> {
+    let mut runs: Vec<arnis_core::BlockRun> = Vec::new();
+    for palette_index in blocks {
+        if let Some(previous) = runs.last_mut() {
+            if previous.palette_index == *palette_index && previous.run_length < u32::MAX {
+                previous.run_length += 1;
+                continue;
+            }
+        }
+        runs.push(arnis_core::BlockRun {
+            palette_index: *palette_index,
+            run_length: 1,
+        });
+    }
+    runs
 }
 
 enum ToolUpdate {
@@ -992,6 +1375,42 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|filter| SharedString::from(filter.label()))
             .collect::<Vec<_>>(),
     )));
+    ui.set_semantic_feature_kinds(ModelRc::new(VecModel::from(
+        SemanticFeatureKind::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_semantic_feature_sides(ModelRc::new(VecModel::from(
+        SemanticFeatureSide::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_semantic_height_bands(ModelRc::new(VecModel::from(
+        SemanticHeightBand::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_semantic_strengths(ModelRc::new(VecModel::from(
+        SemanticStrength::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_external_model_decisions(ModelRc::new(VecModel::from(
+        ExternalModelDecision::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_source_conflict_decisions(ModelRc::new(VecModel::from(
+        SourceConflictDecision::ALL
+            .iter()
+            .map(|value| SharedString::from(value.label()))
+            .collect::<Vec<_>>(),
+    )));
 
     let state = Rc::new(RefCell::new(DesktopApplicationState::default()));
     let map_credentials = Rc::new(RefCell::new(load_map_credentials()));
@@ -1042,6 +1461,132 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             if let Some(ui) = weak.upgrade() {
                 sync_ui(&ui, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_choose_external_model(move |index| {
+            let mut state = state.borrow_mut();
+            state.selected_external_model = index.max(0) as usize;
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_review_external_model(move |model_index, decision_index, reason| {
+            let decision = ExternalModelDecision::ALL
+                .get(decision_index.max(0) as usize)
+                .copied()
+                .unwrap_or_default();
+            let model_id = {
+                let state = state.borrow();
+                let project = state.project.as_ref();
+                project.and_then(|project| {
+                    let slot_id =
+                        project.detailed.selected_slot_id.as_deref().or_else(|| {
+                            project.building_slots.first().map(|slot| slot.id.as_str())
+                        })?;
+                    project
+                        .detailed
+                        .external_models
+                        .iter()
+                        .filter(|review| review.slot_id == slot_id)
+                        .nth(model_index.max(0) as usize)
+                        .map(|review| review.id.clone())
+                })
+            };
+            let result = model_id
+                .ok_or_else(|| "当前建筑没有可审核的外部模型".to_string())
+                .and_then(|model_id| {
+                    let mut result = Ok(());
+                    state.borrow_mut().mutate_project(|project| {
+                        result =
+                            project.review_external_model(&model_id, decision, reason.as_str());
+                    });
+                    result
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_external_model_reason("".into());
+                            ui.set_save_status("外部模型审核已保存".into());
+                        }
+                    }
+                    Err(error) => {
+                        ui.set_save_status(format!("外部模型审核失败：{error}").into());
+                    }
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_choose_source_conflict(move |index| {
+            let mut state = state.borrow_mut();
+            state.selected_source_conflict = index.max(0) as usize;
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_review_source_conflict(move |conflict_index, decision_index, reason| {
+            let decision = SourceConflictDecision::ALL
+                .get(decision_index.max(0) as usize)
+                .copied()
+                .unwrap_or_default();
+            let conflict_id = {
+                let state = state.borrow();
+                let project = state.project.as_ref();
+                project.and_then(|project| {
+                    let slot_id =
+                        project.detailed.selected_slot_id.as_deref().or_else(|| {
+                            project.building_slots.first().map(|slot| slot.id.as_str())
+                        })?;
+                    project
+                        .detailed
+                        .source_conflicts
+                        .iter()
+                        .filter(|conflict| conflict.slot_id == slot_id)
+                        .nth(conflict_index.max(0) as usize)
+                        .map(|conflict| conflict.id.clone())
+                })
+            };
+            let result = conflict_id
+                .ok_or_else(|| "当前建筑没有可审核的来源冲突".to_string())
+                .and_then(|conflict_id| {
+                    let mut result = Ok(());
+                    state.borrow_mut().mutate_project(|project| {
+                        result =
+                            project.review_source_conflict(&conflict_id, decision, reason.as_str());
+                    });
+                    result
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_source_conflict_reason("".into());
+                            ui.set_save_status("来源冲突决策已保存".into());
+                        }
+                    }
+                    Err(error) => {
+                        ui.set_save_status(format!("来源冲突审核失败：{error}").into());
+                    }
+                }
             }
         });
     }
@@ -1396,11 +1941,25 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_switch_mode(move |detailed| {
-            state.borrow_mut().set_mode(if detailed {
+            let mut borrowed = state.borrow_mut();
+            borrowed.set_mode(if detailed {
                 DesktopMode::Detailed
             } else {
                 DesktopMode::Foundation
             });
+            if detailed {
+                borrowed.mutate_project(|project| {
+                    let ids = project
+                        .building_slots
+                        .iter()
+                        .map(|slot| slot.id.clone())
+                        .collect::<Vec<_>>();
+                    for id in ids {
+                        project.discover_external_models_for_slot(&id);
+                    }
+                });
+            }
+            drop(borrowed);
             if let Some(ui) = weak.upgrade() {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);
@@ -1509,12 +2068,20 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_choose_slot(move |index| {
-            state.borrow_mut().mutate_project(|project| {
-                project.detailed.selected_slot_id = project
+            let mut borrowed = state.borrow_mut();
+            borrowed.selected_external_model = 0;
+            borrowed.selected_source_conflict = 0;
+            borrowed.mutate_project(|project| {
+                let slot_id = project
                     .building_slots
                     .get(index.max(0) as usize)
                     .map(|slot| slot.id.clone());
+                project.detailed.selected_slot_id = slot_id.clone();
+                if let Some(slot_id) = slot_id {
+                    project.discover_external_models_for_slot(&slot_id);
+                }
             });
+            drop(borrowed);
             if let Some(ui) = weak.upgrade() {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);
@@ -1681,6 +2248,95 @@ fn main() -> Result<(), slint::PlatformError> {
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_save_status(format!("生成失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_apply_semantic_feature(move |kind, side, height, strength, label, reason| {
+            let kind = SemanticFeatureKind::ALL
+                .get(kind.max(0) as usize)
+                .copied()
+                .unwrap_or(SemanticFeatureKind::EntranceEmphasis);
+            let side = SemanticFeatureSide::ALL
+                .get(side.max(0) as usize)
+                .copied()
+                .unwrap_or(SemanticFeatureSide::Center);
+            let height_band = SemanticHeightBand::ALL
+                .get(height.max(0) as usize)
+                .copied()
+                .unwrap_or(SemanticHeightBand::Lower);
+            let strength = SemanticStrength::ALL
+                .get(strength.max(0) as usize)
+                .copied()
+                .unwrap_or(SemanticStrength::Visible);
+            let snapshot = {
+                let state = state.borrow();
+                let project = state.project.as_ref();
+                project.and_then(|project| {
+                    let slot_id =
+                        project.detailed.selected_slot_id.clone().or_else(|| {
+                            project.building_slots.first().map(|slot| slot.id.clone())
+                        })?;
+                    let refinement = project.latest_refinement(&slot_id)?;
+                    (refinement.status == campus_state::RefinementStatus::Draft).then(|| {
+                        (
+                            refinement.generated_path.clone(),
+                            slot_id,
+                            refinement.id.clone(),
+                        )
+                    })
+                })
+            };
+            let result = snapshot
+                .ok_or_else(|| "请先生成尚未确认的 refinement 草稿".to_string())
+                .and_then(|(path, slot_id, refinement_id)| {
+                    apply_semantic_feature(
+                        &path,
+                        kind,
+                        side,
+                        height_band,
+                        strength,
+                        label.as_str(),
+                        reason.as_str(),
+                    )
+                    .map(|(affected, block)| (slot_id, refinement_id, affected, block))
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok((slot_id, refinement_id, affected, block)) => {
+                        state.borrow_mut().mutate_project(|project| {
+                            project.record_semantic_feature(
+                                &slot_id,
+                                &refinement_id,
+                                SemanticFeatureDraft {
+                                    kind,
+                                    label: label.to_string(),
+                                    side,
+                                    height_band,
+                                    strength,
+                                    reason: reason.to_string(),
+                                },
+                                affected,
+                                block.clone(),
+                            );
+                        });
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_semantic_feature_label("".into());
+                            ui.set_semantic_feature_reason("".into());
+                            ui.set_save_status(
+                                format!("已应用 {}：{} 个方块使用 {block}", kind.label(), affected)
+                                    .into(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        ui.set_save_status(format!("语义特征应用失败：{error}").into());
+                    }
                 }
             }
         });
@@ -1856,6 +2512,18 @@ mod tests {
             .palette
             .iter()
             .any(|block| block.contains("glass")));
+        let (semantic_affected, semantic_block) = apply_semantic_feature(
+            &path,
+            SemanticFeatureKind::WindowBand,
+            SemanticFeatureSide::South,
+            SemanticHeightBand::Middle,
+            SemanticStrength::Visible,
+            "south window band",
+            "fixture evidence",
+        )
+        .unwrap();
+        assert!(semantic_affected > 0);
+        assert_eq!(semantic_block, "minecraft:glass");
         let source = generated
             .palette
             .iter()

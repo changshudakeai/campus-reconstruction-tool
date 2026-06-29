@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -231,6 +232,8 @@ pub struct MapCandidate {
     #[serde(default)]
     pub roof_shape: Option<String>,
     #[serde(default)]
+    pub tags: BTreeMap<String, String>,
+    #[serde(default)]
     pub review: ReviewDecision,
 }
 
@@ -297,6 +300,240 @@ pub struct PreviewBlockSelection {
     pub y: i32,
     pub z: i32,
     pub block: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticFeatureKind {
+    EntranceEmphasis,
+    WindowBand,
+    RoofRidge,
+    Cornice,
+    Frame,
+}
+
+impl SemanticFeatureKind {
+    pub const ALL: [Self; 5] = [
+        Self::EntranceEmphasis,
+        Self::WindowBand,
+        Self::RoofRidge,
+        Self::Cornice,
+        Self::Frame,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EntranceEmphasis => "入口强调",
+            Self::WindowBand => "连续窗带",
+            Self::RoofRidge => "屋脊",
+            Self::Cornice => "檐口",
+            Self::Frame => "立面框架",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticFeatureSide {
+    North,
+    South,
+    East,
+    West,
+    Center,
+}
+
+impl SemanticFeatureSide {
+    pub const ALL: [Self; 5] = [
+        Self::North,
+        Self::South,
+        Self::East,
+        Self::West,
+        Self::Center,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::North => "北侧",
+            Self::South => "南侧",
+            Self::East => "东侧",
+            Self::West => "西侧",
+            Self::Center => "中心",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticHeightBand {
+    Lower,
+    Middle,
+    Upper,
+    Roof,
+}
+
+impl SemanticHeightBand {
+    pub const ALL: [Self; 4] = [Self::Lower, Self::Middle, Self::Upper, Self::Roof];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lower => "下部",
+            Self::Middle => "中部",
+            Self::Upper => "上部",
+            Self::Roof => "屋顶",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticStrength {
+    Subtle,
+    Visible,
+    Strong,
+}
+
+impl SemanticStrength {
+    pub const ALL: [Self; 3] = [Self::Subtle, Self::Visible, Self::Strong];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Subtle => "轻微",
+            Self::Visible => "清晰可见",
+            Self::Strong => "强强调",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticFeatureRecord {
+    pub id: String,
+    pub slot_id: String,
+    pub refinement_id: String,
+    pub kind: SemanticFeatureKind,
+    pub label: String,
+    pub side: SemanticFeatureSide,
+    pub height_band: SemanticHeightBand,
+    pub strength: SemanticStrength,
+    pub reason: String,
+    pub affected_blocks: usize,
+    pub block: String,
+    pub applied_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticFeatureDraft {
+    pub kind: SemanticFeatureKind,
+    pub label: String,
+    pub side: SemanticFeatureSide,
+    pub height_band: SemanticHeightBand,
+    pub strength: SemanticStrength,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalModelEligibility {
+    Eligible,
+    Blocked,
+}
+
+impl ExternalModelEligibility {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Eligible => "许可允许适配",
+            Self::Blocked => "许可阻止适配",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalModelDecision {
+    #[default]
+    Pending,
+    EligiblePrimary,
+    SupportingEvidence,
+    Rejected,
+}
+
+impl ExternalModelDecision {
+    pub const ALL: [Self; 4] = [
+        Self::Pending,
+        Self::EligiblePrimary,
+        Self::SupportingEvidence,
+        Self::Rejected,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "待审核",
+            Self::EligiblePrimary => "采用为主几何",
+            Self::SupportingEvidence => "仅作辅助证据",
+            Self::Rejected => "拒绝",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalModelReview {
+    pub id: String,
+    pub slot_id: String,
+    pub title: String,
+    pub source: String,
+    pub source_url: String,
+    pub author: String,
+    pub license_name: Option<String>,
+    pub eligibility: ExternalModelEligibility,
+    pub decision: ExternalModelDecision,
+    pub decision_reason: String,
+    pub reviewed_at_unix_ms: Option<u64>,
+    pub width_m: Option<f64>,
+    pub height_m: Option<f64>,
+    pub length_m: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceConflictDecision {
+    #[default]
+    Unresolved,
+    PrimarySelected,
+    SupportingOnly,
+    Rejected,
+}
+
+impl SourceConflictDecision {
+    pub const ALL: [Self; 4] = [
+        Self::Unresolved,
+        Self::PrimarySelected,
+        Self::SupportingOnly,
+        Self::Rejected,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unresolved => "未解决",
+            Self::PrimarySelected => "选择主来源",
+            Self::SupportingOnly => "仅作辅助",
+            Self::Rejected => "拒绝冲突来源",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceConflictReview {
+    pub id: String,
+    pub slot_id: String,
+    pub external_model_id: String,
+    pub kind: String,
+    pub severity: String,
+    pub summary: String,
+    pub decision: SourceConflictDecision,
+    pub decision_reason: String,
+    pub decided_at_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -407,6 +644,12 @@ pub struct DetailedBuildingState {
     pub generated_path: Option<PathBuf>,
     #[serde(default)]
     pub refinements: Vec<BuildingRefinement>,
+    #[serde(default)]
+    pub semantic_features: Vec<SemanticFeatureRecord>,
+    #[serde(default)]
+    pub external_models: Vec<ExternalModelReview>,
+    #[serde(default)]
+    pub source_conflicts: Vec<SourceConflictReview>,
 }
 
 impl Default for DetailedBuildingState {
@@ -419,6 +662,9 @@ impl Default for DetailedBuildingState {
             wall_depth: 50,
             generated_path: None,
             refinements: Vec::new(),
+            semantic_features: Vec::new(),
+            external_models: Vec::new(),
+            source_conflicts: Vec::new(),
         }
     }
 }
@@ -605,6 +851,183 @@ impl CampusProject {
         Some(self.detailed.refinements[index].version)
     }
 
+    pub fn record_semantic_feature(
+        &mut self,
+        slot_id: &str,
+        refinement_id: &str,
+        draft: SemanticFeatureDraft,
+        affected_blocks: usize,
+        block: String,
+    ) {
+        let applied_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.detailed.semantic_features.push(SemanticFeatureRecord {
+            id: format!(
+                "{refinement_id}:semantic:{}",
+                self.detailed.semantic_features.len() + 1
+            ),
+            slot_id: slot_id.to_string(),
+            refinement_id: refinement_id.to_string(),
+            kind: draft.kind,
+            label: draft.label,
+            side: draft.side,
+            height_band: draft.height_band,
+            strength: draft.strength,
+            reason: draft.reason,
+            affected_blocks,
+            block,
+            applied_at_unix_ms,
+        });
+    }
+
+    pub fn discover_external_models_for_slot(&mut self, slot_id: &str) {
+        let Some(slot) = self
+            .building_slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(candidate) = self
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == slot_id)
+            .cloned()
+        else {
+            return;
+        };
+        let (observed_width, observed_length) = footprint_dimensions_m(&slot.footprint);
+        let mut discovered = Vec::new();
+        for key in ["3dmr", "3dmr:id", "model:3dmr", "model", "3d_model"] {
+            let Some(value) = candidate
+                .tags
+                .get(key)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let id = format!("{}:3dmr:{}", candidate.id, slug(value));
+            if discovered
+                .iter()
+                .any(|review: &ExternalModelReview| review.id == id)
+            {
+                continue;
+            }
+            discovered.push(external_model_from_tags(
+                &candidate,
+                &slot,
+                id,
+                "3DMR",
+                value,
+                observed_width,
+                observed_length,
+            ));
+        }
+        if let Some(value) = candidate
+            .tags
+            .get("wikidata")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            discovered.push(external_model_from_tags(
+                &candidate,
+                &slot,
+                format!("{}:wikidata:{}", candidate.id, slug(value)),
+                "Wikidata",
+                value,
+                observed_width,
+                observed_length,
+            ));
+        }
+        for review in discovered {
+            if self
+                .detailed
+                .external_models
+                .iter()
+                .any(|existing| existing.id == review.id)
+            {
+                continue;
+            }
+            let mut conflicts = conflicts_for_external_model(&slot, &review);
+            self.detailed.external_models.push(review);
+            for conflict in conflicts.drain(..) {
+                if !self
+                    .detailed
+                    .source_conflicts
+                    .iter()
+                    .any(|existing| existing.id == conflict.id)
+                {
+                    self.detailed.source_conflicts.push(conflict);
+                }
+            }
+        }
+    }
+
+    pub fn review_external_model(
+        &mut self,
+        id: &str,
+        decision: ExternalModelDecision,
+        reason: &str,
+    ) -> Result<(), String> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err("外部模型审核需要理由".into());
+        }
+        let review = self
+            .detailed
+            .external_models
+            .iter_mut()
+            .find(|review| review.id == id)
+            .ok_or("外部模型候选不存在")?;
+        if decision == ExternalModelDecision::EligiblePrimary
+            && review.eligibility != ExternalModelEligibility::Eligible
+        {
+            return Err("许可不明确或阻止适配的模型不能作为主几何".into());
+        }
+        if decision == ExternalModelDecision::EligiblePrimary
+            && review
+                .license_name
+                .as_deref()
+                .is_some_and(|license| license.to_ascii_uppercase().contains("BY"))
+            && review.author.trim().is_empty()
+        {
+            return Err("需要署名的外部模型必须记录作者".into());
+        }
+        review.decision = decision;
+        review.decision_reason = reason.to_string();
+        review.reviewed_at_unix_ms = Some(now_unix_ms());
+        Ok(())
+    }
+
+    pub fn review_source_conflict(
+        &mut self,
+        id: &str,
+        decision: SourceConflictDecision,
+        reason: &str,
+    ) -> Result<(), String> {
+        if decision == SourceConflictDecision::Unresolved {
+            return Err("请选择明确的来源冲突决策".into());
+        }
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err("来源冲突决策需要理由".into());
+        }
+        let conflict = self
+            .detailed
+            .source_conflicts
+            .iter_mut()
+            .find(|conflict| conflict.id == id)
+            .ok_or("来源冲突不存在")?;
+        conflict.decision = decision;
+        conflict.decision_reason = reason.to_string();
+        conflict.decided_at_unix_ms = Some(now_unix_ms());
+        Ok(())
+    }
+
     pub fn reject_candidate(&mut self, id: &str) -> bool {
         let Some(candidate) = self.candidates.iter_mut().find(|item| item.id == id) else {
             return false;
@@ -635,6 +1058,218 @@ impl CampusProject {
     }
 }
 
+fn external_model_from_tags(
+    candidate: &MapCandidate,
+    slot: &BuildingSlot,
+    id: String,
+    source: &str,
+    value: &str,
+    observed_width: f64,
+    observed_length: f64,
+) -> ExternalModelReview {
+    let namespace = if source == "Wikidata" {
+        "wikidata"
+    } else {
+        "3dmr"
+    };
+    let license_name = candidate
+        .tags
+        .get(&format!("{namespace}:license"))
+        .or_else(|| candidate.tags.get("model:license"))
+        .or_else(|| candidate.tags.get("license"))
+        .cloned();
+    let eligibility = if license_name
+        .as_deref()
+        .is_some_and(license_allows_adaptation)
+    {
+        ExternalModelEligibility::Eligible
+    } else {
+        ExternalModelEligibility::Blocked
+    };
+    let source_url = candidate
+        .tags
+        .get(&format!("{namespace}:url"))
+        .or_else(|| candidate.tags.get("model:url"))
+        .cloned()
+        .unwrap_or_else(|| {
+            if value.starts_with("http://") || value.starts_with("https://") {
+                value.to_string()
+            } else if source == "Wikidata" {
+                format!("https://www.wikidata.org/wiki/{value}")
+            } else {
+                format!("https://3dmr.eu/models/{value}")
+            }
+        });
+    ExternalModelReview {
+        id,
+        slot_id: slot.id.clone(),
+        title: candidate
+            .tags
+            .get(&format!("{namespace}:title"))
+            .or_else(|| candidate.tags.get("model:title"))
+            .cloned()
+            .unwrap_or_else(|| candidate.name.clone()),
+        source: source.into(),
+        source_url,
+        author: candidate
+            .tags
+            .get(&format!("{namespace}:author"))
+            .or_else(|| candidate.tags.get("model:author"))
+            .or_else(|| candidate.tags.get("author"))
+            .cloned()
+            .unwrap_or_default(),
+        license_name,
+        eligibility,
+        decision: ExternalModelDecision::Pending,
+        decision_reason: String::new(),
+        reviewed_at_unix_ms: None,
+        width_m: tag_number(&candidate.tags, &["model:width", "3dmr:width"])
+            .or(Some(observed_width)),
+        height_m: tag_number(&candidate.tags, &["model:height", "3dmr:height"]).or(slot.height_m),
+        length_m: tag_number(&candidate.tags, &["model:length", "3dmr:length"])
+            .or(Some(observed_length)),
+    }
+}
+
+fn conflicts_for_external_model(
+    slot: &BuildingSlot,
+    model: &ExternalModelReview,
+) -> Vec<SourceConflictReview> {
+    let mut result = Vec::new();
+    if model.eligibility == ExternalModelEligibility::Blocked {
+        result.push(SourceConflictReview {
+            id: format!("license:{}", model.id),
+            slot_id: slot.id.clone(),
+            external_model_id: model.id.clone(),
+            kind: "license_blocked".into(),
+            severity: "blocking".into(),
+            summary: "外部模型缺少明确的可改编许可，不能进入最终 schematic。".into(),
+            decision: SourceConflictDecision::Unresolved,
+            decision_reason: String::new(),
+            decided_at_unix_ms: None,
+        });
+    }
+    let (observed_width, observed_length) = footprint_dimensions_m(&slot.footprint);
+    let deltas = [
+        model
+            .width_m
+            .map(|value| percent_delta(value, observed_width)),
+        model
+            .length_m
+            .map(|value| percent_delta(value, observed_length)),
+        model
+            .height_m
+            .zip(slot.height_m)
+            .map(|(value, observed)| percent_delta(value, observed)),
+    ];
+    let max_delta = deltas.into_iter().flatten().fold(0.0, f64::max);
+    if max_delta > 15.0 {
+        result.push(SourceConflictReview {
+            id: format!("dimensions:{}", model.id),
+            slot_id: slot.id.clone(),
+            external_model_id: model.id.clone(),
+            kind: "dimension_mismatch".into(),
+            severity: if max_delta > 30.0 {
+                "blocking".into()
+            } else {
+                "warning".into()
+            },
+            summary: format!("外部模型尺寸与已审核观测证据最多相差 {max_delta:.1}%。"),
+            decision: SourceConflictDecision::Unresolved,
+            decision_reason: String::new(),
+            decided_at_unix_ms: None,
+        });
+    }
+    result
+}
+
+fn tag_number(tags: &BTreeMap<String, String>, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| tags.get(*key)?.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn license_allows_adaptation(license: &str) -> bool {
+    let normalized = license.to_ascii_lowercase();
+    !normalized.contains("-nd")
+        && !normalized.contains(" no derivatives")
+        && [
+            "cc0",
+            "cc-by",
+            "cc by",
+            "odbl",
+            "mit",
+            "apache",
+            "bsd",
+            "public domain",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn footprint_dimensions_m(points: &[GeoPoint]) -> (f64, f64) {
+    if points.is_empty() {
+        return (0.0, 0.0);
+    }
+    let min_lng = points
+        .iter()
+        .map(|point| point.lng)
+        .fold(f64::INFINITY, f64::min);
+    let max_lng = points
+        .iter()
+        .map(|point| point.lng)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_lat = points
+        .iter()
+        .map(|point| point.lat)
+        .fold(f64::INFINITY, f64::min);
+    let max_lat = points
+        .iter()
+        .map(|point| point.lat)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let center_lat = ((min_lat + max_lat) / 2.0).to_radians();
+    (
+        (max_lng - min_lng).abs() * 111_320.0 * center_lat.cos(),
+        (max_lat - min_lat).abs() * 111_320.0,
+    )
+}
+
+fn percent_delta(value: f64, observed: f64) -> f64 {
+    if observed <= 0.0 {
+        0.0
+    } else {
+        (value - observed).abs() / observed * 100.0
+    }
+}
+
+fn slug(value: &str) -> String {
+    let slug = value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if slug.is_empty() {
+        "model".into()
+    } else {
+        slug
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn default_block(kind: FeatureKind) -> &'static str {
     FoundationStylePreset::ArnisClassic.block(kind)
 }
@@ -650,6 +1285,8 @@ pub struct DesktopApplicationState {
     pub tool_status: Option<String>,
     pub selected_preview_block: Option<PreviewBlockSelection>,
     pub active_preview_path: Option<PathBuf>,
+    pub selected_external_model: usize,
+    pub selected_source_conflict: usize,
     undo_stack: Vec<CampusProject>,
     redo_stack: Vec<CampusProject>,
 }
@@ -665,6 +1302,8 @@ impl DesktopApplicationState {
         self.tool_status = None;
         self.selected_preview_block = None;
         self.active_preview_path = None;
+        self.selected_external_model = 0;
+        self.selected_source_conflict = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -780,6 +1419,8 @@ impl DesktopApplicationState {
         self.tool_status = None;
         self.selected_preview_block = None;
         self.active_preview_path = None;
+        self.selected_external_model = 0;
+        self.selected_source_conflict = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
@@ -883,6 +1524,15 @@ fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject,
                     .get("roofShape")
                     .and_then(|value| value.as_str())
                     .map(str::to_owned),
+                tags: candidate
+                    .get("tags")
+                    .and_then(|value| value.as_object())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|value| (key.clone(), value.to_string()))
+                    })
+                    .collect(),
                 review,
             });
         }
@@ -1021,6 +1671,12 @@ mod tests {
             height_m: Some(18.0),
             floors: Some(4),
             roof_shape: Some("flat".into()),
+            tags: BTreeMap::from([
+                ("3dmr".into(), "model-42".into()),
+                ("3dmr:license".into(), "CC-BY-4.0".into()),
+                ("3dmr:author".into(), "Example Author".into()),
+                ("model:height".into(), "30".into()),
+            ]),
             review: ReviewDecision::Pending,
         });
         assert!(project.accept_candidate("osm:1"));
@@ -1030,6 +1686,33 @@ mod tests {
         project.apply_foundation_style(FoundationStylePreset::HistoricRedBrick);
         assert_eq!(project.features[0].block, "minecraft:bricks");
         assert_eq!(project.foundation_style_preset.road_width_blocks(), 3);
+        project.discover_external_models_for_slot("osm:1");
+        assert_eq!(project.detailed.external_models.len(), 1);
+        assert_eq!(
+            project.detailed.external_models[0].eligibility,
+            ExternalModelEligibility::Eligible
+        );
+        assert!(project
+            .detailed
+            .source_conflicts
+            .iter()
+            .any(|conflict| conflict.kind == "dimension_mismatch"));
+        let model_id = project.detailed.external_models[0].id.clone();
+        project
+            .review_external_model(
+                &model_id,
+                ExternalModelDecision::EligiblePrimary,
+                "许可和身份均已核对",
+            )
+            .unwrap();
+        let conflict_id = project.detailed.source_conflicts[0].id.clone();
+        project
+            .review_source_conflict(
+                &conflict_id,
+                SourceConflictDecision::PrimarySelected,
+                "以现场测量为准",
+            )
+            .unwrap();
         assert!(project.reset_candidate_review("osm:1"));
         assert_eq!(project.candidates[0].review, ReviewDecision::Pending);
         assert!(project.features.is_empty());
@@ -1102,5 +1785,21 @@ mod tests {
             RefinementStatus::Confirmed
         );
         assert!(project.building_slots[0].refined);
+        project.record_semantic_feature(
+            "library",
+            "library:v2",
+            SemanticFeatureDraft {
+                kind: SemanticFeatureKind::EntranceEmphasis,
+                label: "main entrance".into(),
+                side: SemanticFeatureSide::South,
+                height_band: SemanticHeightBand::Lower,
+                strength: SemanticStrength::Visible,
+                reason: "visible in reference".into(),
+            },
+            15,
+            "minecraft:polished_andesite".into(),
+        );
+        assert_eq!(project.detailed.semantic_features.len(), 1);
+        assert_eq!(project.detailed.semantic_features[0].affected_blocks, 15);
     }
 }

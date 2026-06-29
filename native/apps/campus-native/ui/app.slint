@@ -1,4 +1,4 @@
-import { AboutSlint, Button, ComboBox, LineEdit, Slider } from "std-widgets.slint";
+import { AboutSlint, Button, ComboBox, LineEdit, ScrollView, Slider } from "std-widgets.slint";
 
 export struct CandidateRow {
     id: string,
@@ -90,6 +90,32 @@ export component AppWindow inherits Window {
     in-out property <bool> can-confirm-refinement: false;
     in-out property <string> selected-block-summary: "尚未在预览中选择方块";
     in-out property <string> selected-block-target: "";
+    in-out property <bool> evidence-visible: false;
+    in-out property <[string]> semantic-feature-kinds: [];
+    in-out property <[string]> semantic-feature-sides: [];
+    in-out property <[string]> semantic-height-bands: [];
+    in-out property <[string]> semantic-strengths: [];
+    in-out property <int> selected-semantic-kind: 0;
+    in-out property <int> selected-semantic-side: 0;
+    in-out property <int> selected-semantic-height: 0;
+    in-out property <int> selected-semantic-strength: 1;
+    in-out property <string> semantic-feature-label: "";
+    in-out property <string> semantic-feature-reason: "";
+    in-out property <string> semantic-feature-summary: "尚未标注识别特征";
+    in-out property <string> observed-evidence-summary: "尚未选择建筑槽位";
+    in-out property <string> generated-interpretation-summary: "尚未生成解释结果";
+    in-out property <[string]> external-models: [];
+    in-out property <int> selected-external-model: 0;
+    in-out property <string> external-model-summary: "";
+    in-out property <[string]> external-model-decisions: [];
+    in-out property <int> selected-external-decision: 0;
+    in-out property <string> external-model-reason: "";
+    in-out property <[string]> source-conflicts: [];
+    in-out property <int> selected-source-conflict: 0;
+    in-out property <string> source-conflict-summary: "";
+    in-out property <[string]> source-conflict-decisions: [];
+    in-out property <int> selected-source-conflict-decision: 0;
+    in-out property <string> source-conflict-reason: "";
     in-out property <string> replace-source: "";
     in-out property <string> replace-target: "";
 
@@ -122,6 +148,11 @@ export component AppWindow inherits Window {
     callback update-building-measurements(string, string, string);
     callback replace-generated-block(string, string);
     callback replace-selected-block(string);
+    callback apply-semantic-feature(int, int, int, int, string, string);
+    callback choose-external-model(int);
+    callback review-external-model(int, int, string);
+    callback choose-source-conflict(int);
+    callback review-source-conflict(int, int, string);
 
     shortcut-scope := FocusScope {
       VerticalLayout {
@@ -362,6 +393,10 @@ export component AppWindow inherits Window {
                                 clicked => { root.confirm-refinement(); }
                             }
                         }
+                        Button {
+                            text: "证据与识别特征";
+                            clicked => { root.evidence-visible = true; }
+                        }
                         Button { text: "打开上次生成的预览"; clicked => { root.open-preview(); } }
                         Text {
                             text: "预览选择：" + root.selected-block-summary;
@@ -457,6 +492,161 @@ export component AppWindow inherits Window {
             AboutSlint {}
             Rectangle { vertical-stretch: 1; background: transparent; }
             Button { text: "关闭"; clicked => { root.about-visible = false; } }
+        }
+    }
+
+    if root.evidence-visible : Rectangle {
+        x: 220px;
+        y: 85px;
+        width: 840px;
+        height: 650px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            HorizontalLayout {
+                SectionLabel { text: "Detailed 证据与识别特征"; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: "关闭"; clicked => { root.evidence-visible = false; } }
+            }
+            Rule {}
+            ScrollView {
+                VerticalLayout {
+                    padding-right: 12px;
+                    spacing: 12px;
+                    SectionLabel { text: "观测建筑证据"; }
+                    Text {
+                        text: root.observed-evidence-summary;
+                        color: #33463d;
+                        wrap: word-wrap;
+                    }
+                    SectionLabel { text: "生成建筑解释"; }
+                    Text {
+                        text: root.generated-interpretation-summary;
+                        color: #33463d;
+                        wrap: word-wrap;
+                    }
+                    Rule {}
+                    SectionLabel { text: "外部 3D 模型许可审核"; }
+                    external-model-box := ComboBox {
+                        model: root.external-models;
+                        current-index <=> root.selected-external-model;
+                        selected(value) => {
+                            root.choose-external-model(external-model-box.current-index);
+                        }
+                    }
+                    Text {
+                        text: root.external-model-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    external-decision-box := ComboBox {
+                        model: root.external-model-decisions;
+                        current-index <=> root.selected-external-decision;
+                    }
+                    LineEdit {
+                        text <=> root.external-model-reason;
+                        placeholder-text: "外部模型审核理由";
+                    }
+                    Button {
+                        text: "保存外部模型审核";
+                        clicked => {
+                            root.review-external-model(
+                                root.selected-external-model,
+                                root.selected-external-decision,
+                                root.external-model-reason
+                            );
+                        }
+                    }
+                    SectionLabel { text: "来源冲突审核"; }
+                    source-conflict-box := ComboBox {
+                        model: root.source-conflicts;
+                        current-index <=> root.selected-source-conflict;
+                        selected(value) => {
+                            root.choose-source-conflict(source-conflict-box.current-index);
+                        }
+                    }
+                    Text {
+                        text: root.source-conflict-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    conflict-decision-box := ComboBox {
+                        model: root.source-conflict-decisions;
+                        current-index <=> root.selected-source-conflict-decision;
+                    }
+                    LineEdit {
+                        text <=> root.source-conflict-reason;
+                        placeholder-text: "来源冲突决策理由";
+                    }
+                    Button {
+                        text: "保存来源冲突决策";
+                        clicked => {
+                            root.review-source-conflict(
+                                root.selected-source-conflict,
+                                root.selected-source-conflict-decision,
+                                root.source-conflict-reason
+                            );
+                        }
+                    }
+                    Rule {}
+                    SectionLabel { text: "语义特征保留"; }
+                    Text {
+                        text: "标注入口、窗带、屋脊、檐口或框架；规则只增强局部可识别性，不改变建筑包络。";
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        semantic-kind-box := ComboBox {
+                            model: root.semantic-feature-kinds;
+                            current-index <=> root.selected-semantic-kind;
+                        }
+                        semantic-side-box := ComboBox {
+                            model: root.semantic-feature-sides;
+                            current-index <=> root.selected-semantic-side;
+                        }
+                        semantic-height-box := ComboBox {
+                            model: root.semantic-height-bands;
+                            current-index <=> root.selected-semantic-height;
+                        }
+                        semantic-strength-box := ComboBox {
+                            model: root.semantic-strengths;
+                            current-index <=> root.selected-semantic-strength;
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.semantic-feature-label;
+                        placeholder-text: "特征名称，例如：图书馆南门";
+                    }
+                    LineEdit {
+                        text <=> root.semantic-feature-reason;
+                        placeholder-text: "证据理由，例如：高德 3D 与现场照片均可见";
+                    }
+                    Text {
+                        text: root.semantic-feature-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: "应用到当前 refinement";
+                        clicked => {
+                            root.apply-semantic-feature(
+                                root.selected-semantic-kind,
+                                root.selected-semantic-side,
+                                root.selected-semantic-height,
+                                root.selected-semantic-strength,
+                                root.semantic-feature-label,
+                                root.semantic-feature-reason
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
