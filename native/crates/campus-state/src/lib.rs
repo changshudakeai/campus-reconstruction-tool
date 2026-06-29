@@ -248,6 +248,22 @@ pub struct MapFeature {
     pub source_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildingDirectoryRecord {
+    pub source_id: String,
+    pub name: String,
+    pub updated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildingSuppression {
+    pub source_id: String,
+    pub reason: String,
+    pub suppressed_at_unix_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildingSlot {
@@ -695,6 +711,10 @@ pub struct CampusProject {
     #[serde(default)]
     pub building_slots: Vec<BuildingSlot>,
     #[serde(default)]
+    pub building_directory: Vec<BuildingDirectoryRecord>,
+    #[serde(default)]
+    pub building_suppressions: Vec<BuildingSuppression>,
+    #[serde(default)]
     pub foundation_style_preset: FoundationStylePreset,
     #[serde(default)]
     pub foundation_preview_path: Option<PathBuf>,
@@ -722,6 +742,8 @@ impl CampusProject {
             candidates: Vec::new(),
             features: Vec::new(),
             building_slots: Vec::new(),
+            building_directory: Vec::new(),
+            building_suppressions: Vec::new(),
             foundation_style_preset: FoundationStylePreset::ArnisClassic,
             foundation_preview_path: None,
             detailed: DetailedBuildingState::default(),
@@ -764,6 +786,15 @@ impl CampusProject {
                 floors: candidate.floors,
                 roof_shape: candidate.roof_shape.clone(),
                 refined: false,
+            });
+            let source_id = candidate.id.clone();
+            let name = candidate.name.clone();
+            self.building_directory
+                .retain(|record| record.source_id != source_id);
+            self.building_directory.push(BuildingDirectoryRecord {
+                source_id,
+                name,
+                updated_at_unix_ms: now_unix_ms(),
             });
         }
         true
@@ -1107,6 +1138,81 @@ impl CampusProject {
         Ok(id)
     }
 
+    pub fn rename_building(&mut self, source_id: &str, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("建筑名称不能为空".into());
+        }
+        let candidate = self
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.id == source_id)
+            .ok_or("建筑来源对象不存在")?;
+        if candidate.kind != FeatureKind::Building {
+            return Err("只有建筑候选可以进入建筑目录".into());
+        }
+        candidate.name = name.to_string();
+        for feature in self
+            .features
+            .iter_mut()
+            .filter(|feature| feature.source_id.as_deref() == Some(source_id))
+        {
+            feature.name = name.to_string();
+        }
+        for slot in self
+            .building_slots
+            .iter_mut()
+            .filter(|slot| slot.id == source_id)
+        {
+            slot.name = name.to_string();
+        }
+        self.building_directory
+            .retain(|record| record.source_id != source_id);
+        self.building_directory.push(BuildingDirectoryRecord {
+            source_id: source_id.to_string(),
+            name: name.to_string(),
+            updated_at_unix_ms: now_unix_ms(),
+        });
+        Ok(())
+    }
+
+    pub fn suppress_building(&mut self, source_id: &str, reason: &str) -> Result<(), String> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err("抑制建筑需要理由".into());
+        }
+        let candidate = self
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == source_id)
+            .ok_or("建筑来源对象不存在")?;
+        if candidate.kind != FeatureKind::Building {
+            return Err("只有建筑来源对象可以被持久抑制".into());
+        }
+        self.building_suppressions
+            .retain(|record| record.source_id != source_id);
+        self.building_suppressions.push(BuildingSuppression {
+            source_id: source_id.to_string(),
+            reason: reason.to_string(),
+            suppressed_at_unix_ms: now_unix_ms(),
+        });
+        self.building_directory
+            .retain(|record| record.source_id != source_id);
+        self.candidates
+            .retain(|candidate| candidate.id != source_id);
+        self.features
+            .retain(|feature| feature.source_id.as_deref() != Some(source_id));
+        self.building_slots.retain(|slot| slot.id != source_id);
+        Ok(())
+    }
+
+    pub fn restore_building_suppression(&mut self, source_id: &str) -> bool {
+        let before = self.building_suppressions.len();
+        self.building_suppressions
+            .retain(|record| record.source_id != source_id);
+        self.building_suppressions.len() != before
+    }
+
     pub fn confirm_step(&mut self) {
         if !self.completed_steps.contains(&self.foundation_step) {
             self.completed_steps.push(self.foundation_step);
@@ -1344,6 +1450,8 @@ pub struct DesktopApplicationState {
     pub active_preview_path: Option<PathBuf>,
     pub selected_external_model: usize,
     pub selected_source_conflict: usize,
+    pub selected_candidate_id: Option<String>,
+    pub selected_suppression: usize,
     undo_stack: Vec<CampusProject>,
     redo_stack: Vec<CampusProject>,
 }
@@ -1361,6 +1469,8 @@ impl DesktopApplicationState {
         self.active_preview_path = None;
         self.selected_external_model = 0;
         self.selected_source_conflict = 0;
+        self.selected_candidate_id = None;
+        self.selected_suppression = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -1478,6 +1588,8 @@ impl DesktopApplicationState {
         self.active_preview_path = None;
         self.selected_external_model = 0;
         self.selected_source_conflict = 0;
+        self.selected_candidate_id = None;
+        self.selected_suppression = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
@@ -1633,6 +1745,62 @@ fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject,
             });
         }
     }
+    if let Some(records) = value
+        .pointer("/campusMemory/buildingNames")
+        .and_then(|value| value.as_array())
+    {
+        for record in records {
+            let Some(source_id) = record.get("sourceId").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(name) = record.get("name").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if record.get("status").and_then(|value| value.as_str()) == Some("excluded") {
+                continue;
+            }
+            project.building_directory.push(BuildingDirectoryRecord {
+                source_id: source_id.to_string(),
+                name: name.to_string(),
+                updated_at_unix_ms: now_unix_ms(),
+            });
+            if let Some(candidate) = project
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.id == source_id)
+            {
+                candidate.name = name.to_string();
+            }
+        }
+    }
+    if let Some(suppressions) = value
+        .pointer("/campusMemory/suppressions")
+        .and_then(|value| value.as_array())
+    {
+        for suppression in suppressions {
+            let Some(source_id) = suppression.get("sourceId").and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            project.building_suppressions.push(BuildingSuppression {
+                source_id: source_id.to_string(),
+                reason: suppression
+                    .get("reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Imported legacy suppression")
+                    .to_string(),
+                suppressed_at_unix_ms: now_unix_ms(),
+            });
+        }
+        let suppressed = project
+            .building_suppressions
+            .iter()
+            .map(|record| record.source_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        project
+            .candidates
+            .retain(|candidate| !suppressed.contains(candidate.id.as_str()));
+    }
     let accepted_ids = project
         .candidates
         .iter()
@@ -1770,6 +1938,9 @@ mod tests {
                 "以现场测量为准",
             )
             .unwrap();
+        project.rename_building("osm:1", "新图书馆").unwrap();
+        assert_eq!(project.building_slots[0].name, "新图书馆");
+        assert_eq!(project.building_directory[0].name, "新图书馆");
         assert!(project.reset_candidate_review("osm:1"));
         assert_eq!(project.candidates[0].review, ReviewDecision::Pending);
         assert!(project.features.is_empty());
@@ -1797,6 +1968,41 @@ mod tests {
     }
 
     #[test]
+    fn building_suppression_is_persistent_and_recoverable() {
+        let mut project = CampusProject::new("test", "campus");
+        project.candidates.push(MapCandidate {
+            id: "osm:off-campus".into(),
+            name: "Neighbor".into(),
+            kind: FeatureKind::Building,
+            source: "osm".into(),
+            confidence: "low".into(),
+            points: vec![
+                GeoPoint { lng: 1.0, lat: 2.0 },
+                GeoPoint {
+                    lng: 1.001,
+                    lat: 2.0,
+                },
+                GeoPoint {
+                    lng: 1.001,
+                    lat: 1.999,
+                },
+            ],
+            height_m: None,
+            floors: None,
+            roof_shape: None,
+            tags: BTreeMap::new(),
+            review: ReviewDecision::Pending,
+        });
+        project
+            .suppress_building("osm:off-campus", "neighboring school")
+            .unwrap();
+        assert!(project.candidates.is_empty());
+        assert_eq!(project.building_suppressions.len(), 1);
+        assert!(project.restore_building_suppression("osm:off-campus"));
+        assert!(project.building_suppressions.is_empty());
+    }
+
+    #[test]
     fn imports_portable_web_project_v1() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("legacy.campus.json");
@@ -1820,7 +2026,10 @@ mod tests {
                   "manualFeatures": []
                 }
               },
-              "campusMemory": {}
+              "campusMemory": {
+                "buildingNames": [{"sourceId":"old-building","name":"旧版命名图书馆"}],
+                "suppressions": []
+              }
             }"#,
         )
         .unwrap();
@@ -1830,6 +2039,7 @@ mod tests {
         assert_eq!(project.name, "旧项目");
         assert_eq!(project.orientation_degrees, 18.0);
         assert_eq!(project.building_slots.len(), 1);
+        assert_eq!(project.building_slots[0].name, "旧版命名图书馆");
         assert_eq!(
             project.foundation_style_preset,
             FoundationStylePreset::ModernCampus

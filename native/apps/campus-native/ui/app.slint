@@ -22,6 +22,7 @@ component CandidateItem inherits Rectangle {
     in property <CandidateRow> candidate;
     callback decide(string, bool);
     callback reset(string);
+    callback inspect(string);
     height: 72px;
     background: #f7f3e9;
     border-color: #c7bca8;
@@ -36,6 +37,7 @@ component CandidateItem inherits Rectangle {
         }
         Rectangle { horizontal-stretch: 1; background: transparent; }
         Text { text: candidate.status; color: #a54836; vertical-alignment: center; }
+        Button { text: "详情"; clicked => { root.inspect(candidate.id); } }
         Button { text: "撤销"; enabled: candidate.status != "待审核"; clicked => { root.reset(candidate.id); } }
         Button { text: "拒绝"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, false); } }
         Button { text: "接受"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, true); } }
@@ -116,6 +118,14 @@ export component AppWindow inherits Window {
     in-out property <[string]> source-conflict-decisions: [];
     in-out property <int> selected-source-conflict-decision: 0;
     in-out property <string> source-conflict-reason: "";
+    in-out property <bool> candidate-details-visible: false;
+    in-out property <string> selected-candidate-name: "";
+    in-out property <string> selected-candidate-details: "";
+    in-out property <bool> selected-candidate-is-building: false;
+    in-out property <string> candidate-name-draft: "";
+    in-out property <string> candidate-suppression-reason: "";
+    in-out property <[string]> building-suppressions: [];
+    in-out property <int> selected-building-suppression: 0;
     in-out property <string> replace-source: "";
     in-out property <string> replace-target: "";
 
@@ -155,6 +165,10 @@ export component AppWindow inherits Window {
     callback review-external-model(int, int, string);
     callback choose-source-conflict(int);
     callback review-source-conflict(int, int, string);
+    callback open-candidate-details(string);
+    callback rename-selected-building(string);
+    callback suppress-selected-building(string);
+    callback restore-building-suppression(int);
 
     shortcut-scope := FocusScope {
       VerticalLayout {
@@ -301,6 +315,7 @@ export component AppWindow inherits Window {
                             candidate: candidate;
                             decide(id, accepted) => { root.review-candidate(id, accepted); }
                             reset(id) => { root.reset-candidate-review(id); }
+                            inspect(id) => { root.open-candidate-details(id); }
                         }
                         if root.candidates.length == 0 : Rectangle {
                             height: 120px;
@@ -657,6 +672,68 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    if root.candidate-details-visible : Rectangle {
+        x: 360px;
+        y: 145px;
+        width: 600px;
+        height: 470px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            HorizontalLayout {
+                SectionLabel { text: "候选来源与建筑目录"; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: "关闭"; clicked => { root.candidate-details-visible = false; } }
+            }
+            Text {
+                text: root.selected-candidate-name;
+                font-size: 20px;
+                font-weight: 700;
+                color: #17251f;
+            }
+            Text {
+                text: root.selected-candidate-details;
+                color: #506058;
+                wrap: word-wrap;
+            }
+            if root.selected-candidate-is-building : VerticalLayout {
+                spacing: 8px;
+                LineEdit {
+                    text <=> root.candidate-name-draft;
+                    placeholder-text: "审核后的建筑名称";
+                }
+                Button {
+                    text: "保存建筑名称";
+                    clicked => { root.rename-selected-building(root.candidate-name-draft); }
+                }
+                LineEdit {
+                    text <=> root.candidate-suppression-reason;
+                    placeholder-text: "抑制理由（错误对象、校外建筑等）";
+                }
+                Button {
+                    text: "持久抑制此建筑来源";
+                    clicked => { root.suppress-selected-building(root.candidate-suppression-reason); }
+                }
+            }
+            Rule {}
+            SectionLabel { text: "可恢复的建筑抑制"; }
+            suppression-box := ComboBox {
+                model: root.building-suppressions;
+                current-index <=> root.selected-building-suppression;
+            }
+            Button {
+                text: "恢复所选来源（下次查询重新出现）";
+                enabled: root.building-suppressions.length > 0;
+                clicked => { root.restore-building-suppression(root.selected-building-suppression); }
             }
         }
     }

@@ -15,11 +15,11 @@ block the atomic cutover required by ADR 0031.
 | Foundation | Draw, clear, save, and resume Campus Boundary | `campus-map` drawing toolbar; typed boundary event; autosaved project polygon | Shipped |
 | Foundation | Review Campus Orientation and Campus Scale | Native orientation/scale controls persist project-wide values | Shipped |
 | Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |
-| Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Confidence queues, pagination, source/confidence summary, confirm/reject/revoke are native; full provenance detail remains absent | **Partial** |
+| Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Native detail dialog exposes source object ID/tags, confidence queues and pagination are AppState-owned, and confirm/reject/revoke are reversible | Shipped |
 | Foundation | Batch accept/reject and batch-review undo | Current-kind pending candidates support one-operation accept/reject; global undo restores the batch snapshot | Shipped |
 | Foundation | Human-drawn correction for missing/incorrect feature geometry | Map protocol v2 has a dedicated feature-drawing purpose for all five kinds; accepted manual geometry is separately traceable and manual buildings create valid Building Slots | Shipped |
 | Foundation | Label-free visual capture and deterministic gap recovery | Viewport capture currently triggers structured OSM/Overture retrieval, not image recovery | **Gap** |
-| Foundation | Campus Building Directory naming and suppression | Not exposed by the native workbench | **Gap** |
+| Foundation | Campus Building Directory naming and suppression | Reviewed names propagate to features/slots; persistent suppression tombstones block rediscovery and remain recoverable; portable web directory records migrate | Shipped |
 | Foundation | Four fixed Foundation style packs and advanced style-pack import | Four legacy-compatible presets now drive persisted palette/road width and export; custom JSON import remains absent | **Partial** |
 | Foundation | Generate and inspect native Foundation preview before export | Export model is converted to the native preview snapshot and launched through the preview helper | Shipped |
 | Foundation | Sponge schematic plus portable project export | `campus-export` and Slint Foundation export action | Shipped |

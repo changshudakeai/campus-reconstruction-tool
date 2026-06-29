@@ -265,6 +265,53 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     );
     ui.set_candidate_page(page as i32);
     ui.set_candidate_pages(total_pages as i32);
+    if let Some(candidate) = state.selected_candidate_id.as_deref().and_then(|id| {
+        project
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == id)
+    }) {
+        let tags = candidate
+            .tags
+            .iter()
+            .take(12)
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        ui.set_selected_candidate_name(candidate.name.clone().into());
+        ui.set_candidate_name_draft(candidate.name.clone().into());
+        ui.set_selected_candidate_is_building(candidate.kind == FeatureKind::Building);
+        ui.set_selected_candidate_details(
+            format!(
+                "ID {} · 来源 {} · 置信度 {} · {} 个节点{}",
+                candidate.id,
+                candidate.source,
+                candidate.confidence,
+                candidate.points.len(),
+                if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · 标签 {tags}")
+                }
+            )
+            .into(),
+        );
+    } else {
+        ui.set_selected_candidate_name("未选择候选".into());
+        ui.set_selected_candidate_details("".into());
+        ui.set_selected_candidate_is_building(false);
+    }
+    let suppression_index = state
+        .selected_suppression
+        .min(project.building_suppressions.len().saturating_sub(1));
+    ui.set_selected_building_suppression(suppression_index as i32);
+    ui.set_building_suppressions(ModelRc::new(VecModel::from(
+        project
+            .building_suppressions
+            .iter()
+            .map(|record| SharedString::from(format!("{} · {}", record.source_id, record.reason)))
+            .collect::<Vec<_>>(),
+    )));
     let slots = if project.building_slots.is_empty() {
         vec![SharedString::from("暂无已审核建筑")]
     } else {
@@ -1505,6 +1552,110 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = ui.as_weak();
+        ui.on_open_candidate_details(move |id| {
+            state.borrow_mut().selected_candidate_id = Some(id.to_string());
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state.borrow());
+                ui.set_candidate_details_visible(true);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rename_selected_building(move |name| {
+            let source_id = state.borrow().selected_candidate_id.clone();
+            let result = source_id
+                .ok_or_else(|| "请先选择建筑候选".to_string())
+                .and_then(|source_id| {
+                    let mut result = Ok(());
+                    state.borrow_mut().mutate_project(|project| {
+                        result = project.rename_building(&source_id, name.as_str());
+                    });
+                    result
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_save_status("建筑目录名称已保存".into());
+                        }
+                    }
+                    Err(error) => {
+                        ui.set_save_status(format!("建筑名称保存失败：{error}").into());
+                    }
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_suppress_selected_building(move |reason| {
+            let source_id = state.borrow().selected_candidate_id.clone();
+            let result = source_id
+                .ok_or_else(|| "请先选择建筑候选".to_string())
+                .and_then(|source_id| {
+                    let mut result = Ok(());
+                    state.borrow_mut().mutate_project(|project| {
+                        result = project.suppress_building(&source_id, reason.as_str());
+                    });
+                    result
+                });
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        state.borrow_mut().selected_candidate_id = None;
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_candidate_suppression_reason("".into());
+                            ui.set_candidate_details_visible(false);
+                            ui.set_save_status("建筑来源已持久抑制，可在详情面板恢复".into());
+                        }
+                    }
+                    Err(error) => {
+                        ui.set_save_status(format!("建筑抑制失败：{error}").into());
+                    }
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_restore_building_suppression(move |index| {
+            let source_id = state.borrow().project.as_ref().and_then(|project| {
+                project
+                    .building_suppressions
+                    .get(index.max(0) as usize)
+                    .map(|record| record.source_id.clone())
+            });
+            let restored = source_id.is_some_and(|source_id| {
+                let mut restored = false;
+                state.borrow_mut().mutate_project(|project| {
+                    restored = project.restore_building_suppression(&source_id);
+                });
+                restored
+            });
+            if let Some(ui) = weak.upgrade() {
+                if restored {
+                    if let Err(error) = save_and_sync(&ui, &state) {
+                        set_error(&ui, error);
+                    } else {
+                        ui.set_save_status("建筑抑制已恢复，请重新查询当前视野".into());
+                    }
+                } else {
+                    ui.set_save_status("没有可恢复的建筑抑制".into());
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
         ui.on_choose_external_model(move |index| {
             let mut state = state.borrow_mut();
             state.selected_external_model = index.max(0) as usize;
@@ -1735,7 +1886,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             candidates,
                         } => match candidates {
                             Ok(mut discovered) => {
-                                let count = discovered.len();
+                                let mut count = 0usize;
                                 state.borrow_mut().mutate_project(|project| {
                                     project.map_view.capture_bounds =
                                         Some([south_west, north_east]);
@@ -1762,6 +1913,13 @@ fn main() -> Result<(), slint::PlatformError> {
                                             candidate.review = previous.review;
                                         }
                                     }
+                                    discovered.retain(|candidate| {
+                                        !project
+                                            .building_suppressions
+                                            .iter()
+                                            .any(|record| record.source_id == candidate.id)
+                                    });
+                                    count = discovered.len();
                                     project.candidates.retain(|candidate| {
                                         candidate.review != ReviewDecision::Pending
                                             || candidate.source != "OpenStreetMap / Overpass"
