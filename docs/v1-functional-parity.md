@@ -17,14 +17,14 @@ block the atomic cutover required by ADR 0031.
 | Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |
 | Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Native detail dialog exposes source object ID/tags, confidence queues and pagination are AppState-owned, and confirm/reject/revoke are reversible | Shipped |
 | Foundation | Batch accept/reject and batch-review undo | Current-kind pending candidates support one-operation accept/reject; global undo restores the batch snapshot | Shipped |
-| Foundation | Human-drawn correction for missing/incorrect feature geometry | Map protocol v2 has a dedicated feature-drawing purpose for all five kinds; accepted manual geometry is separately traceable and manual buildings create valid Building Slots | Shipped |
-| Foundation | Label-free visual capture and deterministic gap recovery | Viewport capture currently triggers structured OSM/Overture retrieval, not image recovery | **Gap** |
+| Foundation | Human-drawn correction for missing/incorrect feature geometry | Map protocol v3 has a dedicated feature-drawing purpose for all five kinds; accepted manual geometry is separately traceable and manual buildings create valid Building Slots | Shipped |
+| Foundation | Label-free visual capture and deterministic gap recovery | The map helper captures a label-free PNG independently from structured retrieval; protocol v3 returns it to Rust for deterministic color segmentation, WGS-84 georeferencing, evidence persistence, and human review | Shipped |
 | Foundation | Campus Building Directory naming and suppression | Reviewed names propagate to features/slots; persistent suppression tombstones block rediscovery and remain recoverable; portable web directory records migrate | Shipped |
 | Foundation | Four fixed Foundation style packs and advanced style-pack import | Four legacy-compatible presets now drive persisted palette/road width and export; custom JSON import remains absent | **Partial** |
 | Foundation | Generate and inspect native Foundation preview before export | Export model is converted to the native preview snapshot and launched through the preview helper | Shipped |
 | Foundation | Sponge schematic plus portable project export | `campus-export` and Slint Foundation export action | Shipped |
 | Detailed | Building Slot queue and selected-slot handoff | Slint slot combo; selected slot stored in project | Shipped |
-| Detailed | Gaode 3D reference and open-geodata footprint comparison | Protocol v2 gives the isolated map process an explicit Building Evidence purpose, centers on the selected slot, and overlays its reviewed open-geodata footprint without exposing campus-edit commands | Shipped |
+| Detailed | Gaode 3D reference and open-geodata footprint comparison | Protocol v3 gives the isolated map process an explicit Building Evidence purpose, converts reviewed WGS-84 geometry to Gaode GCJ-02, centers on the selected slot, and hides campus-edit commands | Shipped |
 | Detailed | Preserve measured footprint, height, floors, and roof | Native measurement editor; Arnis regression tests preserve massing | Shipped |
 | Detailed | Complete fixed Arnis appearance categories | All 19 upstream categories are exposed in Slint and tested for distinct output | Shipped |
 | Detailed | Generate a building and open native orbit/zoom preview | Arnis core generation; independent `campus-preview` process | Shipped |

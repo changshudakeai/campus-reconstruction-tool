@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 2;
-pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+pub const PROTOCOL_VERSION: u32 = 3;
+pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +100,13 @@ pub enum ToolEvent {
         points: Vec<MapCoordinate>,
     },
     MapCaptureRequested {
+        south_west_lng: f64,
+        south_west_lat: f64,
+        north_east_lng: f64,
+        north_east_lat: f64,
+    },
+    MapVisualCapture {
+        image_data_url: String,
         south_west_lng: f64,
         south_west_lat: f64,
         north_east_lng: f64,

@@ -222,12 +222,22 @@ mod windows {
             serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
         let (bar, editing_script) = match purpose {
             MapPurpose::CampusReview => (
-                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="capture">截取并识别当前视野</button>"#.to_string(),
+                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string(),
                 r#"
 document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';};
 document.getElementById('clear').onclick=()=>{points=[];redraw();};
 document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
-document.getElementById('capture').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};"#.to_string(),
+document.getElementById('query').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};
+document.getElementById('capture').onclick=()=>{
+  const source=[...document.querySelectorAll('#map canvas')].sort((a,b)=>b.width*b.height-a.width*a.height)[0];
+  if(!source){post({type:'error',message:'当前地图没有可截取的画布'});return;}
+  const maxSide=800,scale=Math.min(1,maxSide/Math.max(source.width,source.height));
+  const target=document.createElement('canvas');
+  target.width=Math.max(1,Math.round(source.width*scale));target.height=Math.max(1,Math.round(source.height*scale));
+  const context=target.getContext('2d',{alpha:false});context.drawImage(source,0,0,target.width,target.height);
+  const b=map.getBounds(),sw=b.getSouthWest(),ne=b.getNorthEast();
+  post({type:'mapVisualCapture',imageDataUrl:target.toDataURL('image/png'),southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat});
+};"#.to_string(),
             ),
             MapPurpose::FoundationFeatureDrawing => (
                 r#"<button id="draw" class="secondary">开始点选</button><button id="clear" class="secondary">清空</button><button id="save">保存手绘地物</button><span class="hint">单击依次添加节点；道路至少 2 点，区域至少 3 点</span>"#.to_string(),

@@ -719,6 +719,8 @@ pub struct CampusProject {
     #[serde(default)]
     pub foundation_preview_path: Option<PathBuf>,
     #[serde(default)]
+    pub visual_capture_path: Option<PathBuf>,
+    #[serde(default)]
     pub detailed: DetailedBuildingState,
 }
 
@@ -746,6 +748,7 @@ impl CampusProject {
             building_suppressions: Vec::new(),
             foundation_style_preset: FoundationStylePreset::ArnisClassic,
             foundation_preview_path: None,
+            visual_capture_path: None,
             detailed: DetailedBuildingState::default(),
         }
     }

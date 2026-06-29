@@ -39,6 +39,10 @@ fn generated_model_dir() -> PathBuf {
     app_data_dir().join("generated")
 }
 
+fn visual_capture_dir() -> PathBuf {
+    app_data_dir().join("captures")
+}
+
 fn project_file_dialog(save: bool) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .add_filter("Campus Reconstruction Project", &["json"])
@@ -1100,6 +1104,12 @@ enum ToolUpdate {
         north_east: GeoPoint,
         candidates: Result<Vec<MapCandidate>, String>,
     },
+    MapVisualCapture {
+        south_west: GeoPoint,
+        north_east: GeoPoint,
+        png_bytes: Vec<u8>,
+        candidates: Result<Vec<MapCandidate>, String>,
+    },
 }
 
 #[derive(Clone)]
@@ -1175,6 +1185,7 @@ impl ToolSupervisor {
                     } if protocol_version == PROTOCOL_VERSION && session_token == token => {}
                     _ => return Err("map tool handshake rejected".into()),
                 }
+                let analysis_campus = request.title.clone();
                 write_message(
                     &mut server,
                     &ToolCommand::OpenMap {
@@ -1189,13 +1200,34 @@ impl ToolSupervisor {
                         boundary: request
                             .boundary
                             .into_iter()
+                            .map(campus_services::wgs84_to_gcj02)
                             .map(|point| MapCoordinate {
                                 lng: point.lng,
                                 lat: point.lat,
                             })
                             .collect(),
                         purpose: request.purpose,
-                        overlays: request.overlays,
+                        overlays: request
+                            .overlays
+                            .into_iter()
+                            .map(|overlay| MapOverlay {
+                                label: overlay.label,
+                                points: overlay
+                                    .points
+                                    .into_iter()
+                                    .map(|point| {
+                                        let point = campus_services::wgs84_to_gcj02(GeoPoint {
+                                            lng: point.lng,
+                                            lat: point.lat,
+                                        });
+                                        MapCoordinate {
+                                            lng: point.lng,
+                                            lat: point.lat,
+                                        }
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
                         feature_kind: request.feature_kind,
                     },
                 )
@@ -1231,9 +1263,11 @@ impl ToolSupervisor {
                             let _ = updates.send(ToolUpdate::MapBoundary(
                                 points
                                     .into_iter()
-                                    .map(|point| GeoPoint {
-                                        lng: point.lng,
-                                        lat: point.lat,
+                                    .map(|point| {
+                                        campus_services::gcj02_to_wgs84(GeoPoint {
+                                            lng: point.lng,
+                                            lat: point.lat,
+                                        })
                                     })
                                     .collect(),
                             ));
@@ -1257,9 +1291,11 @@ impl ToolSupervisor {
                                 kind,
                                 points: points
                                     .into_iter()
-                                    .map(|point| GeoPoint {
-                                        lng: point.lng,
-                                        lat: point.lat,
+                                    .map(|point| {
+                                        campus_services::gcj02_to_wgs84(GeoPoint {
+                                            lng: point.lng,
+                                            lat: point.lat,
+                                        })
                                     })
                                     .collect(),
                             });
@@ -1271,22 +1307,22 @@ impl ToolSupervisor {
                             north_east_lng,
                             north_east_lat,
                         } => {
-                            let south_west = GeoPoint {
+                            let south_west = campus_services::gcj02_to_wgs84(GeoPoint {
                                 lng: south_west_lng,
                                 lat: south_west_lat,
-                            };
-                            let north_east = GeoPoint {
+                            });
+                            let north_east = campus_services::gcj02_to_wgs84(GeoPoint {
                                 lng: north_east_lng,
                                 lat: north_east_lat,
-                            };
+                            });
                             let _ = updates.send(ToolUpdate::Status(
                                 "已锁定当前视野，正在识别校区地物…".into(),
                             ));
                             let bounds = campus_services::GeoBounds {
-                                west: south_west_lng,
-                                south: south_west_lat,
-                                east: north_east_lng,
-                                north: north_east_lat,
+                                west: south_west.lng,
+                                south: south_west.lat,
+                                east: north_east.lng,
+                                north: north_east.lat,
                             };
                             let overture_endpoint = std::env::var("CAMPUS_DATA_SERVICE_URL")
                                 .or_else(|_| std::env::var("OVERTURE_BUILDING_ENDPOINT"))
@@ -1302,6 +1338,54 @@ impl ToolSupervisor {
                                 candidates,
                             });
                             "已接收当前视野范围".to_string()
+                        }
+                        ToolEvent::MapVisualCapture {
+                            image_data_url,
+                            south_west_lng,
+                            south_west_lat,
+                            north_east_lng,
+                            north_east_lat,
+                        } => {
+                            let south_west = campus_services::gcj02_to_wgs84(GeoPoint {
+                                lng: south_west_lng,
+                                lat: south_west_lat,
+                            });
+                            let north_east = campus_services::gcj02_to_wgs84(GeoPoint {
+                                lng: north_east_lng,
+                                lat: north_east_lat,
+                            });
+                            let bounds = campus_services::GeoBounds {
+                                west: south_west.lng,
+                                south: south_west.lat,
+                                east: north_east.lng,
+                                north: north_east.lat,
+                            };
+                            let analysis = campus_services::analyze_visual_capture(
+                                &image_data_url,
+                                bounds,
+                                &analysis_campus,
+                            );
+                            match analysis {
+                                Ok((png_bytes, candidates)) => {
+                                    let count = candidates.len();
+                                    let _ = updates.send(ToolUpdate::MapVisualCapture {
+                                        south_west,
+                                        north_east,
+                                        png_bytes,
+                                        candidates: Ok(candidates),
+                                    });
+                                    format!("视觉补缺完成 · {count} 个候选")
+                                }
+                                Err(error) => {
+                                    let _ = updates.send(ToolUpdate::MapVisualCapture {
+                                        south_west,
+                                        north_east,
+                                        png_bytes: Vec::new(),
+                                        candidates: Err(error.clone()),
+                                    });
+                                    format!("视觉补缺失败：{error}")
+                                }
+                            }
                         }
                         ToolEvent::Error { message } => format!("地图错误：{message}"),
                         ToolEvent::Closed { .. } => "高德工具已关闭".to_string(),
@@ -1939,6 +2023,67 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                             }
                         },
+                        ToolUpdate::MapVisualCapture {
+                            south_west,
+                            north_east,
+                            png_bytes,
+                            candidates,
+                        } => match candidates {
+                            Ok(mut discovered) => {
+                                let capture_path = visual_capture_dir().join("latest.png");
+                                let persisted = std::fs::create_dir_all(visual_capture_dir())
+                                    .and_then(|_| std::fs::write(&capture_path, png_bytes))
+                                    .map(|_| capture_path.clone())
+                                    .map_err(|error| error.to_string());
+                                match persisted {
+                                    Ok(path) => {
+                                        let mut count = 0usize;
+                                        state.borrow_mut().mutate_project(|project| {
+                                            project.map_view.capture_bounds =
+                                                Some([south_west, north_east]);
+                                            project.visual_capture_path = Some(path);
+                                            for candidate in &mut discovered {
+                                                if let Some(previous) = project
+                                                    .candidates
+                                                    .iter()
+                                                    .find(|previous| previous.id == candidate.id)
+                                                {
+                                                    candidate.review = previous.review;
+                                                }
+                                            }
+                                            count = discovered.len();
+                                            project.candidates.retain(|candidate| {
+                                                candidate.review != ReviewDecision::Pending
+                                                    || candidate.source
+                                                        != "截图规则分割（确定性 v2）"
+                                            });
+                                            project.candidates.extend(discovered);
+                                        });
+                                        if let Some(ui) = weak.upgrade() {
+                                            ui.set_save_status(
+                                                format!(
+                                                    "视觉补缺完成：{count} 个候选，截图已随项目记录"
+                                                )
+                                                .into(),
+                                            );
+                                        }
+                                        changed = true;
+                                    }
+                                    Err(error) => {
+                                        if let Some(ui) = weak.upgrade() {
+                                            ui.set_save_status(
+                                                format!("视觉截图保存失败：{error}").into(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(ui) = weak.upgrade() {
+                                    ui.set_save_status(format!("视觉补缺失败：{error}").into());
+                                }
+                            }
+                        },
                     }
                 }
                 if changed {
@@ -2500,7 +2645,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let request = MapLaunchRequest {
                 title: format!("{campus_name} · {}", slot.name),
                 view: MapViewState {
-                    center,
+                    center: campus_services::wgs84_to_gcj02(center),
                     zoom: 19.0,
                     pitch: 65.0,
                     rotation: 0.0,
