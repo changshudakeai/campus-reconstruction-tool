@@ -11,7 +11,7 @@ block the atomic cutover required by ADR 0031.
 | Global | Atomic autosave, recovery copy, undo/redo, Ctrl+S/Z/Y | `campus-state`; top-level Slint key bindings; round-trip tests | Shipped |
 | Global | Gaode credentials in Windows Credential Manager | Map settings dialog and `keyring` Windows backend | Shipped |
 | Global | Chinese/English language selection | No native locale selector or translated projection | **Gap** |
-| Foundation | Select a Campus Target using Gaode search/map evidence | Campus name is editable and map point selection exists, but POI search/result confirmation is absent | **Partial** |
+| Foundation | Select a Campus Target using Gaode search/map evidence | The isolated Gaode helper provides POI search, result preview, and explicit confirmation; the project persists POI identity plus GCJ-02/WGS-84 lineage and reopens at the confirmed view | Shipped |
 | Foundation | Draw, clear, save, and resume Campus Boundary | `campus-map` drawing toolbar; typed boundary event; autosaved project polygon | Shipped |
 | Foundation | Review Campus Orientation and Campus Scale | Native orientation/scale controls persist project-wide values | Shipped |
 | Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |

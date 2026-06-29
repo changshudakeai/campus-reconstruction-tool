@@ -92,6 +92,12 @@ pub enum ToolEvent {
         lng: f64,
         lat: f64,
     },
+    MapCampusSelected {
+        poi_id: String,
+        name: String,
+        lng: f64,
+        lat: f64,
+    },
     MapBoundaryChanged {
         points: Vec<MapCoordinate>,
     },

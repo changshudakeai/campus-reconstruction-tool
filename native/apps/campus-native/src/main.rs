@@ -2,10 +2,11 @@
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, CandidateConfidenceFilter, DesktopApplicationState, DesktopMode,
-    ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePreset, GeoPoint,
-    MapCandidate, MapViewState, ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind,
-    SemanticFeatureSide, SemanticHeightBand, SemanticStrength, SourceConflictDecision,
+    ArnisStylePreset, CampusTargetEvidence, CandidateConfidenceFilter, DesktopApplicationState,
+    DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePreset,
+    GeoPoint, MapCandidate, MapViewState, ReviewDecision, SemanticFeatureDraft,
+    SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand, SemanticStrength,
+    SourceConflictDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent,
@@ -1094,6 +1095,7 @@ enum ToolUpdate {
         rotation: f64,
     },
     MapPoint(GeoPoint),
+    MapCampusTarget(CampusTargetEvidence),
     MapBoundary(Vec<GeoPoint>),
     ManualFeature {
         kind: FeatureKind,
@@ -1257,6 +1259,23 @@ impl ToolSupervisor {
                         ToolEvent::MapPointSelected { lng, lat } => {
                             let _ = updates.send(ToolUpdate::MapPoint(GeoPoint { lng, lat }));
                             format!("已选择位置 {lng:.6}, {lat:.6}")
+                        }
+                        ToolEvent::MapCampusSelected {
+                            poi_id,
+                            name,
+                            lng,
+                            lat,
+                        } => {
+                            let gcj02 = GeoPoint { lng, lat };
+                            let evidence = CampusTargetEvidence {
+                                poi_id,
+                                name: name.clone(),
+                                gcj02,
+                                wgs84: campus_services::gcj02_to_wgs84(gcj02),
+                                acquisition: "gaode_poi_search".into(),
+                            };
+                            let _ = updates.send(ToolUpdate::MapCampusTarget(evidence));
+                            format!("已确认校园：{name}")
                         }
                         ToolEvent::MapBoundaryChanged { points } => {
                             let count = points.len();
@@ -1933,6 +1952,18 @@ fn main() -> Result<(), slint::PlatformError> {
                             state.borrow_mut().mutate_project(|project| {
                                 project.map_view.center = point;
                             });
+                            changed = true;
+                        }
+                        ToolUpdate::MapCampusTarget(target) => {
+                            let name = target.name.clone();
+                            state.borrow_mut().mutate_project(|project| {
+                                project.campus_name = name.clone();
+                                project.map_view.center = target.gcj02;
+                                project.campus_target = Some(target);
+                            });
+                            if let Some(ui) = weak.upgrade() {
+                                ui.set_save_status(format!("高德校园目标已确认：{name}").into());
+                            }
                             changed = true;
                         }
                         ToolUpdate::MapBoundary(points) => {

@@ -222,8 +222,24 @@ mod windows {
             serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
         let (bar, editing_script) = match purpose {
             MapPurpose::CampusReview => (
-                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string(),
+                r#"<input id="poi-query" aria-label="校园名称" placeholder="搜索校园或校区"><button id="poi-search" class="secondary">高德搜索</button><select id="poi-results" aria-label="搜索结果" hidden></select><button id="poi-confirm" hidden>确认校园</button><button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string(),
                 r#"
+let poiSearch=null,poiCandidates=[];
+AMap.plugin('AMap.PlaceSearch',()=>{poiSearch=new AMap.PlaceSearch({pageSize:12,pageIndex:1,extensions:'base'});});
+document.getElementById('poi-search').onclick=()=>{
+  const query=document.getElementById('poi-query').value.trim();
+  if(!query||!poiSearch){post({type:'error',message:'请输入校园名称并等待高德搜索服务就绪'});return;}
+  poiSearch.search(query,(status,result)=>{
+    poiCandidates=status==='complete'&&result.poiList?result.poiList.pois.filter(p=>p.location):[];
+    const select=document.getElementById('poi-results');select.replaceChildren();
+    poiCandidates.forEach((poi,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=[poi.name,poi.address].filter(Boolean).join(' · ');select.appendChild(option);});
+    select.hidden=poiCandidates.length===0;document.getElementById('poi-confirm').hidden=poiCandidates.length===0;
+    if(poiCandidates.length){const p=poiCandidates[0];map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);}
+    else post({type:'error',message:'高德未返回可确认的校园结果'});
+  });
+};
+document.getElementById('poi-results').onchange=e=>{const p=poiCandidates[Number(e.target.value)];if(p)map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);};
+document.getElementById('poi-confirm').onclick=()=>{const index=Number(document.getElementById('poi-results').value),p=poiCandidates[index];if(p)post({type:'mapCampusSelected',poiId:String(p.id||''),name:String(p.name||''),lng:p.location.lng,lat:p.location.lat});};
 document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';};
 document.getElementById('clear').onclick=()=>{points=[];redraw();};
 document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
@@ -259,7 +275,7 @@ document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'
             r#"<!doctype html><html><head><meta charset="utf-8">
 <style>html,body,#map{{margin:0;width:100%;height:100%;overflow:hidden;font-family:"Microsoft YaHei UI",sans-serif}}
 #bar{{position:absolute;z-index:5;left:16px;top:16px;background:#f4f0e5;border:1px solid #23362e;padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
-button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} span{{font-weight:700;color:#17251f}} span.hint{{font-weight:400;color:#506058}}</style>
+button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} input,select{{min-width:170px;padding:8px;background:#fffdf7;color:#17251f;border:1px solid #6d786f}} span{{font-weight:700;color:#17251f}} span.hint{{font-weight:400;color:#506058}}</style>
 <script>window._AMapSecurityConfig={{securityJsCode:{security}}};</script>
 <script src="https://webapi.amap.com/maps?v=2.0&key={key}"></script></head>
 <body><div id="map"></div><div id="bar"><span>{campus}</span>{bar}</div>

@@ -193,6 +193,16 @@ pub struct GeoPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct CampusTargetEvidence {
+    pub poi_id: String,
+    pub name: String,
+    pub gcj02: GeoPoint,
+    pub wgs84: GeoPoint,
+    pub acquisition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct MapViewState {
     pub center: GeoPoint,
     pub zoom: f64,
@@ -691,6 +701,8 @@ pub struct CampusProject {
     pub schema_version: u32,
     pub name: String,
     pub campus_name: String,
+    #[serde(default)]
+    pub campus_target: Option<CampusTargetEvidence>,
     pub mode: DesktopMode,
     #[serde(default)]
     pub foundation_step: FoundationStep,
@@ -734,6 +746,7 @@ impl CampusProject {
             schema_version: PROJECT_SCHEMA_VERSION,
             name: name.into(),
             campus_name: campus_name.into(),
+            campus_target: None,
             mode: DesktopMode::Foundation,
             foundation_step: FoundationStep::Campus,
             completed_steps: Vec::new(),
@@ -1874,6 +1887,19 @@ mod tests {
         state.mutate_project(|project| {
             project.foundation_step = FoundationStep::Building;
             project.detailed.style_preset = ArnisStylePreset::Historic;
+            project.campus_target = Some(CampusTargetEvidence {
+                poi_id: "B00155ABC".into(),
+                name: "测试校区".into(),
+                gcj02: GeoPoint {
+                    lng: 121.406,
+                    lat: 31.228,
+                },
+                wgs84: GeoPoint {
+                    lng: 121.401,
+                    lat: 31.230,
+                },
+                acquisition: "gaode_poi_search".into(),
+            });
         });
         state.save_to(&path).unwrap();
 
@@ -1883,6 +1909,7 @@ mod tests {
         assert_eq!(project.mode, DesktopMode::Detailed);
         assert_eq!(project.foundation_step, FoundationStep::Building);
         assert_eq!(project.detailed.style_preset, ArnisStylePreset::Historic);
+        assert_eq!(project.campus_target.as_ref().unwrap().poi_id, "B00155ABC");
         assert!(!restored.dirty);
     }
 
