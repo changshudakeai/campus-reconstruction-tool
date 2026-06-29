@@ -15,7 +15,7 @@ block the atomic cutover required by ADR 0031.
 | Foundation | Draw, clear, save, and resume Campus Boundary | `campus-map` drawing toolbar; typed boundary event; autosaved project polygon | Shipped |
 | Foundation | Review Campus Orientation and Campus Scale | Native orientation/scale controls persist project-wide values | Shipped |
 | Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |
-| Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Confirm/reject/revoke are native; details, confidence filters, and pagination remain absent | **Partial** |
+| Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Confidence queues, pagination, source/confidence summary, confirm/reject/revoke are native; full provenance detail remains absent | **Partial** |
 | Foundation | Batch accept/reject and batch-review undo | Current-kind pending candidates support one-operation accept/reject; global undo restores the batch snapshot | Shipped |
 | Foundation | Human-drawn correction for missing/incorrect feature geometry | Boundary drawing exists; non-boundary feature drawing is absent | **Gap** |
 | Foundation | Label-free visual capture and deterministic gap recovery | Viewport capture currently triggers structured OSM/Overture retrieval, not image recovery | **Gap** |

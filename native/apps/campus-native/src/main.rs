@@ -2,8 +2,8 @@
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, DesktopApplicationState, DesktopMode, FeatureKind, FoundationStep,
-    FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
+    ArnisStylePreset, CandidateConfidenceFilter, DesktopApplicationState, DesktopMode, FeatureKind,
+    FoundationStep, FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
@@ -211,10 +211,22 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         FoundationStep::Sports => Some(FeatureKind::Sports),
         _ => None,
     };
-    let candidates = project
+    let filtered_candidates = project
         .candidates
         .iter()
         .filter(|candidate| current_kind.is_none() || current_kind == Some(candidate.kind))
+        .filter(|candidate| candidate_matches_filter(candidate, state.candidate_filter))
+        .collect::<Vec<_>>();
+    const CANDIDATE_PAGE_SIZE: usize = 8;
+    let total_pages = filtered_candidates
+        .len()
+        .div_ceil(CANDIDATE_PAGE_SIZE)
+        .max(1);
+    let page = state.candidate_page.min(total_pages - 1);
+    let candidates = filtered_candidates
+        .into_iter()
+        .skip(page * CANDIDATE_PAGE_SIZE)
+        .take(CANDIDATE_PAGE_SIZE)
         .map(|candidate| CandidateRow {
             id: candidate.id.clone().into(),
             name: candidate.name.clone().into(),
@@ -228,6 +240,14 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         })
         .collect::<Vec<_>>();
     ui.set_candidates(ModelRc::new(VecModel::from(candidates)));
+    ui.set_selected_candidate_filter(
+        CandidateConfidenceFilter::ALL
+            .iter()
+            .position(|filter| *filter == state.candidate_filter)
+            .unwrap_or(0) as i32,
+    );
+    ui.set_candidate_page(page as i32);
+    ui.set_candidate_pages(total_pages as i32);
     let slots = if project.building_slots.is_empty() {
         vec![SharedString::from("暂无已审核建筑")]
     } else {
@@ -283,6 +303,27 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_blocks_per_meter(project.blocks_per_meter as f32);
     ui.set_can_undo(state.can_undo());
     ui.set_can_redo(state.can_redo());
+}
+
+fn candidate_matches_filter(candidate: &MapCandidate, filter: CandidateConfidenceFilter) -> bool {
+    match filter {
+        CandidateConfidenceFilter::All => candidate.review == ReviewDecision::Pending,
+        CandidateConfidenceFilter::High => {
+            candidate.review == ReviewDecision::Pending
+                && candidate.confidence.eq_ignore_ascii_case("high")
+        }
+        CandidateConfidenceFilter::Medium => {
+            candidate.review == ReviewDecision::Pending
+                && (candidate.confidence.eq_ignore_ascii_case("medium")
+                    || candidate.confidence.eq_ignore_ascii_case("manual"))
+        }
+        CandidateConfidenceFilter::Low => {
+            candidate.review == ReviewDecision::Pending
+                && candidate.confidence.eq_ignore_ascii_case("low")
+        }
+        CandidateConfidenceFilter::Confirmed => candidate.review == ReviewDecision::Accepted,
+        CandidateConfidenceFilter::Rejected => candidate.review == ReviewDecision::Rejected,
+    }
 }
 
 fn save_and_sync(
@@ -834,6 +875,12 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|preset| SharedString::from(preset.label()))
             .collect::<Vec<_>>(),
     )));
+    ui.set_candidate_filters(ModelRc::new(VecModel::from(
+        CandidateConfidenceFilter::ALL
+            .iter()
+            .map(|filter| SharedString::from(filter.label()))
+            .collect::<Vec<_>>(),
+    )));
 
     let state = Rc::new(RefCell::new(DesktopApplicationState::default()));
     let map_credentials = Rc::new(RefCell::new(load_map_credentials()));
@@ -856,6 +903,37 @@ fn main() -> Result<(), slint::PlatformError> {
     sync_ui(&ui, &state.borrow());
 
     let tool_timer = Timer::default();
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_choose_candidate_filter(move |index| {
+            let filter = CandidateConfidenceFilter::ALL
+                .get(index.max(0) as usize)
+                .copied()
+                .unwrap_or_default();
+            let mut state = state.borrow_mut();
+            state.candidate_filter = filter;
+            state.candidate_page = 0;
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_change_candidate_page(move |delta| {
+            let mut state = state.borrow_mut();
+            state.candidate_page = if delta < 0 {
+                state.candidate_page.saturating_sub(1)
+            } else {
+                state.candidate_page.saturating_add(1)
+            };
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state);
+            }
+        });
+    }
     {
         let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
@@ -1015,6 +1093,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_review_visible_candidates(move |accepted| {
+            let filter = state.borrow().candidate_filter;
             state.borrow_mut().mutate_project(|project| {
                 let kind = match project.foundation_step {
                     FoundationStep::Building => Some(FeatureKind::Building),
@@ -1030,6 +1109,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .filter(|candidate| {
                         candidate.review == ReviewDecision::Pending
                             && kind.is_none_or(|kind| candidate.kind == kind)
+                            && candidate_matches_filter(candidate, filter)
                     })
                     .map(|candidate| candidate.id.clone())
                     .collect::<Vec<_>>();
@@ -1209,9 +1289,13 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(step) = FoundationStep::ALL.get(index.max(0) as usize).copied() else {
                 return;
             };
-            state.borrow_mut().mutate_project(|project| {
-                project.foundation_step = step;
-            });
+            {
+                let mut borrowed = state.borrow_mut();
+                borrowed.candidate_page = 0;
+                borrowed.mutate_project(|project| {
+                    project.foundation_step = step;
+                });
+            }
             if let Some(ui) = weak.upgrade() {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);

@@ -60,6 +60,10 @@ export component AppWindow inherits Window {
     in-out property <int> active-step: 0;
     in-out property <[string]> step-labels: ["校区", "边界", "朝向", "建筑", "道路", "水域", "植被", "体育", "导出"];
     in-out property <[CandidateRow]> candidates: [];
+    in-out property <[string]> candidate-filters: [];
+    in-out property <int> selected-candidate-filter: 0;
+    in-out property <int> candidate-page: 0;
+    in-out property <int> candidate-pages: 1;
     in-out property <[string]> building-slots: ["暂无已审核建筑"];
     in-out property <int> selected-slot: 0;
     in-out property <[string]> arnis-styles: [];
@@ -94,6 +98,8 @@ export component AppWindow inherits Window {
     callback review-candidate(string, bool);
     callback reset-candidate-review(string);
     callback review-visible-candidates(bool);
+    callback choose-candidate-filter(int);
+    callback change-candidate-page(int);
     callback open-map();
     callback open-preview();
     callback choose-style(int, float, float);
@@ -226,9 +232,20 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            Button { text: "批量拒绝待审核"; clicked => { root.review-visible-candidates(false); } }
-                            Button { text: "批量接受待审核"; clicked => { root.review-visible-candidates(true); } }
                             Button { text: "在地图中编辑"; clicked => { root.open-map(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            candidate-filter-box := ComboBox {
+                                model: root.candidate-filters;
+                                current-index <=> root.selected-candidate-filter;
+                                selected(value) => {
+                                    root.choose-candidate-filter(candidate-filter-box.current-index);
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: "批量拒绝"; clicked => { root.review-visible-candidates(false); } }
+                            Button { text: "批量接受"; clicked => { root.review-visible-candidates(true); } }
                         }
                         for candidate in root.candidates: CandidateItem {
                             candidate: candidate;
@@ -243,6 +260,24 @@ export component AppWindow inherits Window {
                             Text {
                                 text: "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
                                 color: #68756e; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "上一页";
+                                enabled: root.candidate-page > 0;
+                                clicked => { root.change-candidate-page(-1); }
+                            }
+                            Text {
+                                text: (root.candidate-page + 1) + " / " + root.candidate-pages;
+                                color: #506058;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                text: "下一页";
+                                enabled: root.candidate-page + 1 < root.candidate-pages;
+                                clicked => { root.change-candidate-page(1); }
                             }
                         }
                     }

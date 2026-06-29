@@ -150,6 +150,39 @@ pub enum ReviewDecision {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CandidateConfidenceFilter {
+    #[default]
+    All,
+    High,
+    Medium,
+    Low,
+    Confirmed,
+    Rejected,
+}
+
+impl CandidateConfidenceFilter {
+    pub const ALL: [Self; 6] = [
+        Self::All,
+        Self::High,
+        Self::Medium,
+        Self::Low,
+        Self::Confirmed,
+        Self::Rejected,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部待审核",
+            Self::High => "高置信度",
+            Self::Medium => "中置信度",
+            Self::Low => "低置信度",
+            Self::Confirmed => "已确认",
+            Self::Rejected => "已拒绝",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GeoPoint {
@@ -494,6 +527,8 @@ pub struct DesktopApplicationState {
     pub project_path: Option<PathBuf>,
     pub dirty: bool,
     pub last_error: Option<String>,
+    pub candidate_filter: CandidateConfidenceFilter,
+    pub candidate_page: usize,
     undo_stack: Vec<CampusProject>,
     redo_stack: Vec<CampusProject>,
 }
@@ -504,6 +539,8 @@ impl DesktopApplicationState {
         self.project_path = None;
         self.dirty = true;
         self.last_error = None;
+        self.candidate_filter = CandidateConfidenceFilter::All;
+        self.candidate_page = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -614,6 +651,8 @@ impl DesktopApplicationState {
         self.project_path = Some(path.to_path_buf());
         self.dirty = false;
         self.last_error = None;
+        self.candidate_filter = CandidateConfidenceFilter::All;
+        self.candidate_page = 0;
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
