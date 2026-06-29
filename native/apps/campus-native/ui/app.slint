@@ -21,6 +21,7 @@ component Rule inherits Rectangle {
 component CandidateItem inherits Rectangle {
     in property <CandidateRow> candidate;
     callback decide(string, bool);
+    callback reset(string);
     height: 72px;
     background: #f7f3e9;
     border-color: #c7bca8;
@@ -35,6 +36,7 @@ component CandidateItem inherits Rectangle {
         }
         Rectangle { horizontal-stretch: 1; background: transparent; }
         Text { text: candidate.status; color: #a54836; vertical-alignment: center; }
+        Button { text: "撤销"; enabled: candidate.status != "待审核"; clicked => { root.reset(candidate.id); } }
         Button { text: "拒绝"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, false); } }
         Button { text: "接受"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, true); } }
     }
@@ -62,6 +64,8 @@ export component AppWindow inherits Window {
     in-out property <int> selected-slot: 0;
     in-out property <[string]> arnis-styles: [];
     in-out property <int> selected-style: 8;
+    in-out property <[string]> foundation-styles: [];
+    in-out property <int> selected-foundation-style: 0;
     in-out property <float> window-density: 50;
     in-out property <float> wall-depth: 50;
     in-out property <string> primary-label: "确认校区并继续";
@@ -88,9 +92,13 @@ export component AppWindow inherits Window {
     callback select-step(int);
     callback confirm-step();
     callback review-candidate(string, bool);
+    callback reset-candidate-review(string);
+    callback review-visible-candidates(bool);
     callback open-map();
     callback open-preview();
     callback choose-style(int, float, float);
+    callback choose-foundation-style(int);
+    callback preview-foundation();
     callback choose-slot(int);
     callback generate-building();
     callback export-building();
@@ -218,11 +226,14 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: "批量拒绝待审核"; clicked => { root.review-visible-candidates(false); } }
+                            Button { text: "批量接受待审核"; clicked => { root.review-visible-candidates(true); } }
                             Button { text: "在地图中编辑"; clicked => { root.open-map(); } }
                         }
                         for candidate in root.candidates: CandidateItem {
                             candidate: candidate;
                             decide(id, accepted) => { root.review-candidate(id, accepted); }
+                            reset(id) => { root.reset-candidate-review(id); }
                         }
                         if root.candidates.length == 0 : Rectangle {
                             height: 120px;
@@ -239,6 +250,18 @@ export component AppWindow inherits Window {
                     if !root.detailed-active && root.active-step == 8 : VerticalLayout {
                         spacing: 14px;
                         Text { text: root.project-summary; color: #33463d; }
+                        SectionLabel { text: "Foundation 样式预设"; }
+                        foundation-style-box := ComboBox {
+                            model: root.foundation-styles;
+                            current-index <=> root.selected-foundation-style;
+                            selected(value) => {
+                                root.choose-foundation-style(foundation-style-box.current-index);
+                            }
+                        }
+                        Button {
+                            text: "生成并打开 Foundation 原生预览";
+                            clicked => { root.preview-foundation(); }
+                        }
                         Button { text: "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
                     }
 

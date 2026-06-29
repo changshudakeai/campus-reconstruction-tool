@@ -1,0 +1,53 @@
+# V1 functional parity matrix
+
+Reference surface: the user-visible React/Tauri desktop workflow at the native
+cutover commit. `Shipped` requires a native Slint control, Rust-owned state,
+persistence where applicable, and an exercised result. `Partial` and `Gap`
+block the atomic cutover required by ADR 0031.
+
+| Area | User-visible capability | Native evidence | Status |
+|---|---|---|---|
+| Global | Create, open/import, save, and save-as portable projects | Slint toolbar callbacks; `DesktopApplicationState::{open,save_to}`; legacy V1 import test | Shipped |
+| Global | Atomic autosave, recovery copy, undo/redo, Ctrl+S/Z/Y | `campus-state`; top-level Slint key bindings; round-trip tests | Shipped |
+| Global | Gaode credentials in Windows Credential Manager | Map settings dialog and `keyring` Windows backend | Shipped |
+| Global | Chinese/English language selection | No native locale selector or translated projection | **Gap** |
+| Foundation | Select a Campus Target using Gaode search/map evidence | Campus name is editable and map point selection exists, but POI search/result confirmation is absent | **Partial** |
+| Foundation | Draw, clear, save, and resume Campus Boundary | `campus-map` drawing toolbar; typed boundary event; autosaved project polygon | Shipped |
+| Foundation | Review Campus Orientation and Campus Scale | Native orientation/scale controls persist project-wide values | Shipped |
+| Foundation | Separate building, road, water, vegetation, and sports review steps | Nine-step Slint workflow and per-kind candidate projection | Shipped |
+| Foundation | Candidate details, confidence queues, pagination, confirm/reject/revoke | Confirm/reject/revoke are native; details, confidence filters, and pagination remain absent | **Partial** |
+| Foundation | Batch accept/reject and batch-review undo | Current-kind pending candidates support one-operation accept/reject; global undo restores the batch snapshot | Shipped |
+| Foundation | Human-drawn correction for missing/incorrect feature geometry | Boundary drawing exists; non-boundary feature drawing is absent | **Gap** |
+| Foundation | Label-free visual capture and deterministic gap recovery | Viewport capture currently triggers structured OSM/Overture retrieval, not image recovery | **Gap** |
+| Foundation | Campus Building Directory naming and suppression | Not exposed by the native workbench | **Gap** |
+| Foundation | Four fixed Foundation style packs and advanced style-pack import | Four legacy-compatible presets now drive persisted palette/road width and export; custom JSON import remains absent | **Partial** |
+| Foundation | Generate and inspect native Foundation preview before export | Export model is converted to the native preview snapshot and launched through the preview helper | Shipped |
+| Foundation | Sponge schematic plus portable project export | `campus-export` and Slint Foundation export action | Shipped |
+| Detailed | Building Slot queue and selected-slot handoff | Slint slot combo; selected slot stored in project | Shipped |
+| Detailed | Gaode 3D reference and open-geodata footprint comparison | Map helper exists, but Detailed evidence review/candidate selection is absent | **Gap** |
+| Detailed | Preserve measured footprint, height, floors, and roof | Native measurement editor; Arnis regression tests preserve massing | Shipped |
+| Detailed | Complete fixed Arnis appearance categories | All 19 upstream categories are exposed in Slint and tested for distinct output | Shipped |
+| Detailed | Generate a building and open native orbit/zoom preview | Arnis core generation; independent `campus-preview` process | Shipped |
+| Detailed | Inspect selected block type and integer coordinates | Preview emits selection events, shown in the main status area | **Partial** |
+| Detailed | Batch palette replacement with validation | Native replacement fields and generated-model rewrite | Shipped |
+| Detailed | Single-block editing and semantic feature preservation controls | Not exposed by the native workbench | **Gap** |
+| Detailed | Observed evidence and generated-interpretation comparison | Not exposed by the native workbench | **Gap** |
+| Detailed | External-model and source-conflict review | Not exposed by the native workbench | **Gap** |
+| Detailed | Confirmed, versioned Building Slot refinements | Selected slot and generated path persist; refinement confirmation/history is absent | **Partial** |
+| Detailed | Export the edited Detailed building schematic | Native Detailed export action | Shipped |
+| Packaging | Separate supervised map/preview processes with authenticated named-pipe IPC | Integration tests for both helper processes | Shipped |
+| Packaging | Installer, uninstall registration, recovery/offline operation, and <50 MB size | NSIS script and size gate exist; interactive install/uninstall and extended offline run remain unrecorded | **Partial** |
+
+## Explicitly outside V1 parity
+
+- Photo-trained template matching, contributed training crops, and model
+  training are V2 work and were not reachable V1 controls at cutover.
+- Permanently hidden branches, obsolete debug-only panels, and the future
+  Cloud Web Companion are not desktop parity requirements.
+
+## Cutover rule
+
+The native entry point may be proposed in a draft branch while this matrix has
+`Partial` or `Gap` rows. It must not be merged as the atomic product cutover
+until every in-scope row is `Shipped` and the final interactive acceptance
+evidence named in ADR 0031 is recorded.

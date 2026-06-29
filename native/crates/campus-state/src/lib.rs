@@ -73,6 +73,76 @@ pub enum FeatureKind {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum FoundationStylePreset {
+    #[default]
+    ArnisClassic,
+    ModernCampus,
+    HistoricRedBrick,
+    LightweightDraft,
+}
+
+impl FoundationStylePreset {
+    pub const ALL: [Self; 4] = [
+        Self::ArnisClassic,
+        Self::ModernCampus,
+        Self::HistoricRedBrick,
+        Self::LightweightDraft,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ArnisClassic => "Arnis Classic",
+            Self::ModernCampus => "现代校园",
+            Self::HistoricRedBrick => "历史红砖校园",
+            Self::LightweightDraft => "轻量草稿",
+        }
+    }
+
+    pub fn block(self, kind: FeatureKind) -> &'static str {
+        match (self, kind) {
+            (Self::ArnisClassic, FeatureKind::Building) => "minecraft:quartz_block",
+            (Self::ArnisClassic, FeatureKind::Road) => "minecraft:gray_concrete",
+            (Self::ArnisClassic, FeatureKind::Water) => "minecraft:water",
+            (Self::ArnisClassic, FeatureKind::Vegetation) => "minecraft:moss_block",
+            (Self::ArnisClassic, FeatureKind::Sports) => "minecraft:green_concrete",
+            (Self::ModernCampus, FeatureKind::Building) => "minecraft:smooth_quartz",
+            (Self::ModernCampus, FeatureKind::Road) => "minecraft:light_gray_concrete",
+            (Self::ModernCampus, FeatureKind::Water) => "minecraft:water",
+            (Self::ModernCampus, FeatureKind::Vegetation) => "minecraft:birch_leaves",
+            (Self::ModernCampus, FeatureKind::Sports) => "minecraft:green_concrete",
+            (Self::HistoricRedBrick, FeatureKind::Building) => "minecraft:bricks",
+            (Self::HistoricRedBrick, FeatureKind::Road) => "minecraft:stone_bricks",
+            (Self::HistoricRedBrick, FeatureKind::Water) => "minecraft:water",
+            (Self::HistoricRedBrick, FeatureKind::Vegetation) => "minecraft:dark_oak_leaves",
+            (Self::HistoricRedBrick, FeatureKind::Sports) => "minecraft:terracotta",
+            (Self::LightweightDraft, FeatureKind::Building) => "minecraft:stone",
+            (Self::LightweightDraft, FeatureKind::Road) => "minecraft:gray_concrete",
+            (Self::LightweightDraft, FeatureKind::Water) => "minecraft:water",
+            (Self::LightweightDraft, FeatureKind::Vegetation) => "minecraft:moss_block",
+            (Self::LightweightDraft, FeatureKind::Sports) => "minecraft:green_concrete",
+        }
+    }
+
+    pub fn road_width_blocks(self) -> i32 {
+        match self {
+            Self::ArnisClassic | Self::ModernCampus => 4,
+            Self::HistoricRedBrick => 3,
+            Self::LightweightDraft => 2,
+        }
+    }
+
+    fn from_legacy_id(id: &str) -> Self {
+        match id {
+            "arnis:modern-campus/v1" => Self::ModernCampus,
+            "arnis:historic-red-brick/v1" => Self::HistoricRedBrick,
+            "arnis:lightweight-draft/v1" => Self::LightweightDraft,
+            _ => Self::ArnisClassic,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     #[default]
     Pending,
@@ -302,6 +372,10 @@ pub struct CampusProject {
     #[serde(default)]
     pub building_slots: Vec<BuildingSlot>,
     #[serde(default)]
+    pub foundation_style_preset: FoundationStylePreset,
+    #[serde(default)]
+    pub foundation_preview_path: Option<PathBuf>,
+    #[serde(default)]
     pub detailed: DetailedBuildingState,
 }
 
@@ -325,6 +399,8 @@ impl CampusProject {
             candidates: Vec::new(),
             features: Vec::new(),
             building_slots: Vec::new(),
+            foundation_style_preset: FoundationStylePreset::ArnisClassic,
+            foundation_preview_path: None,
             detailed: DetailedBuildingState::default(),
         }
     }
@@ -344,7 +420,10 @@ impl CampusProject {
                 name: candidate.name.clone(),
                 kind: candidate.kind,
                 points: candidate.points.clone(),
-                block: default_block(candidate.kind).to_string(),
+                block: self
+                    .foundation_style_preset
+                    .block(candidate.kind)
+                    .to_string(),
                 source_id: Some(candidate.id.clone()),
             });
         }
@@ -367,11 +446,30 @@ impl CampusProject {
         true
     }
 
+    pub fn apply_foundation_style(&mut self, preset: FoundationStylePreset) {
+        self.foundation_style_preset = preset;
+        self.foundation_preview_path = None;
+        for feature in &mut self.features {
+            feature.block = preset.block(feature.kind).to_string();
+        }
+    }
+
     pub fn reject_candidate(&mut self, id: &str) -> bool {
         let Some(candidate) = self.candidates.iter_mut().find(|item| item.id == id) else {
             return false;
         };
         candidate.review = ReviewDecision::Rejected;
+        self.features
+            .retain(|feature| feature.source_id.as_deref() != Some(id));
+        self.building_slots.retain(|slot| slot.id != id);
+        true
+    }
+
+    pub fn reset_candidate_review(&mut self, id: &str) -> bool {
+        let Some(candidate) = self.candidates.iter_mut().find(|item| item.id == id) else {
+            return false;
+        };
+        candidate.review = ReviewDecision::Pending;
         self.features
             .retain(|feature| feature.source_id.as_deref() != Some(id));
         self.building_slots.retain(|slot| slot.id != id);
@@ -387,13 +485,7 @@ impl CampusProject {
 }
 
 fn default_block(kind: FeatureKind) -> &'static str {
-    match kind {
-        FeatureKind::Building => "minecraft:stone_bricks",
-        FeatureKind::Road => "minecraft:gray_concrete",
-        FeatureKind::Water => "minecraft:water",
-        FeatureKind::Vegetation => "minecraft:grass_block",
-        FeatureKind::Sports => "minecraft:green_concrete",
-    }
+    FoundationStylePreset::ArnisClassic.block(kind)
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -556,6 +648,11 @@ fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject,
         .and_then(|value| value.as_f64())
         .unwrap_or(1.0)
         .clamp(0.25, 4.0);
+    project.foundation_style_preset = foundation
+        .pointer("/foundationStylePack/id")
+        .and_then(|value| value.as_str())
+        .map(FoundationStylePreset::from_legacy_id)
+        .unwrap_or_default();
     project.boundary = points_from_value(
         foundation
             .pointer("/boundaryDraft/points")
@@ -763,6 +860,14 @@ mod tests {
         assert!(project.accept_candidate("osm:1"));
         assert_eq!(project.features.len(), 1);
         assert_eq!(project.building_slots.len(), 1);
+        assert_eq!(project.features[0].block, "minecraft:quartz_block");
+        project.apply_foundation_style(FoundationStylePreset::HistoricRedBrick);
+        assert_eq!(project.features[0].block, "minecraft:bricks");
+        assert_eq!(project.foundation_style_preset.road_width_blocks(), 3);
+        assert!(project.reset_candidate_review("osm:1"));
+        assert_eq!(project.candidates[0].review, ReviewDecision::Pending);
+        assert!(project.features.is_empty());
+        assert!(project.building_slots.is_empty());
     }
 
     #[test]
@@ -779,6 +884,7 @@ mod tests {
                 "foundation": {
                   "orientationDegrees": 18,
                   "foundationStyle": {"blocksPerMeter": 1.5},
+                  "foundationStylePack": {"id": "arnis:modern-campus/v1"},
                   "boundaryDraft": {"points": [{"lng":121.0,"lat":31.0},{"lng":121.1,"lat":31.0},{"lng":121.1,"lat":30.9}]},
                   "reviews": {"old-building": "accepted"},
                   "candidates": [{
@@ -798,5 +904,9 @@ mod tests {
         assert_eq!(project.name, "旧项目");
         assert_eq!(project.orientation_degrees, 18.0);
         assert_eq!(project.building_slots.len(), 1);
+        assert_eq!(
+            project.foundation_style_preset,
+            FoundationStylePreset::ModernCampus
+        );
     }
 }

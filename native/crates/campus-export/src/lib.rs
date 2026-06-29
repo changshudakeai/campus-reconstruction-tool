@@ -102,15 +102,13 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             (z - min_z).round() as i32 + 4,
         )
     };
-    let palette = vec![
-        "minecraft:air".into(),
-        "minecraft:grass_block".into(),
-        "minecraft:stone_bricks".into(),
-        "minecraft:gray_concrete".into(),
-        "minecraft:water".into(),
-        "minecraft:moss_block".into(),
-        "minecraft:green_concrete".into(),
-    ];
+    let mut palette = vec!["minecraft:air".into(), "minecraft:grass_block".into()];
+    for feature in &project.features {
+        let block = normalize_block(&feature.block);
+        if !palette.contains(&block) {
+            palette.push(block);
+        }
+    }
     let height = 2;
     let mut blocks = vec![0u16; width * height * length];
     let boundary = project
@@ -129,15 +127,23 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             .copied()
             .map(to_grid)
             .collect::<Vec<_>>();
-        let palette_index = match feature.kind {
-            FeatureKind::Building => 2,
-            FeatureKind::Road => 3,
-            FeatureKind::Water => 4,
-            FeatureKind::Vegetation => 5,
-            FeatureKind::Sports => 6,
-        };
+        let block = normalize_block(&feature.block);
+        let palette_index = palette
+            .iter()
+            .position(|entry| *entry == block)
+            .ok_or_else(|| format!("missing Foundation palette entry for {}", feature.name))?
+            as u16;
         if feature.kind == FeatureKind::Road {
-            draw_polyline(&mut blocks, width, length, 1, &points, 2, palette_index);
+            let radius = (project.foundation_style_preset.road_width_blocks() / 2).max(1);
+            draw_polyline(
+                &mut blocks,
+                width,
+                length,
+                1,
+                &points,
+                radius,
+                palette_index,
+            );
         } else if points.len() >= 3 {
             fill_polygon(&mut blocks, width, length, 1, &points, palette_index);
         }
@@ -149,6 +155,62 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
         palette,
         blocks,
     })
+}
+
+fn normalize_block(block: &str) -> String {
+    if block.starts_with("minecraft:") {
+        block.to_string()
+    } else {
+        format!("minecraft:{block}")
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewModel<'a> {
+    width: usize,
+    height: usize,
+    length: usize,
+    palette: &'a [String],
+    block_runs: Vec<PreviewBlockRun>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewBlockRun {
+    palette_index: u16,
+    run_length: u32,
+}
+
+pub fn write_preview_model(path: &Path, model: &VoxelModel) -> Result<(), String> {
+    if model.blocks.len() != model.width * model.height * model.length {
+        return Err("方块数组尺寸与模型尺寸不一致".into());
+    }
+    let mut block_runs: Vec<PreviewBlockRun> = Vec::new();
+    for palette_index in &model.blocks {
+        if let Some(run) = block_runs.last_mut() {
+            if run.palette_index == *palette_index && run.run_length < u32::MAX {
+                run.run_length += 1;
+                continue;
+            }
+        }
+        block_runs.push(PreviewBlockRun {
+            palette_index: *palette_index,
+            run_length: 1,
+        });
+    }
+    let preview = PreviewModel {
+        width: model.width,
+        height: model.height,
+        length: model.length,
+        palette: &model.palette,
+        block_runs,
+    };
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&preview).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), String> {
@@ -377,6 +439,16 @@ mod tests {
         });
         let model = foundation_model(&project).unwrap();
         assert!(model.blocks.contains(&2));
+        assert!(model
+            .palette
+            .iter()
+            .any(|block| block == "minecraft:stone_bricks"));
+        let preview_path = std::env::temp_dir().join("campus-export-test.preview.json");
+        write_preview_model(&preview_path, &model).unwrap();
+        let preview: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&preview_path).unwrap()).unwrap();
+        assert_eq!(preview["width"], model.width);
+        assert!(preview["blockRuns"].as_array().unwrap().len() > 1);
         let path = std::env::temp_dir().join("campus-export-test.schem");
         write_schematic(&path, "test", &model).unwrap();
         assert!(std::fs::metadata(&path).unwrap().len() > 64);
@@ -389,5 +461,6 @@ mod tests {
         };
         assert!(root.contains_key("Schematic"));
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(preview_path);
     }
 }

@@ -2,8 +2,8 @@
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, DesktopApplicationState, DesktopMode, FeatureKind, FoundationStep, GeoPoint,
-    MapCandidate, MapViewState, ReviewDecision,
+    ArnisStylePreset, DesktopApplicationState, DesktopMode, FeatureKind, FoundationStep,
+    FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
@@ -272,6 +272,11 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .position(|preset| *preset == project.detailed.style_preset)
         .unwrap_or(8);
     ui.set_selected_style(selected_style as i32);
+    let foundation_style = FoundationStylePreset::ALL
+        .iter()
+        .position(|preset| *preset == project.foundation_style_preset)
+        .unwrap_or(0);
+    ui.set_selected_foundation_style(foundation_style as i32);
     ui.set_window_density(project.detailed.window_density as f32);
     ui.set_wall_depth(project.detailed.wall_depth as f32);
     ui.set_orientation_degrees(project.orientation_degrees as f32);
@@ -291,6 +296,21 @@ fn save_and_sync(
 
 fn set_error(ui: &AppWindow, message: impl AsRef<str>) {
     ui.set_save_status(format!("保存失败：{}", message.as_ref()).into());
+}
+
+fn generate_foundation_preview(
+    state: &Rc<RefCell<DesktopApplicationState>>,
+) -> Result<(PathBuf, String), String> {
+    let project = state.borrow().project.clone().ok_or("请先创建项目")?;
+    let model = campus_export::foundation_model(&project)?;
+    let directory = generated_model_dir();
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = directory.join("foundation-preview.json");
+    campus_export::write_preview_model(&path, &model)?;
+    state.borrow_mut().mutate_project(|project| {
+        project.foundation_preview_path = Some(path.clone());
+    });
+    Ok((path, format!("{} · Foundation", project.name)))
 }
 
 fn generate_detailed_model(
@@ -808,6 +828,12 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|preset| SharedString::from(preset.label()))
             .collect::<Vec<_>>(),
     )));
+    ui.set_foundation_styles(ModelRc::new(VecModel::from(
+        FoundationStylePreset::ALL
+            .iter()
+            .map(|preset| SharedString::from(preset.label()))
+            .collect::<Vec<_>>(),
+    )));
 
     let state = Rc::new(RefCell::new(DesktopApplicationState::default()));
     let map_credentials = Rc::new(RefCell::new(load_map_credentials()));
@@ -974,12 +1000,111 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = ui.as_weak();
+        ui.on_reset_candidate_review(move |id| {
+            state.borrow_mut().mutate_project(|project| {
+                project.reset_candidate_review(id.as_str());
+            });
+            if let Some(ui) = weak.upgrade() {
+                if let Err(error) = save_and_sync(&ui, &state) {
+                    set_error(&ui, error);
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_review_visible_candidates(move |accepted| {
+            state.borrow_mut().mutate_project(|project| {
+                let kind = match project.foundation_step {
+                    FoundationStep::Building => Some(FeatureKind::Building),
+                    FoundationStep::Road => Some(FeatureKind::Road),
+                    FoundationStep::Water => Some(FeatureKind::Water),
+                    FoundationStep::Vegetation => Some(FeatureKind::Vegetation),
+                    FoundationStep::Sports => Some(FeatureKind::Sports),
+                    _ => None,
+                };
+                let ids = project
+                    .candidates
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.review == ReviewDecision::Pending
+                            && kind.is_none_or(|kind| candidate.kind == kind)
+                    })
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>();
+                for id in ids {
+                    if accepted {
+                        project.accept_candidate(&id);
+                    } else {
+                        project.reject_candidate(&id);
+                    }
+                }
+            });
+            if let Some(ui) = weak.upgrade() {
+                if let Err(error) = save_and_sync(&ui, &state) {
+                    set_error(&ui, error);
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
         ui.on_redo(move || {
             if state.borrow_mut().redo() {
                 if let Some(ui) = weak.upgrade() {
                     if let Err(error) = save_and_sync(&ui, &state) {
                         set_error(&ui, error);
                     }
+                }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_choose_foundation_style(move |index| {
+            let preset = FoundationStylePreset::ALL
+                .get(index.max(0) as usize)
+                .copied()
+                .unwrap_or_default();
+            state
+                .borrow_mut()
+                .mutate_project(|project| project.apply_foundation_style(preset));
+            if let Some(ui) = weak.upgrade() {
+                if let Err(error) = save_and_sync(&ui, &state) {
+                    set_error(&ui, error);
+                } else {
+                    ui.set_save_status(format!("Foundation 样式已切换：{}", preset.label()).into());
+                }
+            }
+        });
+    }
+    {
+        let tools = tools.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_preview_foundation(move || match generate_foundation_preview(&state) {
+            Ok((path, title)) => {
+                if let Some(ui) = weak.upgrade() {
+                    if let Err(error) = autosave(&state) {
+                        set_error(&ui, error);
+                        return;
+                    }
+                    sync_ui(&ui, &state.borrow());
+                }
+                if let Err(error) = tools.launch_preview(weak.clone(), path, title) {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_save_status(
+                            format!("Foundation 已生成，预览启动失败：{error}").into(),
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_save_status(format!("Foundation 预览失败：{error}").into());
                 }
             }
         });
