@@ -8,7 +8,8 @@ use campus_state::{
     SemanticFeatureSide, SemanticHeightBand, SemanticStrength, SourceConflictDecision,
 };
 use campus_tool_protocol::{
-    read_message, write_message, MapCoordinate, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+    read_message, write_message, MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent,
+    ToolKind, PROTOCOL_VERSION,
 };
 use rand::Rng;
 use slint::{ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -1056,6 +1057,16 @@ struct ToolSupervisor {
     updates: mpsc::Sender<ToolUpdate>,
 }
 
+struct MapLaunchRequest {
+    title: String,
+    view: MapViewState,
+    boundary: Vec<GeoPoint>,
+    js_api_key: String,
+    security_code: String,
+    purpose: MapPurpose,
+    overlays: Vec<MapOverlay>,
+}
+
 impl ToolSupervisor {
     fn tool_executable(name: &str) -> Result<PathBuf, String> {
         let directory = std::env::current_exe()
@@ -1074,11 +1085,7 @@ impl ToolSupervisor {
     fn launch_map(
         &self,
         ui: slint::Weak<AppWindow>,
-        campus_name: String,
-        view: MapViewState,
-        boundary: Vec<GeoPoint>,
-        js_api_key: String,
-        security_code: String,
+        request: MapLaunchRequest,
     ) -> Result<(), String> {
         let executable = Self::tool_executable("campus-map")?;
         let random: u128 = rand::rng().random();
@@ -1119,21 +1126,24 @@ impl ToolSupervisor {
                 write_message(
                     &mut server,
                     &ToolCommand::OpenMap {
-                        campus_name,
-                        center_lng: view.center.lng,
-                        center_lat: view.center.lat,
-                        zoom: view.zoom,
-                        pitch: view.pitch,
-                        rotation: view.rotation,
-                        js_api_key,
-                        security_code,
-                        boundary: boundary
+                        campus_name: request.title,
+                        center_lng: request.view.center.lng,
+                        center_lat: request.view.center.lat,
+                        zoom: request.view.zoom,
+                        pitch: request.view.pitch,
+                        rotation: request.view.rotation,
+                        js_api_key: request.js_api_key,
+                        security_code: request.security_code,
+                        boundary: request
+                            .boundary
                             .into_iter()
                             .map(|point| MapCoordinate {
                                 lng: point.lng,
                                 lat: point.lat,
                             })
                             .collect(),
+                        purpose: request.purpose,
+                        overlays: request.overlays,
                     },
                 )
                 .await?;
@@ -1242,11 +1252,7 @@ impl ToolSupervisor {
     fn launch_map(
         &self,
         _ui: slint::Weak<AppWindow>,
-        _campus_name: String,
-        _view: MapViewState,
-        _boundary: Vec<GeoPoint>,
-        _js_api_key: String,
-        _security_code: String,
+        _request: MapLaunchRequest,
     ) -> Result<(), String> {
         Err("map tool is supported only on Windows".into())
     }
@@ -2143,14 +2149,93 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             if let Err(error) = tools.launch_map(
                 weak.clone(),
-                campus_name,
-                view,
-                boundary,
-                credentials.js_api_key,
-                credentials.security_code,
+                MapLaunchRequest {
+                    title: campus_name,
+                    view,
+                    boundary,
+                    js_api_key: credentials.js_api_key,
+                    security_code: credentials.security_code,
+                    purpose: MapPurpose::CampusReview,
+                    overlays: Vec::new(),
+                },
             ) {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_save_status(format!("地图启动失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let tools = tools.clone();
+        let state = state.clone();
+        let map_credentials = map_credentials.clone();
+        let weak = ui.as_weak();
+        ui.on_open_detailed_map(move || {
+            let selected = {
+                let state = state.borrow();
+                state.project.as_ref().and_then(|project| {
+                    let slot = project
+                        .detailed
+                        .selected_slot_id
+                        .as_deref()
+                        .and_then(|id| project.building_slots.iter().find(|slot| slot.id == id))
+                        .or_else(|| project.building_slots.first())?;
+                    if slot.footprint.is_empty() {
+                        return None;
+                    }
+                    let count = slot.footprint.len() as f64;
+                    let center = slot.footprint.iter().fold(
+                        GeoPoint { lng: 0.0, lat: 0.0 },
+                        |sum, point| GeoPoint {
+                            lng: sum.lng + point.lng / count,
+                            lat: sum.lat + point.lat / count,
+                        },
+                    );
+                    Some((project.campus_name.clone(), slot.clone(), center))
+                })
+            };
+            let Some((campus_name, slot, center)) = selected else {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_save_status("请先选择具有已审核轮廓的建筑槽位".into());
+                }
+                return;
+            };
+            let credentials = map_credentials.borrow().clone();
+            if credentials.js_api_key.trim().is_empty() {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_settings_visible(true);
+                    ui.set_save_status("请先配置高德 Web JS API 密钥".into());
+                }
+                return;
+            }
+            let request = MapLaunchRequest {
+                title: format!("{campus_name} · {}", slot.name),
+                view: MapViewState {
+                    center,
+                    zoom: 19.0,
+                    pitch: 65.0,
+                    rotation: 0.0,
+                    capture_bounds: None,
+                },
+                boundary: Vec::new(),
+                js_api_key: credentials.js_api_key,
+                security_code: credentials.security_code,
+                purpose: MapPurpose::BuildingEvidence,
+                overlays: vec![MapOverlay {
+                    label: slot.name,
+                    points: slot
+                        .footprint
+                        .into_iter()
+                        .map(|point| MapCoordinate {
+                            lng: point.lng,
+                            lat: point.lat,
+                        })
+                        .collect(),
+                }],
+            };
+            if let Err(error) = tools.launch_map(weak.clone(), request) {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_save_status(format!("建筑证据地图启动失败：{error}").into());
                 }
             }
         });

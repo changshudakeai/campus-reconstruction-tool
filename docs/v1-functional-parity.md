@@ -24,7 +24,7 @@ block the atomic cutover required by ADR 0031.
 | Foundation | Generate and inspect native Foundation preview before export | Export model is converted to the native preview snapshot and launched through the preview helper | Shipped |
 | Foundation | Sponge schematic plus portable project export | `campus-export` and Slint Foundation export action | Shipped |
 | Detailed | Building Slot queue and selected-slot handoff | Slint slot combo; selected slot stored in project | Shipped |
-| Detailed | Gaode 3D reference and open-geodata footprint comparison | Map helper exists, but Detailed evidence review/candidate selection is absent | **Gap** |
+| Detailed | Gaode 3D reference and open-geodata footprint comparison | Protocol v2 gives the isolated map process an explicit Building Evidence purpose, centers on the selected slot, and overlays its reviewed open-geodata footprint without exposing campus-edit commands | Shipped |
 | Detailed | Preserve measured footprint, height, floors, and roof | Native measurement editor; Arnis regression tests preserve massing | Shipped |
 | Detailed | Complete fixed Arnis appearance categories | All 19 upstream categories are exposed in Slint and tested for distinct output | Shipped |
 | Detailed | Generate a building and open native orbit/zoom preview | Arnis core generation; independent `campus-preview` process | Shipped |

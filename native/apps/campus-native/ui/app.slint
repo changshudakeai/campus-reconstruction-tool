@@ -132,6 +132,7 @@ export component AppWindow inherits Window {
     callback choose-candidate-filter(int);
     callback change-candidate-page(int);
     callback open-map();
+    callback open-detailed-map();
     callback open-preview();
     callback choose-style(int, float, float);
     callback choose-foundation-style(int);
@@ -523,6 +524,10 @@ export component AppWindow inherits Window {
                         text: root.observed-evidence-summary;
                         color: #33463d;
                         wrap: word-wrap;
+                    }
+                    Button {
+                        text: "打开高德 3D 与已审核轮廓对照";
+                        clicked => { root.open-detailed-map(); }
                     }
                     SectionLabel { text: "生成建筑解释"; }
                     Text {

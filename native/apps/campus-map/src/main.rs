@@ -8,7 +8,7 @@ fn main() {
 #[cfg(target_os = "windows")]
 mod windows {
     use campus_tool_protocol::{
-        read_message, write_message, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+        read_message, write_message, MapPurpose, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
     };
     use std::sync::mpsc::{self, Sender};
     use std::thread;
@@ -198,6 +198,8 @@ mod windows {
             js_api_key,
             security_code,
             boundary,
+            purpose,
+            overlays,
         } = command
         else {
             return "<h1>Invalid map request</h1>".into();
@@ -209,14 +211,30 @@ mod windows {
             .collect::<String>();
         let security = serde_json::to_string(security_code).unwrap();
         let boundary = serde_json::to_string(boundary).unwrap();
+        let overlays = serde_json::to_string(overlays).unwrap();
+        let (bar, editing_script) = if *purpose == MapPurpose::CampusReview {
+            (
+                r#"<button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="capture">截取并识别当前视野</button>"#,
+                r#"
+document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';};
+document.getElementById('clear').onclick=()=>{points=[];redraw();};
+document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
+document.getElementById('capture').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};"#,
+            )
+        } else {
+            (
+                r#"<span class="hint">绿色轮廓：已审核开放地理数据 · 高德 3D：人工视觉证据</span>"#,
+                "",
+            )
+        };
         format!(
             r#"<!doctype html><html><head><meta charset="utf-8">
 <style>html,body,#map{{margin:0;width:100%;height:100%;overflow:hidden;font-family:"Microsoft YaHei UI",sans-serif}}
 #bar{{position:absolute;z-index:5;left:16px;top:16px;background:#f4f0e5;border:1px solid #23362e;padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
-button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} span{{font-weight:700;color:#17251f}}</style>
+button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} span{{font-weight:700;color:#17251f}} span.hint{{font-weight:400;color:#506058}}</style>
 <script>window._AMapSecurityConfig={{securityJsCode:{security}}};</script>
 <script src="https://webapi.amap.com/maps?v=2.0&key={key}"></script></head>
-<body><div id="map"></div><div id="bar"><span>{campus}</span><button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="capture">截取并识别当前视野</button></div>
+<body><div id="map"></div><div id="bar"><span>{campus}</span>{bar}</div>
 <script>
 const post=(value)=>window.ipc.postMessage(JSON.stringify(value));
 const map=new AMap.Map('map',{{viewMode:'3D',zoom:{zoom},pitch:{pitch},rotation:{rotation},center:[{center_lng},{center_lat}],showLabel:false}});
@@ -225,12 +243,11 @@ let points={boundary}.map(p=>[p.lng,p.lat]);
 let polygon=null;
 const redraw=()=>{{if(polygon)map.remove(polygon);polygon=points.length>=2?new AMap.Polygon({{path:points,strokeColor:'#a54836',strokeWeight:4,fillColor:'#a54836',fillOpacity:.14}}):null;if(polygon)map.add(polygon);}};
 redraw();
+const overlays={overlays};
+overlays.forEach((overlay,index)=>{{const item=new AMap.Polygon({{path:overlay.points.map(p=>[p.lng,p.lat]),strokeColor:index%2===0?'#2f765b':'#a54836',strokeWeight:5,fillColor:index%2===0?'#2f765b':'#a54836',fillOpacity:.16}});map.add(item);}});
 map.on('click',e=>{{if(drawing){{points.push([e.lnglat.lng,e.lnglat.lat]);redraw();}}else post({{type:'mapPointSelected',lng:e.lnglat.lng,lat:e.lnglat.lat}});}});
 map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng:c.lng,centerLat:c.lat,zoom:map.getZoom(),pitch:map.getPitch(),rotation:map.getRotation()}})}});
-document.getElementById('draw').onclick=()=>{{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';}};
-document.getElementById('clear').onclick=()=>{{points=[];redraw();}};
-document.getElementById('save').onclick=()=>{{if(points.length>=3)post({{type:'mapBoundaryChanged',points:points.map(p=>({{lng:p[0],lat:p[1]}}))}});}};
-document.getElementById('capture').onclick=()=>{{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({{type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat}})}};
+{editing_script}
 </script></body></html>"#,
         )
     }

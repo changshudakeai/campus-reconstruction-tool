@@ -1,7 +1,7 @@
 #![cfg(target_os = "windows")]
 
 use campus_tool_protocol::{
-    read_message, write_message, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+    read_message, write_message, MapPurpose, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
 };
 use std::process::Command;
 use tokio::net::windows::named_pipe::ServerOptions;
@@ -51,6 +51,8 @@ fn map_process_completes_authenticated_pipe_handshake() {
                 js_api_key: "test".into(),
                 security_code: "test".into(),
                 boundary: Vec::new(),
+                purpose: MapPurpose::CampusReview,
+                overlays: Vec::new(),
             },
         )
         .await

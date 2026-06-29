@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -9,6 +9,21 @@ pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 pub struct MapCoordinate {
     pub lng: f64,
     pub lat: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MapPurpose {
+    #[default]
+    CampusReview,
+    BuildingEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapOverlay {
+    pub label: String,
+    pub points: Vec<MapCoordinate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -33,6 +48,10 @@ pub enum ToolCommand {
         js_api_key: String,
         security_code: String,
         boundary: Vec<MapCoordinate>,
+        #[serde(default)]
+        purpose: MapPurpose,
+        #[serde(default)]
+        overlays: Vec<MapOverlay>,
     },
     OpenPreview {
         model_path: String,
