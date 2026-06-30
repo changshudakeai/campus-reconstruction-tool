@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "name": "V1 验收项目",
+  "campusName": "华东师范大学普陀校区",
+  "mode": "detailed",
+  "foundationStep": "export",
+  "completedSteps": [
+    "campus",
+    "boundary",
+    "orientation",
+    "building",
+    "road",
+    "water",
+    "vegetation",
+    "sports"
+  ],
+  "boundary": [
+    {
+      "lng": 121.4059,
+      "lat": 31.2288
+    },
+    {
+      "lng": 121.4072,
+      "lat": 31.2288
+    },
+    {
+      "lng": 121.4072,
+      "lat": 31.2277
+    },
+    {
+      "lng": 121.4059,
+      "lat": 31.2277
+    }
+  ],
+  "orientationDegrees": 12.0,
+  "blocksPerMeter": 1.0,
+  "mapView": {
+    "center": {
+      "lng": 121.406582,
+      "lat": 31.228318
+    },
+    "zoom": 17.0,
+    "pitch": 45.0,
+    "rotation": 0.0,
+    "captureBounds": null
+  },
+  "candidates": [
+    {
+      "id": "demo-library",
+      "name": "验收图书馆",
+      "kind": "building",
+      "source": "V1 fixture",
+      "confidence": "high",
+      "points": [
+        {
+          "lng": 121.4061,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.22818
+        },
+        {
+          "lng": 121.4061,
+          "lat": 31.22818
+        }
+      ],
+      "review": "accepted"
+    }
+  ],
+  "features": [
+    {
+      "id": "accepted-demo-library",
+      "name": "验收图书馆",
+      "kind": "building",
+      "points": [
+        {
+          "lng": 121.4061,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.22818
+        },
+        {
+          "lng": 121.4061,
+          "lat": 31.22818
+        }
+      ],
+      "block": "minecraft:stone_bricks",
+      "sourceId": "demo-library"
+    }
+  ],
+  "buildingSlots": [
+    {
+      "id": "demo-library",
+      "name": "验收图书馆",
+      "footprint": [
+        {
+          "lng": 121.4061,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.2285
+        },
+        {
+          "lng": 121.40655,
+          "lat": 31.22818
+        },
+        {
+          "lng": 121.4061,
+          "lat": 31.22818
+        }
+      ],
+      "heightM": 22.0,
+      "floors": 5,
+      "refined": true
+    }
+  ],
+  "detailed": {
+    "selectedSlotId": "demo-library",
+    "stylePreset": "school",
+    "wallBlock": null,
+    "windowDensity": 55,
+    "wallDepth": 45,
+    "generatedPath": "C:\\Users\\chang\\AppData\\Local\\CampusReconstructionTool\\generated\\demo-library.arnis.json"
+  }
+}

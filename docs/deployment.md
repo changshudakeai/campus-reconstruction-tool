@@ -1,31 +1,51 @@
-# Campus Reconstruction Tool deployment notes
+# Campus Reconstruction Tool V1 deployment
 
-## Client deployment
+## Windows client
 
-Use the Windows x64 installer produced by Tauri:
+Install `artifacts/installer/Campus-Reconstruction-Tool-V1-Setup.exe` on
+Windows 10/11 x64. The per-user NSIS package installs:
 
-- `Campus Reconstruction Tool_0.1.0_x64-setup.exe`
-- Optional enterprise installer: `Campus Reconstruction Tool_0.1.0_x64_en-US.msi`
+- `campus-native.exe` — Slint/Rust main application and sole AppState owner;
+- `campus-map.exe` — isolated Gaode WebView2 helper;
+- `campus-preview.exe` — isolated native wgpu preview helper;
+- `THIRD_PARTY_NOTICES.md` and the uninstaller.
 
-The installer includes the compiled desktop application and bundled web assets. The target computer needs Microsoft Edge WebView2 Runtime, which is normally present on modern Windows. No Node.js, Rust, source files, or `node_modules` are required on the client machine.
+No Node.js, Rust toolchain, Python runtime, source tree, model weights, or
+dataset is installed. Microsoft Edge WebView2 Runtime is required only when
+opening the Gaode helper and is normally present on supported Windows systems.
+Existing projects, generation, preview, editing, and export remain available
+offline.
 
-## Repository-only files
+The installer registers a per-user uninstaller under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CampusReconstructionTool`
+and creates Start Menu shortcuts.
 
-Keep these in GitHub/source control, not in the client deployment package:
+## Release verification
 
-- `src/`, `src-tauri/`, `scripts/`
-- `package.json`, `package-lock.json`
-- `docs/`, ADRs, smoke tests
-- `public/` source assets
+From the repository root:
 
-## Generated files not meant for source control
+```powershell
+npm run bundle:v1
+npm run verify:installer
+npm run size:release
+```
 
-These are build outputs and can be regenerated:
-
-- `dist/`
-- `src-tauri/target/`
-- `.scratch/`
+`verify:installer` performs a real silent installation, validates the exact
+payload and uninstall registration, runs the installed binary's offline
+multi-cycle self-test (project recovery, all four Foundation packs, all 19
+Arnis categories, Foundation and Detailed schematic export), and then performs
+a real silent uninstall.
 
 ## Local user data
 
-Campus projects, cached reverse-geocode attempts, and local review state are stored on the user machine by the desktop app. They are not shipped with the installer. Export portable Campus Reconstruction Projects from inside the app when moving work between computers.
+Projects and generated snapshots live under
+`%LOCALAPPDATA%\CampusReconstructionTool`. Gaode credentials live in Windows
+Credential Manager. Language preference is application-local; portable
+project JSON remains language-neutral. Export a portable project when moving
+work between computers.
+
+## Repository-only and generated files
+
+Source (`native/`, `src/`, `src-tauri/`, `scripts/`, `docs/`) is not deployed.
+Build outputs under `native/target/`, `dist/`, and `artifacts/` are
+regenerable and are not application runtime dependencies.

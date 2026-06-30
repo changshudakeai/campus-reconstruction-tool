@@ -1,0 +1,11 @@
+[package]
+name = "campus-map"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+campus-tool-protocol = { path = "../../crates/campus-tool-protocol" }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
+winit = "0.30"
+wry = "0.55"

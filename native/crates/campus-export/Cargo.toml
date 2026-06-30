@@ -1,0 +1,11 @@
+[package]
+name = "campus-export"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+campus-state = { path = "../campus-state" }
+fastnbt = "2"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

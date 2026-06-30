@@ -1,0 +1,753 @@
+import { AboutSlint, Button, ComboBox, LineEdit, ScrollView, Slider } from "std-widgets.slint";
+
+export struct CandidateRow {
+    id: string,
+    name: string,
+    meta: string,
+    status: string,
+    pending: bool,
+}
+
+component SectionLabel inherits Text {
+    color: #a54836;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+component Rule inherits Rectangle {
+    height: 1px;
+    background: #b7ad9a;
+}
+
+component CandidateItem inherits Rectangle {
+    in property <CandidateRow> candidate;
+    in property <bool> english;
+    callback decide(string, bool);
+    callback reset(string);
+    callback inspect(string);
+    height: 72px;
+    background: #f7f3e9;
+    border-color: #c7bca8;
+    border-width: 1px;
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: candidate.name; font-weight: 700; color: #17251f; }
+            Text { text: candidate.meta; font-size: 12px; color: #617068; }
+        }
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+        Text { text: candidate.status; color: #a54836; vertical-alignment: center; }
+        Button { text: root.english ? "Details" : "详情"; clicked => { root.inspect(candidate.id); } }
+        Button { text: root.english ? "Revoke" : "撤销"; enabled: !candidate.pending; clicked => { root.reset(candidate.id); } }
+        Button { text: root.english ? "Reject" : "拒绝"; enabled: candidate.pending; clicked => { root.decide(candidate.id, false); } }
+        Button { text: root.english ? "Accept" : "接受"; enabled: candidate.pending; clicked => { root.decide(candidate.id, true); } }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Minecraft 校园复刻工具";
+    width: 1280px;
+    height: 820px;
+    background: #f4f0e5;
+    default-font-family: "Microsoft YaHei UI";
+    forward-focus: shortcut-scope;
+
+    in-out property <string> project-name: "未命名项目";
+    in-out property <string> campus-name: "华东师范大学普陀校区";
+    in-out property <string> save-status: "未保存";
+    in-out property <string> tool-status: "";
+    in-out property <string> page-title: "选择学校与具体校区";
+    in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
+    in-out property <string> project-summary: "尚未建立项目";
+    in-out property <bool> detailed-active: false;
+    in-out property <int> active-step: 0;
+    in-out property <[string]> step-labels: ["校区", "边界", "朝向", "建筑", "道路", "水域", "植被", "体育", "导出"];
+    in-out property <[CandidateRow]> candidates: [];
+    in-out property <[string]> candidate-filters: [];
+    in-out property <int> selected-candidate-filter: 0;
+    in-out property <int> candidate-page: 0;
+    in-out property <int> candidate-pages: 1;
+    in-out property <[string]> building-slots: ["暂无已审核建筑"];
+    in-out property <int> selected-slot: 0;
+    in-out property <[string]> arnis-styles: [];
+    in-out property <int> selected-style: 8;
+    in-out property <[string]> foundation-styles: [];
+    in-out property <int> selected-foundation-style: 0;
+    in-out property <string> foundation-style-name: "Arnis Classic";
+    in-out property <float> window-density: 50;
+    in-out property <float> wall-depth: 50;
+    in-out property <string> primary-label: "确认校区并继续";
+    in-out property <bool> settings-visible: false;
+    in-out property <bool> about-visible: false;
+    in-out property <string> gaode-key: "";
+    in-out property <string> gaode-security: "";
+    in-out property <float> orientation-degrees: 0;
+    in-out property <float> blocks-per-meter: 1;
+    in-out property <bool> can-undo: false;
+    in-out property <bool> can-redo: false;
+    in-out property <string> measured-height: "";
+    in-out property <string> measured-floors: "";
+    in-out property <string> measured-roof: "";
+    in-out property <string> palette-summary: "尚未生成模型";
+    in-out property <string> refinement-summary: "尚无生成版本";
+    in-out property <bool> can-confirm-refinement: false;
+    in-out property <string> selected-block-summary: "尚未在预览中选择方块";
+    in-out property <string> selected-block-target: "";
+    in-out property <bool> evidence-visible: false;
+    in-out property <[string]> semantic-feature-kinds: [];
+    in-out property <[string]> semantic-feature-sides: [];
+    in-out property <[string]> semantic-height-bands: [];
+    in-out property <[string]> semantic-strengths: [];
+    in-out property <int> selected-semantic-kind: 0;
+    in-out property <int> selected-semantic-side: 0;
+    in-out property <int> selected-semantic-height: 0;
+    in-out property <int> selected-semantic-strength: 1;
+    in-out property <string> semantic-feature-label: "";
+    in-out property <string> semantic-feature-reason: "";
+    in-out property <string> semantic-feature-summary: "尚未标注识别特征";
+    in-out property <string> observed-evidence-summary: "尚未选择建筑槽位";
+    in-out property <string> generated-interpretation-summary: "尚未生成解释结果";
+    in-out property <[string]> external-models: [];
+    in-out property <int> selected-external-model: 0;
+    in-out property <string> external-model-summary: "";
+    in-out property <[string]> external-model-decisions: [];
+    in-out property <int> selected-external-decision: 0;
+    in-out property <string> external-model-reason: "";
+    in-out property <[string]> source-conflicts: [];
+    in-out property <int> selected-source-conflict: 0;
+    in-out property <string> source-conflict-summary: "";
+    in-out property <[string]> source-conflict-decisions: [];
+    in-out property <int> selected-source-conflict-decision: 0;
+    in-out property <string> source-conflict-reason: "";
+    in-out property <bool> candidate-details-visible: false;
+    in-out property <string> selected-candidate-name: "";
+    in-out property <string> selected-candidate-details: "";
+    in-out property <bool> selected-candidate-is-building: false;
+    in-out property <string> candidate-name-draft: "";
+    in-out property <string> candidate-suppression-reason: "";
+    in-out property <[string]> building-suppressions: [];
+    in-out property <int> selected-building-suppression: 0;
+    in-out property <string> replace-source: "";
+    in-out property <string> replace-target: "";
+    in-out property <bool> english: false;
+
+    callback create-project(string, string);
+    callback open-project();
+    callback save-project();
+    callback save-project-as();
+    callback switch-mode(bool);
+    callback select-step(int);
+    callback confirm-step();
+    callback review-candidate(string, bool);
+    callback reset-candidate-review(string);
+    callback review-visible-candidates(bool);
+    callback choose-candidate-filter(int);
+    callback change-candidate-page(int);
+    callback open-map();
+    callback open-detailed-map();
+    callback draw-foundation-feature();
+    callback open-preview();
+    callback choose-style(int, float, float);
+    callback choose-foundation-style(int);
+    callback import-foundation-style();
+    callback preview-foundation();
+    callback choose-slot(int);
+    callback generate-building();
+    callback confirm-refinement();
+    callback export-building();
+    callback export-project();
+    callback save-map-settings(string, string);
+    callback set-foundation-metrics(float, float);
+    callback undo();
+    callback redo();
+    callback update-building-measurements(string, string, string);
+    callback replace-generated-block(string, string);
+    callback replace-selected-block(string);
+    callback apply-semantic-feature(int, int, int, int, string, string);
+    callback choose-external-model(int);
+    callback review-external-model(int, int, string);
+    callback choose-source-conflict(int);
+    callback review-source-conflict(int, int, string);
+    callback open-candidate-details(string);
+    callback rename-selected-building(string);
+    callback suppress-selected-building(string);
+    callback restore-building-suppression(int);
+    callback set-locale(bool);
+
+    shortcut-scope := FocusScope {
+      VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 66px;
+            background: #eee6d6;
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 18px;
+                spacing: 10px;
+                Text { text: root.english ? "MC Campus Reconstruction" : "MC 校园复刻"; font-size: 22px; font-weight: 700; color: #17251f; vertical-alignment: center; }
+                Rectangle { width: 1px; height: 30px; background: #b7ad9a; }
+                Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: root.save-status; color: root.save-status == "保存失败" || root.save-status == "Save failed" ? #a54836 : #4c665b; vertical-alignment: center; }
+                if root.tool-status != "" : Text {
+                    text: root.tool-status;
+                    color: #617068;
+                    vertical-alignment: center;
+                }
+                Button { text: root.english ? "中文" : "EN"; clicked => { root.set-locale(!root.english); } }
+                Button { text: root.english ? "Undo" : "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
+                Button { text: root.english ? "Redo" : "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
+                Button { text: root.english ? "Map settings" : "地图设置"; clicked => { root.settings-visible = true; } }
+                Button { text: root.english ? "About" : "关于"; clicked => { root.about-visible = true; } }
+                Button { text: root.english ? "Open" : "打开"; clicked => { root.open-project(); } }
+                Button { text: root.english ? "Save as" : "另存为"; clicked => { root.save-project-as(); } }
+                Button { text: root.english ? "Save" : "保存"; clicked => { root.save-project(); } }
+            }
+        }
+        Rectangle { height: 2px; background: #23362e; }
+
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 244px;
+                background: #ece4d3;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    SectionLabel { text: root.english ? "WORK MODE" : "工作模式"; }
+                    Button { text: root.english ? "Foundation & Campus" : "地基与校区"; enabled: root.detailed-active; clicked => { root.switch-mode(false); } }
+                    Button { text: root.english ? "Detailed Building" : "精细建筑"; enabled: !root.detailed-active; clicked => { root.switch-mode(true); } }
+                    Rule {}
+                    if !root.detailed-active : VerticalLayout {
+                        spacing: 5px;
+                        SectionLabel { text: root.english ? "WORKFLOW" : "工作步骤"; }
+                        for label[index] in root.step-labels: Button {
+                            text: (index + 1) + ". " + label;
+                            enabled: root.active-step != index;
+                            clicked => { root.select-step(index); }
+                        }
+                    }
+                    if root.detailed-active : VerticalLayout {
+                        spacing: 8px;
+                        SectionLabel { text: root.english ? "BUILDING QUEUE" : "建筑清单"; }
+                        Text { text: root.project-summary; color: #506058; wrap: word-wrap; }
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+            Rectangle { width: 1px; background: #948a78; }
+
+            Rectangle {
+                background: #faf8f1;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+                    SectionLabel { text: root.detailed-active ? (root.english ? "DETAILED BUILDING" : "精细建筑") : (root.english ? "FOUNDATION & CAMPUS" : "地基与校区"); }
+                    Text { text: root.page-title; font-size: 28px; font-weight: 700; color: #17251f; }
+                    Text { text: root.page-help; font-size: 15px; color: #5b665f; wrap: word-wrap; }
+                    Rule {}
+
+                    if !root.detailed-active && root.active-step == 0 : Rectangle {
+                        height: 270px;
+                        background: #f4f0e5;
+                        border-color: #23362e;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 10px;
+                            SectionLabel { text: root.english ? "LOCAL PROJECT" : "本地项目"; }
+                            LineEdit { text <=> root.project-name; placeholder-text: root.english ? "Project name" : "项目名称"; }
+                            LineEdit { text <=> root.campus-name; placeholder-text: root.english ? "School and campus" : "学校与校区"; }
+                            Button { text: root.english ? "Choose campus in Gaode" : "在高德中选择校区"; clicked => { root.open-map(); } }
+                            Button { text: root.english ? "Create local project" : "创建本地项目"; clicked => { root.create-project(root.project-name, root.campus-name); } }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step == 2 : Rectangle {
+                        height: 220px;
+                        background: #f4f0e5;
+                        border-color: #c7bca8;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 14px;
+                            SectionLabel { text: root.english ? "COORDINATE TRANSFORM" : "坐标转换"; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: root.english ? "Campus axis" : "校园主轴"; width: 90px; vertical-alignment: center; }
+                                Slider { value <=> root.orientation-degrees; minimum: -180; maximum: 180; }
+                                Text { text: round(root.orientation-degrees) + "°"; width: 60px; vertical-alignment: center; }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: root.english ? "Blocks / m" : "方块 / 米"; width: 90px; vertical-alignment: center; }
+                                Slider { value <=> root.blocks-per-meter; minimum: 0.25; maximum: 4; }
+                                Text { text: round(root.blocks-per-meter * 100) / 100; width: 60px; vertical-alignment: center; }
+                            }
+                            Button {
+                                text: root.english ? "Apply orientation and scale" : "应用朝向与比例";
+                                clicked => { root.set-foundation-metrics(root.orientation-degrees, root.blocks-per-meter); }
+                            }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step > 0 && root.active-step < 8 && root.active-step != 2 : VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button {
+                                text: root.english ? "Draw current type" : "手绘当前类型";
+                                enabled: root.active-step > 2;
+                                clicked => { root.draw-foundation-feature(); }
+                            }
+                            Button { text: root.english ? "Edit on map" : "在地图中编辑"; clicked => { root.open-map(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            candidate-filter-box := ComboBox {
+                                model: root.candidate-filters;
+                                current-index <=> root.selected-candidate-filter;
+                                selected(value) => {
+                                    root.choose-candidate-filter(candidate-filter-box.current-index);
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: root.english ? "Reject visible" : "批量拒绝"; clicked => { root.review-visible-candidates(false); } }
+                            Button { text: root.english ? "Accept visible" : "批量接受"; clicked => { root.review-visible-candidates(true); } }
+                        }
+                        for candidate in root.candidates: CandidateItem {
+                            candidate: candidate;
+                            english: root.english;
+                            decide(id, accepted) => { root.review-candidate(id, accepted); }
+                            reset(id) => { root.reset-candidate-review(id); }
+                            inspect(id) => { root.open-candidate-details(id); }
+                        }
+                        if root.candidates.length == 0 : Rectangle {
+                            height: 120px;
+                            background: #f4f0e5;
+                            border-color: #c7bca8;
+                            border-width: 1px;
+                            Text {
+                                text: root.english ? "No pending objects in this step. Open the map to query, draw, or capture the current view." : "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
+                                color: #68756e; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: root.english ? "Previous" : "上一页";
+                                enabled: root.candidate-page > 0;
+                                clicked => { root.change-candidate-page(-1); }
+                            }
+                            Text {
+                                text: (root.candidate-page + 1) + " / " + root.candidate-pages;
+                                color: #506058;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                text: root.english ? "Next" : "下一页";
+                                enabled: root.candidate-page + 1 < root.candidate-pages;
+                                clicked => { root.change-candidate-page(1); }
+                            }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step == 8 : VerticalLayout {
+                        spacing: 14px;
+                        Text { text: root.project-summary; color: #33463d; }
+                        SectionLabel { text: root.english ? "FOUNDATION STYLE PRESET" : "Foundation 样式预设"; }
+                        foundation-style-box := ComboBox {
+                            model: root.foundation-styles;
+                            current-index <=> root.selected-foundation-style;
+                            selected(value) => {
+                                root.choose-foundation-style(foundation-style-box.current-index);
+                            }
+                        }
+                        Text { text: (root.english ? "Current style pack: " : "当前样式包：") + root.foundation-style-name; color: #506058; }
+                        Button {
+                            text: root.english ? "Import advanced JSON style pack" : "导入进阶 JSON 样式包";
+                            clicked => { root.import-foundation-style(); }
+                        }
+                        Button {
+                            text: root.english ? "Generate and open native Foundation preview" : "生成并打开 Foundation 原生预览";
+                            clicked => { root.preview-foundation(); }
+                        }
+                        Button { text: root.english ? "Export Foundation project and .schem" : "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
+                    }
+
+                    if root.detailed-active : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: root.english ? "TARGET BUILDING" : "目标建筑"; }
+                        slot-box := ComboBox {
+                            model: root.building-slots;
+                            current-index <=> root.selected-slot;
+                            selected(value) => { root.choose-slot(slot-box.current-index); }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { text <=> root.measured-height; placeholder-text: root.english ? "Measured height (m)" : "实测高度（米）"; }
+                            LineEdit { text <=> root.measured-floors; placeholder-text: root.english ? "Measured floors" : "实测楼层"; }
+                            LineEdit { text <=> root.measured-roof; placeholder-text: root.english ? "Roof (flat/gabled/hipped)" : "屋顶形状（flat/gabled/hipped）"; }
+                            Button {
+                                text: root.english ? "Save measurements" : "保存实测值";
+                                clicked => { root.update-building-measurements(root.measured-height, root.measured-floors, root.measured-roof); }
+                            }
+                        }
+                        SectionLabel { text: root.english ? "ARNIS APPEARANCE PRESET" : "Arnis 外观预设"; }
+                        style-box := ComboBox {
+                            model: root.arnis-styles;
+                            current-index <=> root.selected-style;
+                            selected(value) => { root.choose-style(style-box.current-index, root.window-density, root.wall-depth); }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: root.english ? "Window density" : "窗户密度"; width: 110px; vertical-alignment: center; }
+                            Slider { value <=> root.window-density; minimum: 0; maximum: 100; }
+                            Text { text: round(root.window-density) + "%"; width: 48px; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: root.english ? "Wall depth" : "墙面层次"; width: 110px; vertical-alignment: center; }
+                            Slider { value <=> root.wall-depth; minimum: 0; maximum: 100; }
+                            Text { text: round(root.wall-depth) + "%"; width: 48px; vertical-alignment: center; }
+                        }
+                        Button { text: root.english ? "Generate and open native preview" : "生成并打开原生预览"; clicked => { root.generate-building(); } }
+                        HorizontalLayout {
+                            Text {
+                                text: root.refinement-summary;
+                                color: #506058;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button {
+                                text: root.english ? "Confirm this version" : "确认此版本";
+                                enabled: root.can-confirm-refinement;
+                                clicked => { root.confirm-refinement(); }
+                            }
+                        }
+                        Button {
+                            text: root.english ? "Evidence and semantic features" : "证据与识别特征";
+                            clicked => { root.evidence-visible = true; }
+                        }
+                        Button { text: root.english ? "Open latest preview" : "打开上次生成的预览"; clicked => { root.open-preview(); } }
+                        Text {
+                            text: (root.english ? "Preview selection: " : "预览选择：") + root.selected-block-summary;
+                            color: #506058;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit {
+                                text <=> root.selected-block-target;
+                                placeholder-text: root.english ? "New ID for selected block" : "选中方块的新 ID";
+                            }
+                            Button {
+                                text: root.english ? "Replace selected block" : "替换选中方块";
+                                clicked => { root.replace-selected-block(root.selected-block-target); }
+                            }
+                        }
+                        SectionLabel { text: root.english ? "BATCH BLOCK REPLACEMENT" : "批量方块替换"; }
+                        Text { text: root.palette-summary; color: #506058; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { text <=> root.replace-source; placeholder-text: root.english ? "Source, e.g. minecraft:bricks" : "原方块，例如 minecraft:bricks"; }
+                            LineEdit { text <=> root.replace-target; placeholder-text: root.english ? "Target, e.g. minecraft:white_concrete" : "新方块，例如 minecraft:white_concrete"; }
+                            Button {
+                                text: root.english ? "Replace all" : "全部替换";
+                                clicked => { root.replace-generated-block(root.replace-source, root.replace-target); }
+                            }
+                        }
+                        Button { text: root.english ? "Export detailed building .schem" : "导出当前精细建筑 .schem"; clicked => { root.export-building(); } }
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                    if !root.detailed-active : HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Button { text: root.primary-label; clicked => { root.confirm-step(); } }
+                    }
+                }
+            }
+        }
+      }
+      KeyBinding { keys: @keys(Control + S); activated => { root.save-project(); } }
+      KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }
+      KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }
+    }
+
+    if root.settings-visible : Rectangle {
+        x: 360px;
+        y: 170px;
+        width: 560px;
+        height: 330px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            SectionLabel { text: root.english ? "GAODE MAP SERVICE" : "高德地图服务"; }
+            Text { text: root.english ? "Credentials are stored only in Windows Credential Manager, never in projects or the repository." : "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
+            LineEdit { text <=> root.gaode-key; placeholder-text: "Web JS API Key"; }
+            LineEdit { text <=> root.gaode-security; placeholder-text: root.english ? "Security JS Code" : "安全密钥 Security JS Code"; }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            HorizontalLayout {
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: root.english ? "Cancel" : "取消"; clicked => { root.settings-visible = false; } }
+                Button {
+                    text: root.english ? "Save securely" : "安全保存";
+                    clicked => {
+                        root.save-map-settings(root.gaode-key, root.gaode-security);
+                        root.settings-visible = false;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.about-visible : Rectangle {
+        x: 420px;
+        y: 190px;
+        width: 440px;
+        height: 300px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            SectionLabel { text: root.english ? "ABOUT CAMPUS RECONSTRUCTION TOOL" : "关于 Campus Reconstruction Tool"; }
+            Text { text: root.english ? "V1 · Native Slint / Rust campus reconstruction workbench" : "V1 · 原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
+            AboutSlint {}
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            Button { text: root.english ? "Close" : "关闭"; clicked => { root.about-visible = false; } }
+        }
+    }
+
+    if root.evidence-visible : Rectangle {
+        x: 220px;
+        y: 85px;
+        width: 840px;
+        height: 650px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            HorizontalLayout {
+                SectionLabel { text: root.english ? "DETAILED EVIDENCE & SEMANTICS" : "Detailed 证据与识别特征"; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: root.english ? "Close" : "关闭"; clicked => { root.evidence-visible = false; } }
+            }
+            Rule {}
+            ScrollView {
+                VerticalLayout {
+                    padding-right: 12px;
+                    spacing: 12px;
+                    SectionLabel { text: root.english ? "OBSERVED BUILDING EVIDENCE" : "观测建筑证据"; }
+                    Text {
+                        text: root.observed-evidence-summary;
+                        color: #33463d;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: root.english ? "Compare Gaode 3D with reviewed footprint" : "打开高德 3D 与已审核轮廓对照";
+                        clicked => { root.open-detailed-map(); }
+                    }
+                    SectionLabel { text: root.english ? "GENERATED INTERPRETATION" : "生成建筑解释"; }
+                    Text {
+                        text: root.generated-interpretation-summary;
+                        color: #33463d;
+                        wrap: word-wrap;
+                    }
+                    Rule {}
+                    SectionLabel { text: root.english ? "EXTERNAL 3D MODEL LICENSE REVIEW" : "外部 3D 模型许可审核"; }
+                    external-model-box := ComboBox {
+                        model: root.external-models;
+                        current-index <=> root.selected-external-model;
+                        selected(value) => {
+                            root.choose-external-model(external-model-box.current-index);
+                        }
+                    }
+                    Text {
+                        text: root.external-model-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    external-decision-box := ComboBox {
+                        model: root.external-model-decisions;
+                        current-index <=> root.selected-external-decision;
+                    }
+                    LineEdit {
+                        text <=> root.external-model-reason;
+                        placeholder-text: root.english ? "External model review reason" : "外部模型审核理由";
+                    }
+                    Button {
+                        text: root.english ? "Save external model review" : "保存外部模型审核";
+                        clicked => {
+                            root.review-external-model(
+                                root.selected-external-model,
+                                root.selected-external-decision,
+                                root.external-model-reason
+                            );
+                        }
+                    }
+                    SectionLabel { text: root.english ? "SOURCE CONFLICT REVIEW" : "来源冲突审核"; }
+                    source-conflict-box := ComboBox {
+                        model: root.source-conflicts;
+                        current-index <=> root.selected-source-conflict;
+                        selected(value) => {
+                            root.choose-source-conflict(source-conflict-box.current-index);
+                        }
+                    }
+                    Text {
+                        text: root.source-conflict-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    conflict-decision-box := ComboBox {
+                        model: root.source-conflict-decisions;
+                        current-index <=> root.selected-source-conflict-decision;
+                    }
+                    LineEdit {
+                        text <=> root.source-conflict-reason;
+                        placeholder-text: root.english ? "Source conflict decision reason" : "来源冲突决策理由";
+                    }
+                    Button {
+                        text: root.english ? "Save source conflict decision" : "保存来源冲突决策";
+                        clicked => {
+                            root.review-source-conflict(
+                                root.selected-source-conflict,
+                                root.selected-source-conflict-decision,
+                                root.source-conflict-reason
+                            );
+                        }
+                    }
+                    Rule {}
+                    SectionLabel { text: root.english ? "SEMANTIC FEATURE PRESERVATION" : "语义特征保留"; }
+                    Text {
+                        text: root.english ? "Mark entrances, window bands, ridges, eaves, or frames. Rules improve local identity without changing the envelope." : "标注入口、窗带、屋脊、檐口或框架；规则只增强局部可识别性，不改变建筑包络。";
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        semantic-kind-box := ComboBox {
+                            model: root.semantic-feature-kinds;
+                            current-index <=> root.selected-semantic-kind;
+                        }
+                        semantic-side-box := ComboBox {
+                            model: root.semantic-feature-sides;
+                            current-index <=> root.selected-semantic-side;
+                        }
+                        semantic-height-box := ComboBox {
+                            model: root.semantic-height-bands;
+                            current-index <=> root.selected-semantic-height;
+                        }
+                        semantic-strength-box := ComboBox {
+                            model: root.semantic-strengths;
+                            current-index <=> root.selected-semantic-strength;
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.semantic-feature-label;
+                        placeholder-text: root.english ? "Feature name, e.g. Library south entrance" : "特征名称，例如：图书馆南门";
+                    }
+                    LineEdit {
+                        text <=> root.semantic-feature-reason;
+                        placeholder-text: root.english ? "Evidence reason, e.g. visible in Gaode 3D and photos" : "证据理由，例如：高德 3D 与现场照片均可见";
+                    }
+                    Text {
+                        text: root.semantic-feature-summary;
+                        color: #506058;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: root.english ? "Apply to current refinement" : "应用到当前 refinement";
+                        clicked => {
+                            root.apply-semantic-feature(
+                                root.selected-semantic-kind,
+                                root.selected-semantic-side,
+                                root.selected-semantic-height,
+                                root.selected-semantic-strength,
+                                root.semantic-feature-label,
+                                root.semantic-feature-reason
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.candidate-details-visible : Rectangle {
+        x: 360px;
+        y: 145px;
+        width: 600px;
+        height: 470px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            HorizontalLayout {
+                SectionLabel { text: root.english ? "CANDIDATE SOURCE & BUILDING DIRECTORY" : "候选来源与建筑目录"; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: root.english ? "Close" : "关闭"; clicked => { root.candidate-details-visible = false; } }
+            }
+            Text {
+                text: root.selected-candidate-name;
+                font-size: 20px;
+                font-weight: 700;
+                color: #17251f;
+            }
+            Text {
+                text: root.selected-candidate-details;
+                color: #506058;
+                wrap: word-wrap;
+            }
+            if root.selected-candidate-is-building : VerticalLayout {
+                spacing: 8px;
+                LineEdit {
+                    text <=> root.candidate-name-draft;
+                    placeholder-text: root.english ? "Reviewed building name" : "审核后的建筑名称";
+                }
+                Button {
+                    text: root.english ? "Save building name" : "保存建筑名称";
+                    clicked => { root.rename-selected-building(root.candidate-name-draft); }
+                }
+                LineEdit {
+                    text <=> root.candidate-suppression-reason;
+                    placeholder-text: root.english ? "Suppression reason (wrong object, off-campus, etc.)" : "抑制理由（错误对象、校外建筑等）";
+                }
+                Button {
+                    text: root.english ? "Persistently suppress this source" : "持久抑制此建筑来源";
+                    clicked => { root.suppress-selected-building(root.candidate-suppression-reason); }
+                }
+            }
+            Rule {}
+            SectionLabel { text: root.english ? "RECOVERABLE BUILDING SUPPRESSIONS" : "可恢复的建筑抑制"; }
+            suppression-box := ComboBox {
+                model: root.building-suppressions;
+                current-index <=> root.selected-building-suppression;
+            }
+            Button {
+                text: root.english ? "Restore selected source (returns on next query)" : "恢复所选来源（下次查询重新出现）";
+                enabled: root.building-suppressions.length > 0;
+                clicked => { root.restore-building-suppression(root.selected-building-suppression); }
+            }
+        }
+    }
+}

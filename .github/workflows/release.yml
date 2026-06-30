@@ -1,0 +1,23 @@
+name: package-v1
+
+on:
+  push:
+    tags: ["v1.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: choco install nsis --yes --no-progress
+      - run: npm run bundle:v1
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/installer/Campus-Reconstruction-Tool-V1-Setup.exe

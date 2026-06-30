@@ -70,6 +70,7 @@ pub struct MaterialOverrides {
     pub floor: Option<String>,
     pub roof: Option<String>,
     pub entrance: Option<String>,
+    pub accent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,10 +92,28 @@ pub struct GenerateBuildingRequest {
     pub correction_notes: Vec<String>,
     #[serde(default)]
     pub parts: Vec<BuildingPart>,
+    #[serde(default = "default_style_preset")]
+    pub style_preset: String,
+    #[serde(default = "default_window_density")]
+    pub window_density: u8,
+    #[serde(default = "default_wall_depth")]
+    pub wall_depth: u8,
 }
 
 fn default_scale() -> f64 {
     1.0
+}
+
+fn default_style_preset() -> String {
+    "school".into()
+}
+
+fn default_window_density() -> u8 {
+    55
+}
+
+fn default_wall_depth() -> u8 {
+    40
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -315,7 +334,8 @@ pub fn generate_building(request: GenerateBuildingRequest) -> Result<GeneratedBu
     }
 
     let roof_shape = normalize_roof(request.roof_shape.as_deref());
-    let m = materials(&request.materials);
+    let m = materials(&request.style_preset, &request.materials);
+    let behavior = style_behavior(&request.style_preset);
     let mut sink = BlockSink::default();
     for z in 0..=max_z {
         for x in 0..=max_x {
@@ -325,16 +345,23 @@ pub fn generate_building(request: GenerateBuildingRequest) -> Result<GeneratedBu
         }
     }
     if parts.is_empty() {
+        let roof_base = roof_base_height(0, fallback_height, &roof_shape);
         render_volume(
             &mut sink,
             &mask,
-            0,
-            fallback_height,
-            fallback_floors,
-            request.seed,
+            VolumeSpec {
+                min_height: 0,
+                height: roof_base,
+                floors: fallback_floors,
+                seed: request.seed,
+                window_density: request.window_density,
+                wall_depth: request.wall_depth,
+            },
+            &behavior,
             &m,
         );
-        add_roof(&mut sink, &mask, fallback_height, &roof_shape, &m.roof);
+        add_roof(&mut sink, &mask, roof_base, &roof_shape, &m.roof);
+        add_style_details(&mut sink, &mask, roof_base, &roof_shape, &behavior, &m);
     } else {
         parts.sort_by_key(|part| part.height);
         for (index, part) in parts.iter().enumerate() {
@@ -343,30 +370,48 @@ pub fn generate_building(request: GenerateBuildingRequest) -> Result<GeneratedBu
             if !part_mask.iter().flatten().any(|value| *value) {
                 continue;
             }
+            let roof_base = roof_base_height(part.min_height, part.height, &part.roof_shape);
             render_volume(
                 &mut sink,
                 &part_mask,
-                part.min_height,
-                part.height,
-                part.floors,
-                request.seed.wrapping_add(index as u64),
+                VolumeSpec {
+                    min_height: part.min_height,
+                    height: roof_base,
+                    floors: part.floors,
+                    seed: request.seed.wrapping_add(index as u64),
+                    window_density: request.window_density,
+                    wall_depth: request.wall_depth,
+                },
+                &behavior,
                 &m,
             );
-            add_roof(
+            add_roof(&mut sink, &part_mask, roof_base, &part.roof_shape, &m.roof);
+            add_style_details(
                 &mut sink,
                 &part_mask,
-                part.height,
+                roof_base,
                 &part.roof_shape,
-                &m.roof,
+                &behavior,
+                &m,
             );
         }
     }
     add_entrance(&mut sink, &mask, fallback_height, &m.entrance);
+    let measured_height = parts
+        .iter()
+        .map(|part| part.height)
+        .max()
+        .unwrap_or(fallback_height);
+    sink.blocks
+        .retain(|(_, y, _), _| *y >= 0 && *y < measured_height);
     let non_air_blocks = sink.blocks.len();
     sink.finish(GenerationReport {
         candidate_id: request.candidate_id,
         source: request.source,
-        generator: "arnis-core-2.9.0-campus".into(),
+        generator: format!(
+            "arnis-core-2.9.0-campus-exterior-v1/{}",
+            request.style_preset
+        ),
         blocks_per_meter: scale,
         floor_count: parts
             .iter()
@@ -383,6 +428,16 @@ pub fn generate_building(request: GenerateBuildingRequest) -> Result<GeneratedBu
         correction_notes: request.correction_notes,
         building_part_count: parts.len(),
     })
+}
+
+fn roof_base_height(min_height: i32, measured_height: i32, shape: &str) -> i32 {
+    let span = (measured_height - min_height).max(2);
+    let reserve = match shape {
+        "flat" => 2,
+        "dome" | "cone" | "onion" => (span / 3).clamp(3, 8),
+        _ => (span / 4).clamp(2, 6),
+    };
+    (measured_height - reserve).max(min_height + 1)
 }
 
 fn local_component(
@@ -436,38 +491,77 @@ fn mask_for_components(components: &[LocalComponent], max_x: i32, max_z: i32) ->
 fn render_volume(
     sink: &mut BlockSink,
     mask: &[Vec<bool>],
-    min_height: i32,
-    height: i32,
-    floors: u32,
-    seed: u64,
+    spec: VolumeSpec,
+    behavior: &StyleBehavior,
     materials: &Materials,
 ) {
-    let span = (height - min_height).max(1);
-    let spacing = (span / floors.max(1) as i32).max(3);
+    let span = (spec.height - spec.min_height).max(1);
+    let spacing = (span / spec.floors.max(1) as i32).max(3);
     for z in 0..mask.len() as i32 {
         for x in 0..mask[0].len() as i32 {
             if !mask[z as usize][x as usize] {
                 continue;
             }
-            sink.set_block_absolute(&materials.floor, x, min_height, z);
-            for y in min_height + 1..height {
-                if (y - min_height) % spacing == 0 {
+            sink.set_block_absolute(&materials.floor, x, spec.min_height, z);
+            for y in spec.min_height + 1..spec.height {
+                if (y - spec.min_height) % spacing == 0 {
                     sink.set_block_absolute(&materials.floor, x, y, z);
                 }
                 if boundary(mask, x, z) {
-                    let block = if y > min_height + 1
-                        && (y - min_height) % spacing != 0
-                        && (x + z + seed as i32).rem_euclid(3) != 0
-                    {
+                    let facade_cell = (x * 17 + z * 31 + spec.seed as i32).rem_euclid(100);
+                    let within_floor = (y - spec.min_height).rem_euclid(spacing);
+                    let pattern_window = if behavior.horizontal_windows {
+                        within_floor >= 2
+                    } else if behavior.vertical_windows {
+                        facade_cell.rem_euclid(5) <= 2
+                    } else {
+                        facade_cell.rem_euclid(4) <= 1 || facade_cell.rem_euclid(7) == 0
+                    };
+                    let is_window = behavior.has_windows
+                        && y > spec.min_height + 1
+                        && (y - spec.min_height) % spacing != 0
+                        && facade_cell < spec.window_density.clamp(5, 95) as i32
+                        && within_floor > 1
+                        && pattern_window;
+                    let floor_band =
+                        behavior.accent_lines && within_floor == 0 && y > spec.min_height + 1;
+                    let block = if is_window {
                         &materials.window
+                    } else if floor_band {
+                        &materials.accent
                     } else {
                         &materials.wall
                     };
                     sink.set_block_absolute(block, x, y, z);
+                    if spec.wall_depth >= 25
+                        && !is_window
+                        && (y - spec.min_height) % spacing != 0
+                        && depth_feature(
+                            behavior.depth,
+                            facade_cell,
+                            within_floor,
+                            spacing,
+                            spec.wall_depth,
+                        )
+                    {
+                        if let Some((outside_x, outside_z)) = outward_cell(mask, x, z) {
+                            sink.set_block_absolute(&materials.accent, outside_x, y, outside_z);
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct VolumeSpec {
+    min_height: i32,
+    height: i32,
+    floors: u32,
+    seed: u64,
+    window_density: u8,
+    wall_depth: u8,
 }
 
 struct Materials {
@@ -477,21 +571,423 @@ struct Materials {
     floor: String,
     roof: String,
     entrance: String,
+    accent: String,
 }
-fn materials(m: &MaterialOverrides) -> Materials {
+
+#[derive(Clone, Copy)]
+enum FacadeDepth {
+    None,
+    SubtlePilasters,
+    ModernPillars,
+    InstitutionalBands,
+    IndustrialBeams,
+    HistoricOrnate,
+    ReligiousButtress,
+    SkyscraperFins,
+    GlassCurtain,
+}
+
+#[derive(Clone, Copy)]
+struct StyleBehavior {
+    vertical_windows: bool,
+    horizontal_windows: bool,
+    has_windows: bool,
+    accent_roof_line: bool,
+    accent_lines: bool,
+    chimney: bool,
+    parapet: bool,
+    depth: FacadeDepth,
+}
+
+fn style_behavior(style: &str) -> StyleBehavior {
+    let mut result = StyleBehavior {
+        vertical_windows: false,
+        horizontal_windows: false,
+        has_windows: true,
+        accent_roof_line: false,
+        accent_lines: false,
+        chimney: false,
+        parapet: false,
+        depth: FacadeDepth::None,
+    };
+    match style {
+        "house" => {
+            result.chimney = true;
+            result.accent_roof_line = true;
+            result.depth = FacadeDepth::SubtlePilasters;
+        }
+        "residential" => result.depth = FacadeDepth::SubtlePilasters,
+        "commercial" => {
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::ModernPillars;
+        }
+        "office" => {
+            result.vertical_windows = true;
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::ModernPillars;
+        }
+        "hotel" => {
+            result.vertical_windows = true;
+            result.accent_roof_line = true;
+            result.accent_lines = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::ModernPillars;
+        }
+        "industrial" | "warehouse" => result.depth = FacadeDepth::IndustrialBeams,
+        "school" => {
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::InstitutionalBands;
+        }
+        "hospital" => {
+            result.vertical_windows = true;
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::InstitutionalBands;
+        }
+        "religious" => {
+            result.vertical_windows = true;
+            result.accent_roof_line = true;
+            result.depth = FacadeDepth::ReligiousButtress;
+        }
+        "historic" => result.depth = FacadeDepth::HistoricOrnate,
+        "tower" => {
+            result.vertical_windows = true;
+            result.accent_lines = true;
+            result.accent_roof_line = true;
+        }
+        "garage" => {
+            result.has_windows = false;
+            result.accent_roof_line = true;
+        }
+        "shed" | "greenhouse" => result.has_windows = false,
+        "tall_building" => {
+            result.vertical_windows = true;
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::SkyscraperFins;
+        }
+        "glassy_skyscraper" => {
+            result.has_windows = false;
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::GlassCurtain;
+        }
+        "modern_skyscraper" => {
+            result.horizontal_windows = true;
+            result.accent_roof_line = true;
+            result.parapet = true;
+            result.depth = FacadeDepth::SkyscraperFins;
+        }
+        _ => {}
+    }
+    result
+}
+
+fn depth_feature(
+    style: FacadeDepth,
+    facade_cell: i32,
+    within_floor: i32,
+    spacing: i32,
+    wall_depth: u8,
+) -> bool {
+    let strength = (wall_depth as i32 / 12).clamp(1, 8);
+    match style {
+        FacadeDepth::None => false,
+        FacadeDepth::SubtlePilasters => facade_cell.rem_euclid(8) < strength.min(2),
+        FacadeDepth::ModernPillars => {
+            facade_cell.rem_euclid(7) < strength.min(2) || within_floor == spacing - 1
+        }
+        FacadeDepth::InstitutionalBands => {
+            facade_cell.rem_euclid(9) < strength.min(2) || within_floor == spacing - 1
+        }
+        FacadeDepth::IndustrialBeams => facade_cell.rem_euclid(17) < strength,
+        FacadeDepth::HistoricOrnate => {
+            facade_cell.rem_euclid(6) < strength.min(2) || within_floor >= spacing - 2
+        }
+        FacadeDepth::ReligiousButtress => facade_cell.rem_euclid(11) < strength.min(3),
+        FacadeDepth::SkyscraperFins => facade_cell.rem_euclid(5) < strength.min(2),
+        FacadeDepth::GlassCurtain => facade_cell.rem_euclid(23) < strength.min(2),
+    }
+}
+fn materials(style: &str, m: &MaterialOverrides) -> Materials {
+    let preset = preset_materials(style);
     Materials {
         foundation: m
             .foundation
             .clone()
-            .unwrap_or("minecraft:smooth_stone".into()),
-        wall: m.wall.clone().unwrap_or("minecraft:stone_bricks".into()),
-        window: m.window.clone().unwrap_or("minecraft:glass".into()),
-        floor: m.floor.clone().unwrap_or("minecraft:oak_planks".into()),
-        roof: m.roof.clone().unwrap_or("minecraft:dark_oak_slab".into()),
-        entrance: m
-            .entrance
-            .clone()
-            .unwrap_or("minecraft:dark_oak_door".into()),
+            .unwrap_or_else(|| preset.foundation.into()),
+        wall: m.wall.clone().unwrap_or_else(|| preset.wall.into()),
+        window: m.window.clone().unwrap_or_else(|| preset.window.into()),
+        floor: m.floor.clone().unwrap_or_else(|| preset.floor.into()),
+        roof: m.roof.clone().unwrap_or_else(|| preset.roof.into()),
+        entrance: m.entrance.clone().unwrap_or_else(|| preset.entrance.into()),
+        accent: m.accent.clone().unwrap_or_else(|| preset.accent.into()),
+    }
+}
+
+struct MaterialPreset {
+    foundation: &'static str,
+    wall: &'static str,
+    window: &'static str,
+    floor: &'static str,
+    roof: &'static str,
+    entrance: &'static str,
+    accent: &'static str,
+}
+
+fn preset_materials(style: &str) -> MaterialPreset {
+    let values = match style {
+        "house" => (
+            "cobblestone",
+            "bricks",
+            "glass_pane",
+            "oak_planks",
+            "dark_oak_slab",
+            "oak_door",
+            "stripped_oak_log",
+        ),
+        "residential" => (
+            "smooth_stone",
+            "white_concrete",
+            "glass_pane",
+            "spruce_planks",
+            "stone_slab",
+            "spruce_door",
+            "light_gray_concrete",
+        ),
+        "farm" => (
+            "cobblestone",
+            "oak_planks",
+            "glass_pane",
+            "spruce_planks",
+            "spruce_slab",
+            "oak_door",
+            "stripped_spruce_log",
+        ),
+        "commercial" => (
+            "smooth_stone",
+            "smooth_quartz",
+            "light_blue_stained_glass",
+            "polished_andesite",
+            "smooth_stone_slab",
+            "iron_door",
+            "gray_concrete",
+        ),
+        "office" => (
+            "smooth_stone",
+            "light_gray_concrete",
+            "gray_stained_glass",
+            "smooth_stone",
+            "polished_andesite_slab",
+            "iron_door",
+            "white_concrete",
+        ),
+        "hotel" => (
+            "stone_bricks",
+            "quartz_bricks",
+            "black_stained_glass",
+            "dark_oak_planks",
+            "dark_oak_slab",
+            "dark_oak_door",
+            "cut_copper",
+        ),
+        "industrial" => (
+            "deepslate_tiles",
+            "gray_concrete",
+            "iron_bars",
+            "smooth_stone",
+            "deepslate_tile_slab",
+            "iron_door",
+            "exposed_copper",
+        ),
+        "warehouse" => (
+            "stone",
+            "light_gray_concrete",
+            "glass_pane",
+            "smooth_stone",
+            "stone_slab",
+            "iron_door",
+            "gray_concrete",
+        ),
+        "hospital" => (
+            "smooth_stone",
+            "white_concrete",
+            "light_blue_stained_glass",
+            "quartz_block",
+            "smooth_quartz_slab",
+            "iron_door",
+            "cyan_terracotta",
+        ),
+        "religious" => (
+            "stone_bricks",
+            "sandstone",
+            "yellow_stained_glass",
+            "smooth_stone",
+            "stone_brick_slab",
+            "dark_oak_door",
+            "chiseled_stone_bricks",
+        ),
+        "historic" => (
+            "cobblestone",
+            "bricks",
+            "brown_stained_glass",
+            "dark_oak_planks",
+            "deepslate_tile_slab",
+            "dark_oak_door",
+            "polished_granite",
+        ),
+        "tower" => (
+            "deepslate_bricks",
+            "stone_bricks",
+            "tinted_glass",
+            "smooth_stone",
+            "deepslate_brick_slab",
+            "iron_door",
+            "chiseled_deepslate",
+        ),
+        "garage" => (
+            "stone",
+            "gray_concrete",
+            "iron_bars",
+            "smooth_stone",
+            "stone_slab",
+            "iron_door",
+            "yellow_concrete",
+        ),
+        "shed" => (
+            "cobblestone",
+            "spruce_planks",
+            "glass_pane",
+            "oak_planks",
+            "spruce_slab",
+            "spruce_door",
+            "stripped_spruce_log",
+        ),
+        "greenhouse" => (
+            "stone",
+            "glass",
+            "glass",
+            "moss_block",
+            "glass",
+            "oak_door",
+            "green_stained_glass",
+        ),
+        "tall_building" => (
+            "deepslate_tiles",
+            "light_gray_concrete",
+            "blue_stained_glass",
+            "smooth_stone",
+            "smooth_stone_slab",
+            "iron_door",
+            "polished_blackstone",
+        ),
+        "glassy_skyscraper" => (
+            "deepslate_tiles",
+            "cyan_stained_glass",
+            "light_blue_stained_glass",
+            "smooth_stone",
+            "smooth_quartz_slab",
+            "iron_door",
+            "black_concrete",
+        ),
+        "modern_skyscraper" => (
+            "deepslate_tiles",
+            "white_concrete",
+            "black_stained_glass",
+            "smooth_stone",
+            "smooth_quartz_slab",
+            "iron_door",
+            "gray_concrete",
+        ),
+        _ => (
+            "stone_bricks",
+            "bricks",
+            "glass_pane",
+            "oak_planks",
+            "dark_oak_slab",
+            "dark_oak_door",
+            "smooth_sandstone",
+        ),
+    };
+    MaterialPreset {
+        foundation: block(values.0),
+        wall: block(values.1),
+        window: block(values.2),
+        floor: block(values.3),
+        roof: block(values.4),
+        entrance: block(values.5),
+        accent: block(values.6),
+    }
+}
+
+fn block(value: &'static str) -> &'static str {
+    match value.strip_prefix("minecraft:") {
+        Some(_) => value,
+        None => {
+            // All built-in values are literals, so their prefixed forms are listed here.
+            match value {
+                "cobblestone" => "minecraft:cobblestone",
+                "bricks" => "minecraft:bricks",
+                "glass_pane" => "minecraft:glass_pane",
+                "oak_planks" => "minecraft:oak_planks",
+                "dark_oak_slab" => "minecraft:dark_oak_slab",
+                "oak_door" => "minecraft:oak_door",
+                "stripped_oak_log" => "minecraft:stripped_oak_log",
+                "smooth_stone" => "minecraft:smooth_stone",
+                "white_concrete" => "minecraft:white_concrete",
+                "spruce_planks" => "minecraft:spruce_planks",
+                "stone_slab" => "minecraft:stone_slab",
+                "spruce_door" => "minecraft:spruce_door",
+                "light_gray_concrete" => "minecraft:light_gray_concrete",
+                "spruce_slab" => "minecraft:spruce_slab",
+                "stripped_spruce_log" => "minecraft:stripped_spruce_log",
+                "smooth_quartz" => "minecraft:smooth_quartz",
+                "light_blue_stained_glass" => "minecraft:light_blue_stained_glass",
+                "polished_andesite" => "minecraft:polished_andesite",
+                "smooth_stone_slab" => "minecraft:smooth_stone_slab",
+                "iron_door" => "minecraft:iron_door",
+                "gray_concrete" => "minecraft:gray_concrete",
+                "gray_stained_glass" => "minecraft:gray_stained_glass",
+                "polished_andesite_slab" => "minecraft:polished_andesite_slab",
+                "quartz_bricks" => "minecraft:quartz_bricks",
+                "black_stained_glass" => "minecraft:black_stained_glass",
+                "dark_oak_planks" => "minecraft:dark_oak_planks",
+                "dark_oak_door" => "minecraft:dark_oak_door",
+                "cut_copper" => "minecraft:cut_copper",
+                "deepslate_tiles" => "minecraft:deepslate_tiles",
+                "iron_bars" => "minecraft:iron_bars",
+                "deepslate_tile_slab" => "minecraft:deepslate_tile_slab",
+                "exposed_copper" => "minecraft:exposed_copper",
+                "stone" => "minecraft:stone",
+                "quartz_block" => "minecraft:quartz_block",
+                "smooth_quartz_slab" => "minecraft:smooth_quartz_slab",
+                "cyan_terracotta" => "minecraft:cyan_terracotta",
+                "stone_bricks" => "minecraft:stone_bricks",
+                "sandstone" => "minecraft:sandstone",
+                "yellow_stained_glass" => "minecraft:yellow_stained_glass",
+                "stone_brick_slab" => "minecraft:stone_brick_slab",
+                "chiseled_stone_bricks" => "minecraft:chiseled_stone_bricks",
+                "brown_stained_glass" => "minecraft:brown_stained_glass",
+                "polished_granite" => "minecraft:polished_granite",
+                "deepslate_bricks" => "minecraft:deepslate_bricks",
+                "tinted_glass" => "minecraft:tinted_glass",
+                "deepslate_brick_slab" => "minecraft:deepslate_brick_slab",
+                "chiseled_deepslate" => "minecraft:chiseled_deepslate",
+                "yellow_concrete" => "minecraft:yellow_concrete",
+                "glass" => "minecraft:glass",
+                "moss_block" => "minecraft:moss_block",
+                "green_stained_glass" => "minecraft:green_stained_glass",
+                "blue_stained_glass" => "minecraft:blue_stained_glass",
+                "polished_blackstone" => "minecraft:polished_blackstone",
+                "cyan_stained_glass" => "minecraft:cyan_stained_glass",
+                "black_concrete" => "minecraft:black_concrete",
+                "smooth_sandstone" => "minecraft:smooth_sandstone",
+                _ => "minecraft:stone_bricks",
+            }
+        }
     }
 }
 fn validate_request(r: &GenerateBuildingRequest) -> Result<(), String> {
@@ -550,6 +1046,57 @@ fn boundary(mask: &[Vec<bool>], x: i32, z: i32) -> bool {
             || !mask[nz as usize][nx as usize]
     })
 }
+
+fn outward_cell(mask: &[Vec<bool>], x: i32, z: i32) -> Option<(i32, i32)> {
+    [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        .into_iter()
+        .find_map(|(dx, dz)| {
+            let nx = x + dx;
+            let nz = z + dz;
+            let outside = nz < 0
+                || nx < 0
+                || nz as usize >= mask.len()
+                || nx as usize >= mask[0].len()
+                || !mask[nz as usize][nx as usize];
+            outside.then_some((nx, nz))
+        })
+}
+
+fn add_style_details(
+    sink: &mut BlockSink,
+    mask: &[Vec<bool>],
+    height: i32,
+    roof_shape: &str,
+    behavior: &StyleBehavior,
+    materials: &Materials,
+) {
+    if behavior.accent_roof_line {
+        for z in 0..mask.len() as i32 {
+            for x in 0..mask[0].len() as i32 {
+                if mask[z as usize][x as usize] && boundary(mask, x, z) {
+                    sink.set_block_absolute(&materials.accent, x, height, z);
+                }
+            }
+        }
+    }
+    if behavior.parapet && roof_shape == "flat" {
+        for z in 0..mask.len() as i32 {
+            for x in 0..mask[0].len() as i32 {
+                if mask[z as usize][x as usize] && boundary(mask, x, z) {
+                    sink.set_block_absolute(&materials.wall, x, height + 2, z);
+                }
+            }
+        }
+    }
+    if behavior.chimney && matches!(roof_shape, "gabled" | "hipped") {
+        let center_x = mask[0].len() as i32 / 2;
+        let center_z = mask.len() as i32 / 2;
+        for y in height + 1..=height + 4 {
+            sink.set_block_absolute(&materials.accent, center_x, y, center_z);
+        }
+    }
+}
+
 fn add_entrance(s: &mut BlockSink, mask: &[Vec<bool>], h: i32, block: &str) {
     let south = (0..mask.len()).rev().find(|z| mask[*z].iter().any(|v| *v));
     if let Some(z) = south {
@@ -648,6 +1195,9 @@ mod tests {
             materials: Default::default(),
             correction_notes: vec![],
             parts: vec![],
+            style_preset: "school".into(),
+            window_density: 55,
+            wall_depth: 40,
         }
     }
     #[test]
@@ -720,5 +1270,23 @@ mod tests {
         let mut r = request("flat");
         r.blocks_per_meter = 9.0;
         assert!(generate_building(r).is_err())
+    }
+
+    #[test]
+    fn measured_height_is_not_changed_by_style_details() {
+        let output = generate_building(request("gabled")).unwrap();
+        assert_eq!(output.height, 15);
+    }
+
+    #[test]
+    fn upstream_style_categories_produce_distinct_facades() {
+        let mut school = request("flat");
+        school.style_preset = "school".into();
+        let mut glassy = request("flat");
+        glassy.style_preset = "glassy_skyscraper".into();
+        let school = generate_building(school).unwrap();
+        let glassy = generate_building(glassy).unwrap();
+        assert_ne!(school.palette, glassy.palette);
+        assert_ne!(school.block_runs, glassy.block_runs);
     }
 }

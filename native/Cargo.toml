@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/campus-native",
+  "apps/campus-map",
+  "apps/campus-preview",
+  "crates/campus-export",
+  "crates/campus-services",
+  "crates/campus-state",
+  "crates/campus-tool-protocol",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+panic = "abort"
+strip = "symbols"

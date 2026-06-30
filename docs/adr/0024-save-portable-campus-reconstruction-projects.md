@@ -16,6 +16,8 @@ Autosave retains the most recent 50 semantic history operations across restarts,
 
 Important project decisions are autosaved into the active Campus Reconstruction Project after confirmation, including Campus Scale changes, Campus Boundary confirmation, Campus Orientation, candidate review, manual feature drawing, style choices, and provider snapshots. Before actions that can replace or leave the active project context, such as switching Campus Target or loading a different Campus Reconstruction Project, the application asks whether to explicitly save the current project snapshot first.
 
+The native desktop toolbar continuously exposes `saving`, `saved`, or `save failed` state, and `Ctrl+S` requests an immediate save. Pointer movement is never written frame by frame; a completed drag becomes one semantic operation and one save. Destructive operations create a recovery snapshot before mutation. On startup after an unclean exit, the application offers the most recent valid recovery state without overwriting the last confirmed project file.
+
 Portable projects record a project-schema version separately from their Minecraft target version. Older project schemas migrate with backup; unsupported newer schemas must not be guessed or partially imported. Minecraft version remains an independent compatibility input for block catalogs, generation rules, and schematic output.
 
 A project remains pinned to its recorded Minecraft target version when opened or imported. Upgrading that target is an explicit migration preceded by a compatibility report for block identifiers and generation rules; the application never upgrades it silently.
