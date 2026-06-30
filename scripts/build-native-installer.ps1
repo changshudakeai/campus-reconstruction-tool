@@ -4,7 +4,13 @@ $target = Join-Path $root "native\target\release"
 $artifact = Join-Path $root "artifacts\installer"
 $bundledMakensis = Join-Path $env:LOCALAPPDATA "tauri\NSIS\makensis.exe"
 $commandMakensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
-$makensis = if ($commandMakensis) { $commandMakensis.Source } else { $bundledMakensis }
+$makensisCandidates = @(
+    $(if ($commandMakensis) { $commandMakensis.Source }),
+    $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe" }),
+    $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles "NSIS\makensis.exe" }),
+    $bundledMakensis
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+$makensis = $makensisCandidates | Select-Object -First 1
 
 Push-Location $root
 try {
@@ -16,8 +22,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
 
     New-Item -ItemType Directory -Force -Path $artifact | Out-Null
-    if (-not (Test-Path -LiteralPath $makensis)) {
-        throw "NSIS compiler was not found at $makensis."
+    if (-not $makensis) {
+        throw "NSIS compiler was not found in PATH, Program Files, or the bundled Tauri cache."
     }
     & $makensis (Join-Path $root "installer\campus-reconstruction-tool.nsi")
     if ($LASTEXITCODE -ne 0) { throw "NSIS packaging failed." }
