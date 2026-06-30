@@ -102,14 +102,33 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             (z - min_z).round() as i32 + 4,
         )
     };
-    let mut palette = vec!["minecraft:air".into(), "minecraft:grass_block".into()];
+    let campus_block = project
+        .foundation_style_pack
+        .features
+        .get("campus")
+        .and_then(|style| style.blocks.first())
+        .map(|block| normalize_block(block))
+        .unwrap_or_else(|| "minecraft:grass_block".into());
+    let mut palette = vec!["minecraft:air".into(), campus_block];
+    for style in project.foundation_style_pack.features.values() {
+        for block in &style.blocks {
+            let block = normalize_block(block);
+            if !palette.contains(&block) {
+                palette.push(block);
+            }
+        }
+    }
     for feature in &project.features {
         let block = normalize_block(&feature.block);
         if !palette.contains(&block) {
             palette.push(block);
         }
     }
-    let height = 2;
+    let generated_trees = project
+        .foundation_style_pack
+        .style(FeatureKind::Vegetation)
+        .is_some_and(|style| style.generator == "arnis:vegetation/v1");
+    let height = if generated_trees { 8 } else { 2 };
     let mut blocks = vec![0u16; width * height * length];
     let boundary = project
         .boundary
@@ -133,19 +152,68 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             .position(|entry| *entry == block)
             .ok_or_else(|| format!("missing Foundation palette entry for {}", feature.name))?
             as u16;
+        let generator_style = project.foundation_style_pack.style(feature.kind);
         if feature.kind == FeatureKind::Road {
-            let radius = (project.foundation_style_preset.road_width_blocks() / 2).max(1);
+            let road_width = project.foundation_road_width_blocks().max(1);
+            if generator_style.is_some_and(|style| style.generator == "arnis:road/v1") {
+                let edge_index =
+                    secondary_palette_index(generator_style, &palette, palette_index, 1);
+                draw_polyline(
+                    &mut blocks,
+                    width,
+                    length,
+                    1,
+                    &points,
+                    ((road_width + 2) / 2).max(1),
+                    edge_index,
+                );
+            }
             draw_polyline(
                 &mut blocks,
                 width,
                 length,
                 1,
                 &points,
-                radius,
+                (road_width / 2).max(1),
                 palette_index,
             );
         } else if points.len() >= 3 {
             fill_polygon(&mut blocks, width, length, 1, &points, palette_index);
+            if matches!(feature.kind, FeatureKind::Water | FeatureKind::Sports)
+                && generator_style.is_some_and(|style| {
+                    matches!(
+                        style.generator.as_str(),
+                        "arnis:water/v1" | "arnis:sports/v1"
+                    )
+                })
+            {
+                let border_index =
+                    secondary_palette_index(generator_style, &palette, palette_index, 1);
+                draw_polygon_outline(&mut blocks, width, length, 1, &points, border_index);
+            }
+            if feature.kind == FeatureKind::Vegetation
+                && generator_style.is_some_and(|style| style.generator == "arnis:vegetation/v1")
+            {
+                let log_index =
+                    secondary_palette_index(generator_style, &palette, palette_index, 1);
+                let leaves_index =
+                    secondary_palette_index(generator_style, &palette, palette_index, 2);
+                let density = generator_style
+                    .and_then(|style| style.density)
+                    .unwrap_or(0.035);
+                let seed = generator_style.and_then(|style| style.seed).unwrap_or(1);
+                draw_vegetation_trees(
+                    &mut blocks,
+                    width,
+                    height,
+                    length,
+                    &points,
+                    log_index,
+                    leaves_index,
+                    density,
+                    seed,
+                );
+            }
         }
     }
     Ok(VoxelModel {
@@ -155,6 +223,20 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
         palette,
         blocks,
     })
+}
+
+fn secondary_palette_index(
+    style: Option<&campus_state::FoundationGeneratorStyle>,
+    palette: &[String],
+    fallback: u16,
+    index: usize,
+) -> u16 {
+    style
+        .and_then(|style| style.blocks.get(index))
+        .map(|block| normalize_block(block))
+        .and_then(|block| palette.iter().position(|entry| *entry == block))
+        .map(|index| index as u16)
+        .unwrap_or(fallback)
 }
 
 fn normalize_block(block: &str) -> String {
@@ -403,6 +485,78 @@ fn draw_polyline(
     }
 }
 
+fn draw_polygon_outline(
+    blocks: &mut [u16],
+    width: usize,
+    length: usize,
+    y: usize,
+    polygon: &[(i32, i32)],
+    value: u16,
+) {
+    if polygon.len() < 3 {
+        return;
+    }
+    let mut closed = polygon.to_vec();
+    closed.push(polygon[0]);
+    draw_polyline(blocks, width, length, y, &closed, 1, value);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_vegetation_trees(
+    blocks: &mut [u16],
+    width: usize,
+    height: usize,
+    length: usize,
+    polygon: &[(i32, i32)],
+    log: u16,
+    leaves: u16,
+    density: f64,
+    seed: u64,
+) {
+    let min_x = polygon.iter().map(|point| point.0).min().unwrap_or(0);
+    let max_x = polygon.iter().map(|point| point.0).max().unwrap_or(0);
+    let min_z = polygon.iter().map(|point| point.1).min().unwrap_or(0);
+    let max_z = polygon.iter().map(|point| point.1).max().unwrap_or(0);
+    let step = (1.0 / density.max(0.005).sqrt()).round().max(4.0) as i32;
+    let start_x = min_x + ((seed >> 3) % step as u64) as i32;
+    let start_z = min_z + (seed % step as u64) as i32;
+    for z in (start_z..=max_z).step_by(step as usize) {
+        for x in (start_x..=max_x).step_by(step as usize) {
+            if !point_in_polygon(x as f64 + 0.5, z as f64 + 0.5, polygon) {
+                continue;
+            }
+            for y in 2..=5 {
+                set_voxel(blocks, width, height, length, x, y, z, log);
+            }
+            for y in 5..=7 {
+                for dz in -2i32..=2 {
+                    for dx in -2i32..=2 {
+                        if dx.abs() + dz.abs() + (y as i32 - 6).abs() <= 4 {
+                            set_voxel(blocks, width, height, length, x + dx, y, z + dz, leaves);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_voxel(
+    blocks: &mut [u16],
+    width: usize,
+    height: usize,
+    length: usize,
+    x: i32,
+    y: usize,
+    z: i32,
+    value: u16,
+) {
+    if x >= 0 && z >= 0 && x < width as i32 && z < length as i32 && y < height {
+        blocks[x as usize + z as usize * width + y * width * length] = value;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,7 +592,12 @@ mod tests {
             source_id: None,
         });
         let model = foundation_model(&project).unwrap();
-        assert!(model.blocks.contains(&2));
+        let stone_bricks = model
+            .palette
+            .iter()
+            .position(|block| block == "minecraft:stone_bricks")
+            .unwrap() as u16;
+        assert!(model.blocks.contains(&stone_bricks));
         assert!(model
             .palette
             .iter()
@@ -462,5 +621,52 @@ mod tests {
         assert!(root.contains_key("Schematic"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(preview_path);
+    }
+
+    #[test]
+    fn arnis_foundation_generators_add_edges_and_trees() {
+        let mut project = CampusProject::new("test", "campus");
+        project.boundary = vec![
+            GeoPoint {
+                lng: 121.0,
+                lat: 31.0,
+            },
+            GeoPoint {
+                lng: 121.001,
+                lat: 31.0,
+            },
+            GeoPoint {
+                lng: 121.001,
+                lat: 30.999,
+            },
+            GeoPoint {
+                lng: 121.0,
+                lat: 30.999,
+            },
+        ];
+        project.features.push(MapFeature {
+            id: "vegetation".into(),
+            name: "grove".into(),
+            kind: FeatureKind::Vegetation,
+            points: project.boundary.clone(),
+            block: project
+                .foundation_style_pack
+                .primary_block(FeatureKind::Vegetation),
+            source_id: None,
+        });
+        let model = foundation_model(&project).unwrap();
+        assert_eq!(model.height, 8);
+        let log = model
+            .palette
+            .iter()
+            .position(|block| block == "minecraft:oak_log")
+            .unwrap() as u16;
+        let leaves = model
+            .palette
+            .iter()
+            .position(|block| block == "minecraft:oak_leaves")
+            .unwrap() as u16;
+        assert!(model.blocks.contains(&log));
+        assert!(model.blocks.contains(&leaves));
     }
 }

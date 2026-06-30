@@ -142,6 +142,272 @@ impl FoundationStylePreset {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationGeneratorStyle {
+    pub generator: String,
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub density: Option<f64>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationStylePack {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    pub features: BTreeMap<String, FoundationGeneratorStyle>,
+}
+
+impl FoundationStylePack {
+    pub fn from_preset(preset: FoundationStylePreset) -> Self {
+        let (
+            id,
+            name,
+            road,
+            road_edge,
+            road_width,
+            vegetation,
+            log,
+            leaves,
+            density,
+            water_edge,
+            sports,
+            sports_edge,
+            lightweight,
+        ) = match preset {
+            FoundationStylePreset::ArnisClassic => (
+                "arnis:classic/v1",
+                "Arnis Classic",
+                "minecraft:gray_concrete",
+                "minecraft:stone_bricks",
+                4,
+                "minecraft:moss_block",
+                "minecraft:oak_log",
+                "minecraft:oak_leaves",
+                0.035,
+                "minecraft:sand",
+                "minecraft:green_concrete",
+                "minecraft:white_concrete",
+                false,
+            ),
+            FoundationStylePreset::ModernCampus => (
+                "arnis:modern-campus/v1",
+                "Modern Campus",
+                "minecraft:light_gray_concrete",
+                "minecraft:smooth_stone",
+                4,
+                "minecraft:moss_block",
+                "minecraft:birch_log",
+                "minecraft:birch_leaves",
+                0.025,
+                "minecraft:smooth_sandstone",
+                "minecraft:green_concrete",
+                "minecraft:white_concrete",
+                false,
+            ),
+            FoundationStylePreset::HistoricRedBrick => (
+                "arnis:historic-red-brick/v1",
+                "Historic Red-Brick Campus",
+                "minecraft:stone_bricks",
+                "minecraft:cobblestone",
+                3,
+                "minecraft:dark_oak_leaves",
+                "minecraft:dark_oak_log",
+                "minecraft:dark_oak_leaves",
+                0.045,
+                "minecraft:mud_bricks",
+                "minecraft:terracotta",
+                "minecraft:white_concrete",
+                false,
+            ),
+            FoundationStylePreset::LightweightDraft => (
+                "arnis:lightweight-draft/v1",
+                "Lightweight Draft",
+                "minecraft:gray_concrete",
+                "minecraft:gray_concrete",
+                2,
+                "minecraft:moss_block",
+                "minecraft:moss_block",
+                "minecraft:moss_block",
+                0.01,
+                "minecraft:water",
+                "minecraft:green_concrete",
+                "minecraft:green_concrete",
+                true,
+            ),
+        };
+        let generator = |arnis: &str| {
+            if lightweight {
+                "core:solid-fill/v1"
+            } else {
+                arnis
+            }
+            .to_string()
+        };
+        let style = |generator: String,
+                     blocks: Vec<&str>,
+                     width: Option<i32>,
+                     density: Option<f64>| FoundationGeneratorStyle {
+            generator,
+            blocks: blocks.into_iter().map(str::to_string).collect(),
+            width,
+            density,
+            seed: Some(104_729),
+        };
+        Self {
+            schema_version: "1.0".into(),
+            id: id.into(),
+            name: name.into(),
+            features: BTreeMap::from([
+                (
+                    "campus".into(),
+                    style(
+                        "core:solid-fill/v1".into(),
+                        vec!["minecraft:grass_block"],
+                        None,
+                        None,
+                    ),
+                ),
+                (
+                    "building".into(),
+                    style(
+                        "core:solid-fill/v1".into(),
+                        vec![preset.block(FeatureKind::Building)],
+                        None,
+                        None,
+                    ),
+                ),
+                (
+                    "road".into(),
+                    style(
+                        generator("arnis:road/v1"),
+                        vec![road, road_edge],
+                        Some(road_width),
+                        None,
+                    ),
+                ),
+                (
+                    "vegetation".into(),
+                    style(
+                        generator("arnis:vegetation/v1"),
+                        vec![vegetation, log, leaves],
+                        None,
+                        Some(density),
+                    ),
+                ),
+                (
+                    "water".into(),
+                    style(
+                        generator("arnis:water/v1"),
+                        vec!["minecraft:water", water_edge],
+                        None,
+                        None,
+                    ),
+                ),
+                (
+                    "sports".into(),
+                    style(
+                        generator("arnis:sports/v1"),
+                        vec![sports, sports_edge],
+                        None,
+                        None,
+                    ),
+                ),
+            ]),
+        }
+    }
+
+    pub fn parse_json(bytes: &[u8]) -> Result<Self, String> {
+        let pack: Self =
+            serde_json::from_slice(bytes).map_err(|error| format!("样式包 JSON 无效：{error}"))?;
+        pack.validate()?;
+        Ok(pack)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != "1.0" || self.id.trim().is_empty() || self.name.trim().is_empty()
+        {
+            return Err("Foundation 样式包头部无效".into());
+        }
+        let allowed_generators = [
+            "arnis:road/v1",
+            "arnis:vegetation/v1",
+            "arnis:water/v1",
+            "arnis:sports/v1",
+            "core:solid-fill/v1",
+        ];
+        let allowed_features = [
+            "campus",
+            "building",
+            "road",
+            "vegetation",
+            "water",
+            "sports",
+        ];
+        if self.features.is_empty() {
+            return Err("Foundation 样式包没有地物规则".into());
+        }
+        for (feature, style) in &self.features {
+            if !allowed_features.contains(&feature.as_str())
+                || !allowed_generators.contains(&style.generator.as_str())
+                || style.blocks.is_empty()
+                || style.blocks.len() > 16
+            {
+                return Err(format!("未注册或无效的 Foundation 地物生成器：{feature}"));
+            }
+            if style.blocks.iter().any(|block| {
+                block.trim().is_empty()
+                    || !block.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "_:-".contains(character)
+                    })
+            }) {
+                return Err(format!("样式包 {feature} 含无效方块 ID"));
+            }
+            if style.width.is_some_and(|width| !(1..=32).contains(&width))
+                || style
+                    .density
+                    .is_some_and(|density| !density.is_finite() || !(0.0..=1.0).contains(&density))
+            {
+                return Err(format!("样式包 {feature} 参数超出范围"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn style(&self, kind: FeatureKind) -> Option<&FoundationGeneratorStyle> {
+        self.features.get(feature_kind_key(kind))
+    }
+
+    pub fn primary_block(&self, kind: FeatureKind) -> String {
+        self.style(kind)
+            .and_then(|style| style.blocks.first())
+            .map(|block| normalize_block(block))
+            .unwrap_or_else(|| FoundationStylePreset::ArnisClassic.block(kind).into())
+    }
+}
+
+impl Default for FoundationStylePack {
+    fn default() -> Self {
+        Self::from_preset(FoundationStylePreset::ArnisClassic)
+    }
+}
+
+fn feature_kind_key(kind: FeatureKind) -> &'static str {
+    match kind {
+        FeatureKind::Building => "building",
+        FeatureKind::Road => "road",
+        FeatureKind::Water => "water",
+        FeatureKind::Vegetation => "vegetation",
+        FeatureKind::Sports => "sports",
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
@@ -729,6 +995,8 @@ pub struct CampusProject {
     #[serde(default)]
     pub foundation_style_preset: FoundationStylePreset,
     #[serde(default)]
+    pub foundation_style_pack: FoundationStylePack,
+    #[serde(default)]
     pub foundation_preview_path: Option<PathBuf>,
     #[serde(default)]
     pub visual_capture_path: Option<PathBuf>,
@@ -760,6 +1028,7 @@ impl CampusProject {
             building_directory: Vec::new(),
             building_suppressions: Vec::new(),
             foundation_style_preset: FoundationStylePreset::ArnisClassic,
+            foundation_style_pack: FoundationStylePack::default(),
             foundation_preview_path: None,
             visual_capture_path: None,
             detailed: DetailedBuildingState::default(),
@@ -781,10 +1050,7 @@ impl CampusProject {
                 name: candidate.name.clone(),
                 kind: candidate.kind,
                 points: candidate.points.clone(),
-                block: self
-                    .foundation_style_preset
-                    .block(candidate.kind)
-                    .to_string(),
+                block: self.foundation_style_pack.primary_block(candidate.kind),
                 source_id: Some(candidate.id.clone()),
             });
         }
@@ -818,10 +1084,26 @@ impl CampusProject {
 
     pub fn apply_foundation_style(&mut self, preset: FoundationStylePreset) {
         self.foundation_style_preset = preset;
+        self.foundation_style_pack = FoundationStylePack::from_preset(preset);
         self.foundation_preview_path = None;
         for feature in &mut self.features {
-            feature.block = preset.block(feature.kind).to_string();
+            feature.block = self.foundation_style_pack.primary_block(feature.kind);
         }
+    }
+
+    pub fn apply_foundation_style_pack(&mut self, pack: FoundationStylePack) {
+        self.foundation_style_pack = pack;
+        self.foundation_preview_path = None;
+        for feature in &mut self.features {
+            feature.block = self.foundation_style_pack.primary_block(feature.kind);
+        }
+    }
+
+    pub fn foundation_road_width_blocks(&self) -> i32 {
+        self.foundation_style_pack
+            .style(FeatureKind::Road)
+            .and_then(|style| style.width)
+            .unwrap_or_else(|| self.foundation_style_preset.road_width_blocks())
     }
 
     pub fn next_refinement_version(&self, slot_id: &str) -> u32 {
@@ -1137,7 +1419,7 @@ impl CampusProject {
             name: name.clone(),
             kind,
             points: points.clone(),
-            block: self.foundation_style_preset.block(kind).into(),
+            block: self.foundation_style_pack.primary_block(kind),
             source_id: None,
         });
         if kind == FeatureKind::Building {
@@ -1577,7 +1859,16 @@ impl DesktopApplicationState {
     pub fn open(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
         let bytes = fs::read(path).map_err(|error| error.to_string())?;
-        let project = match serde_json::from_slice::<CampusProject>(&bytes) {
+        let native_style_pack_missing = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .is_some_and(|value| {
+                value
+                    .get("schemaVersion")
+                    .and_then(|version| version.as_u64())
+                    .is_some()
+                    && value.get("foundationStylePack").is_none()
+            });
+        let mut project = match serde_json::from_slice::<CampusProject>(&bytes) {
             Ok(project) => project,
             Err(native_error) => {
                 let value: serde_json::Value =
@@ -1587,6 +1878,10 @@ impl DesktopApplicationState {
                 })?
             }
         };
+        if native_style_pack_missing {
+            project.foundation_style_pack =
+                FoundationStylePack::from_preset(project.foundation_style_preset);
+        }
         if project.schema_version > PROJECT_SCHEMA_VERSION {
             return Err(format!(
                 "Project schema {} is newer than supported schema {}",
@@ -1645,6 +1940,12 @@ fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject,
         .and_then(|value| value.as_str())
         .map(FoundationStylePreset::from_legacy_id)
         .unwrap_or_default();
+    project.foundation_style_pack = foundation
+        .get("foundationStylePack")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<FoundationStylePack>(value).ok())
+        .filter(|pack| pack.validate().is_ok())
+        .unwrap_or_else(|| FoundationStylePack::from_preset(project.foundation_style_preset));
     project.boundary = points_from_value(
         foundation
             .pointer("/boundaryDraft/points")
@@ -2030,6 +2331,36 @@ mod tests {
         assert_eq!(project.building_suppressions.len(), 1);
         assert!(project.restore_building_suppression("osm:off-campus"));
         assert!(project.building_suppressions.is_empty());
+    }
+
+    #[test]
+    fn imports_validated_foundation_style_pack() {
+        let pack = FoundationStylePack::parse_json(
+            br#"{
+              "schemaVersion":"1.0",
+              "id":"campus:test/v1",
+              "name":"Test Campus",
+              "features":{
+                "road":{"generator":"arnis:road/v1","blocks":["gray_concrete","white_concrete"],"width":5},
+                "vegetation":{"generator":"arnis:vegetation/v1","blocks":["moss_block","oak_log","oak_leaves"],"density":0.04,"seed":7}
+              }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(pack.name, "Test Campus");
+        assert_eq!(
+            pack.primary_block(FeatureKind::Road),
+            "minecraft:gray_concrete"
+        );
+        assert_eq!(pack.style(FeatureKind::Road).unwrap().width, Some(5));
+        let mut project = CampusProject::new("test", "campus");
+        project.apply_foundation_style_pack(pack);
+        assert_eq!(project.foundation_road_width_blocks(), 5);
+
+        let invalid = FoundationStylePack::parse_json(
+            br#"{"schemaVersion":"1.0","id":"bad","name":"Bad","features":{"road":{"generator":"shell:exec/v1","blocks":["stone"]}}}"#,
+        );
+        assert!(invalid.is_err());
     }
 
     #[test]

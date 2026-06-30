@@ -3,10 +3,10 @@
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
     ArnisStylePreset, CampusTargetEvidence, CandidateConfidenceFilter, DesktopApplicationState,
-    DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePreset,
-    GeoPoint, MapCandidate, MapViewState, ReviewDecision, SemanticFeatureDraft,
-    SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand, SemanticStrength,
-    SourceConflictDecision,
+    DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePack,
+    FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
+    SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand,
+    SemanticStrength, SourceConflictDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent,
@@ -67,6 +67,13 @@ fn schematic_file_dialog(default_name: &str) -> Option<PathBuf> {
         )
         .set_file_name(default_name)
         .save_file()
+}
+
+fn foundation_style_file_dialog() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Foundation Style Pack", &["json"])
+        .set_directory(app_data_dir())
+        .pick_file()
 }
 
 #[derive(Clone, Default)]
@@ -573,6 +580,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .position(|preset| *preset == project.foundation_style_preset)
         .unwrap_or(0);
     ui.set_selected_foundation_style(foundation_style as i32);
+    ui.set_foundation_style_name(project.foundation_style_pack.name.clone().into());
     ui.set_window_density(project.detailed.window_density as f32);
     ui.set_wall_depth(project.detailed.wall_depth as f32);
     ui.set_orientation_degrees(project.orientation_degrees as f32);
@@ -1634,6 +1642,40 @@ fn main() -> Result<(), slint::PlatformError> {
             state.candidate_page = 0;
             if let Some(ui) = weak.upgrade() {
                 sync_ui(&ui, &state);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_import_foundation_style(move || {
+            let Some(path) = foundation_style_file_dialog() else {
+                return;
+            };
+            let result = std::fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| FoundationStylePack::parse_json(&bytes));
+            match result {
+                Ok(pack) => {
+                    let name = pack.name.clone();
+                    state
+                        .borrow_mut()
+                        .mutate_project(|project| project.apply_foundation_style_pack(pack));
+                    if let Some(ui) = weak.upgrade() {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            ui.set_save_status(
+                                format!("进阶 Foundation 样式包已导入：{name}").into(),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    if let Some(ui) = weak.upgrade() {
+                        set_error(&ui, error);
+                    }
+                }
             }
         });
     }

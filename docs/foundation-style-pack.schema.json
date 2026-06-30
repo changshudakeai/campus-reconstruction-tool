@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://campus-reconstruction-tool.local/schema/foundation-style-pack-v1.json",
+  "title": "Campus Reconstruction Tool Foundation Style Pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "features"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "features": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "campus": { "$ref": "#/$defs/style" },
+        "building": { "$ref": "#/$defs/style" },
+        "road": { "$ref": "#/$defs/style" },
+        "vegetation": { "$ref": "#/$defs/style" },
+        "water": { "$ref": "#/$defs/style" },
+        "sports": { "$ref": "#/$defs/style" }
+      }
+    }
+  },
+  "$defs": {
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generator", "blocks"],
+      "properties": {
+        "generator": {
+          "enum": [
+            "arnis:road/v1",
+            "arnis:vegetation/v1",
+            "arnis:water/v1",
+            "arnis:sports/v1",
+            "core:solid-fill/v1"
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_:-]+$" }
+        },
+        "width": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "density": { "type": "number", "minimum": 0, "maximum": 1 },
+        "seed": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

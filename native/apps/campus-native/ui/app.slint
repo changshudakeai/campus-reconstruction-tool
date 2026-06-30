@@ -73,6 +73,7 @@ export component AppWindow inherits Window {
     in-out property <int> selected-style: 8;
     in-out property <[string]> foundation-styles: [];
     in-out property <int> selected-foundation-style: 0;
+    in-out property <string> foundation-style-name: "Arnis Classic";
     in-out property <float> window-density: 50;
     in-out property <float> wall-depth: 50;
     in-out property <string> primary-label: "确认校区并继续";
@@ -147,6 +148,7 @@ export component AppWindow inherits Window {
     callback open-preview();
     callback choose-style(int, float, float);
     callback choose-foundation-style(int);
+    callback import-foundation-style();
     callback preview-foundation();
     callback choose-slot(int);
     callback generate-building();
@@ -357,6 +359,11 @@ export component AppWindow inherits Window {
                             selected(value) => {
                                 root.choose-foundation-style(foundation-style-box.current-index);
                             }
+                        }
+                        Text { text: "å½“å‰æ ·å¼åŒ…ï¼š" + root.foundation-style-name; color: #506058; }
+                        Button {
+                            text: "å¯¼å…¥è¿›é˜¶ JSON æ ·å¼åŒ…";
+                            clicked => { root.import-foundation-style(); }
                         }
                         Button {
                             text: "生成并打开 Foundation 原生预览";
