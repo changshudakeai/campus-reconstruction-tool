@@ -60,7 +60,12 @@ mod windows {
             return run_headless(pipe, token);
         }
         let (command, event_tx) = connect(pipe, token)?;
-        let ToolCommand::OpenPreview { model_path, title } = command else {
+        let ToolCommand::OpenPreview {
+            model_path,
+            title,
+            english,
+        } = command
+        else {
             return Err("invalid preview request".into());
         };
         let model: Model = serde_json::from_slice(
@@ -73,6 +78,7 @@ mod windows {
             window: None,
             pixels: None,
             title,
+            english,
             voxels,
             model_size: [model.width as f32, model.height as f32, model.length as f32],
             yaw: -0.72,
@@ -241,6 +247,7 @@ mod windows {
         window: Option<Arc<Window>>,
         pixels: Option<Pixels<'static>>,
         title: String,
+        english: bool,
         voxels: Vec<Voxel>,
         model_size: [f32; 3],
         yaw: f32,
@@ -262,7 +269,15 @@ mod windows {
                 event_loop
                     .create_window(
                         Window::default_attributes()
-                            .with_title(format!("原生方块预览 · {}", self.title))
+                            .with_title(format!(
+                                "{} · {}",
+                                if self.english {
+                                    "Native Block Preview"
+                                } else {
+                                    "原生方块预览"
+                                },
+                                self.title
+                            ))
                             .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT)),
                     )
                     .expect("create preview window"),

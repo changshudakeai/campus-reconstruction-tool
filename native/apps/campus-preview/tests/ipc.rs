@@ -50,6 +50,7 @@ fn preview_process_completes_authenticated_pipe_handshake() {
             &ToolCommand::OpenPreview {
                 model_path: model_path.to_string_lossy().into_owned(),
                 title: "IPC test".into(),
+                english: true,
             },
         )
         .await

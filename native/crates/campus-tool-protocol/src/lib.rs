@@ -55,10 +55,14 @@ pub enum ToolCommand {
         overlays: Vec<MapOverlay>,
         #[serde(default)]
         feature_kind: Option<String>,
+        #[serde(default)]
+        english: bool,
     },
     OpenPreview {
         model_path: String,
         title: String,
+        #[serde(default)]
+        english: bool,
     },
     Shutdown,
 }

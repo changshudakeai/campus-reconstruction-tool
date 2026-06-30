@@ -201,6 +201,7 @@ mod windows {
             purpose,
             overlays,
             feature_kind,
+            english,
         } = command
         else {
             return "<h1>Invalid map request</h1>".into();
@@ -222,52 +223,68 @@ mod windows {
             serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
         let (bar, editing_script) = match purpose {
             MapPurpose::CampusReview => (
-                r#"<input id="poi-query" aria-label="校园名称" placeholder="搜索校园或校区"><button id="poi-search" class="secondary">高德搜索</button><select id="poi-results" aria-label="搜索结果" hidden></select><button id="poi-confirm" hidden>确认校园</button><button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string(),
+                if *english {
+                    r#"<input id="poi-query" aria-label="Campus name" placeholder="Search school or campus"><button id="poi-search" class="secondary">Gaode search</button><select id="poi-results" aria-label="Search results" hidden></select><button id="poi-confirm" hidden>Confirm campus</button><button id="draw" class="secondary">Draw boundary</button><button id="clear" class="secondary">Clear boundary</button><button id="save" class="secondary">Save boundary</button><button id="query">Query open data</button><button id="capture">Visual gap recovery</button>"#.to_string()
+                } else {
+                    r#"<input id="poi-query" aria-label="校园名称" placeholder="搜索校园或校区"><button id="poi-search" class="secondary">高德搜索</button><select id="poi-results" aria-label="搜索结果" hidden></select><button id="poi-confirm" hidden>确认校园</button><button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string()
+                },
                 r#"
+const english=__ENGLISH__;
 let poiSearch=null,poiCandidates=[];
 AMap.plugin('AMap.PlaceSearch',()=>{poiSearch=new AMap.PlaceSearch({pageSize:12,pageIndex:1,extensions:'base'});});
 document.getElementById('poi-search').onclick=()=>{
   const query=document.getElementById('poi-query').value.trim();
-  if(!query||!poiSearch){post({type:'error',message:'请输入校园名称并等待高德搜索服务就绪'});return;}
+  if(!query||!poiSearch){post({type:'error',message:english?'Enter a campus name and wait for Gaode search to become ready':'请输入校园名称并等待高德搜索服务就绪'});return;}
   poiSearch.search(query,(status,result)=>{
     poiCandidates=status==='complete'&&result.poiList?result.poiList.pois.filter(p=>p.location):[];
     const select=document.getElementById('poi-results');select.replaceChildren();
     poiCandidates.forEach((poi,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=[poi.name,poi.address].filter(Boolean).join(' · ');select.appendChild(option);});
     select.hidden=poiCandidates.length===0;document.getElementById('poi-confirm').hidden=poiCandidates.length===0;
     if(poiCandidates.length){const p=poiCandidates[0];map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);}
-    else post({type:'error',message:'高德未返回可确认的校园结果'});
+    else post({type:'error',message:english?'Gaode returned no campus result to confirm':'高德未返回可确认的校园结果'});
   });
 };
 document.getElementById('poi-results').onchange=e=>{const p=poiCandidates[Number(e.target.value)];if(p)map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);};
 document.getElementById('poi-confirm').onclick=()=>{const index=Number(document.getElementById('poi-results').value),p=poiCandidates[index];if(p)post({type:'mapCampusSelected',poiId:String(p.id||''),name:String(p.name||''),lng:p.location.lng,lat:p.location.lat});};
-document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'绘制边界';};
+document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?(english?'Finish points':'完成点选'):(english?'Draw boundary':'绘制边界');};
 document.getElementById('clear').onclick=()=>{points=[];redraw();};
 document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
 document.getElementById('query').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};
 document.getElementById('capture').onclick=()=>{
   const source=[...document.querySelectorAll('#map canvas')].sort((a,b)=>b.width*b.height-a.width*a.height)[0];
-  if(!source){post({type:'error',message:'当前地图没有可截取的画布'});return;}
+  if(!source){post({type:'error',message:english?'No map canvas is available to capture':'当前地图没有可截取的画布'});return;}
   const maxSide=800,scale=Math.min(1,maxSide/Math.max(source.width,source.height));
   const target=document.createElement('canvas');
   target.width=Math.max(1,Math.round(source.width*scale));target.height=Math.max(1,Math.round(source.height*scale));
   const context=target.getContext('2d',{alpha:false});context.drawImage(source,0,0,target.width,target.height);
   const b=map.getBounds(),sw=b.getSouthWest(),ne=b.getNorthEast();
   post({type:'mapVisualCapture',imageDataUrl:target.toDataURL('image/png'),southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat});
-};"#.to_string(),
+};"#
+                    .replace("__ENGLISH__", if *english { "true" } else { "false" }),
             ),
             MapPurpose::FoundationFeatureDrawing => (
-                r#"<button id="draw" class="secondary">开始点选</button><button id="clear" class="secondary">清空</button><button id="save">保存手绘地物</button><span class="hint">单击依次添加节点；道路至少 2 点，区域至少 3 点</span>"#.to_string(),
+                if *english {
+                    r#"<button id="draw" class="secondary">Start points</button><button id="clear" class="secondary">Clear</button><button id="save">Save manual feature</button><span class="hint">Click to add nodes; roads need 2+, areas need 3+</span>"#.to_string()
+                } else {
+                    r#"<button id="draw" class="secondary">开始点选</button><button id="clear" class="secondary">清空</button><button id="save">保存手绘地物</button><span class="hint">单击依次添加节点；道路至少 2 点，区域至少 3 点</span>"#.to_string()
+                },
                 format!(
                     r#"
 const featureKind={feature_kind};
+const english={english};
 drawing=true;
-document.getElementById('draw').onclick=()=>{{drawing=!drawing;document.getElementById('draw').textContent=drawing?'完成点选':'继续点选';}};
+document.getElementById('draw').onclick=()=>{{drawing=!drawing;document.getElementById('draw').textContent=drawing?(english?'Finish points':'完成点选'):(english?'Continue points':'继续点选');}};
 document.getElementById('clear').onclick=()=>{{points=[];redraw();}};
-document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'?2:3;if(points.length>=minimum)post({{type:'mapFeatureDrawn',kind:featureKind,points:points.map(p=>({{lng:p[0],lat:p[1]}}))}});}};"#
+document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'?2:3;if(points.length>=minimum)post({{type:'mapFeatureDrawn',kind:featureKind,points:points.map(p=>({{lng:p[0],lat:p[1]}}))}});}};"#,
+                    english = english
                 ),
             ),
             MapPurpose::BuildingEvidence => (
-                r#"<span class="hint">绿色轮廓：已审核开放地理数据 · 高德 3D：人工视觉证据</span>"#.to_string(),
+                if *english {
+                    r#"<span class="hint">Green outline: reviewed open geodata · Gaode 3D: human visual evidence</span>"#.to_string()
+                } else {
+                    r#"<span class="hint">绿色轮廓：已审核开放地理数据 · 高德 3D：人工视觉证据</span>"#.to_string()
+                },
                 String::new(),
             ),
         };

@@ -54,6 +54,7 @@ fn map_process_completes_authenticated_pipe_handshake() {
                 purpose: MapPurpose::CampusReview,
                 overlays: Vec::new(),
                 feature_kind: None,
+                english: false,
             },
         )
         .await

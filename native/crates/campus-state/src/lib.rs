@@ -14,6 +14,13 @@ pub enum DesktopMode {
     Detailed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DesktopLocale {
+    #[default]
+    ZhCn,
+    En,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FoundationStep {
@@ -1740,6 +1747,7 @@ pub struct DesktopApplicationState {
     pub project: Option<CampusProject>,
     pub project_path: Option<PathBuf>,
     pub dirty: bool,
+    pub locale: DesktopLocale,
     pub last_error: Option<String>,
     pub candidate_filter: CandidateConfidenceFilter,
     pub candidate_page: usize,

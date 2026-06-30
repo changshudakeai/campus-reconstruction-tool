@@ -3,10 +3,10 @@
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
     ArnisStylePreset, CampusTargetEvidence, CandidateConfidenceFilter, DesktopApplicationState,
-    DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep, FoundationStylePack,
-    FoundationStylePreset, GeoPoint, MapCandidate, MapViewState, ReviewDecision,
-    SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand,
-    SemanticStrength, SourceConflictDecision,
+    DesktopLocale, DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep,
+    FoundationStylePack, FoundationStylePreset, GeoPoint, MapCandidate, MapViewState,
+    ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide,
+    SemanticHeightBand, SemanticStrength, SourceConflictDecision,
 };
 use campus_tool_protocol::{
     read_message, write_message, MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent,
@@ -42,6 +42,33 @@ fn generated_model_dir() -> PathBuf {
 
 fn visual_capture_dir() -> PathBuf {
     app_data_dir().join("captures")
+}
+
+fn locale_path() -> PathBuf {
+    app_data_dir().join("locale.txt")
+}
+
+fn load_locale() -> DesktopLocale {
+    match std::fs::read_to_string(locale_path())
+        .unwrap_or_default()
+        .trim()
+    {
+        "en" => DesktopLocale::En,
+        _ => DesktopLocale::ZhCn,
+    }
+}
+
+fn persist_locale(locale: DesktopLocale) -> Result<(), String> {
+    std::fs::create_dir_all(app_data_dir()).map_err(|error| error.to_string())?;
+    std::fs::write(
+        locale_path(),
+        if locale == DesktopLocale::En {
+            "en"
+        } else {
+            "zh-CN"
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn project_file_dialog(save: bool) -> Option<PathBuf> {
@@ -131,7 +158,59 @@ fn autosave(state: &Rc<RefCell<DesktopApplicationState>>) -> Result<(), String> 
     state.borrow_mut().save_to(path)
 }
 
-fn page_copy(step: FoundationStep) -> (&'static str, &'static str, &'static str) {
+fn page_copy(
+    step: FoundationStep,
+    locale: DesktopLocale,
+) -> (&'static str, &'static str, &'static str) {
+    if locale == DesktopLocale::En {
+        return match step {
+            FoundationStep::Campus => (
+                "Choose a school and campus",
+                "Confirm the exact campus before discovering buildings, roads, water, vegetation, and sports facilities.",
+                "Confirm campus and continue",
+            ),
+            FoundationStep::Boundary => (
+                "Confirm campus boundary",
+                "Adjust the map view and outline. The boundary defines scope; it does not replace Foundation features.",
+                "Confirm boundary and continue",
+            ),
+            FoundationStep::Orientation => (
+                "Set Minecraft orientation",
+                "Align a campus axis to Minecraft. Every downstream feature shares this project orientation.",
+                "Confirm orientation and continue",
+            ),
+            FoundationStep::Building => (
+                "Review buildings and fill gaps",
+                "Accept reliable building candidates, then recover missing geometry from the map view or manual drawing.",
+                "Complete building review",
+            ),
+            FoundationStep::Road => (
+                "Review roads",
+                "Review main roads and footways, then apply the style-pack road width.",
+                "Complete road review",
+            ),
+            FoundationStep::Water => (
+                "Review water",
+                "Review rivers, ponds, and landscape water surfaces.",
+                "Complete water review",
+            ),
+            FoundationStep::Vegetation => (
+                "Review vegetation",
+                "Review woodland, lawns, and major landscaped areas.",
+                "Complete vegetation review",
+            ),
+            FoundationStep::Sports => (
+                "Review sports facilities",
+                "Review tracks, courts, fields, and other sports areas.",
+                "Complete sports review",
+            ),
+            FoundationStep::Export => (
+                "Export campus Foundation",
+                "Inspect scope, block count, and Building Slots before exporting the portable project and schematic.",
+                "Complete Foundation",
+            ),
+        };
+    }
     match step {
         FoundationStep::Campus => (
             "选择学校与具体校区",
@@ -175,9 +254,221 @@ fn page_copy(step: FoundationStep) -> (&'static str, &'static str, &'static str)
     }
 }
 
+fn tr<'a>(locale: DesktopLocale, zh: &'a str, en: &'a str) -> &'a str {
+    if locale == DesktopLocale::En {
+        en
+    } else {
+        zh
+    }
+}
+
+fn strings(values: &[&str]) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        values
+            .iter()
+            .map(|value| SharedString::from(*value))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn sync_locale_models(ui: &AppWindow, locale: DesktopLocale) {
+    let english = locale == DesktopLocale::En;
+    ui.set_step_labels(if english {
+        strings(&[
+            "Campus",
+            "Boundary",
+            "Orientation",
+            "Buildings",
+            "Roads",
+            "Water",
+            "Vegetation",
+            "Sports",
+            "Export",
+        ])
+    } else {
+        strings(&[
+            "校区", "边界", "朝向", "建筑", "道路", "水域", "植被", "体育", "导出",
+        ])
+    });
+    ui.set_arnis_styles(if english {
+        strings(&[
+            "House",
+            "Residential / Dormitory",
+            "Farm",
+            "Commercial",
+            "Office",
+            "Hotel",
+            "Industrial",
+            "Warehouse",
+            "School / Public",
+            "Hospital",
+            "Religious",
+            "Historic",
+            "Tower",
+            "Garage",
+            "Shed",
+            "Greenhouse",
+            "Tall Building",
+            "Glassy Skyscraper",
+            "Modern Skyscraper",
+        ])
+    } else {
+        strings(
+            &ArnisStylePreset::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_foundation_styles(if english {
+        strings(&[
+            "Arnis Classic",
+            "Modern Campus",
+            "Historic Red-Brick Campus",
+            "Lightweight Draft",
+        ])
+    } else {
+        strings(
+            &FoundationStylePreset::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_candidate_filters(if english {
+        strings(&[
+            "All pending",
+            "High confidence",
+            "Medium confidence",
+            "Low confidence",
+            "Confirmed",
+            "Rejected",
+        ])
+    } else {
+        strings(
+            &CandidateConfidenceFilter::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_semantic_feature_kinds(if english {
+        strings(&["Entrance", "Window band", "Roof ridge", "Cornice", "Frame"])
+    } else {
+        strings(
+            &SemanticFeatureKind::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_semantic_feature_sides(if english {
+        strings(&["North", "South", "East", "West", "Center"])
+    } else {
+        strings(
+            &SemanticFeatureSide::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_semantic_height_bands(if english {
+        strings(&["Lower", "Middle", "Upper", "Roof"])
+    } else {
+        strings(
+            &SemanticHeightBand::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_semantic_strengths(if english {
+        strings(&["Subtle", "Visible", "Strong"])
+    } else {
+        strings(
+            &SemanticStrength::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_external_model_decisions(if english {
+        strings(&[
+            "Pending",
+            "Use as primary geometry",
+            "Supporting evidence only",
+            "Reject",
+        ])
+    } else {
+        strings(
+            &ExternalModelDecision::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+    ui.set_source_conflict_decisions(if english {
+        strings(&[
+            "Unresolved",
+            "Select primary source",
+            "Supporting only",
+            "Reject conflicting source",
+        ])
+    } else {
+        strings(
+            &SourceConflictDecision::ALL
+                .iter()
+                .map(|value| value.label())
+                .collect::<Vec<_>>(),
+        )
+    });
+}
+
+fn external_decision_label(value: ExternalModelDecision, locale: DesktopLocale) -> &'static str {
+    if locale != DesktopLocale::En {
+        return value.label();
+    }
+    match value {
+        ExternalModelDecision::Pending => "Pending",
+        ExternalModelDecision::EligiblePrimary => "Primary geometry",
+        ExternalModelDecision::SupportingEvidence => "Supporting evidence",
+        ExternalModelDecision::Rejected => "Rejected",
+    }
+}
+
+fn conflict_decision_label(value: SourceConflictDecision, locale: DesktopLocale) -> &'static str {
+    if locale != DesktopLocale::En {
+        return value.label();
+    }
+    match value {
+        SourceConflictDecision::Unresolved => "Unresolved",
+        SourceConflictDecision::PrimarySelected => "Primary selected",
+        SourceConflictDecision::SupportingOnly => "Supporting only",
+        SourceConflictDecision::Rejected => "Rejected",
+    }
+}
+
+fn refinement_status_label(
+    value: campus_state::RefinementStatus,
+    locale: DesktopLocale,
+) -> &'static str {
+    if locale != DesktopLocale::En {
+        return value.label();
+    }
+    match value {
+        campus_state::RefinementStatus::Draft => "Draft",
+        campus_state::RefinementStatus::Confirmed => "Confirmed",
+        campus_state::RefinementStatus::Archived => "Archived",
+    }
+}
+
 fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
+    let locale = state.locale;
+    let english = locale == DesktopLocale::En;
+    ui.set_english(english);
+    sync_locale_models(ui, locale);
     let Some(project) = &state.project else {
-        ui.set_save_status("未保存".into());
+        ui.set_save_status(tr(locale, "未保存", "Unsaved").into());
         return;
     };
     ui.set_project_name(project.name.clone().into());
@@ -193,7 +484,14 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                     selection.block, selection.x, selection.y, selection.z
                 )
             })
-            .unwrap_or_else(|| "尚未在预览中选择方块".into())
+            .unwrap_or_else(|| {
+                tr(
+                    locale,
+                    "尚未在预览中选择方块",
+                    "No block selected in preview",
+                )
+                .into()
+            })
             .into(),
     );
     ui.set_detailed_active(project.mode == DesktopMode::Detailed);
@@ -204,32 +502,49 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             .unwrap_or(0) as i32,
     );
     let (title, help, primary) = if project.mode == DesktopMode::Detailed {
-        (
-            "精细建筑模板",
-            "实测轮廓、高度与楼层保持不变；模板只控制方块、窗户与墙面质感。",
-            "",
-        )
+        if english {
+            (
+                "Detailed building template",
+                "Measured footprint, height, and floors remain fixed. The template controls blocks, windows, and facade character only.",
+                "",
+            )
+        } else {
+            (
+                "精细建筑模板",
+                "实测轮廓、高度与楼层保持不变；模板只控制方块、窗户与墙面质感。",
+                "",
+            )
+        }
     } else {
-        page_copy(project.foundation_step)
+        page_copy(project.foundation_step, locale)
     };
     ui.set_page_title(title.into());
     ui.set_page_help(help.into());
     ui.set_primary_label(primary.into());
     ui.set_save_status(
         if state.dirty {
-            "待保存"
+            tr(locale, "待保存", "Unsaved changes")
         } else {
-            "已保存"
+            tr(locale, "已保存", "Saved")
         }
         .into(),
     );
     ui.set_project_summary(
-        format!(
-            "{} 个候选 · {} 个已采用地物 · {} 个建筑槽位",
-            project.candidates.len(),
-            project.features.len(),
-            project.building_slots.len()
-        )
+        if english {
+            format!(
+                "{} candidates · {} accepted features · {} Building Slots",
+                project.candidates.len(),
+                project.features.len(),
+                project.building_slots.len()
+            )
+        } else {
+            format!(
+                "{} 个候选 · {} 个已采用地物 · {} 个建筑槽位",
+                project.candidates.len(),
+                project.features.len(),
+                project.building_slots.len()
+            )
+        }
         .into(),
     );
     let current_kind = match project.foundation_step {
@@ -261,11 +576,12 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             name: candidate.name.clone().into(),
             meta: format!("{} · {}", candidate.source, candidate.confidence).into(),
             status: match candidate.review {
-                ReviewDecision::Pending => "待审核",
-                ReviewDecision::Accepted => "已接受",
-                ReviewDecision::Rejected => "已拒绝",
+                ReviewDecision::Pending => tr(locale, "待审核", "Pending"),
+                ReviewDecision::Accepted => tr(locale, "已接受", "Accepted"),
+                ReviewDecision::Rejected => tr(locale, "已拒绝", "Rejected"),
             }
             .into(),
+            pending: candidate.review == ReviewDecision::Pending,
         })
         .collect::<Vec<_>>();
     ui.set_candidates(ModelRc::new(VecModel::from(candidates)));
@@ -294,22 +610,37 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         ui.set_candidate_name_draft(candidate.name.clone().into());
         ui.set_selected_candidate_is_building(candidate.kind == FeatureKind::Building);
         ui.set_selected_candidate_details(
-            format!(
-                "ID {} · 来源 {} · 置信度 {} · {} 个节点{}",
-                candidate.id,
-                candidate.source,
-                candidate.confidence,
-                candidate.points.len(),
-                if tags.is_empty() {
-                    String::new()
-                } else {
-                    format!(" · 标签 {tags}")
-                }
-            )
+            if english {
+                format!(
+                    "ID {} · Source {} · Confidence {} · {} points{}",
+                    candidate.id,
+                    candidate.source,
+                    candidate.confidence,
+                    candidate.points.len(),
+                    if tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · Tags {tags}")
+                    }
+                )
+            } else {
+                format!(
+                    "ID {} · 来源 {} · 置信度 {} · {} 个节点{}",
+                    candidate.id,
+                    candidate.source,
+                    candidate.confidence,
+                    candidate.points.len(),
+                    if tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · 标签 {tags}")
+                    }
+                )
+            }
             .into(),
         );
     } else {
-        ui.set_selected_candidate_name("未选择候选".into());
+        ui.set_selected_candidate_name(tr(locale, "未选择候选", "No candidate selected").into());
         ui.set_selected_candidate_details("".into());
         ui.set_selected_candidate_is_building(false);
     }
@@ -325,7 +656,11 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             .collect::<Vec<_>>(),
     )));
     let slots = if project.building_slots.is_empty() {
-        vec![SharedString::from("暂无已审核建筑")]
+        vec![SharedString::from(tr(
+            locale,
+            "暂无已审核建筑",
+            "No reviewed buildings",
+        ))]
     } else {
         project
             .building_slots
@@ -354,7 +689,11 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .min(external_models.len().saturating_sub(1));
     ui.set_external_models(ModelRc::new(VecModel::from(
         if external_models.is_empty() {
-            vec![SharedString::from("暂无外部模型候选")]
+            vec![SharedString::from(tr(
+                locale,
+                "暂无外部模型候选",
+                "No external model candidates",
+            ))]
         } else {
             external_models
                 .iter()
@@ -364,18 +703,32 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     )));
     ui.set_selected_external_model(external_index as i32);
     if let Some(review) = external_models.get(external_index) {
+        let eligibility = if english {
+            match review.eligibility {
+                campus_state::ExternalModelEligibility::Eligible => "License permits adaptation",
+                campus_state::ExternalModelEligibility::Blocked => "License blocks adaptation",
+            }
+        } else {
+            review.eligibility.label()
+        };
         ui.set_external_model_summary(
             format!(
-                "{} · {} · 作者 {} · 许可 {} · {} · 尺寸 {}×{}×{}m · {}",
+                "{} · {} · {} {} · {} {} · {} · {} {}×{}×{}m · {}",
                 review.source,
                 review.source_url,
+                tr(locale, "作者", "Author"),
                 if review.author.is_empty() {
-                    "未知"
+                    tr(locale, "未知", "Unknown")
                 } else {
                     review.author.as_str()
                 },
-                review.license_name.as_deref().unwrap_or("缺失"),
-                review.eligibility.label(),
+                tr(locale, "许可", "License"),
+                review
+                    .license_name
+                    .as_deref()
+                    .unwrap_or(tr(locale, "缺失", "Missing")),
+                eligibility,
+                tr(locale, "尺寸", "Size"),
                 review
                     .width_m
                     .map(|value| format!("{value:.1}"))
@@ -388,7 +741,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                     .length_m
                     .map(|value| format!("{value:.1}"))
                     .unwrap_or_else(|| "?".into()),
-                review.decision.label()
+                external_decision_label(review.decision, locale)
             )
             .into(),
         );
@@ -399,7 +752,14 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                 .unwrap_or(0) as i32,
         );
     } else {
-        ui.set_external_model_summary("当前建筑来源对象没有 3DMR/Wikidata 模型标签。".into());
+        ui.set_external_model_summary(
+            tr(
+                locale,
+                "当前建筑来源对象没有 3DMR/Wikidata 模型标签。",
+                "The current source object has no 3DMR/Wikidata model tags.",
+            )
+            .into(),
+        );
         ui.set_selected_external_decision(0);
     }
     let source_conflicts = project
@@ -413,7 +773,11 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         .min(source_conflicts.len().saturating_sub(1));
     ui.set_source_conflicts(ModelRc::new(VecModel::from(
         if source_conflicts.is_empty() {
-            vec![SharedString::from("暂无来源冲突")]
+            vec![SharedString::from(tr(
+                locale,
+                "暂无来源冲突",
+                "No source conflicts",
+            ))]
         } else {
             source_conflicts
                 .iter()
@@ -429,9 +793,9 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             format!(
                 "{} · {} · {}",
                 conflict.summary,
-                conflict.decision.label(),
+                conflict_decision_label(conflict.decision, locale),
                 if conflict.decision_reason.is_empty() {
-                    "尚无决策理由"
+                    tr(locale, "尚无决策理由", "No decision reason yet")
                 } else {
                     conflict.decision_reason.as_str()
                 }
@@ -445,7 +809,14 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                 .unwrap_or(0) as i32,
         );
     } else {
-        ui.set_source_conflict_summary("当前建筑没有待处理的来源冲突。".into());
+        ui.set_source_conflict_summary(
+            tr(
+                locale,
+                "当前建筑没有待处理的来源冲突。",
+                "The current building has no unresolved source conflicts.",
+            )
+            .into(),
+        );
         ui.set_selected_source_conflict_decision(0);
     }
     ui.set_observed_evidence_summary(
@@ -456,26 +827,48 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                     .iter()
                     .find(|candidate| candidate.id == slot.id)
                     .map(|candidate| {
-                        format!(
-                            "{} · {}置信度 · {}",
-                            candidate.source, candidate.confidence, candidate.id
-                        )
+                        if english {
+                            format!(
+                                "{} · {} confidence · {}",
+                                candidate.source, candidate.confidence, candidate.id
+                            )
+                        } else {
+                            format!(
+                                "{} · {}置信度 · {}",
+                                candidate.source, candidate.confidence, candidate.id
+                            )
+                        }
                     })
-                    .unwrap_or_else(|| "项目审核槽位".into());
-                format!(
-                    "轮廓 {} 点 · 高度 {} · 楼层 {} · 屋顶 {} · 来源 {}",
-                    slot.footprint.len(),
-                    slot.height_m
-                        .map(|value| format!("{value:.2}m"))
-                        .unwrap_or_else(|| "未知".into()),
-                    slot.floors
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "未知".into()),
-                    slot.roof_shape.as_deref().unwrap_or("未知"),
-                    source
-                )
+                    .unwrap_or_else(|| tr(locale, "项目审核槽位", "Project-reviewed slot").into());
+                if english {
+                    format!(
+                        "Footprint {} points · Height {} · Floors {} · Roof {} · Source {}",
+                        slot.footprint.len(),
+                        slot.height_m
+                            .map(|value| format!("{value:.2}m"))
+                            .unwrap_or_else(|| "Unknown".into()),
+                        slot.floors
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "Unknown".into()),
+                        slot.roof_shape.as_deref().unwrap_or("Unknown"),
+                        source
+                    )
+                } else {
+                    format!(
+                        "轮廓 {} 点 · 高度 {} · 楼层 {} · 屋顶 {} · 来源 {}",
+                        slot.footprint.len(),
+                        slot.height_m
+                            .map(|value| format!("{value:.2}m"))
+                            .unwrap_or_else(|| "未知".into()),
+                        slot.floors
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "未知".into()),
+                        slot.roof_shape.as_deref().unwrap_or("未知"),
+                        source
+                    )
+                }
             })
-            .unwrap_or_else(|| "尚未选择建筑槽位".into())
+            .unwrap_or_else(|| tr(locale, "尚未选择建筑槽位", "No Building Slot selected").into())
             .into(),
     );
     let latest_refinement =
@@ -486,11 +879,43 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                 format!(
                     "v{} · {} · {}",
                     refinement.version,
-                    refinement.status.label(),
-                    refinement.style_preset.label()
+                    refinement_status_label(refinement.status, locale),
+                    if english {
+                        ArnisStylePreset::ALL
+                            .iter()
+                            .position(|preset| *preset == refinement.style_preset)
+                            .and_then(|index| {
+                                [
+                                    "House",
+                                    "Residential",
+                                    "Farm",
+                                    "Commercial",
+                                    "Office",
+                                    "Hotel",
+                                    "Industrial",
+                                    "Warehouse",
+                                    "School",
+                                    "Hospital",
+                                    "Religious",
+                                    "Historic",
+                                    "Tower",
+                                    "Garage",
+                                    "Shed",
+                                    "Greenhouse",
+                                    "Tall Building",
+                                    "Glassy Skyscraper",
+                                    "Modern Skyscraper",
+                                ]
+                                .get(index)
+                                .copied()
+                            })
+                            .unwrap_or("Unknown")
+                    } else {
+                        refinement.style_preset.label()
+                    }
                 )
             })
-            .unwrap_or_else(|| "尚无生成版本".into())
+            .unwrap_or_else(|| tr(locale, "尚无生成版本", "No generated version").into())
             .into(),
     );
     ui.set_can_confirm_refinement(
@@ -507,22 +932,30 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
                     .filter(|record| record.refinement_id == refinement.id)
                     .collect::<Vec<_>>();
                 if records.is_empty() {
-                    "尚未标注识别特征".into()
+                    tr(locale, "尚未标注识别特征", "No semantic features annotated").into()
                 } else {
-                    format!(
-                        "{} 项 · {}",
-                        records.len(),
-                        records
-                            .iter()
-                            .rev()
-                            .take(3)
-                            .map(|record| record.label.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    )
+                    let labels = records
+                        .iter()
+                        .rev()
+                        .take(3)
+                        .map(|record| record.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    if english {
+                        format!("{} items · {labels}", records.len())
+                    } else {
+                        format!("{} 项 · {labels}", records.len())
+                    }
                 }
             })
-            .unwrap_or_else(|| "请先生成一个 refinement 草稿".into())
+            .unwrap_or_else(|| {
+                tr(
+                    locale,
+                    "请先生成一个 refinement 草稿",
+                    "Generate a refinement draft first",
+                )
+                .into()
+            })
             .into(),
     );
     ui.set_generated_interpretation_summary(
@@ -533,20 +966,42 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             .and_then(|path| std::fs::read(path).ok())
             .and_then(|bytes| serde_json::from_slice::<arnis_core::GeneratedBuilding>(&bytes).ok())
             .map(|generated| {
-                format!(
-                    "{}×{}×{} · {} 非空气方块 · {} · 比例 {:.2} · {} 层 · {} 屋顶 · {} 条修正记录",
-                    generated.width,
-                    generated.height,
-                    generated.length,
-                    generated.report.non_air_blocks,
-                    generated.report.generator,
-                    generated.report.blocks_per_meter,
-                    generated.report.floor_count,
-                    generated.report.roof_shape,
-                    generated.report.correction_notes.len()
-                )
+                if english {
+                    format!(
+                        "{}×{}×{} · {} non-air blocks · {} · scale {:.2} · {} floors · {} roof · {} corrections",
+                        generated.width,
+                        generated.height,
+                        generated.length,
+                        generated.report.non_air_blocks,
+                        generated.report.generator,
+                        generated.report.blocks_per_meter,
+                        generated.report.floor_count,
+                        generated.report.roof_shape,
+                        generated.report.correction_notes.len()
+                    )
+                } else {
+                    format!(
+                        "{}×{}×{} · {} 非空气方块 · {} · 比例 {:.2} · {} 层 · {} 屋顶 · {} 条修正记录",
+                        generated.width,
+                        generated.height,
+                        generated.length,
+                        generated.report.non_air_blocks,
+                        generated.report.generator,
+                        generated.report.blocks_per_meter,
+                        generated.report.floor_count,
+                        generated.report.roof_shape,
+                        generated.report.correction_notes.len()
+                    )
+                }
             })
-            .unwrap_or_else(|| "尚未生成解释结果".into())
+            .unwrap_or_else(|| {
+                tr(
+                    locale,
+                    "尚未生成解释结果",
+                    "No generated interpretation",
+                )
+                .into()
+            })
             .into(),
     );
     ui.set_measured_height(
@@ -569,7 +1024,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             .unwrap_or_default()
             .into(),
     );
-    ui.set_palette_summary(generated_palette_summary(project).into());
+    ui.set_palette_summary(generated_palette_summary(project, locale).into());
     let selected_style = ArnisStylePreset::ALL
         .iter()
         .position(|preset| *preset == project.detailed.style_preset)
@@ -620,7 +1075,25 @@ fn save_and_sync(
 }
 
 fn set_error(ui: &AppWindow, message: impl AsRef<str>) {
-    ui.set_save_status(format!("保存失败：{}", message.as_ref()).into());
+    ui.set_save_status(
+        if ui.get_english() {
+            format!("Operation failed: {}", message.as_ref())
+        } else {
+            format!("保存失败：{}", message.as_ref())
+        }
+        .into(),
+    );
+}
+
+fn set_status(ui: &AppWindow, zh: impl Into<String>, en: impl Into<String>) {
+    ui.set_save_status(
+        if ui.get_english() {
+            en.into()
+        } else {
+            zh.into()
+        }
+        .into(),
+    );
 }
 
 fn generate_foundation_preview(
@@ -713,15 +1186,28 @@ fn generate_detailed_model(
     Ok((path, slot.name))
 }
 
-fn generated_palette_summary(project: &campus_state::CampusProject) -> String {
+fn generated_palette_summary(
+    project: &campus_state::CampusProject,
+    locale: DesktopLocale,
+) -> String {
     let Some(path) = &project.detailed.generated_path else {
-        return "尚未生成模型".into();
+        return tr(locale, "尚未生成模型", "No model generated").into();
     };
     let Ok(bytes) = std::fs::read(path) else {
-        return "生成文件已移动，请重新生成".into();
+        return tr(
+            locale,
+            "生成文件已移动，请重新生成",
+            "Generated file was moved; generate again",
+        )
+        .into();
     };
     let Ok(generated) = serde_json::from_slice::<arnis_core::GeneratedBuilding>(&bytes) else {
-        return "生成文件格式无效".into();
+        return tr(
+            locale,
+            "生成文件格式无效",
+            "Generated file format is invalid",
+        )
+        .into();
     };
     generated
         .palette
@@ -1137,6 +1623,7 @@ struct MapLaunchRequest {
     purpose: MapPurpose,
     overlays: Vec<MapOverlay>,
     feature_kind: Option<String>,
+    english: bool,
 }
 
 impl ToolSupervisor {
@@ -1196,6 +1683,11 @@ impl ToolSupervisor {
                     _ => return Err("map tool handshake rejected".into()),
                 }
                 let analysis_campus = request.title.clone();
+                let locale = if request.english {
+                    DesktopLocale::En
+                } else {
+                    DesktopLocale::ZhCn
+                };
                 write_message(
                     &mut server,
                     &ToolCommand::OpenMap {
@@ -1239,13 +1731,16 @@ impl ToolSupervisor {
                             })
                             .collect(),
                         feature_kind: request.feature_kind,
+                        english: request.english,
                     },
                 )
                 .await?;
                 loop {
                     let event: ToolEvent = read_message(&mut server).await?;
                     let message = match event {
-                        ToolEvent::Ready { .. } => "高德工具已连接".to_string(),
+                        ToolEvent::Ready { .. } => {
+                            tr(locale, "高德工具已连接", "Gaode tool connected").to_string()
+                        }
                         ToolEvent::MapCamera {
                             center_lng,
                             center_lat,
@@ -1262,11 +1757,19 @@ impl ToolSupervisor {
                                 pitch,
                                 rotation,
                             });
-                            format!("地图视角已记录 · zoom {zoom:.1} · pitch {pitch:.0}")
+                            if locale == DesktopLocale::En {
+                                format!("Map view recorded · zoom {zoom:.1} · pitch {pitch:.0}")
+                            } else {
+                                format!("地图视角已记录 · zoom {zoom:.1} · pitch {pitch:.0}")
+                            }
                         }
                         ToolEvent::MapPointSelected { lng, lat } => {
                             let _ = updates.send(ToolUpdate::MapPoint(GeoPoint { lng, lat }));
-                            format!("已选择位置 {lng:.6}, {lat:.6}")
+                            if locale == DesktopLocale::En {
+                                format!("Selected location {lng:.6}, {lat:.6}")
+                            } else {
+                                format!("已选择位置 {lng:.6}, {lat:.6}")
+                            }
                         }
                         ToolEvent::MapCampusSelected {
                             poi_id,
@@ -1283,7 +1786,11 @@ impl ToolSupervisor {
                                 acquisition: "gaode_poi_search".into(),
                             };
                             let _ = updates.send(ToolUpdate::MapCampusTarget(evidence));
-                            format!("已确认校园：{name}")
+                            if locale == DesktopLocale::En {
+                                format!("Campus confirmed: {name}")
+                            } else {
+                                format!("已确认校园：{name}")
+                            }
                         }
                         ToolEvent::MapBoundaryChanged { points } => {
                             let count = points.len();
@@ -1298,7 +1805,11 @@ impl ToolSupervisor {
                                     })
                                     .collect(),
                             ));
-                            format!("校区边界已保存 · {count} 个节点")
+                            if locale == DesktopLocale::En {
+                                format!("Campus boundary saved · {count} nodes")
+                            } else {
+                                format!("校区边界已保存 · {count} 个节点")
+                            }
                         }
                         ToolEvent::MapFeatureDrawn { kind, points } => {
                             let kind = match kind.as_str() {
@@ -1308,8 +1819,14 @@ impl ToolSupervisor {
                                 "vegetation" => FeatureKind::Vegetation,
                                 "sports" => FeatureKind::Sports,
                                 _ => {
-                                    let _ =
-                                        updates.send(ToolUpdate::Status("手绘地物类型无效".into()));
+                                    let _ = updates.send(ToolUpdate::Status(
+                                        tr(
+                                            locale,
+                                            "手绘地物类型无效",
+                                            "Invalid manual feature type",
+                                        )
+                                        .into(),
+                                    ));
                                     continue;
                                 }
                             };
@@ -1326,7 +1843,11 @@ impl ToolSupervisor {
                                     })
                                     .collect(),
                             });
-                            format!("已接收手绘地物 · {count} 个节点")
+                            if locale == DesktopLocale::En {
+                                format!("Manual feature received · {count} nodes")
+                            } else {
+                                format!("已接收手绘地物 · {count} 个节点")
+                            }
                         }
                         ToolEvent::MapCaptureRequested {
                             south_west_lng,
@@ -1343,7 +1864,12 @@ impl ToolSupervisor {
                                 lat: north_east_lat,
                             });
                             let _ = updates.send(ToolUpdate::Status(
-                                "已锁定当前视野，正在识别校区地物…".into(),
+                                tr(
+                                    locale,
+                                    "已锁定当前视野，正在识别校区地物…",
+                                    "Current view locked; discovering campus features…",
+                                )
+                                .into(),
                             ));
                             let bounds = campus_services::GeoBounds {
                                 west: south_west.lng,
@@ -1364,7 +1890,8 @@ impl ToolSupervisor {
                                 north_east,
                                 candidates,
                             });
-                            "已接收当前视野范围".to_string()
+                            tr(locale, "已接收当前视野范围", "Current view bounds received")
+                                .to_string()
                         }
                         ToolEvent::MapVisualCapture {
                             image_data_url,
@@ -1401,7 +1928,11 @@ impl ToolSupervisor {
                                         png_bytes,
                                         candidates: Ok(candidates),
                                     });
-                                    format!("视觉补缺完成 · {count} 个候选")
+                                    if locale == DesktopLocale::En {
+                                        format!("Visual recovery complete · {count} candidates")
+                                    } else {
+                                        format!("视觉补缺完成 · {count} 个候选")
+                                    }
                                 }
                                 Err(error) => {
                                     let _ = updates.send(ToolUpdate::MapVisualCapture {
@@ -1410,12 +1941,24 @@ impl ToolSupervisor {
                                         png_bytes: Vec::new(),
                                         candidates: Err(error.clone()),
                                     });
-                                    format!("视觉补缺失败：{error}")
+                                    if locale == DesktopLocale::En {
+                                        format!("Visual recovery failed: {error}")
+                                    } else {
+                                        format!("视觉补缺失败：{error}")
+                                    }
                                 }
                             }
                         }
-                        ToolEvent::Error { message } => format!("地图错误：{message}"),
-                        ToolEvent::Closed { .. } => "高德工具已关闭".to_string(),
+                        ToolEvent::Error { message } => {
+                            if locale == DesktopLocale::En {
+                                format!("Map error: {message}")
+                            } else {
+                                format!("地图错误：{message}")
+                            }
+                        }
+                        ToolEvent::Closed { .. } => {
+                            tr(locale, "高德工具已关闭", "Gaode tool closed").to_string()
+                        }
                         _ => continue,
                     };
                     let weak = ui.clone();
@@ -1430,7 +1973,11 @@ impl ToolSupervisor {
                 let weak = error_ui;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
-                        ui.set_save_status(format!("地图连接失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("地图连接失败：{error}"),
+                            format!("Map connection failed: {error}"),
+                        );
                     }
                 });
             }
@@ -1453,6 +2000,7 @@ impl ToolSupervisor {
         _ui: slint::Weak<AppWindow>,
         model_path: PathBuf,
         title: String,
+        english: bool,
     ) -> Result<(), String> {
         let executable = Self::tool_executable("campus-preview")?;
         let random: u128 = rand::rng().random();
@@ -1495,27 +2043,48 @@ impl ToolSupervisor {
                     &ToolCommand::OpenPreview {
                         model_path: model_path.to_string_lossy().into_owned(),
                         title,
+                        english,
                     },
                 )
                 .await?;
                 loop {
                     let event: ToolEvent = read_message(&mut server).await?;
                     let update = match event {
-                        ToolEvent::Ready { .. } => ToolUpdate::Status("原生 3D 预览已连接".into()),
+                        ToolEvent::Ready { .. } => ToolUpdate::Status(
+                            if english {
+                                "Native 3D preview connected"
+                            } else {
+                                "原生 3D 预览已连接"
+                            }
+                            .into(),
+                        ),
                         ToolEvent::PreviewBlockSelected { x, y, z, block } => {
                             ToolUpdate::PreviewBlockSelected { x, y, z, block }
                         }
-                        ToolEvent::Error { message } => {
-                            ToolUpdate::Status(format!("预览错误：{message}"))
-                        }
-                        ToolEvent::Closed { .. } => ToolUpdate::Status("原生预览已关闭".into()),
+                        ToolEvent::Error { message } => ToolUpdate::Status(if english {
+                            format!("Preview error: {message}")
+                        } else {
+                            format!("预览错误：{message}")
+                        }),
+                        ToolEvent::Closed { .. } => ToolUpdate::Status(
+                            if english {
+                                "Native preview closed"
+                            } else {
+                                "原生预览已关闭"
+                            }
+                            .into(),
+                        ),
                         _ => continue,
                     };
                     let _ = event_updates.send(update);
                 }
             });
             if let Err(error) = result {
-                let _ = updates.send(ToolUpdate::Status(format!("预览连接失败：{error}")));
+                let _ = updates.send(ToolUpdate::Status(if english {
+                    format!("Preview connection failed: {error}")
+                } else {
+                    format!("预览连接失败：{error}")
+                }));
             }
         });
         Ok(())
@@ -1527,6 +2096,7 @@ impl ToolSupervisor {
         _ui: slint::Weak<AppWindow>,
         _model_path: PathBuf,
         _title: String,
+        _english: bool,
     ) -> Result<(), String> {
         Err("preview tool is supported only on Windows".into())
     }
@@ -1608,7 +2178,9 @@ fn main() -> Result<(), slint::PlatformError> {
             .collect::<Vec<_>>(),
     )));
 
-    let state = Rc::new(RefCell::new(DesktopApplicationState::default()));
+    let mut initial_state = DesktopApplicationState::default();
+    initial_state.locale = load_locale();
+    let state = Rc::new(RefCell::new(initial_state));
     let map_credentials = Rc::new(RefCell::new(load_map_credentials()));
     ui.set_gaode_key(map_credentials.borrow().js_api_key.clone().into());
     ui.set_gaode_security(map_credentials.borrow().security_code.clone().into());
@@ -1629,6 +2201,27 @@ fn main() -> Result<(), slint::PlatformError> {
     sync_ui(&ui, &state.borrow());
 
     let tool_timer = Timer::default();
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_set_locale(move |english| {
+            let locale = if english {
+                DesktopLocale::En
+            } else {
+                DesktopLocale::ZhCn
+            };
+            state.borrow_mut().locale = locale;
+            if let Err(error) = persist_locale(locale) {
+                if let Some(ui) = weak.upgrade() {
+                    set_error(&ui, error);
+                }
+                return;
+            }
+            if let Some(ui) = weak.upgrade() {
+                sync_ui(&ui, &state.borrow());
+            }
+        });
+    }
     {
         let state = state.clone();
         let weak = ui.as_weak();
@@ -1665,8 +2258,10 @@ fn main() -> Result<(), slint::PlatformError> {
                         if let Err(error) = save_and_sync(&ui, &state) {
                             set_error(&ui, error);
                         } else {
-                            ui.set_save_status(
-                                format!("进阶 Foundation 样式包已导入：{name}").into(),
+                            set_status(
+                                &ui,
+                                format!("进阶 Foundation 样式包已导入：{name}"),
+                                format!("Advanced Foundation style pack imported: {name}"),
                             );
                         }
                     }
@@ -1725,11 +2320,15 @@ fn main() -> Result<(), slint::PlatformError> {
                         if let Err(error) = save_and_sync(&ui, &state) {
                             set_error(&ui, error);
                         } else {
-                            ui.set_save_status("建筑目录名称已保存".into());
+                            set_status(&ui, "建筑目录名称已保存", "Building directory name saved");
                         }
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("建筑名称保存失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("建筑名称保存失败：{error}"),
+                            format!("Failed to save building name: {error}"),
+                        );
                     }
                 }
             }
@@ -1758,11 +2357,19 @@ fn main() -> Result<(), slint::PlatformError> {
                         } else {
                             ui.set_candidate_suppression_reason("".into());
                             ui.set_candidate_details_visible(false);
-                            ui.set_save_status("建筑来源已持久抑制，可在详情面板恢复".into());
+                            set_status(
+                                &ui,
+                                "建筑来源已持久抑制，可在详情面板恢复",
+                                "Building source suppressed; it remains recoverable in Details",
+                            );
                         }
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("建筑抑制失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("建筑抑制失败：{error}"),
+                            format!("Failed to suppress building: {error}"),
+                        );
                     }
                 }
             }
@@ -1790,10 +2397,18 @@ fn main() -> Result<(), slint::PlatformError> {
                     if let Err(error) = save_and_sync(&ui, &state) {
                         set_error(&ui, error);
                     } else {
-                        ui.set_save_status("建筑抑制已恢复，请重新查询当前视野".into());
+                        set_status(
+                            &ui,
+                            "建筑抑制已恢复，请重新查询当前视野",
+                            "Building suppression restored; query the current view again",
+                        );
                     }
                 } else {
-                    ui.set_save_status("没有可恢复的建筑抑制".into());
+                    set_status(
+                        &ui,
+                        "没有可恢复的建筑抑制",
+                        "No recoverable building suppressions",
+                    );
                 }
             }
         });
@@ -1851,11 +2466,15 @@ fn main() -> Result<(), slint::PlatformError> {
                             set_error(&ui, error);
                         } else {
                             ui.set_external_model_reason("".into());
-                            ui.set_save_status("外部模型审核已保存".into());
+                            set_status(&ui, "外部模型审核已保存", "External model review saved");
                         }
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("外部模型审核失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("外部模型审核失败：{error}"),
+                            format!("External model review failed: {error}"),
+                        );
                     }
                 }
             }
@@ -1914,11 +2533,15 @@ fn main() -> Result<(), slint::PlatformError> {
                             set_error(&ui, error);
                         } else {
                             ui.set_source_conflict_reason("".into());
-                            ui.set_save_status("来源冲突决策已保存".into());
+                            set_status(&ui, "来源冲突决策已保存", "Source conflict decision saved");
                         }
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("来源冲突审核失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("来源冲突审核失败：{error}"),
+                            format!("Source conflict review failed: {error}"),
+                        );
                     }
                 }
             }
@@ -1936,10 +2559,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 match save_map_credentials(&updated) {
                     Ok(()) => {
                         *map_credentials.borrow_mut() = updated;
-                        ui.set_save_status("地图密钥已安全保存".into());
+                        set_status(&ui, "地图密钥已安全保存", "Map credentials saved securely");
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("地图密钥保存失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("地图密钥保存失败：{error}"),
+                            format!("Failed to save map credentials: {error}"),
+                        );
                     }
                 }
             }
@@ -2004,7 +2631,11 @@ fn main() -> Result<(), slint::PlatformError> {
                                 project.campus_target = Some(target);
                             });
                             if let Some(ui) = weak.upgrade() {
-                                ui.set_save_status(format!("高德校园目标已确认：{name}").into());
+                                set_status(
+                                    &ui,
+                                    format!("高德校园目标已确认：{name}"),
+                                    format!("Gaode campus target confirmed: {name}"),
+                                );
                             }
                             changed = true;
                         }
@@ -2084,15 +2715,21 @@ fn main() -> Result<(), slint::PlatformError> {
                                     project.candidates.extend(discovered);
                                 });
                                 if let Some(ui) = weak.upgrade() {
-                                    ui.set_save_status(
-                                        format!("识别完成：发现 {count} 个校区候选").into(),
+                                    set_status(
+                                        &ui,
+                                        format!("识别完成：发现 {count} 个校区候选"),
+                                        format!("Discovery complete: {count} campus candidates"),
                                     );
                                 }
                                 changed = true;
                             }
                             Err(error) => {
                                 if let Some(ui) = weak.upgrade() {
-                                    ui.set_save_status(format!("识别失败：{error}").into());
+                                    set_status(
+                                        &ui,
+                                        format!("识别失败：{error}"),
+                                        format!("Discovery failed: {error}"),
+                                    );
                                 }
                             }
                         },
@@ -2133,19 +2770,24 @@ fn main() -> Result<(), slint::PlatformError> {
                                             project.candidates.extend(discovered);
                                         });
                                         if let Some(ui) = weak.upgrade() {
-                                            ui.set_save_status(
+                                            set_status(
+                                                &ui,
                                                 format!(
                                                     "视觉补缺完成：{count} 个候选，截图已随项目记录"
-                                                )
-                                                .into(),
+                                                ),
+                                                format!(
+                                                    "Visual recovery complete: {count} candidates; screenshot recorded with the project"
+                                                ),
                                             );
                                         }
                                         changed = true;
                                     }
                                     Err(error) => {
                                         if let Some(ui) = weak.upgrade() {
-                                            ui.set_save_status(
-                                                format!("视觉截图保存失败：{error}").into(),
+                                            set_status(
+                                                &ui,
+                                                format!("视觉截图保存失败：{error}"),
+                                                format!("Failed to save visual capture: {error}"),
                                             );
                                         }
                                     }
@@ -2153,7 +2795,11 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                             Err(error) => {
                                 if let Some(ui) = weak.upgrade() {
-                                    ui.set_save_status(format!("视觉补缺失败：{error}").into());
+                                    set_status(
+                                        &ui,
+                                        format!("视觉补缺失败：{error}"),
+                                        format!("Visual recovery failed: {error}"),
+                                    );
                                 }
                             }
                         },
@@ -2264,7 +2910,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);
                 } else {
-                    ui.set_save_status(format!("Foundation 样式已切换：{}", preset.label()).into());
+                    set_status(
+                        &ui,
+                        format!("Foundation 样式已切换：{}", preset.label()),
+                        format!(
+                            "Foundation style switched: {}",
+                            FoundationStylePack::from_preset(preset).name
+                        ),
+                    );
                 }
             }
         });
@@ -2283,17 +2936,28 @@ fn main() -> Result<(), slint::PlatformError> {
                     sync_ui(&ui, &state.borrow());
                 }
                 state.borrow_mut().active_preview_path = Some(path.clone());
-                if let Err(error) = tools.launch_preview(weak.clone(), path, title) {
+                if let Err(error) = tools.launch_preview(
+                    weak.clone(),
+                    path,
+                    title,
+                    state.borrow().locale == DesktopLocale::En,
+                ) {
                     if let Some(ui) = weak.upgrade() {
-                        ui.set_save_status(
-                            format!("Foundation 已生成，预览启动失败：{error}").into(),
+                        set_status(
+                            &ui,
+                            format!("Foundation 已生成，预览启动失败：{error}"),
+                            format!("Foundation generated, but preview failed to start: {error}"),
                         );
                     }
                 }
             }
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("Foundation 预览失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("Foundation 预览失败：{error}"),
+                        format!("Foundation preview failed: {error}"),
+                    );
                 }
             }
         });
@@ -2310,7 +2974,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);
                 } else {
-                    ui.set_save_status("朝向与比例已应用".into());
+                    set_status(&ui, "朝向与比例已应用", "Orientation and scale applied");
                 }
             }
         });
@@ -2474,7 +3138,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 | "onion" => Some(roof.trim().to_ascii_lowercase()),
                 _ => {
                     if let Some(ui) = weak.upgrade() {
-                        ui.set_save_status("屋顶形状无效".into());
+                        set_status(&ui, "屋顶形状无效", "Invalid roof shape");
                     }
                     return;
                 }
@@ -2496,7 +3160,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Err(error) = save_and_sync(&ui, &state) {
                     set_error(&ui, error);
                 } else {
-                    ui.set_save_status("实测几何已保存，模板不会修改这些数值".into());
+                    set_status(
+                        &ui,
+                        "实测几何已保存，模板不会修改这些数值",
+                        "Measurements saved; templates will not alter them",
+                    );
                 }
             }
         });
@@ -2574,7 +3242,11 @@ fn main() -> Result<(), slint::PlatformError> {
             if credentials.js_api_key.trim().is_empty() {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_settings_visible(true);
-                    ui.set_save_status("请先配置高德 Web JS API 密钥".into());
+                    set_status(
+                        &ui,
+                        "请先配置高德 Web JS API 密钥",
+                        "Configure the Gaode Web JS API key first",
+                    );
                 }
                 return;
             }
@@ -2589,10 +3261,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     purpose: MapPurpose::CampusReview,
                     overlays: Vec::new(),
                     feature_kind: None,
+                    english: state.borrow().locale == DesktopLocale::En,
                 },
             ) {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("地图启动失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("地图启动失败：{error}"),
+                        format!("Map failed to start: {error}"),
+                    );
                 }
             }
         });
@@ -2643,7 +3320,11 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let Some((_kind, slug, label, campus_name, view, overlays)) = snapshot else {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status("当前步骤不支持手绘地物".into());
+                    set_status(
+                        &ui,
+                        "当前步骤不支持手绘地物",
+                        "The current step does not support manual drawing",
+                    );
                 }
                 return;
             };
@@ -2651,7 +3332,11 @@ fn main() -> Result<(), slint::PlatformError> {
             if credentials.js_api_key.trim().is_empty() {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_settings_visible(true);
-                    ui.set_save_status("请先配置高德 Web JS API 密钥".into());
+                    set_status(
+                        &ui,
+                        "请先配置高德 Web JS API 密钥",
+                        "Configure the Gaode Web JS API key first",
+                    );
                 }
                 return;
             }
@@ -2664,10 +3349,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 purpose: MapPurpose::FoundationFeatureDrawing,
                 overlays,
                 feature_kind: Some(slug),
+                english: state.borrow().locale == DesktopLocale::En,
             };
             if let Err(error) = tools.launch_map(weak.clone(), request) {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("手绘地图启动失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("手绘地图启动失败：{error}"),
+                        format!("Drawing map failed to start: {error}"),
+                    );
                 }
             }
         });
@@ -2703,7 +3393,11 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let Some((campus_name, slot, center)) = selected else {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status("请先选择具有已审核轮廓的建筑槽位".into());
+                    set_status(
+                        &ui,
+                        "请先选择具有已审核轮廓的建筑槽位",
+                        "Select a Building Slot with a reviewed footprint first",
+                    );
                 }
                 return;
             };
@@ -2711,7 +3405,11 @@ fn main() -> Result<(), slint::PlatformError> {
             if credentials.js_api_key.trim().is_empty() {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_settings_visible(true);
-                    ui.set_save_status("请先配置高德 Web JS API 密钥".into());
+                    set_status(
+                        &ui,
+                        "请先配置高德 Web JS API 密钥",
+                        "Configure the Gaode Web JS API key first",
+                    );
                 }
                 return;
             }
@@ -2740,10 +3438,15 @@ fn main() -> Result<(), slint::PlatformError> {
                         .collect(),
                 }],
                 feature_kind: None,
+                english: state.borrow().locale == DesktopLocale::En,
             };
             if let Err(error) = tools.launch_map(weak.clone(), request) {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("建筑证据地图启动失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("建筑证据地图启动失败：{error}"),
+                        format!("Building evidence map failed to start: {error}"),
+                    );
                 }
             }
         });
@@ -2760,7 +3463,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 .and_then(|project| project.detailed.generated_path.clone());
             let Some(model) = model else {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status("请先生成精细建筑".into());
+                    set_status(
+                        &ui,
+                        "请先生成精细建筑",
+                        "Generate a detailed building first",
+                    );
                 }
                 return;
             };
@@ -2778,9 +3485,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .unwrap_or_else(|| "精细建筑".into());
             state.borrow_mut().active_preview_path = Some(model.clone());
-            if let Err(error) = tools.launch_preview(weak.clone(), model, title) {
+            if let Err(error) = tools.launch_preview(
+                weak.clone(),
+                model,
+                title,
+                state.borrow().locale == DesktopLocale::En,
+            ) {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("预览启动失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("预览启动失败：{error}"),
+                        format!("Preview failed to start: {error}"),
+                    );
                 }
             }
         });
@@ -2810,10 +3526,14 @@ fn main() -> Result<(), slint::PlatformError> {
                         if let Err(error) = save_and_sync(&ui, &state) {
                             set_error(&ui, error);
                         } else {
-                            ui.set_save_status(format!("已确认建筑 refinement v{version}").into());
+                            set_status(
+                                &ui,
+                                format!("已确认建筑 refinement v{version}"),
+                                format!("Building refinement v{version} confirmed"),
+                            );
                         }
                     }
-                    Err(error) => ui.set_save_status(error.into()),
+                    Err(error) => set_error(&ui, error),
                 }
             }
         });
@@ -2832,15 +3552,28 @@ fn main() -> Result<(), slint::PlatformError> {
                     sync_ui(&ui, &state.borrow());
                 }
                 state.borrow_mut().active_preview_path = Some(path.clone());
-                if let Err(error) = tools.launch_preview(weak.clone(), path, title) {
+                if let Err(error) = tools.launch_preview(
+                    weak.clone(),
+                    path,
+                    title,
+                    state.borrow().locale == DesktopLocale::En,
+                ) {
                     if let Some(ui) = weak.upgrade() {
-                        ui.set_save_status(format!("生成成功，预览启动失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("生成成功，预览启动失败：{error}"),
+                            format!("Generation succeeded, but preview failed to start: {error}"),
+                        );
                     }
                 }
             }
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_save_status(format!("生成失败：{error}").into());
+                    set_status(
+                        &ui,
+                        format!("生成失败：{error}"),
+                        format!("Generation failed: {error}"),
+                    );
                 }
             }
         });
@@ -2921,14 +3654,19 @@ fn main() -> Result<(), slint::PlatformError> {
                         } else {
                             ui.set_semantic_feature_label("".into());
                             ui.set_semantic_feature_reason("".into());
-                            ui.set_save_status(
-                                format!("已应用 {}：{} 个方块使用 {block}", kind.label(), affected)
-                                    .into(),
+                            set_status(
+                                &ui,
+                                format!("已应用 {}：{} 个方块使用 {block}", kind.label(), affected),
+                                format!("Semantic feature applied: {affected} blocks use {block}"),
                             );
                         }
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("语义特征应用失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("语义特征应用失败：{error}"),
+                            format!("Failed to apply semantic feature: {error}"),
+                        );
                     }
                 }
             }
@@ -2968,15 +3706,17 @@ fn main() -> Result<(), slint::PlatformError> {
                                 ..selection
                             });
                         sync_ui(&ui, &state.borrow());
-                        ui.set_save_status(
-                            format!(
-                                "已编辑 ({}, {}, {})：{previous} → {normalized}",
-                                selection.x, selection.y, selection.z
-                            )
-                            .into(),
+                        let detail = format!(
+                            "({}, {}, {}): {previous} → {normalized}",
+                            selection.x, selection.y, selection.z
                         );
+                        set_status(&ui, format!("已编辑 {detail}"), format!("Edited {detail}"));
                     }
-                    Err(error) => ui.set_save_status(format!("单点编辑失败：{error}").into()),
+                    Err(error) => set_status(
+                        &ui,
+                        format!("单点编辑失败：{error}"),
+                        format!("Single-block edit failed: {error}"),
+                    ),
                 }
             }
         });
@@ -2998,10 +3738,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 match result {
                     Ok(count) => {
                         sync_ui(&ui, &state.borrow());
-                        ui.set_save_status(format!("已替换 {count} 个方块，请重新打开预览").into());
+                        set_status(
+                            &ui,
+                            format!("已替换 {count} 个方块，请重新打开预览"),
+                            format!("Replaced {count} blocks; reopen the preview"),
+                        );
                     }
                     Err(error) => {
-                        ui.set_save_status(format!("替换失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("替换失败：{error}"),
+                            format!("Replacement failed: {error}"),
+                        );
                     }
                 }
             }
@@ -3040,10 +3788,18 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = weak.upgrade() {
                 match result {
                     Ok(path) => {
-                        ui.set_save_status(format!("精细建筑已导出：{}", path.display()).into());
+                        set_status(
+                            &ui,
+                            format!("精细建筑已导出：{}", path.display()),
+                            format!("Detailed building exported: {}", path.display()),
+                        );
                     }
                     Err(error) if error != "已取消导出" => {
-                        ui.set_save_status(format!("导出失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("导出失败：{error}"),
+                            format!("Export failed: {error}"),
+                        );
                     }
                     Err(_) => {}
                 }
@@ -3071,10 +3827,18 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = weak.upgrade() {
                 match result {
                     Ok(path) => {
-                        ui.set_save_status(format!("Foundation 已导出：{}", path.display()).into());
+                        set_status(
+                            &ui,
+                            format!("Foundation 已导出：{}", path.display()),
+                            format!("Foundation exported: {}", path.display()),
+                        );
                     }
                     Err(error) if error != "已取消导出" => {
-                        ui.set_save_status(format!("导出失败：{error}").into());
+                        set_status(
+                            &ui,
+                            format!("导出失败：{error}"),
+                            format!("Export failed: {error}"),
+                        );
                     }
                     Err(_) => {}
                 }
@@ -3142,5 +3906,17 @@ mod tests {
             .iter()
             .any(|note| note.contains("single block edit")));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn locale_changes_copy_without_changing_project_state() {
+        let (title, _, action) = page_copy(FoundationStep::Boundary, DesktopLocale::En);
+        assert_eq!(title, "Confirm campus boundary");
+        assert_eq!(action, "Confirm boundary and continue");
+        let mut state = DesktopApplicationState::default();
+        state.locale = DesktopLocale::En;
+        state.new_project("test", "campus");
+        assert_eq!(state.locale, DesktopLocale::En);
+        assert_eq!(state.project.as_ref().unwrap().campus_name, "campus");
     }
 }

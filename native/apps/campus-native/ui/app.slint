@@ -5,6 +5,7 @@ export struct CandidateRow {
     name: string,
     meta: string,
     status: string,
+    pending: bool,
 }
 
 component SectionLabel inherits Text {
@@ -20,6 +21,7 @@ component Rule inherits Rectangle {
 
 component CandidateItem inherits Rectangle {
     in property <CandidateRow> candidate;
+    in property <bool> english;
     callback decide(string, bool);
     callback reset(string);
     callback inspect(string);
@@ -37,10 +39,10 @@ component CandidateItem inherits Rectangle {
         }
         Rectangle { horizontal-stretch: 1; background: transparent; }
         Text { text: candidate.status; color: #a54836; vertical-alignment: center; }
-        Button { text: "详情"; clicked => { root.inspect(candidate.id); } }
-        Button { text: "撤销"; enabled: candidate.status != "待审核"; clicked => { root.reset(candidate.id); } }
-        Button { text: "拒绝"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, false); } }
-        Button { text: "接受"; enabled: candidate.status == "待审核"; clicked => { root.decide(candidate.id, true); } }
+        Button { text: root.english ? "Details" : "详情"; clicked => { root.inspect(candidate.id); } }
+        Button { text: root.english ? "Revoke" : "撤销"; enabled: !candidate.pending; clicked => { root.reset(candidate.id); } }
+        Button { text: root.english ? "Reject" : "拒绝"; enabled: candidate.pending; clicked => { root.decide(candidate.id, false); } }
+        Button { text: root.english ? "Accept" : "接受"; enabled: candidate.pending; clicked => { root.decide(candidate.id, true); } }
     }
 }
 
@@ -129,6 +131,7 @@ export component AppWindow inherits Window {
     in-out property <int> selected-building-suppression: 0;
     in-out property <string> replace-source: "";
     in-out property <string> replace-target: "";
+    in-out property <bool> english: false;
 
     callback create-project(string, string);
     callback open-project();
@@ -171,6 +174,7 @@ export component AppWindow inherits Window {
     callback rename-selected-building(string);
     callback suppress-selected-building(string);
     callback restore-building-suppression(int);
+    callback set-locale(bool);
 
     shortcut-scope := FocusScope {
       VerticalLayout {
@@ -182,23 +186,24 @@ export component AppWindow inherits Window {
                 padding-left: 22px;
                 padding-right: 18px;
                 spacing: 10px;
-                Text { text: "MC 校园复刻"; font-size: 22px; font-weight: 700; color: #17251f; vertical-alignment: center; }
+                Text { text: root.english ? "MC Campus Reconstruction" : "MC 校园复刻"; font-size: 22px; font-weight: 700; color: #17251f; vertical-alignment: center; }
                 Rectangle { width: 1px; height: 30px; background: #b7ad9a; }
                 Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.save-status; color: root.save-status == "保存失败" ? #a54836 : #4c665b; vertical-alignment: center; }
+                Text { text: root.save-status; color: root.save-status == "保存失败" || root.save-status == "Save failed" ? #a54836 : #4c665b; vertical-alignment: center; }
                 if root.tool-status != "" : Text {
                     text: root.tool-status;
                     color: #617068;
                     vertical-alignment: center;
                 }
-                Button { text: "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
-                Button { text: "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
-                Button { text: "地图设置"; clicked => { root.settings-visible = true; } }
-                Button { text: "关于"; clicked => { root.about-visible = true; } }
-                Button { text: "打开"; clicked => { root.open-project(); } }
-                Button { text: "另存为"; clicked => { root.save-project-as(); } }
-                Button { text: "保存"; clicked => { root.save-project(); } }
+                Button { text: root.english ? "中文" : "EN"; clicked => { root.set-locale(!root.english); } }
+                Button { text: root.english ? "Undo" : "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
+                Button { text: root.english ? "Redo" : "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
+                Button { text: root.english ? "Map settings" : "地图设置"; clicked => { root.settings-visible = true; } }
+                Button { text: root.english ? "About" : "关于"; clicked => { root.about-visible = true; } }
+                Button { text: root.english ? "Open" : "打开"; clicked => { root.open-project(); } }
+                Button { text: root.english ? "Save as" : "另存为"; clicked => { root.save-project-as(); } }
+                Button { text: root.english ? "Save" : "保存"; clicked => { root.save-project(); } }
             }
         }
         Rectangle { height: 2px; background: #23362e; }
@@ -211,13 +216,13 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 20px;
                     spacing: 10px;
-                    SectionLabel { text: "工作模式"; }
-                    Button { text: "地基与校区"; enabled: root.detailed-active; clicked => { root.switch-mode(false); } }
-                    Button { text: "精细建筑"; enabled: !root.detailed-active; clicked => { root.switch-mode(true); } }
+                    SectionLabel { text: root.english ? "WORK MODE" : "工作模式"; }
+                    Button { text: root.english ? "Foundation & Campus" : "地基与校区"; enabled: root.detailed-active; clicked => { root.switch-mode(false); } }
+                    Button { text: root.english ? "Detailed Building" : "精细建筑"; enabled: !root.detailed-active; clicked => { root.switch-mode(true); } }
                     Rule {}
                     if !root.detailed-active : VerticalLayout {
                         spacing: 5px;
-                        SectionLabel { text: "工作步骤"; }
+                        SectionLabel { text: root.english ? "WORKFLOW" : "工作步骤"; }
                         for label[index] in root.step-labels: Button {
                             text: (index + 1) + ". " + label;
                             enabled: root.active-step != index;
@@ -226,7 +231,7 @@ export component AppWindow inherits Window {
                     }
                     if root.detailed-active : VerticalLayout {
                         spacing: 8px;
-                        SectionLabel { text: "建筑清单"; }
+                        SectionLabel { text: root.english ? "BUILDING QUEUE" : "建筑清单"; }
                         Text { text: root.project-summary; color: #506058; wrap: word-wrap; }
                     }
                     Rectangle { vertical-stretch: 1; background: transparent; }
@@ -239,7 +244,7 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 28px;
                     spacing: 14px;
-                    SectionLabel { text: root.detailed-active ? "精细建筑" : "地基与校区"; }
+                    SectionLabel { text: root.detailed-active ? (root.english ? "DETAILED BUILDING" : "精细建筑") : (root.english ? "FOUNDATION & CAMPUS" : "地基与校区"); }
                     Text { text: root.page-title; font-size: 28px; font-weight: 700; color: #17251f; }
                     Text { text: root.page-help; font-size: 15px; color: #5b665f; wrap: word-wrap; }
                     Rule {}
@@ -252,11 +257,11 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             padding: 20px;
                             spacing: 10px;
-                            SectionLabel { text: "本地项目"; }
-                            LineEdit { text <=> root.project-name; placeholder-text: "项目名称"; }
-                            LineEdit { text <=> root.campus-name; placeholder-text: "学校与校区"; }
-                            Button { text: "在高德中选择校区"; clicked => { root.open-map(); } }
-                            Button { text: "创建本地项目"; clicked => { root.create-project(root.project-name, root.campus-name); } }
+                            SectionLabel { text: root.english ? "LOCAL PROJECT" : "本地项目"; }
+                            LineEdit { text <=> root.project-name; placeholder-text: root.english ? "Project name" : "项目名称"; }
+                            LineEdit { text <=> root.campus-name; placeholder-text: root.english ? "School and campus" : "学校与校区"; }
+                            Button { text: root.english ? "Choose campus in Gaode" : "在高德中选择校区"; clicked => { root.open-map(); } }
+                            Button { text: root.english ? "Create local project" : "创建本地项目"; clicked => { root.create-project(root.project-name, root.campus-name); } }
                         }
                     }
 
@@ -268,21 +273,21 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             padding: 20px;
                             spacing: 14px;
-                            SectionLabel { text: "坐标转换"; }
+                            SectionLabel { text: root.english ? "COORDINATE TRANSFORM" : "坐标转换"; }
                             HorizontalLayout {
                                 spacing: 12px;
-                                Text { text: "校园主轴"; width: 90px; vertical-alignment: center; }
+                                Text { text: root.english ? "Campus axis" : "校园主轴"; width: 90px; vertical-alignment: center; }
                                 Slider { value <=> root.orientation-degrees; minimum: -180; maximum: 180; }
                                 Text { text: round(root.orientation-degrees) + "°"; width: 60px; vertical-alignment: center; }
                             }
                             HorizontalLayout {
                                 spacing: 12px;
-                                Text { text: "方块 / 米"; width: 90px; vertical-alignment: center; }
+                                Text { text: root.english ? "Blocks / m" : "方块 / 米"; width: 90px; vertical-alignment: center; }
                                 Slider { value <=> root.blocks-per-meter; minimum: 0.25; maximum: 4; }
                                 Text { text: round(root.blocks-per-meter * 100) / 100; width: 60px; vertical-alignment: center; }
                             }
                             Button {
-                                text: "应用朝向与比例";
+                                text: root.english ? "Apply orientation and scale" : "应用朝向与比例";
                                 clicked => { root.set-foundation-metrics(root.orientation-degrees, root.blocks-per-meter); }
                             }
                         }
@@ -294,11 +299,11 @@ export component AppWindow inherits Window {
                             Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Button {
-                                text: "手绘当前类型";
+                                text: root.english ? "Draw current type" : "手绘当前类型";
                                 enabled: root.active-step > 2;
                                 clicked => { root.draw-foundation-feature(); }
                             }
-                            Button { text: "在地图中编辑"; clicked => { root.open-map(); } }
+                            Button { text: root.english ? "Edit on map" : "在地图中编辑"; clicked => { root.open-map(); } }
                         }
                         HorizontalLayout {
                             spacing: 8px;
@@ -310,11 +315,12 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            Button { text: "批量拒绝"; clicked => { root.review-visible-candidates(false); } }
-                            Button { text: "批量接受"; clicked => { root.review-visible-candidates(true); } }
+                            Button { text: root.english ? "Reject visible" : "批量拒绝"; clicked => { root.review-visible-candidates(false); } }
+                            Button { text: root.english ? "Accept visible" : "批量接受"; clicked => { root.review-visible-candidates(true); } }
                         }
                         for candidate in root.candidates: CandidateItem {
                             candidate: candidate;
+                            english: root.english;
                             decide(id, accepted) => { root.review-candidate(id, accepted); }
                             reset(id) => { root.reset-candidate-review(id); }
                             inspect(id) => { root.open-candidate-details(id); }
@@ -325,14 +331,14 @@ export component AppWindow inherits Window {
                             border-color: #c7bca8;
                             border-width: 1px;
                             Text {
-                                text: "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
+                                text: root.english ? "No pending objects in this step. Open the map to query, draw, or capture the current view." : "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
                                 color: #68756e; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
                             }
                         }
                         HorizontalLayout {
                             spacing: 8px;
                             Button {
-                                text: "上一页";
+                                text: root.english ? "Previous" : "上一页";
                                 enabled: root.candidate-page > 0;
                                 clicked => { root.change-candidate-page(-1); }
                             }
@@ -342,7 +348,7 @@ export component AppWindow inherits Window {
                                 vertical-alignment: center;
                             }
                             Button {
-                                text: "下一页";
+                                text: root.english ? "Next" : "下一页";
                                 enabled: root.candidate-page + 1 < root.candidate-pages;
                                 clicked => { root.change-candidate-page(1); }
                             }
@@ -352,7 +358,7 @@ export component AppWindow inherits Window {
                     if !root.detailed-active && root.active-step == 8 : VerticalLayout {
                         spacing: 14px;
                         Text { text: root.project-summary; color: #33463d; }
-                        SectionLabel { text: "Foundation 样式预设"; }
+                        SectionLabel { text: root.english ? "FOUNDATION STYLE PRESET" : "Foundation 样式预设"; }
                         foundation-style-box := ComboBox {
                             model: root.foundation-styles;
                             current-index <=> root.selected-foundation-style;
@@ -360,21 +366,21 @@ export component AppWindow inherits Window {
                                 root.choose-foundation-style(foundation-style-box.current-index);
                             }
                         }
-                        Text { text: "å½“å‰æ ·å¼åŒ…ï¼š" + root.foundation-style-name; color: #506058; }
+                        Text { text: (root.english ? "Current style pack: " : "当前样式包：") + root.foundation-style-name; color: #506058; }
                         Button {
-                            text: "å¯¼å…¥è¿›é˜¶ JSON æ ·å¼åŒ…";
+                            text: root.english ? "Import advanced JSON style pack" : "导入进阶 JSON 样式包";
                             clicked => { root.import-foundation-style(); }
                         }
                         Button {
-                            text: "生成并打开 Foundation 原生预览";
+                            text: root.english ? "Generate and open native Foundation preview" : "生成并打开 Foundation 原生预览";
                             clicked => { root.preview-foundation(); }
                         }
-                        Button { text: "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
+                        Button { text: root.english ? "Export Foundation project and .schem" : "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
                     }
 
                     if root.detailed-active : VerticalLayout {
                         spacing: 12px;
-                        SectionLabel { text: "目标建筑"; }
+                        SectionLabel { text: root.english ? "TARGET BUILDING" : "目标建筑"; }
                         slot-box := ComboBox {
                             model: root.building-slots;
                             current-index <=> root.selected-slot;
@@ -382,15 +388,15 @@ export component AppWindow inherits Window {
                         }
                         HorizontalLayout {
                             spacing: 10px;
-                            LineEdit { text <=> root.measured-height; placeholder-text: "实测高度（米）"; }
-                            LineEdit { text <=> root.measured-floors; placeholder-text: "实测楼层"; }
-                            LineEdit { text <=> root.measured-roof; placeholder-text: "屋顶形状（flat/gabled/hipped）"; }
+                            LineEdit { text <=> root.measured-height; placeholder-text: root.english ? "Measured height (m)" : "实测高度（米）"; }
+                            LineEdit { text <=> root.measured-floors; placeholder-text: root.english ? "Measured floors" : "实测楼层"; }
+                            LineEdit { text <=> root.measured-roof; placeholder-text: root.english ? "Roof (flat/gabled/hipped)" : "屋顶形状（flat/gabled/hipped）"; }
                             Button {
-                                text: "保存实测值";
+                                text: root.english ? "Save measurements" : "保存实测值";
                                 clicked => { root.update-building-measurements(root.measured-height, root.measured-floors, root.measured-roof); }
                             }
                         }
-                        SectionLabel { text: "Arnis 外观预设"; }
+                        SectionLabel { text: root.english ? "ARNIS APPEARANCE PRESET" : "Arnis 外观预设"; }
                         style-box := ComboBox {
                             model: root.arnis-styles;
                             current-index <=> root.selected-style;
@@ -398,17 +404,17 @@ export component AppWindow inherits Window {
                         }
                         HorizontalLayout {
                             spacing: 12px;
-                            Text { text: "窗户密度"; width: 90px; vertical-alignment: center; }
+                            Text { text: root.english ? "Window density" : "窗户密度"; width: 110px; vertical-alignment: center; }
                             Slider { value <=> root.window-density; minimum: 0; maximum: 100; }
                             Text { text: round(root.window-density) + "%"; width: 48px; vertical-alignment: center; }
                         }
                         HorizontalLayout {
                             spacing: 12px;
-                            Text { text: "墙面层次"; width: 90px; vertical-alignment: center; }
+                            Text { text: root.english ? "Wall depth" : "墙面层次"; width: 110px; vertical-alignment: center; }
                             Slider { value <=> root.wall-depth; minimum: 0; maximum: 100; }
                             Text { text: round(root.wall-depth) + "%"; width: 48px; vertical-alignment: center; }
                         }
-                        Button { text: "生成并打开原生预览"; clicked => { root.generate-building(); } }
+                        Button { text: root.english ? "Generate and open native preview" : "生成并打开原生预览"; clicked => { root.generate-building(); } }
                         HorizontalLayout {
                             Text {
                                 text: root.refinement-summary;
@@ -417,18 +423,18 @@ export component AppWindow inherits Window {
                             }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
                             Button {
-                                text: "确认此版本";
+                                text: root.english ? "Confirm this version" : "确认此版本";
                                 enabled: root.can-confirm-refinement;
                                 clicked => { root.confirm-refinement(); }
                             }
                         }
                         Button {
-                            text: "证据与识别特征";
+                            text: root.english ? "Evidence and semantic features" : "证据与识别特征";
                             clicked => { root.evidence-visible = true; }
                         }
-                        Button { text: "打开上次生成的预览"; clicked => { root.open-preview(); } }
+                        Button { text: root.english ? "Open latest preview" : "打开上次生成的预览"; clicked => { root.open-preview(); } }
                         Text {
-                            text: "预览选择：" + root.selected-block-summary;
+                            text: (root.english ? "Preview selection: " : "预览选择：") + root.selected-block-summary;
                             color: #506058;
                             wrap: word-wrap;
                         }
@@ -436,25 +442,25 @@ export component AppWindow inherits Window {
                             spacing: 10px;
                             LineEdit {
                                 text <=> root.selected-block-target;
-                                placeholder-text: "选中方块的新 ID";
+                                placeholder-text: root.english ? "New ID for selected block" : "选中方块的新 ID";
                             }
                             Button {
-                                text: "替换选中方块";
+                                text: root.english ? "Replace selected block" : "替换选中方块";
                                 clicked => { root.replace-selected-block(root.selected-block-target); }
                             }
                         }
-                        SectionLabel { text: "批量方块替换"; }
+                        SectionLabel { text: root.english ? "BATCH BLOCK REPLACEMENT" : "批量方块替换"; }
                         Text { text: root.palette-summary; color: #506058; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 10px;
-                            LineEdit { text <=> root.replace-source; placeholder-text: "原方块，例如 minecraft:bricks"; }
-                            LineEdit { text <=> root.replace-target; placeholder-text: "新方块，例如 minecraft:white_concrete"; }
+                            LineEdit { text <=> root.replace-source; placeholder-text: root.english ? "Source, e.g. minecraft:bricks" : "原方块，例如 minecraft:bricks"; }
+                            LineEdit { text <=> root.replace-target; placeholder-text: root.english ? "Target, e.g. minecraft:white_concrete" : "新方块，例如 minecraft:white_concrete"; }
                             Button {
-                                text: "全部替换";
+                                text: root.english ? "Replace all" : "全部替换";
                                 clicked => { root.replace-generated-block(root.replace-source, root.replace-target); }
                             }
                         }
-                        Button { text: "导出当前精细建筑 .schem"; clicked => { root.export-building(); } }
+                        Button { text: root.english ? "Export detailed building .schem" : "导出当前精细建筑 .schem"; clicked => { root.export-building(); } }
                     }
 
                     Rectangle { vertical-stretch: 1; background: transparent; }
@@ -484,16 +490,16 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding: 24px;
             spacing: 12px;
-            SectionLabel { text: "高德地图服务"; }
-            Text { text: "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
+            SectionLabel { text: root.english ? "GAODE MAP SERVICE" : "高德地图服务"; }
+            Text { text: root.english ? "Credentials are stored only in Windows Credential Manager, never in projects or the repository." : "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
             LineEdit { text <=> root.gaode-key; placeholder-text: "Web JS API Key"; }
-            LineEdit { text <=> root.gaode-security; placeholder-text: "安全密钥 Security JS Code"; }
+            LineEdit { text <=> root.gaode-security; placeholder-text: root.english ? "Security JS Code" : "安全密钥 Security JS Code"; }
             Rectangle { vertical-stretch: 1; background: transparent; }
             HorizontalLayout {
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Button { text: "取消"; clicked => { root.settings-visible = false; } }
+                Button { text: root.english ? "Cancel" : "取消"; clicked => { root.settings-visible = false; } }
                 Button {
-                    text: "安全保存";
+                    text: root.english ? "Save securely" : "安全保存";
                     clicked => {
                         root.save-map-settings(root.gaode-key, root.gaode-security);
                         root.settings-visible = false;
@@ -516,11 +522,11 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding: 24px;
             spacing: 12px;
-            SectionLabel { text: "关于 Campus Reconstruction Tool"; }
-            Text { text: "V1 · 原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
+            SectionLabel { text: root.english ? "ABOUT CAMPUS RECONSTRUCTION TOOL" : "关于 Campus Reconstruction Tool"; }
+            Text { text: root.english ? "V1 · Native Slint / Rust campus reconstruction workbench" : "V1 · 原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
             AboutSlint {}
             Rectangle { vertical-stretch: 1; background: transparent; }
-            Button { text: "关闭"; clicked => { root.about-visible = false; } }
+            Button { text: root.english ? "Close" : "关闭"; clicked => { root.about-visible = false; } }
         }
     }
 
@@ -538,33 +544,33 @@ export component AppWindow inherits Window {
             padding: 24px;
             spacing: 12px;
             HorizontalLayout {
-                SectionLabel { text: "Detailed 证据与识别特征"; }
+                SectionLabel { text: root.english ? "DETAILED EVIDENCE & SEMANTICS" : "Detailed 证据与识别特征"; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Button { text: "关闭"; clicked => { root.evidence-visible = false; } }
+                Button { text: root.english ? "Close" : "关闭"; clicked => { root.evidence-visible = false; } }
             }
             Rule {}
             ScrollView {
                 VerticalLayout {
                     padding-right: 12px;
                     spacing: 12px;
-                    SectionLabel { text: "观测建筑证据"; }
+                    SectionLabel { text: root.english ? "OBSERVED BUILDING EVIDENCE" : "观测建筑证据"; }
                     Text {
                         text: root.observed-evidence-summary;
                         color: #33463d;
                         wrap: word-wrap;
                     }
                     Button {
-                        text: "打开高德 3D 与已审核轮廓对照";
+                        text: root.english ? "Compare Gaode 3D with reviewed footprint" : "打开高德 3D 与已审核轮廓对照";
                         clicked => { root.open-detailed-map(); }
                     }
-                    SectionLabel { text: "生成建筑解释"; }
+                    SectionLabel { text: root.english ? "GENERATED INTERPRETATION" : "生成建筑解释"; }
                     Text {
                         text: root.generated-interpretation-summary;
                         color: #33463d;
                         wrap: word-wrap;
                     }
                     Rule {}
-                    SectionLabel { text: "外部 3D 模型许可审核"; }
+                    SectionLabel { text: root.english ? "EXTERNAL 3D MODEL LICENSE REVIEW" : "外部 3D 模型许可审核"; }
                     external-model-box := ComboBox {
                         model: root.external-models;
                         current-index <=> root.selected-external-model;
@@ -583,10 +589,10 @@ export component AppWindow inherits Window {
                     }
                     LineEdit {
                         text <=> root.external-model-reason;
-                        placeholder-text: "外部模型审核理由";
+                        placeholder-text: root.english ? "External model review reason" : "外部模型审核理由";
                     }
                     Button {
-                        text: "保存外部模型审核";
+                        text: root.english ? "Save external model review" : "保存外部模型审核";
                         clicked => {
                             root.review-external-model(
                                 root.selected-external-model,
@@ -595,7 +601,7 @@ export component AppWindow inherits Window {
                             );
                         }
                     }
-                    SectionLabel { text: "来源冲突审核"; }
+                    SectionLabel { text: root.english ? "SOURCE CONFLICT REVIEW" : "来源冲突审核"; }
                     source-conflict-box := ComboBox {
                         model: root.source-conflicts;
                         current-index <=> root.selected-source-conflict;
@@ -614,10 +620,10 @@ export component AppWindow inherits Window {
                     }
                     LineEdit {
                         text <=> root.source-conflict-reason;
-                        placeholder-text: "来源冲突决策理由";
+                        placeholder-text: root.english ? "Source conflict decision reason" : "来源冲突决策理由";
                     }
                     Button {
-                        text: "保存来源冲突决策";
+                        text: root.english ? "Save source conflict decision" : "保存来源冲突决策";
                         clicked => {
                             root.review-source-conflict(
                                 root.selected-source-conflict,
@@ -627,9 +633,9 @@ export component AppWindow inherits Window {
                         }
                     }
                     Rule {}
-                    SectionLabel { text: "语义特征保留"; }
+                    SectionLabel { text: root.english ? "SEMANTIC FEATURE PRESERVATION" : "语义特征保留"; }
                     Text {
-                        text: "标注入口、窗带、屋脊、檐口或框架；规则只增强局部可识别性，不改变建筑包络。";
+                        text: root.english ? "Mark entrances, window bands, ridges, eaves, or frames. Rules improve local identity without changing the envelope." : "标注入口、窗带、屋脊、檐口或框架；规则只增强局部可识别性，不改变建筑包络。";
                         color: #506058;
                         wrap: word-wrap;
                     }
@@ -654,11 +660,11 @@ export component AppWindow inherits Window {
                     }
                     LineEdit {
                         text <=> root.semantic-feature-label;
-                        placeholder-text: "特征名称，例如：图书馆南门";
+                        placeholder-text: root.english ? "Feature name, e.g. Library south entrance" : "特征名称，例如：图书馆南门";
                     }
                     LineEdit {
                         text <=> root.semantic-feature-reason;
-                        placeholder-text: "证据理由，例如：高德 3D 与现场照片均可见";
+                        placeholder-text: root.english ? "Evidence reason, e.g. visible in Gaode 3D and photos" : "证据理由，例如：高德 3D 与现场照片均可见";
                     }
                     Text {
                         text: root.semantic-feature-summary;
@@ -666,7 +672,7 @@ export component AppWindow inherits Window {
                         wrap: word-wrap;
                     }
                     Button {
-                        text: "应用到当前 refinement";
+                        text: root.english ? "Apply to current refinement" : "应用到当前 refinement";
                         clicked => {
                             root.apply-semantic-feature(
                                 root.selected-semantic-kind,
@@ -697,9 +703,9 @@ export component AppWindow inherits Window {
             padding: 24px;
             spacing: 12px;
             HorizontalLayout {
-                SectionLabel { text: "候选来源与建筑目录"; }
+                SectionLabel { text: root.english ? "CANDIDATE SOURCE & BUILDING DIRECTORY" : "候选来源与建筑目录"; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Button { text: "关闭"; clicked => { root.candidate-details-visible = false; } }
+                Button { text: root.english ? "Close" : "关闭"; clicked => { root.candidate-details-visible = false; } }
             }
             Text {
                 text: root.selected-candidate-name;
@@ -716,29 +722,29 @@ export component AppWindow inherits Window {
                 spacing: 8px;
                 LineEdit {
                     text <=> root.candidate-name-draft;
-                    placeholder-text: "审核后的建筑名称";
+                    placeholder-text: root.english ? "Reviewed building name" : "审核后的建筑名称";
                 }
                 Button {
-                    text: "保存建筑名称";
+                    text: root.english ? "Save building name" : "保存建筑名称";
                     clicked => { root.rename-selected-building(root.candidate-name-draft); }
                 }
                 LineEdit {
                     text <=> root.candidate-suppression-reason;
-                    placeholder-text: "抑制理由（错误对象、校外建筑等）";
+                    placeholder-text: root.english ? "Suppression reason (wrong object, off-campus, etc.)" : "抑制理由（错误对象、校外建筑等）";
                 }
                 Button {
-                    text: "持久抑制此建筑来源";
+                    text: root.english ? "Persistently suppress this source" : "持久抑制此建筑来源";
                     clicked => { root.suppress-selected-building(root.candidate-suppression-reason); }
                 }
             }
             Rule {}
-            SectionLabel { text: "可恢复的建筑抑制"; }
+            SectionLabel { text: root.english ? "RECOVERABLE BUILDING SUPPRESSIONS" : "可恢复的建筑抑制"; }
             suppression-box := ComboBox {
                 model: root.building-suppressions;
                 current-index <=> root.selected-building-suppression;
             }
             Button {
-                text: "恢复所选来源（下次查询重新出现）";
+                text: root.english ? "Restore selected source (returns on next query)" : "恢复所选来源（下次查询重新出现）";
                 enabled: root.building-suppressions.length > 0;
                 clicked => { root.restore-building-suppression(root.selected-building-suppression); }
             }

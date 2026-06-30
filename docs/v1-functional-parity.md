@@ -10,7 +10,7 @@ block the atomic cutover required by ADR 0031.
 | Global | Create, open/import, save, and save-as portable projects | Slint toolbar callbacks; `DesktopApplicationState::{open,save_to}`; legacy V1 import test | Shipped |
 | Global | Atomic autosave, recovery copy, undo/redo, Ctrl+S/Z/Y | `campus-state`; top-level Slint key bindings; round-trip tests | Shipped |
 | Global | Gaode credentials in Windows Credential Manager | Map settings dialog and `keyring` Windows backend | Shipped |
-| Global | Chinese/English language selection | No native locale selector or translated projection | **Gap** |
+| Global | Chinese/English language selection | Header selector updates the Rust-owned `DesktopLocale`; Slint static copy, AppState projections, review models, status feedback, Gaode helper, and native-preview title switch together, while the preference persists outside portable project data | Shipped |
 | Foundation | Select a Campus Target using Gaode search/map evidence | The isolated Gaode helper provides POI search, result preview, and explicit confirmation; the project persists POI identity plus GCJ-02/WGS-84 lineage and reopens at the confirmed view | Shipped |
 | Foundation | Draw, clear, save, and resume Campus Boundary | `campus-map` drawing toolbar; typed boundary event; autosaved project polygon | Shipped |
 | Foundation | Review Campus Orientation and Campus Scale | Native orientation/scale controls persist project-wide values | Shipped |
