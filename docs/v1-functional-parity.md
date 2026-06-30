@@ -36,7 +36,7 @@ block the atomic cutover required by ADR 0031.
 | Detailed | Confirmed, versioned Building Slot refinements | Every generation creates a retained versioned draft; explicit confirmation archives the prior confirmed version and marks the slot refined | Shipped |
 | Detailed | Export the edited Detailed building schematic | Native Detailed export action | Shipped |
 | Packaging | Separate supervised map/preview processes with authenticated named-pipe IPC | Integration tests for both helper processes | Shipped |
-| Packaging | Installer, uninstall registration, recovery/offline operation, and <50 MB size | NSIS script and size gate exist; interactive install/uninstall and extended offline run remain unrecorded | **Partial** |
+| Packaging | Installer, uninstall registration, recovery/offline operation, and <50 MB size | Real per-user install/uninstall passed; installed payload and registry were verified; the installed binary completed 3 offline cycles (57 Arnis generations), all 4 Foundation packs, five feature kinds, schematic exports, and corrupt-primary recovery; final installer is 6.17 MB | Shipped |
 
 ## Explicitly outside V1 parity
 

@@ -522,7 +522,13 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_page_help(help.into());
     ui.set_primary_label(primary.into());
     ui.set_save_status(
-        if state.dirty {
+        if state.last_error.is_some() {
+            tr(
+                locale,
+                "已从恢复副本打开，请保存修复主文件",
+                "Recovered from backup; save to repair the primary file",
+            )
+        } else if state.dirty {
             tr(locale, "待保存", "Unsaved changes")
         } else {
             tr(locale, "已保存", "Saved")
@@ -2115,7 +2121,252 @@ impl Drop for ToolSupervisor {
     }
 }
 
+fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable_dir = executable
+        .parent()
+        .ok_or("executable has no parent directory")?;
+    for helper in ["campus-map.exe", "campus-preview.exe"] {
+        if !executable_dir.join(helper).is_file() {
+            return Err(format!("installed helper is missing: {helper}"));
+        }
+    }
+
+    let random: u128 = rand::rng().random();
+    let temp = std::env::temp_dir().join(format!("campus-v1-self-test-{random:032x}"));
+    std::fs::create_dir_all(&temp).map_err(|error| error.to_string())?;
+    let result = (|| {
+        let mut state = DesktopApplicationState::default();
+        state.new_project("V1 self-test", "华东师范大学普陀校区");
+        state.mutate_project(|project| {
+            project.boundary = vec![
+                GeoPoint {
+                    lng: 121.4000,
+                    lat: 31.2300,
+                },
+                GeoPoint {
+                    lng: 121.4003,
+                    lat: 31.2300,
+                },
+                GeoPoint {
+                    lng: 121.4003,
+                    lat: 31.2297,
+                },
+                GeoPoint {
+                    lng: 121.4000,
+                    lat: 31.2297,
+                },
+            ];
+            let building = project
+                .add_manual_feature(FeatureKind::Building, project.boundary.clone())
+                .expect("self-test building geometry");
+            project
+                .add_manual_feature(
+                    FeatureKind::Road,
+                    vec![
+                        GeoPoint {
+                            lng: 121.4000,
+                            lat: 31.22985,
+                        },
+                        GeoPoint {
+                            lng: 121.4003,
+                            lat: 31.22985,
+                        },
+                    ],
+                )
+                .expect("self-test road geometry");
+            for (kind, west, east, south, north) in [
+                (FeatureKind::Water, 121.40003, 121.40010, 31.22973, 31.22980),
+                (
+                    FeatureKind::Vegetation,
+                    121.40012,
+                    121.40021,
+                    31.22973,
+                    31.22982,
+                ),
+                (
+                    FeatureKind::Sports,
+                    121.40022,
+                    121.40029,
+                    31.22973,
+                    31.22982,
+                ),
+            ] {
+                project
+                    .add_manual_feature(
+                        kind,
+                        vec![
+                            GeoPoint {
+                                lng: west,
+                                lat: north,
+                            },
+                            GeoPoint {
+                                lng: east,
+                                lat: north,
+                            },
+                            GeoPoint {
+                                lng: east,
+                                lat: south,
+                            },
+                            GeoPoint {
+                                lng: west,
+                                lat: south,
+                            },
+                        ],
+                    )
+                    .expect("self-test area geometry");
+            }
+            project.detailed.selected_slot_id = Some(building);
+            if let Some(slot) = project.building_slots.first_mut() {
+                slot.height_m = Some(18.0);
+                slot.floors = Some(5);
+                slot.roof_shape = Some("flat".into());
+            }
+        });
+
+        let project_path = temp.join("self-test.campus.json");
+        state.save_to(&project_path)?;
+        state.mutate_project(|project| project.name = "V1 self-test second save".into());
+        state.save()?;
+        std::fs::write(&project_path, b"{corrupt").map_err(|error| error.to_string())?;
+        let mut recovered = DesktopApplicationState::default();
+        recovered.open(&project_path)?;
+        if !recovered.dirty || recovered.project.is_none() {
+            return Err("project recovery did not activate".into());
+        }
+        recovered.save()?;
+
+        for preset in FoundationStylePreset::ALL {
+            recovered
+                .project
+                .as_mut()
+                .expect("recovered project")
+                .apply_foundation_style(preset);
+            let model =
+                campus_export::foundation_model(recovered.project.as_ref().expect("project"))?;
+            if !model.blocks.iter().any(|block| *block != 0) {
+                return Err(format!("Foundation preset {:?} produced no blocks", preset));
+            }
+        }
+        let foundation_model =
+            campus_export::foundation_model(recovered.project.as_ref().expect("project"))?;
+        let foundation_path = temp.join("foundation.schem");
+        campus_export::write_schematic(
+            &foundation_path,
+            "self-test-foundation",
+            &foundation_model,
+        )?;
+
+        let shared = Rc::new(RefCell::new(recovered));
+        let cycles = cycles.clamp(1, 20);
+        let mut generated_count = 0usize;
+        let mut generated_paths = Vec::new();
+        for _ in 0..cycles {
+            for preset in ArnisStylePreset::ALL {
+                shared
+                    .borrow_mut()
+                    .mutate_project(|project| project.detailed.style_preset = preset);
+                let (path, _) = generate_detailed_model(&shared)?;
+                let generated: arnis_core::GeneratedBuilding = serde_json::from_slice(
+                    &std::fs::read(&path).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+                if generated.report.non_air_blocks == 0 {
+                    return Err(format!("Arnis preset {:?} produced no blocks", preset));
+                }
+                generated_paths.push(path);
+                generated_count += 1;
+            }
+        }
+        let generated_path = shared
+            .borrow()
+            .project
+            .as_ref()
+            .and_then(|project| project.detailed.generated_path.clone())
+            .ok_or("self-test detailed output missing")?;
+        let generated: arnis_core::GeneratedBuilding = serde_json::from_slice(
+            &std::fs::read(&generated_path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let detailed_model = campus_export::model_from_runs(
+            generated.width,
+            generated.height,
+            generated.length,
+            generated.palette,
+            generated
+                .block_runs
+                .into_iter()
+                .map(|run| (run.palette_index, run.run_length)),
+        )?;
+        let detailed_path = temp.join("detailed.schem");
+        campus_export::write_schematic(&detailed_path, "self-test-detailed", &detailed_model)?;
+        if std::fs::metadata(&foundation_path)
+            .map_err(|error| error.to_string())?
+            .len()
+            < 64
+            || std::fs::metadata(&detailed_path)
+                .map_err(|error| error.to_string())?
+                .len()
+                < 64
+        {
+            return Err("self-test schematic output is unexpectedly small".into());
+        }
+        for path in generated_paths {
+            let _ = std::fs::remove_file(path);
+        }
+        Ok(serde_json::json!({
+            "status": "pass",
+            "offline": true,
+            "recovery": true,
+            "campus": "华东师范大学普陀校区",
+            "featureKinds": 5,
+            "foundationPresets": FoundationStylePreset::ALL.len(),
+            "arnisGenerations": generated_count,
+            "helpers": ["campus-map.exe", "campus-preview.exe"]
+        }))
+    })();
+    let _ = std::fs::remove_dir_all(&temp);
+    result
+}
+
 fn main() -> Result<(), slint::PlatformError> {
+    let arguments = std::env::args().collect::<Vec<_>>();
+    if arguments.iter().any(|argument| argument == "--self-test") {
+        let cycles = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--cycles")
+            .and_then(|pair| pair[1].parse::<usize>().ok())
+            .unwrap_or(1);
+        let report_path = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--self-test-report")
+            .map(|pair| PathBuf::from(&pair[1]));
+        match run_self_test(cycles) {
+            Ok(report) => {
+                if let Some(path) = report_path {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap_or_default())
+                        .is_err()
+                    {
+                        std::process::exit(2);
+                    }
+                }
+                std::process::exit(0);
+            }
+            Err(error) => {
+                if let Some(path) = report_path {
+                    let report = serde_json::json!({"status": "fail", "error": error});
+                    let _ = std::fs::write(
+                        path,
+                        serde_json::to_vec_pretty(&report).unwrap_or_default(),
+                    );
+                }
+                std::process::exit(1);
+            }
+        }
+    }
     let ui = AppWindow::new()?;
     ui.set_step_labels(ModelRc::new(VecModel::from(
         FoundationStep::ALL

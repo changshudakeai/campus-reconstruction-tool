@@ -1866,40 +1866,33 @@ impl DesktopApplicationState {
 
     pub fn open(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
-        let bytes = fs::read(path).map_err(|error| error.to_string())?;
-        let native_style_pack_missing = serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .is_some_and(|value| {
-                value
-                    .get("schemaVersion")
-                    .and_then(|version| version.as_u64())
-                    .is_some()
-                    && value.get("foundationStylePack").is_none()
-            });
-        let mut project = match serde_json::from_slice::<CampusProject>(&bytes) {
-            Ok(project) => project,
-            Err(native_error) => {
-                let value: serde_json::Value =
-                    serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-                legacy_project_from_value(&value).map_err(|legacy_error| {
-                    format!("无法读取项目；原生格式：{native_error}；旧版格式：{legacy_error}")
-                })?
+        let primary = fs::read(path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| decode_project(&bytes));
+        let (project, recovered) = match primary {
+            Ok(project) => (project, false),
+            Err(primary_error) => {
+                let recovery = path.with_extension("campus.recovery.json");
+                let project = fs::read(&recovery)
+                    .map_err(|recovery_error| {
+                        format!(
+                            "项目与恢复副本均不可读；主文件：{primary_error}；恢复副本：{recovery_error}"
+                        )
+                    })
+                    .and_then(|bytes| {
+                        decode_project(&bytes).map_err(|recovery_error| {
+                            format!(
+                                "项目与恢复副本均无效；主文件：{primary_error}；恢复副本：{recovery_error}"
+                            )
+                        })
+                    })?;
+                (project, true)
             }
         };
-        if native_style_pack_missing {
-            project.foundation_style_pack =
-                FoundationStylePack::from_preset(project.foundation_style_preset);
-        }
-        if project.schema_version > PROJECT_SCHEMA_VERSION {
-            return Err(format!(
-                "Project schema {} is newer than supported schema {}",
-                project.schema_version, PROJECT_SCHEMA_VERSION
-            ));
-        }
         self.project = Some(project);
         self.project_path = Some(path.to_path_buf());
-        self.dirty = false;
-        self.last_error = None;
+        self.dirty = recovered;
+        self.last_error = recovered.then(|| "已从项目恢复副本打开；请保存以修复主文件".into());
         self.candidate_filter = CandidateConfidenceFilter::All;
         self.candidate_page = 0;
         self.tool_status = None;
@@ -1913,6 +1906,39 @@ impl DesktopApplicationState {
         self.redo_stack.clear();
         Ok(())
     }
+}
+
+fn decode_project(bytes: &[u8]) -> Result<CampusProject, String> {
+    let native_style_pack_missing = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("schemaVersion")
+                .and_then(|version| version.as_u64())
+                .is_some()
+                && value.get("foundationStylePack").is_none()
+        });
+    let mut project = match serde_json::from_slice::<CampusProject>(bytes) {
+        Ok(project) => project,
+        Err(native_error) => {
+            let value: serde_json::Value =
+                serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+            legacy_project_from_value(&value).map_err(|legacy_error| {
+                format!("无法读取项目；原生格式：{native_error}；旧版格式：{legacy_error}")
+            })?
+        }
+    };
+    if native_style_pack_missing {
+        project.foundation_style_pack =
+            FoundationStylePack::from_preset(project.foundation_style_preset);
+    }
+    if project.schema_version > PROJECT_SCHEMA_VERSION {
+        return Err(format!(
+            "Project schema {} is newer than supported schema {}",
+            project.schema_version, PROJECT_SCHEMA_VERSION
+        ));
+    }
+    Ok(project)
 }
 
 fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject, String> {
@@ -2220,6 +2246,27 @@ mod tests {
         assert_eq!(project.detailed.style_preset, ArnisStylePreset::Historic);
         assert_eq!(project.campus_target.as_ref().unwrap().poi_id, "B00155ABC");
         assert!(!restored.dirty);
+    }
+
+    #[test]
+    fn corrupt_primary_project_recovers_previous_atomic_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("recovery.campus.json");
+        let mut state = DesktopApplicationState::default();
+        state.new_project("first", "campus");
+        state.save_to(&path).unwrap();
+        state.mutate_project(|project| project.name = "second".into());
+        state.save().unwrap();
+        std::fs::write(&path, b"{corrupt").unwrap();
+
+        let mut restored = DesktopApplicationState::default();
+        restored.open(&path).unwrap();
+        assert_eq!(restored.project.as_ref().unwrap().name, "first");
+        assert!(restored.dirty);
+        assert!(restored
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("恢复副本")));
     }
 
     #[test]
