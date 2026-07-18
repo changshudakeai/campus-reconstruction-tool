@@ -5,6 +5,9 @@
 #[allow(dead_code)]
 mod bresenham;
 pub mod deterministic_rng;
+mod foundation_tracer;
+
+pub use foundation_tracer::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

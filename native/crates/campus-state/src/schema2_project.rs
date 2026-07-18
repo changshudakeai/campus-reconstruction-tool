@@ -248,10 +248,25 @@ impl FoundationReviewLedger {
         &self.entries
     }
 
-    pub fn is_complete(&self) -> bool {
-        FoundationCategory::ALL
-            .into_iter()
-            .all(|category| self.disposition(category).is_some())
+    fn disposition_for_evidence(
+        &self,
+        category: FoundationCategory,
+        evidence_result_sha256: &str,
+    ) -> Option<&FoundationReviewDisposition> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.category == category && entry.evidence_result_sha256 == evidence_result_sha256
+            })
+            .map(|entry| &entry.disposition)
+    }
+
+    fn is_complete_for_evidence(&self, evidence_result_sha256: &str) -> bool {
+        FoundationCategory::ALL.into_iter().all(|category| {
+            self.disposition_for_evidence(category, evidence_result_sha256)
+                .is_some()
+        })
     }
 }
 
@@ -435,10 +450,17 @@ impl Schema2Project {
             return FoundationResumePoint::Acquisition;
         }
         for category in FoundationCategory::ALL {
+            let evidence_sha = &self
+                .foundation
+                .acquisition
+                .as_ref()
+                .expect("acquisition was checked")
+                .manifest
+                .result_sha256;
             if self
                 .foundation
                 .review_ledger
-                .disposition(category)
+                .disposition_for_evidence(category, evidence_sha)
                 .is_none()
             {
                 return FoundationResumePoint::Review(category);
@@ -482,7 +504,6 @@ impl Schema2Project {
         self.mark_updated(actor)?;
         self.foundation.boundary = Some(evidence);
         self.foundation.acquisition = None;
-        self.foundation.review_ledger = FoundationReviewLedger::default();
         self.foundation.generated = None;
         self.foundation.exported = None;
         self.workflow.boundary = DurableTaskState::Confirmed;
@@ -522,7 +543,6 @@ impl Schema2Project {
         }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
-        self.foundation.review_ledger = FoundationReviewLedger::default();
         self.foundation.generated = None;
         self.foundation.exported = None;
         self.workflow.acquisition = DurableTaskState::Confirmed;
@@ -594,7 +614,15 @@ impl Schema2Project {
             });
         self.foundation.generated = None;
         self.foundation.exported = None;
-        self.workflow.review = if self.foundation.review_ledger.is_complete() {
+        self.workflow.review = if self.foundation.review_ledger.is_complete_for_evidence(
+            &self
+                .foundation
+                .acquisition
+                .as_ref()
+                .expect("acquisition remains pinned")
+                .manifest
+                .result_sha256,
+        ) {
             DurableTaskState::Confirmed
         } else {
             DurableTaskState::Pending
@@ -605,7 +633,19 @@ impl Schema2Project {
     }
 
     pub fn reviewed_projection(&self) -> Result<ReviewedFoundationProjection, String> {
-        if !self.foundation.review_ledger.is_complete() {
+        let evidence_sha = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pinned Foundation evidence is incomplete")?
+            .manifest
+            .result_sha256
+            .as_str();
+        if !self
+            .foundation
+            .review_ledger
+            .is_complete_for_evidence(evidence_sha)
+        {
             return Err("All five Foundation categories must be explicitly reviewed".into());
         }
         let evidence = self
@@ -613,7 +653,11 @@ impl Schema2Project {
             .ok_or("Pinned Foundation evidence is incomplete")?;
         let selected_ids = FoundationCategory::ALL
             .iter()
-            .filter_map(|category| self.foundation.review_ledger.disposition(*category))
+            .filter_map(|category| {
+                self.foundation
+                    .review_ledger
+                    .disposition_for_evidence(*category, evidence_sha)
+            })
             .filter_map(|disposition| match disposition {
                 FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
                     Some(evidence_ids.as_slice())

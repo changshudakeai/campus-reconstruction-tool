@@ -6,6 +6,7 @@ license = "Apache-2.0"
 description = "Vendored and adapted Arnis building data and generation core"
 
 [dependencies]
+campus-state = { path = "../../../native/crates/campus-state" }
 rand = "0.9.3"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }

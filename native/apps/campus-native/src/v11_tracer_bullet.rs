@@ -1,7 +1,7 @@
 #[cfg(debug_assertions)]
 use campus_export::{
-    foundation_model_from_schema2_reviewed, write_foundation_manifest, write_schematic,
-    FoundationManifest, FoundationManifestSchematic,
+    write_foundation_manifest, write_schematic, FoundationManifest, FoundationManifestSchematic,
+    VoxelModel,
 };
 #[cfg(debug_assertions)]
 use campus_services::acquisition::{
@@ -137,7 +137,14 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     pub fn generate_and_export(&self) -> Result<FixedDatasetTracerReport, String> {
         let mut library = self.open_library()?;
         let mut project = self.project()?;
-        let model = foundation_model_from_schema2_reviewed(&project.reviewed_projection()?)?;
+        let generated = arnis_core::generate_foundation(&project.reviewed_projection()?)?;
+        let model = VoxelModel {
+            width: generated.width,
+            height: generated.height,
+            length: generated.length,
+            palette: generated.palette,
+            blocks: generated.blocks,
+        };
         let non_air_blocks = model.blocks.iter().filter(|block| **block != 0).count();
         project.record_generation(
             model.width,

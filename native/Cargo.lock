@@ -148,6 +148,7 @@ dependencies = [
 name = "arnis-core"
 version = "2.9.0-campus.1"
 dependencies = [
+ "campus-state",
  "rand",
  "rand_chacha",
  "serde",
