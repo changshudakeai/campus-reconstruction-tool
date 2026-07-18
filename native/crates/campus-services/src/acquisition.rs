@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-#[cfg(debug_assertions)]
-use std::io::Write;
 
-use flate2::read::GzDecoder;
 #[cfg(debug_assertions)]
-use flate2::{Compression, GzBuilder};
+use base64::Engine;
+use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
@@ -292,14 +290,71 @@ pub enum AttributeDerivation {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AttributeProvenance {
-    pub attribute: String,
-    pub value: serde_json::Value,
-    pub source_observation_id: String,
-    pub original_value: serde_json::Value,
-    pub unit: String,
-    pub derivation: AttributeDerivation,
-    pub rule_version: String,
+#[serde(tag = "attribute")]
+pub enum AttributeProvenance {
+    #[serde(rename = "height_m")]
+    HeightMetres {
+        value: f64,
+        source_observation_id: String,
+        original_value: serde_json::Value,
+        unit: MetreUnit,
+        derivation: AttributeDerivation,
+        rule_version: String,
+    },
+    #[serde(rename = "levels")]
+    Levels {
+        value: u32,
+        source_observation_id: String,
+        original_value: serde_json::Value,
+        unit: LevelUnit,
+        derivation: AttributeDerivation,
+        rule_version: String,
+    },
+    #[serde(rename = "width_m")]
+    WidthMetres {
+        value: f64,
+        source_observation_id: String,
+        original_value: serde_json::Value,
+        unit: MetreUnit,
+        derivation: AttributeDerivation,
+        rule_version: String,
+    },
+    #[serde(rename = "subtype")]
+    Subtype {
+        value: String,
+        source_observation_id: String,
+        original_value: serde_json::Value,
+        unit: NoUnit,
+        derivation: AttributeDerivation,
+        rule_version: String,
+    },
+    #[serde(rename = "name")]
+    Name {
+        value: String,
+        source_observation_id: String,
+        original_value: serde_json::Value,
+        unit: NoUnit,
+        derivation: AttributeDerivation,
+        rule_version: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum MetreUnit {
+    #[serde(rename = "m")]
+    Metres,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum LevelUnit {
+    #[serde(rename = "levels")]
+    Levels,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum NoUnit {
+    #[serde(rename = "none")]
+    None,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -518,6 +573,11 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
                     "The service returned a different resume cursor than the pinned manifest.",
                 ));
             }
+            if sha256_hex(&response.body) != chunk.sha256 {
+                return Err(integrity_error(
+                    "A downloaded gzip result chunk failed SHA-256 verification.",
+                ));
+            }
             let mut decoded = Vec::new();
             GzDecoder::new(response.body.as_slice())
                 .read_to_end(&mut decoded)
@@ -525,11 +585,6 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
             if decoded.len() as u64 != chunk.uncompressed_bytes {
                 return Err(integrity_error(
                     "A downloaded result chunk has an unexpected decoded size.",
-                ));
-            }
-            if sha256_hex(&decoded) != chunk.sha256 {
-                return Err(integrity_error(
-                    "A decoded result chunk failed SHA-256 verification.",
                 ));
             }
             for line in decoded
@@ -587,24 +642,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(debug_assertions)]
 fn fixture_result_parts(
-    manifest_template: &serde_json::Value,
-    bundle: &serde_json::Value,
-    coverage_report: &serde_json::Value,
-    records: &[serde_json::Value],
+    fixture: &serde_json::Value,
+    records_key: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let mut canonical = Vec::new();
-    for record in records {
-        canonical.extend(serde_json::to_vec(record).map_err(|error| error.to_string())?);
-        canonical.push(b'\n');
-    }
-    let mut encoder = GzBuilder::new()
-        .mtime(0)
-        .write(Vec::new(), Compression::default());
-    encoder
-        .write_all(&canonical)
-        .expect("Vec writes cannot fail");
-    let compressed = encoder.finish().expect("Vec writes cannot fail");
+    let records = fixture[records_key]
+        .as_array()
+        .ok_or_else(|| format!("fixture {records_key} must be an array"))?;
+    let manifest_template = &fixture["manifest"];
     let chunk_template = &manifest_template["chunks"][0];
+    let chunk_id = chunk_template["id"]
+        .as_str()
+        .ok_or("fixture chunk is missing id")?;
+    let compressed = base64::engine::general_purpose::STANDARD
+        .decode(
+            fixture["transport_chunks"][chunk_id]
+                .as_str()
+                .ok_or("fixture transport chunk is missing")?,
+        )
+        .map_err(|error| format!("fixture transport chunk is invalid base64: {error}"))?;
+    let mut canonical = Vec::new();
+    GzDecoder::new(compressed.as_slice())
+        .read_to_end(&mut canonical)
+        .map_err(|error| format!("fixture transport chunk is invalid gzip: {error}"))?;
     let declared_chunk_sha = chunk_template["sha256"]
         .as_str()
         .ok_or("fixture chunk is missing sha256")?;
@@ -614,7 +673,7 @@ fn fixture_result_parts(
     let declared_bytes = chunk_template["uncompressed_bytes"]
         .as_u64()
         .ok_or("fixture chunk is missing uncompressed_bytes")?;
-    if sha256_hex(&canonical) != declared_chunk_sha
+    if sha256_hex(&compressed) != declared_chunk_sha
         || sha256_hex(&canonical) != declared_result_sha
         || canonical.len() as u64 != declared_bytes
     {
@@ -626,8 +685,8 @@ fn fixture_result_parts(
         .collect::<Vec<_>>();
     let manifest = serde_json::json!({
         "contract_version": CONTRACT_VERSION,
-        "bundle": bundle,
-        "coverage_report": coverage_report,
+        "bundle": fixture["bundle"],
+        "coverage_report": fixture["coverage_report"],
         "licences": licences,
         "chunks": [{
             "id": chunk_template["id"],
@@ -668,22 +727,10 @@ pub mod fixture_transport {
                 "../../../../contracts/acquisition/v1/fixtures/boundary-discovery-snapshot.json"
             ))
             .map_err(|error| error.to_string())?;
-            let (acquisition_manifest, acquisition_chunk) = fixture_result_parts(
-                &fixture["manifest"],
-                &fixture["bundle"],
-                &fixture["coverage_report"],
-                fixture["observations"]
-                    .as_array()
-                    .expect("canonical fixture observations are an array"),
-            )?;
-            let (boundary_manifest, boundary_chunk) = fixture_result_parts(
-                &boundary["manifest"],
-                &boundary["bundle"],
-                &boundary["coverage_report"],
-                boundary["candidates"]
-                    .as_array()
-                    .expect("boundary fixture candidates are an array"),
-            )?;
+            let (acquisition_manifest, acquisition_chunk) =
+                fixture_result_parts(&fixture, "observations")?;
+            let (boundary_manifest, boundary_chunk) =
+                fixture_result_parts(&boundary, "candidates")?;
             Ok(Self {
                 acquisition_manifest,
                 acquisition_chunk,

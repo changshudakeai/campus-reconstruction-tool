@@ -220,9 +220,22 @@
         "review_geometry_proposal": {"$ref": "#/$defs/geometry"},
         "raw_spatial_measures": {"type": "object", "additionalProperties": {"type": "number"}},
         "suggestions": {"type": "array", "items": {"type": "object", "required": ["kind", "rule_version", "reason"], "properties": {"kind": {"type": "string"}, "rule_version": {"type": "string"}, "reason": {"type": "string"}}, "additionalProperties": false}},
-        "attribute_provenance": {"type": "array", "items": {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"type": "string"}, "value": {}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"type": "string"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false}}
+        "attribute_provenance": {"type": "array", "items": {"$ref": "#/$defs/attributeProvenance"}}
       },
       "additionalProperties": false
+    },
+    "attributeProvenance": {
+      "oneOf": [
+        {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"const": "height_m"}, "value": {"type": "number"}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"const": "m"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false},
+        {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"const": "levels"}, "value": {"type": "integer", "minimum": 1}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"const": "levels"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false},
+        {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"const": "width_m"}, "value": {"type": "number", "exclusiveMinimum": 0}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"const": "m"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false},
+        {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"enum": ["subtype", "name"]}, "value": {"type": "string"}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"const": "none"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false}
+      ]
+    },
+    "transportChunks": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "contentEncoding": "base64"}
     },
     "boundaryCandidate": {
       "type": "object",
@@ -249,12 +262,13 @@
     },
     "boundaryDiscoverySnapshot": {
       "type": "object",
-      "required": ["contract_version", "bundle", "candidates", "coverage_report", "manifest"],
+      "required": ["contract_version", "bundle", "candidates", "coverage_report", "transport_chunks", "manifest"],
       "properties": {
         "contract_version": {"$ref": "#/$defs/contractVersion"},
         "bundle": {"$ref": "#/$defs/datasetBundle"},
         "candidates": {"type": "array", "items": {"$ref": "#/$defs/boundaryCandidate"}},
         "coverage_report": {"$ref": "#/$defs/coverageReport"},
+        "transport_chunks": {"$ref": "#/$defs/transportChunks"},
         "manifest": {"$ref": "#/$defs/fixtureManifest"}
       },
       "additionalProperties": false
@@ -297,12 +311,13 @@
     },
     "acquisitionFixture": {
       "type": "object",
-      "required": ["contract_version", "bundle", "coverage_report", "observations", "manifest"],
+      "required": ["contract_version", "bundle", "coverage_report", "observations", "transport_chunks", "manifest"],
       "properties": {
         "contract_version": {"$ref": "#/$defs/contractVersion"},
         "bundle": {"$ref": "#/$defs/datasetBundle"},
         "coverage_report": {"$ref": "#/$defs/coverageReport"},
         "observations": {"type": "array", "items": {"$ref": "#/$defs/sourceObservation"}},
+        "transport_chunks": {"$ref": "#/$defs/transportChunks"},
         "manifest": {"$ref": "#/$defs/fixtureManifest"}
       },
       "additionalProperties": false

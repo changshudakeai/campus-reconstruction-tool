@@ -1,6 +1,6 @@
 """Provider-neutral decoder for the frozen Controlled Acquisition v1 contract."""
 
-import gzip
+import base64
 import json
 import re
 from dataclasses import dataclass
@@ -203,9 +203,13 @@ class FixtureAcquisitionService:
             "/v1/boundary-jobs",
             "/v1/acquisition-jobs",
         ):
-            if not body:
-                return self._failure(400, "invalid_request", path, False)
+            try:
+                request = json.loads(body or b"")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                request = None
             kind = path.rsplit("/", 1)[-1]
+            if not self._valid_create_request(kind, request):
+                return self._failure(400, "invalid_request", path, False)
             job_id = f"fixture-{self._next_job}"
             self._next_job += 1
             self._jobs[job_id] = {"kind": kind, "state": "complete"}
@@ -234,10 +238,12 @@ class FixtureAcquisitionService:
             chunk = fixture["manifest"]["chunks"][0]
             if match.group("chunk") != chunk["id"] or cursor != chunk["stable_cursor"]:
                 return self._failure(416, "invalid_cursor", job_id, True)
-            canonical = self._canonical_records(fixture)
+            compressed = base64.b64decode(
+                fixture["transport_chunks"][chunk["id"]], validate=True
+            )
             return ServiceResponse(
                 status=200,
-                body=gzip.compress(canonical, mtime=0),
+                body=compressed,
                 headers={
                     "content-type": "application/gzip",
                     "x-stable-cursor": chunk["stable_cursor"],
@@ -248,6 +254,77 @@ class FixtureAcquisitionService:
 
     def _fixture(self, kind: str) -> Mapping[str, Any]:
         return self._boundary if kind == "boundary-jobs" else self._acquisition
+
+    def _valid_create_request(self, kind: str, value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        identity = value.get("request_identity")
+        common = (
+            value.get("contract_version") == CONTRACT_VERSION
+            and value.get("bundle_id") == self._acquisition["bundle"]["id"]
+            and isinstance(identity, Mapping)
+            and isinstance(identity.get("idempotency_key"), str)
+            and self._is_sha256(identity.get("content_sha256"))
+        )
+        if not common:
+            return False
+        if kind == "boundary-jobs":
+            target = value.get("campus_target")
+            return (
+                isinstance(target, Mapping)
+                and isinstance(target.get("name"), str)
+                and isinstance(target.get("aliases"), list)
+                and self._position(target.get("anchor_wgs84"))
+                and isinstance(target.get("search_radius_m"), (int, float))
+                and target["search_radius_m"] > 0
+                and set(value) == {
+                    "contract_version",
+                    "request_identity",
+                    "bundle_id",
+                    "campus_target",
+                }
+            )
+        categories = value.get("categories")
+        return (
+            isinstance(value.get("boundary_revision"), str)
+            and self._polygon(value.get("boundary_wgs84"))
+            and isinstance(categories, list)
+            and len(categories) == 5
+            and set(categories) == KNOWN_CATEGORIES
+            and set(value) == {
+                "contract_version",
+                "request_identity",
+                "bundle_id",
+                "boundary_revision",
+                "boundary_wgs84",
+                "categories",
+            }
+        )
+
+    @staticmethod
+    def _is_sha256(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    @staticmethod
+    def _position(value: Any) -> bool:
+        return (
+            isinstance(value, list)
+            and len(value) == 2
+            and all(isinstance(coordinate, (int, float)) for coordinate in value)
+        )
+
+    @classmethod
+    def _polygon(cls, value: Any) -> bool:
+        return (
+            isinstance(value, Mapping)
+            and value.get("type") in {"Polygon", "MultiPolygon"}
+            and isinstance(value.get("coordinates"), list)
+            and bool(value["coordinates"])
+        )
 
     @staticmethod
     def _canonical_records(fixture: Mapping[str, Any]) -> bytes:

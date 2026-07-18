@@ -66,7 +66,7 @@ fn result_parts(
             "stable_cursor": "v1:observations:0001:end",
             "content_type": "application/x-ndjson",
             "content_encoding": "gzip",
-            "sha256": sha(&canonical),
+            "sha256": sha(&compressed),
             "uncompressed_bytes": canonical.len()
         }],
         "result_sha256": sha(&canonical)

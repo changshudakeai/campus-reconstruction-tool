@@ -1,3 +1,4 @@
+import base64
 import gzip
 import hashlib
 import json
@@ -114,7 +115,12 @@ class AcquisitionContractTests(unittest.TestCase):
             observation["geometry_sha256"],
         )
         self.assertEqual(
-            hashlib.sha256(canonical_observation).hexdigest(),
+            hashlib.sha256(
+                base64.b64decode(
+                    fixture["transport_chunks"][manifest["chunks"][0]["id"]],
+                    validate=True,
+                )
+            ).hexdigest(),
             manifest["chunks"][0]["sha256"],
         )
         self.assertEqual(len(canonical_observation), manifest["chunks"][0]["uncompressed_bytes"])
@@ -169,7 +175,49 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertEqual(service.handle("GET", "/v1/capabilities").status, 200)
 
         for kind in ("boundary-jobs", "acquisition-jobs"):
-            created = service.handle("POST", f"/v1/{kind}", b'{"request_identity":"fixture"}')
+            request = {
+                "contract_version": "1.0.0",
+                "request_identity": {
+                    "idempotency_key": f"fixture-{kind}",
+                    "content_sha256": "d" * 64,
+                },
+                "bundle_id": "cn-campus-2026-06",
+            }
+            if kind == "boundary-jobs":
+                request["campus_target"] = {
+                    "name": "Test Campus",
+                    "aliases": [],
+                    "anchor_wgs84": [121.4, 31.2],
+                    "search_radius_m": 2000,
+                }
+            else:
+                request.update(
+                    {
+                        "boundary_revision": "boundary-1",
+                        "boundary_wgs84": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [
+                                    [121.4, 31.2],
+                                    [121.5, 31.2],
+                                    [121.4, 31.2],
+                                ]
+                            ],
+                        },
+                        "categories": [
+                            "building",
+                            "circulation",
+                            "water",
+                            "vegetation",
+                            "sports",
+                        ],
+                    }
+                )
+            created = service.handle(
+                "POST",
+                f"/v1/{kind}",
+                json.dumps(request).encode("utf-8"),
+            )
             self.assertEqual(created.status, 202)
             job_id = json.loads(created.body)["job_id"]
             self.assertEqual(service.handle("GET", f"/v1/{kind}/{job_id}").status, 200)
@@ -193,7 +241,13 @@ class AcquisitionContractTests(unittest.TestCase):
                 chunk_response.headers["x-stable-cursor"], chunk["stable_cursor"]
             )
             decoded_chunk = gzip.decompress(chunk_response.body)
-            self.assertEqual(hashlib.sha256(decoded_chunk).hexdigest(), chunk["sha256"])
+            self.assertEqual(
+                hashlib.sha256(chunk_response.body).hexdigest(), chunk["sha256"]
+            )
+            self.assertEqual(
+                hashlib.sha256(decoded_chunk).hexdigest(),
+                manifest["result_sha256"],
+            )
             self.assertEqual(len(decoded_chunk), chunk["uncompressed_bytes"])
             self.assertEqual(
                 service.handle("POST", f"/v1/{kind}/{job_id}/cancel").status,
@@ -203,6 +257,8 @@ class AcquisitionContractTests(unittest.TestCase):
         failure = service.handle("GET", "/v1/acquisition-jobs/missing")
         self.assertEqual(failure.status, 404)
         self.assertIn("suggested_action", json.loads(failure.body))
+        invalid = service.handle("POST", "/v1/acquisition-jobs", b'{"request_identity":"fixture"}')
+        self.assertEqual(invalid.status, 400)
 
 
 if __name__ == "__main__":

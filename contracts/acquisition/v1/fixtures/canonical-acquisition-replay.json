@@ -47,9 +47,12 @@
       "attribute_provenance": [{"attribute": "height_m", "value": 18, "source_observation_id": "obs-osm-relation-42", "original_value": "18 m", "unit": "m", "derivation": "direct", "rule_version": "attribute-normalisation-1.0.0"}]
     }
   ],
+  "transport_chunks": {
+    "observations-0001": "H4sIAAAAAAAA/9VVzY7bNhC+5ykEni1bki3LFtBTCvTSYIMmpwQLgaLGWqKUqJKUN8bCD9TXyJNlRjRtrzdJg6A91PCB4vxw+M18H58Yd87IenRQDUbvoee9AFZ+fLoYWMkeQLYPrurYjDVg5J47qXvcb6QB4XBXG9nKnqtqz9VIEekmIm8zKqj2YKz3P+eMe206rqSdMsXpPJkn6G71aARUurZg/CGVbDAON2Jtu9iA8gGrDL3HXjo00jmnY9PN8X7GBHfQanNAWz1K1ci+RRehtcEl2ioLHe+dFJaVeM9P0lZoAoP+SvetdGMDMR1EC4o06Mjufntdvv7j3WbFjs9ReGIG9hIeqxZ0B84cKvvAs3yNMdt0td2JzTbfAc9rkW/yZL2tcyG2xaYpVk2RL5e8KHhRi2INItktc5ED363SbJVvl+IlguGM+FLBLXr/SRnWwYAofGTcIno11iR0NyhANENTfBtkQwgbxNzixmCAWonexiJy9whdKI+Au/SEcuMvzdL5arZM51l2P/NfSfr17zRsnMz4eXJIln4rWZ5jkvzbW/ll6xKIvxlzh4Fm+c2onHyr1aHFS17d4F8F+DtzrqSAiZU4rOKvETnXVJwmP0uydZwUcZK+T5Jy+n9A/8AyPzGf/47uBujfOQPg3vAhErr3dm2oRdgvbsFRGwEXVAVWIPrYZ1/Hy2QqD5AxOzmx5O7X+neaOuLgYDEx75CzSrZT0X5MAtO/dzhCPBpF+uLcYMvFQqMv1YOz1WGiuTbtYrq9BbvQTa0WaZwsqAdK9sDbH8fkx255ljGhcM7xuiIoXRCSX1B0Jja6wzTeei+9cmA6YmvgAtXlmYJj4rgbSUICZdCxQxMYVLcJrUd+WKwyqsCv0vMqI5BCVi+G4QuthMSJ9SjEyKWXHrcOFykprtvnrf9czPEKJLz9AMZJmHT0LLUle4aRfzvCk4Dxhj9WdsACMUWHzRiNT8CxkKrLWLndFOt5juiixCHREKaOlVjHPKHoG62lIrTl6v8rJ3ZsW7CBOU/sT9lTE29GkG7O7dS49w8Q+aZG8GlAfkinDlHwBxs5dAizFoVhiLiNeHRpTRQaNn/5yjw/+/TA0NPqsCE3z+fPse9CuyvHo3/Tbw7oW0URDbQoIqRYNCj07mfX04WjdXz1BX8taZzPCAAA"
+  },
   "manifest": {
     "contract_version": "1.0.0",
-    "chunks": [{"id": "observations-0001", "stable_cursor": "v1:observations:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "2e8129a17c5a210f3826f3ae979246a234d9d84792bcb046fdb59ab285b18395", "uncompressed_bytes": 2255}],
+    "chunks": [{"id": "observations-0001", "stable_cursor": "v1:observations:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "2e563ad9979d8a4756568ae24f9c565c31ff6563399306a8a3e0b56d214229d5", "uncompressed_bytes": 2255}],
     "result_sha256": "2e8129a17c5a210f3826f3ae979246a234d9d84792bcb046fdb59ab285b18395"
   }
 }
