@@ -1874,7 +1874,7 @@ impl DesktopApplicationState {
         let path = path.as_ref();
         let primary = fs::read(path)
             .map_err(|error| error.to_string())
-            .and_then(|bytes| decode_project(&bytes));
+            .and_then(|bytes| decode_schema1_project(&bytes));
         let (project, recovered) = match primary {
             Ok(project) => (project, false),
             Err(primary_error) => {
@@ -1886,7 +1886,7 @@ impl DesktopApplicationState {
                         )
                     })
                     .and_then(|bytes| {
-                        decode_project(&bytes).map_err(|recovery_error| {
+                        decode_schema1_project(&bytes).map_err(|recovery_error| {
                             format!(
                                 "项目与恢复副本均无效；主文件：{primary_error}；恢复副本：{recovery_error}"
                             )
@@ -1914,7 +1914,11 @@ impl DesktopApplicationState {
     }
 }
 
-fn decode_project(bytes: &[u8]) -> Result<CampusProject, String> {
+/// Decodes the supported V1.0.1 project formats without writing or upgrading them.
+///
+/// This is the read-only compatibility boundary used before a transactional
+/// schema-2 migration creates any candidate state.
+pub fn decode_schema1_project(bytes: &[u8]) -> Result<CampusProject, String> {
     let native_style_pack_missing = serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .is_some_and(|value| {
@@ -1941,6 +1945,12 @@ fn decode_project(bytes: &[u8]) -> Result<CampusProject, String> {
     if project.schema_version > PROJECT_SCHEMA_VERSION {
         return Err(format!(
             "Project schema {} is newer than supported schema {}",
+            project.schema_version, PROJECT_SCHEMA_VERSION
+        ));
+    }
+    if project.schema_version != PROJECT_SCHEMA_VERSION {
+        return Err(format!(
+            "Project schema {} is not supported schema {}",
             project.schema_version, PROJECT_SCHEMA_VERSION
         ));
     }

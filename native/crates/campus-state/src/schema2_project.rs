@@ -9,6 +9,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+mod schema1_migration;
+pub use schema1_migration::*;
+
 pub const SCHEMA_2_VERSION: u32 = 2;
 const LIBRARY_INDEX_FILE: &str = "library-index.json";
 const PROJECT_FILE_NAME: &str = "project.campus.json";
@@ -1004,6 +1007,7 @@ pub struct CampusProjectLibrary {
     index: LibraryIndex,
     construction_enabled: bool,
     next_save_fault: Option<SaveFaultPoint>,
+    next_migration_fault: Option<MigrationFaultPoint>,
 }
 
 impl CampusProjectLibrary {
@@ -1030,6 +1034,7 @@ impl CampusProjectLibrary {
             index,
             construction_enabled: false,
             next_save_fault: None,
+            next_migration_fault: None,
         };
         for record in &library.index.projects {
             if record.campus_target_id != library.campus_target_id {
