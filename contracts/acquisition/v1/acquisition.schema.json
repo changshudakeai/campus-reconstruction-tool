@@ -202,8 +202,8 @@
         "original_properties": {"type": "object"},
         "lineage": {"$ref": "#/$defs/sourceLineage"},
         "licence": {"$ref": "#/$defs/licence"},
-        "coordinate_semantics": {"type": "object", "required": ["crs", "axis_order"], "properties": {"crs": {"const": "OGC:CRS84"}, "axis_order": {"const": "longitude-latitude"}}, "additionalProperties": false},
-        "unit_semantics": {"type": "object", "additionalProperties": {"enum": ["m", "m2", "degrees"]}},
+        "coordinate_semantics": {"type": "object", "required": ["crs", "axis_order"], "properties": {"crs": {"type": "string", "minLength": 1}, "axis_order": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+        "unit_semantics": {"type": "object", "additionalProperties": {"enum": ["m", "m2", "degrees", "levels", "none"]}},
         "time_semantics": {"type": "object", "required": ["dataset_release", "acquired_at"], "properties": {"dataset_release": {"type": "string"}, "acquired_at": {"type": "string", "format": "date-time"}}, "additionalProperties": false},
         "geometry_sha256": {"$ref": "#/$defs/sha256"},
         "derivation": {

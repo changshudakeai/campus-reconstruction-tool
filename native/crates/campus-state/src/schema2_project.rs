@@ -1,6 +1,8 @@
 use crate::{
-    BoundaryCandidate, FoundationAcquisitionCheckpoint, FoundationCategory, ProviderOutcomeStatus,
-    ResultManifest, SourceGeometry, SourceObservation,
+    BoundaryCandidate, BuildingEntityDecision, BuildingEntityReviewLedger,
+    BuildingEvidenceDescriptor, BuildingGenerationBasis, BuildingNameEvidence,
+    FoundationAcquisitionCheckpoint, FoundationCategory, ProviderOutcomeStatus, ResultManifest,
+    ReviewedBuildingEntity, SourceGeometry, SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -244,6 +246,7 @@ pub struct PinnedFoundationEvidence<'a> {
 #[serde(rename_all = "camelCase", tag = "decision")]
 pub enum FoundationReviewDisposition {
     SelectedEvidence { evidence_ids: Vec<String> },
+    ReviewedBuildingEntities { entity_ids: Vec<String> },
     CompleteEmpty,
     KnownGap { reasons: Vec<String> },
 }
@@ -257,6 +260,8 @@ pub struct FoundationReviewBasis {
     pub classification_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
+    #[serde(default)]
+    pub building_review_sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -396,13 +401,15 @@ pub struct GeneratedFoundationOutput {
     pub non_air_blocks: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFoundationOutput {
     pub project_revision: u64,
     pub schematic_sha256: String,
     pub schematic_bytes: u64,
     pub manifest_file_name: String,
+    #[serde(default)]
+    pub building_provenance: Vec<ReviewedBuildingEntity>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -412,6 +419,8 @@ struct FoundationTracerState {
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
     acquisition: Option<PinnedAcquisitionEvidence>,
+    #[serde(default)]
+    building_review: BuildingEntityReviewLedger,
     review_ledger: FoundationReviewLedger,
     generation_settings: FoundationGenerationSettings,
     generated: Option<GeneratedFoundationOutput>,
@@ -655,6 +664,10 @@ impl Schema2Project {
         &self.foundation.review_ledger
     }
 
+    pub fn building_entity_review(&self) -> &BuildingEntityReviewLedger {
+        &self.foundation.building_review
+    }
+
     pub fn generation_settings(&self) -> &FoundationGenerationSettings {
         &self.foundation.generation_settings
     }
@@ -848,6 +861,53 @@ impl Schema2Project {
         Ok(())
     }
 
+    pub fn initialize_building_entity_review(
+        &mut self,
+        evidence: Vec<BuildingEvidenceDescriptor>,
+        name_evidence: Vec<BuildingNameEvidence>,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let observations = &self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Building Entities")?
+            .observations;
+        let review = BuildingEntityReviewLedger::new(observations, evidence, name_evidence)?;
+        self.mark_updated(actor)?;
+        self.foundation.building_review = review;
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn record_building_entity_decision(
+        &mut self,
+        decision: BuildingEntityDecision,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let observations = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Building Entities")?
+            .observations
+            .clone();
+        let mut review = self.foundation.building_review.clone();
+        let sequence = review.record(decision, &observations)?;
+        self.mark_updated(actor)?;
+        self.foundation.building_review = review;
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(sequence)
+    }
+
     pub fn complete_foundation_review(
         &mut self,
         category: FoundationCategory,
@@ -870,6 +930,34 @@ impl Schema2Project {
                     })
                 {
                     return Err("Selected review evidence is not pinned for this category".into());
+                }
+            }
+            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids } => {
+                if category != FoundationCategory::Building {
+                    return Err(
+                        "Reviewed Building Entities can complete only the Building category".into(),
+                    );
+                }
+                let reviewed = self.foundation.building_review.reviewed_entities(
+                    &acquisition.observations,
+                    self.building_generation_basis(),
+                )?;
+                let reviewed_ids = reviewed
+                    .iter()
+                    .map(|entity| entity.id.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let selected_ids = entity_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>();
+                if entity_ids.is_empty()
+                    || entity_ids.len() != selected_ids.len()
+                    || selected_ids != reviewed_ids
+                {
+                    return Err(
+                        "Building review must select the complete reviewed entity projection"
+                            .into(),
+                    );
                 }
             }
             FoundationReviewDisposition::CompleteEmpty => {
@@ -898,6 +986,9 @@ impl Schema2Project {
         let basis = self.review_basis()?;
         let subjects = match &disposition {
             FoundationReviewDisposition::SelectedEvidence { evidence_ids } => evidence_ids.clone(),
+            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids } => {
+                entity_ids.clone()
+            }
             _ => vec![format!("foundation-category:{category:?}").to_ascii_lowercase()],
         };
         let before = self
@@ -950,17 +1041,55 @@ impl Schema2Project {
                 FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
                     Some(evidence_ids.as_slice())
                 }
+                FoundationReviewDisposition::ReviewedBuildingEntities { .. } => None,
                 _ => None,
             })
             .flatten()
             .collect::<Vec<_>>();
-        let selected_features = evidence
+        let mut selected_features = evidence
             .acquisition
             .observations
             .iter()
             .filter(|observation| selected_ids.contains(&&observation.id))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
+        let building_entities = match self
+            .foundation
+            .review_ledger
+            .disposition_for_basis(FoundationCategory::Building, &basis)
+        {
+            Some(FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids }) => {
+                let entities = self.foundation.building_review.reviewed_entities(
+                    &evidence.acquisition.observations,
+                    self.building_generation_basis(),
+                )?;
+                if entities
+                    .iter()
+                    .map(|entity| entity.id.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    != entity_ids
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<std::collections::BTreeSet<_>>()
+                {
+                    return Err("Reviewed Building Entity selection is stale".into());
+                }
+                entities
+            }
+            _ => Vec::new(),
+        };
+        for entity in &building_entities {
+            let mut generation_feature = entity
+                .source_observations
+                .iter()
+                .find(|observation| observation.id == entity.primary_observation_id)
+                .cloned()
+                .ok_or("Reviewed Building Entity primary evidence is missing")?;
+            generation_feature.id = entity.id.clone();
+            generation_feature.review_geometry_proposal =
+                entity.generation_geometry.geometry.clone();
+            selected_features.push(generation_feature);
+        }
         Ok(ReviewedFoundationProjection {
             boundary: evidence
                 .boundary
@@ -971,8 +1100,22 @@ impl Schema2Project {
                 .geometry
                 .clone(),
             selected_features,
+            building_entities,
             generation_settings: self.foundation.generation_settings.clone(),
         })
+    }
+
+    fn building_generation_basis(&self) -> BuildingGenerationBasis {
+        BuildingGenerationBasis {
+            orientation_degrees: self.foundation.generation_settings.orientation_degrees,
+            blocks_per_meter: self.foundation.generation_settings.blocks_per_meter,
+            rule_version: self
+                .foundation
+                .acquisition
+                .as_ref()
+                .map(|acquisition| acquisition.manifest.bundle.derivation_rules.clone())
+                .unwrap_or_default(),
+        }
     }
 
     fn review_basis(&self) -> Result<FoundationReviewBasis, String> {
@@ -993,6 +1136,7 @@ impl Schema2Project {
             classification_rules: acquisition.manifest.bundle.classification_rules.clone(),
             conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
             derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
+            building_review_sequence: self.foundation.building_review.entries().len() as u64,
         })
     }
 
@@ -1029,6 +1173,7 @@ impl Schema2Project {
         schematic_bytes: u64,
         manifest_file_name: String,
     ) -> Result<(), String> {
+        let building_provenance = self.reviewed_projection()?.building_entities;
         let generated = self
             .foundation
             .generated
@@ -1046,6 +1191,7 @@ impl Schema2Project {
             schematic_sha256,
             schematic_bytes,
             manifest_file_name,
+            building_provenance,
         });
         self.workflow.export = DurableTaskState::Confirmed;
         Ok(())
@@ -1069,10 +1215,12 @@ impl Schema2Project {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewedFoundationProjection {
     pub boundary: SourceGeometry,
     pub selected_features: Vec<SourceObservation>,
+    pub building_entities: Vec<ReviewedBuildingEntity>,
     pub generation_settings: FoundationGenerationSettings,
 }
 

@@ -148,6 +148,85 @@ class AcquisitionContractTests(unittest.TestCase):
             [True, True, False, False, False],
         )
 
+    def test_complex_building_fixture_preserves_typed_review_evidence(self) -> None:
+        schema = json.loads(
+            (CONTRACT_DIR / "acquisition.schema.json").read_text(encoding="utf-8")
+        )
+        fixture = json.loads(
+            (FIXTURE_DIR / "complex-building-review.json").read_text(encoding="utf-8")
+        )
+        observation_validator = Draft202012Validator(
+            {
+                "$schema": schema["$schema"],
+                "$defs": schema["$defs"],
+                "$ref": "#/$defs/sourceObservation",
+            }
+        )
+        errors = [
+            error.message
+            for observation in fixture["observations"]
+            for error in observation_validator.iter_errors(observation)
+        ]
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            {observation["geometry"]["type"] for observation in fixture["observations"]},
+            {
+                "Point",
+                "MultiPoint",
+                "LineString",
+                "MultiLineString",
+                "Polygon",
+                "MultiPolygon",
+            },
+        )
+        library = next(
+            observation
+            for observation in fixture["observations"]
+            if observation["id"] == "obs-campus-library-v1"
+        )
+        self.assertEqual(len(library["geometry"]["coordinates"]), 2)
+        self.assertEqual(len(library["geometry"]["coordinates"][0]), 2)
+        self.assertNotEqual(library["geometry"], library["review_geometry_proposal"])
+        replay = next(
+            observation
+            for observation in fixture["observations"]
+            if observation["id"] == "obs-campus-library-v1-replay"
+        )
+        refreshed = next(
+            observation
+            for observation in fixture["observations"]
+            if observation["id"] == "obs-campus-library-v2"
+        )
+        self.assertEqual(library["lineage"], replay["lineage"])
+        self.assertEqual(library["geometry_sha256"], replay["geometry_sha256"])
+        self.assertEqual(
+            library["lineage"]["source_record_id"],
+            refreshed["lineage"]["source_record_id"],
+        )
+        self.assertNotEqual(
+            library["lineage"]["source_record_version"],
+            refreshed["lineage"]["source_record_version"],
+        )
+        self.assertTrue(
+            any(item["role"] == "part" for item in fixture["building_evidence"])
+        )
+        self.assertGreaterEqual(
+            sum(
+                item["overlap_group"] == "library-conflict"
+                for item in fixture["building_evidence"]
+            ),
+            4,
+        )
+        self.assertTrue(
+            any(
+                evidence["scope"] == "campus"
+                and len(evidence["candidate_entity_ids"]) > 1
+                for evidence in fixture["name_evidence"]
+            )
+        )
+        poi_ids = [evidence["poi_id"] for evidence in fixture["name_evidence"]]
+        self.assertLess(len(set(poi_ids)), len(poi_ids))
+
     def test_boundary_snapshot_preserves_ranked_complete_relation_candidates(self) -> None:
         snapshot = json.loads(
             (FIXTURE_DIR / "boundary-discovery-snapshot.json").read_text(
