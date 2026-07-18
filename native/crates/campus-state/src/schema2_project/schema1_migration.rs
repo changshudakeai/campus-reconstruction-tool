@@ -457,19 +457,7 @@ fn build_legacy_migration_state(
         else {
             continue;
         };
-        let subject_id = format!("candidate:{candidate_id}");
         ledger_subjects.insert(candidate_id.to_owned(), ());
-        let Some(candidate) = candidate_by_id.get(candidate_id) else {
-            needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingLegacySubject);
-            continue;
-        };
-        if candidate.review != decision {
-            needs_reconfirmation.insert(
-                subject_id,
-                ReconfirmationReason::ContradictoryLegacyDecision,
-            );
-            continue;
-        }
         let source_snapshot_id = entry
             .get("sourceSnapshotId")
             .and_then(Value::as_str)
@@ -478,6 +466,48 @@ fn build_legacy_migration_state(
             .and_then(|id| snapshot_by_id.get(id))
             .copied()
             .unwrap_or(false);
+
+        let Some(candidate) = candidate_by_id.get(candidate_id) else {
+            let suppression_subject = format!("suppression:{candidate_id}");
+            if legacy
+                .building_suppressions
+                .iter()
+                .any(|suppression| suppression.source_id == candidate_id)
+            {
+                if decision != ReviewDecision::Rejected {
+                    needs_reconfirmation.insert(
+                        suppression_subject,
+                        ReconfirmationReason::ContradictoryLegacyDecision,
+                    );
+                } else if source_is_complete {
+                    legacy_assertions.push(LegacyAssertion {
+                        subject_id: suppression_subject,
+                        decision,
+                        source_snapshot_id: source_snapshot_id.map(str::to_owned),
+                        lineage: lineage.clone(),
+                    });
+                } else {
+                    needs_reconfirmation.insert(
+                        suppression_subject,
+                        ReconfirmationReason::MissingSourceSnapshot,
+                    );
+                }
+            } else {
+                needs_reconfirmation.insert(
+                    format!("candidate:{candidate_id}"),
+                    ReconfirmationReason::MissingLegacySubject,
+                );
+            }
+            continue;
+        };
+        let subject_id = format!("candidate:{candidate_id}");
+        if candidate.review != decision {
+            needs_reconfirmation.insert(
+                subject_id,
+                ReconfirmationReason::ContradictoryLegacyDecision,
+            );
+            continue;
+        }
         if source_is_complete {
             legacy_assertions.push(LegacyAssertion {
                 subject_id,
@@ -501,10 +531,14 @@ fn build_legacy_migration_state(
         );
     }
     for suppression in &legacy.building_suppressions {
-        needs_reconfirmation.insert(
-            format!("suppression:{}", suppression.source_id),
-            ReconfirmationReason::MissingSourceSnapshot,
-        );
+        let subject_id = format!("suppression:{}", suppression.source_id);
+        if !legacy_assertions
+            .iter()
+            .any(|assertion| assertion.subject_id == subject_id)
+            && !needs_reconfirmation.contains_key(&subject_id)
+        {
+            needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingSourceSnapshot);
+        }
     }
     legacy_assertions.sort_by(|left, right| left.subject_id.cmp(&right.subject_id));
     report_entry(
@@ -512,7 +546,7 @@ fn build_legacy_migration_state(
         "review-decisions",
         if needs_reconfirmation
             .keys()
-            .any(|subject| subject.starts_with("candidate:"))
+            .any(|subject| subject.starts_with("candidate:") || subject.starts_with("suppression:"))
         {
             MigrationDisposition::Quarantined
         } else {
@@ -608,6 +642,18 @@ fn build_legacy_migration_state(
     }
 
     let historical_artifacts = collect_historical_artifacts(legacy);
+    for (index, artifact) in historical_artifacts.iter().enumerate() {
+        report_entry(
+            &mut report,
+            &format!(
+                "historical-artifact:{}:record-{}",
+                historical_artifact_label(artifact.kind),
+                index + 1
+            ),
+            MigrationDisposition::Preserved,
+            "The generated artifact reference is retained as compatibility-unverified history",
+        );
+    }
     report_entry(
         &mut report,
         "historical-generated-artifacts",
@@ -686,16 +732,59 @@ fn append_record_level_report(
     source_project: &Value,
     needs_reconfirmation: &BTreeMap<String, ReconfirmationReason>,
 ) {
-    for snapshot in raw_foundation_source_snapshots(source_project) {
-        let Some(id) = snapshot.get("id").and_then(Value::as_str) else {
-            continue;
-        };
+    for (index, snapshot) in raw_foundation_source_snapshots(source_project).enumerate() {
+        let id = snapshot
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("raw-record-{}", index + 1));
+        let has_stable_id = snapshot.get("id").and_then(Value::as_str).is_some();
         report_entry(
             report,
             &format!("source-snapshot:{id}"),
-            MigrationDisposition::Preserved,
-            "The provider outcome and its legacy lineage are retained verbatim",
+            if has_stable_id {
+                MigrationDisposition::Preserved
+            } else {
+                MigrationDisposition::Quarantined
+            },
+            if has_stable_id {
+                "The provider outcome and its legacy lineage are retained verbatim"
+            } else {
+                "The raw source snapshot is retained but lacks a stable identifier"
+            },
         );
+    }
+    for (index, entry) in raw_foundation_review_entries(source_project).enumerate() {
+        let candidate_id = entry
+            .get("candidateId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("raw-record-{}", index + 1));
+        report_entry(
+            report,
+            &format!("review-ledger:{candidate_id}:record-{}", index + 1),
+            MigrationDisposition::Transformed,
+            "The legacy review record is evaluated into an assertion or targeted reconfirmation",
+        );
+    }
+    if let Some(reviews) = raw_portable_reviews(source_project) {
+        for (candidate_id, decision) in reviews {
+            let is_supported = serde_json::from_value::<ReviewDecision>(decision.clone()).is_ok();
+            report_entry(
+                report,
+                &format!("review-ledger:{candidate_id}"),
+                if is_supported {
+                    MigrationDisposition::Transformed
+                } else {
+                    MigrationDisposition::Quarantined
+                },
+                if is_supported {
+                    "The portable review decision is retained for targeted legacy review"
+                } else {
+                    "The portable review decision is retained but could not be decoded"
+                },
+            );
+        }
     }
     for candidate in &legacy.candidates {
         let subject = format!("candidate:{}", candidate.id);
@@ -748,13 +837,24 @@ fn append_record_level_report(
         );
     }
     for suppression in &legacy.building_suppressions {
+        let subject = format!("suppression:{}", suppression.source_id);
+        let requires_reconfirmation = needs_reconfirmation.contains_key(&subject);
         report_entry(
             report,
-            &format!("suppression:{}", suppression.source_id),
-            MigrationDisposition::Quarantined,
-            "The suppression is retained but lacks a complete source dependency basis",
+            &subject,
+            if requires_reconfirmation {
+                MigrationDisposition::Quarantined
+            } else {
+                MigrationDisposition::Transformed
+            },
+            if requires_reconfirmation {
+                "The suppression is retained but requires targeted reconfirmation"
+            } else {
+                "The rejected decision and complete source dependency become a legacy assertion"
+            },
         );
     }
+    append_undecoded_record_report(report, legacy, source_project);
     for (collection, records) in raw_detailed_collections(source_project) {
         for (index, record) in records.iter().enumerate() {
             let record_id = record
@@ -773,6 +873,45 @@ fn append_record_level_report(
     }
 }
 
+fn append_undecoded_record_report(
+    report: &mut Schema1MigrationReport,
+    legacy: &CampusProject,
+    source_project: &Value,
+) {
+    for (index, record) in raw_candidate_records(source_project).enumerate() {
+        let id = record
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("raw-record-{}", index + 1));
+        if legacy.candidates.iter().any(|candidate| candidate.id == id) {
+            continue;
+        }
+        report_entry(
+            report,
+            &format!("candidate:{id}"),
+            MigrationDisposition::Omitted,
+            "The raw legacy candidate could not be decoded into a supported candidate record",
+        );
+    }
+    for (index, record) in raw_feature_records(source_project).enumerate() {
+        let id = record
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("raw-record-{}", index + 1));
+        if legacy.features.iter().any(|feature| feature.id == id) {
+            continue;
+        }
+        report_entry(
+            report,
+            &format!("feature:{id}"),
+            MigrationDisposition::Omitted,
+            "The raw legacy feature could not be decoded into a supported feature record",
+        );
+    }
+}
+
 fn push_artifact(
     artifacts: &mut Vec<HistoricalLegacyArtifact>,
     kind: HistoricalArtifactKind,
@@ -784,6 +923,14 @@ fn push_artifact(
         compatibility_status: LegacyArtifactCompatibility::CompatibilityUnverified,
         satisfies_v11_completion: false,
     });
+}
+
+fn historical_artifact_label(kind: HistoricalArtifactKind) -> &'static str {
+    match kind {
+        HistoricalArtifactKind::FoundationPreview => "foundation-preview",
+        HistoricalArtifactKind::DetailedGeneratedOutput => "detailed-generated-output",
+        HistoricalArtifactKind::DetailedRefinementOutput => "detailed-refinement-output",
+    }
 }
 
 fn report_entry(
@@ -853,6 +1000,12 @@ fn raw_foundation_review_entries(source_project: &Value) -> impl Iterator<Item =
         .flatten()
 }
 
+fn raw_portable_reviews(source_project: &Value) -> Option<&serde_json::Map<String, Value>> {
+    raw_native_or_web_root(source_project)
+        .pointer("/foundation/reviews")
+        .and_then(Value::as_object)
+}
+
 fn raw_candidate_source_snapshot_id<'a>(
     source_project: &'a Value,
     candidate_id: &str,
@@ -867,6 +1020,24 @@ fn raw_candidate_source_snapshot_id<'a>(
         .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(candidate_id))?
         .get("sourceSnapshotId")
         .and_then(Value::as_str)
+}
+
+fn raw_candidate_records(source_project: &Value) -> impl Iterator<Item = &Value> {
+    let root = raw_native_or_web_root(source_project);
+    root.get("candidates")
+        .or_else(|| root.pointer("/foundation/candidates"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn raw_feature_records(source_project: &Value) -> impl Iterator<Item = &Value> {
+    let root = raw_native_or_web_root(source_project);
+    root.get("features")
+        .or_else(|| root.pointer("/foundation/manualFeatures"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
 }
 
 fn raw_detailed_evidence_assets(source_project: &Value) -> impl Iterator<Item = &Value> {

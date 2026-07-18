@@ -244,6 +244,14 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
         entry.subject == "detailed-facade-draft:facade-1"
             && entry.disposition == MigrationDisposition::Preserved
     }));
+    assert!(migration.report.entries.iter().any(|entry| {
+        entry.subject == "review-ledger:demo-library:record-1"
+            && entry.disposition == MigrationDisposition::Transformed
+    }));
+    assert!(migration.report.entries.iter().any(|entry| {
+        entry.subject == "historical-artifact:foundation-preview:record-1"
+            && entry.disposition == MigrationDisposition::Preserved
+    }));
 
     let record = library.find_by_name("V1.0.1 baseline project").unwrap();
     assert_eq!(record.project_id(), outcome.project.id());
@@ -316,6 +324,89 @@ fn contradictory_legacy_decision_is_quarantined_without_becoming_an_assertion() 
         .legacy_assertions
         .iter()
         .any(|assertion| assertion.subject_id == "candidate:demo-library"));
+}
+
+#[test]
+fn suppression_with_consistent_rejected_ledger_and_complete_snapshot_becomes_an_assertion() {
+    let directory = tempfile::tempdir().unwrap();
+    let (legacy_path, original_bytes) =
+        write_managed_fixture(directory.path(), populated_native_schema1_bytes());
+    let mut provable: Value = serde_json::from_slice(&original_bytes).unwrap();
+    provable["foundationReviewLedger"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "candidateId": "fixture-rejected-shed",
+            "sourceSnapshotId": "osm:v1-baseline",
+            "decision": "rejected",
+            "decidedAtUnixMs": 1710000000250_u64
+        }));
+    std::fs::write(&legacy_path, serde_json::to_vec_pretty(&provable).unwrap()).unwrap();
+    let mut library = CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
+
+    let outcome = library
+        .migrate_managed_schema1_project(&legacy_path, actor())
+        .unwrap();
+    let migration = outcome.project.legacy_migration().unwrap().unwrap();
+
+    assert!(migration.legacy_assertions.iter().any(|assertion| {
+        assertion.subject_id == "suppression:fixture-rejected-shed"
+            && assertion.decision == ReviewDecision::Rejected
+            && assertion.source_snapshot_id.as_deref() == Some("osm:v1-baseline")
+    }));
+    assert!(!migration
+        .needs_reconfirmation
+        .iter()
+        .any(|item| item.subject_id == "suppression:fixture-rejected-shed"));
+}
+
+#[test]
+fn raw_records_skipped_by_compatibility_decoding_are_reported_with_reasons() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut source: Value = serde_json::from_slice(&legacy_web_schema1_bytes()).unwrap();
+    source["project"]["foundation"]["candidates"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "unsupported-candidate",
+            "name": "Unsupported candidate",
+            "kind": "not-a-supported-kind",
+            "geometry": {"points": []}
+        }));
+    source["project"]["foundation"]["manualFeatures"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "unsupported-feature",
+            "name": "Unsupported feature",
+            "kind": "not-a-supported-kind",
+            "geometry": {"points": []}
+        }));
+    let (legacy_path, _) = write_managed_fixture(
+        directory.path(),
+        serde_json::to_vec_pretty(&source).unwrap(),
+    );
+    let mut library = CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
+
+    let outcome = library
+        .migrate_managed_schema1_project(&legacy_path, actor())
+        .unwrap();
+    let entries = &outcome.report.entries;
+
+    assert!(entries.iter().any(|entry| {
+        entry.subject == "candidate:unsupported-candidate"
+            && entry.disposition == MigrationDisposition::Omitted
+            && entry.reason.contains("could not be decoded")
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry.subject == "feature:unsupported-feature"
+            && entry.disposition == MigrationDisposition::Omitted
+            && entry.reason.contains("could not be decoded")
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry.subject == "review-ledger:legacy-road"
+            && entry.disposition == MigrationDisposition::Transformed
+    }));
 }
 
 #[test]
