@@ -1,6 +1,8 @@
 use campus_state::{
-    CampusProjectLibrary, CampusScope, InstallationId, ProjectSaveStatus, SaveFaultPoint,
-    Schema2ProjectSession, V11ConstructionCapability,
+    decode_schema2_project, AcquisitionJobState, AcquisitionRequestIdentity, CampusProjectLibrary,
+    CampusScope, FoundationAcquisitionCheckpoint, InstallationId, PinnedBoundaryEvidence,
+    ProjectSaveStatus, ResultManifest, SaveFaultPoint, Schema2ProjectSession, SourceObservation,
+    V11ConstructionCapability, VerifiedAcquisitionChunk,
 };
 
 fn scope() -> CampusScope {
@@ -19,6 +21,159 @@ fn actor() -> InstallationId {
 fn library(root: &std::path::Path) -> CampusProjectLibrary {
     let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
     CampusProjectLibrary::open_for_construction(root, "gaode:B00155J6JH", &capability).unwrap()
+}
+
+fn boundary_evidence() -> PinnedBoundaryEvidence {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/acquisition/v1/fixtures/boundary-discovery-snapshot.json"
+    ))
+    .unwrap();
+    PinnedBoundaryEvidence {
+        manifest: serde_json::from_value(serde_json::json!({
+            "contract_version": fixture["contract_version"],
+            "bundle": fixture["bundle"],
+            "coverage_report": fixture["coverage_report"],
+            "licences": fixture["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|candidate| candidate["licence"].clone())
+                .collect::<Vec<_>>(),
+            "chunks": fixture["manifest"]["chunks"],
+            "result_sha256": fixture["manifest"]["result_sha256"]
+        }))
+        .unwrap(),
+        candidates: serde_json::from_value(fixture["candidates"].clone()).unwrap(),
+        selected_candidate_id: "boundary-osm-relation-100".into(),
+    }
+}
+
+fn partial_acquisition_checkpoint() -> FoundationAcquisitionCheckpoint {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/acquisition/v1/fixtures/canonical-acquisition.json"
+    ))
+    .unwrap();
+    let mut manifest: ResultManifest = serde_json::from_value(serde_json::json!({
+        "contract_version": fixture["contract_version"],
+        "bundle": fixture["bundle"],
+        "coverage_report": fixture["coverage_report"],
+        "licences": fixture["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|observation| observation["licence"].clone())
+            .collect::<Vec<_>>(),
+        "chunks": fixture["manifest"]["chunks"],
+        "result_sha256": fixture["manifest"]["result_sha256"]
+    }))
+    .unwrap();
+    let observations: Vec<SourceObservation> =
+        serde_json::from_value(fixture["observations"].clone()).unwrap();
+    let canonical_ndjson = observations
+        .iter()
+        .map(|observation| serde_json::to_string(observation).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    manifest.chunks[0].uncompressed_bytes = canonical_ndjson.len() as u64;
+    let mut checkpoint = FoundationAcquisitionCheckpoint::new(
+        "acquisition-job-9",
+        "1.0.0",
+        manifest.bundle.clone(),
+        boundary_evidence().manifest.result_sha256,
+        AcquisitionRequestIdentity::new(
+            "installation-42:project-7:foundation-baseline",
+            "a".repeat(64),
+        )
+        .unwrap(),
+        AcquisitionJobState::Partial,
+        manifest.coverage_report.outcomes.clone(),
+        None,
+        30,
+    )
+    .unwrap();
+    checkpoint.record_manifest(manifest.clone()).unwrap();
+    checkpoint
+        .record_verified_chunk(VerifiedAcquisitionChunk {
+            descriptor: manifest.chunks[0].clone(),
+            canonical_ndjson,
+            observations,
+        })
+        .unwrap();
+    checkpoint
+}
+
+#[test]
+fn partial_live_acquisition_survives_save_close_reopen_and_keeps_verified_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let project_id = {
+        let mut library = library(directory.path());
+        let project = library
+            .create_project(scope(), "resumable acquisition", actor())
+            .unwrap();
+        let project_id = project.id().clone();
+        let mut session = Schema2ProjectSession::default();
+        session.open_project(&library, &project_id).unwrap();
+        session
+            .apply_semantic_operation(&mut library, "confirm boundary", |project| {
+                project.confirm_boundary(boundary_evidence(), actor())
+            })
+            .unwrap();
+        session
+            .apply_semantic_operation(
+                &mut library,
+                "checkpoint partial five-category acquisition",
+                |project| {
+                    project.record_acquisition_checkpoint(partial_acquisition_checkpoint(), actor())
+                },
+            )
+            .unwrap();
+        project_id
+    };
+
+    let reopened_library =
+        CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
+    let reopened = reopened_library.open_project(&project_id).unwrap();
+    let checkpoint = reopened.acquisition_checkpoint().unwrap();
+
+    assert_eq!(checkpoint.job_id, "acquisition-job-9");
+    assert_eq!(checkpoint.state, AcquisitionJobState::Partial);
+    assert_eq!(checkpoint.retention_days, 30);
+    assert_eq!(checkpoint.verified_chunks.len(), 1);
+    assert_eq!(checkpoint.verified_chunks[0].observations.len(), 1);
+    assert_eq!(
+        checkpoint.verified_chunks[0].descriptor.stable_cursor,
+        "v1:observations:0001:end"
+    );
+    assert!(checkpoint
+        .outcomes
+        .iter()
+        .any(|outcome| outcome.status == campus_state::ProviderOutcomeStatus::Complete));
+    assert!(checkpoint
+        .outcomes
+        .iter()
+        .any(|outcome| outcome.status == campus_state::ProviderOutcomeStatus::Failed));
+    let mut corrupt_identity = serde_json::to_value(&reopened).unwrap();
+    corrupt_identity["foundation"]["acquisitionCheckpoint"]["request_identity"]
+        ["idempotency_key"] = serde_json::json!("");
+    assert!(
+        decode_schema2_project(&serde_json::to_vec(&corrupt_identity).unwrap())
+            .unwrap_err()
+            .contains("stable idempotency key")
+    );
+    let mut missing_failure = serde_json::to_value(&reopened).unwrap();
+    let failed_outcome = missing_failure["foundation"]["acquisitionCheckpoint"]["outcomes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|outcome| outcome["status"] == "failed")
+        .unwrap();
+    failed_outcome.as_object_mut().unwrap().remove("failure");
+    assert!(
+        decode_schema2_project(&serde_json::to_vec(&missing_failure).unwrap())
+            .unwrap_err()
+            .contains("structured failure")
+    );
 }
 
 #[test]

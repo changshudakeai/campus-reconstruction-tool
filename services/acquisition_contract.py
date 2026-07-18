@@ -1,6 +1,7 @@
 """Provider-neutral decoder for the frozen Controlled Acquisition v1 contract."""
 
 import base64
+import copy
 import hashlib
 import json
 import math
@@ -188,7 +189,14 @@ class FixtureAcquisitionService:
                 ("acquisition-jobs", "acquisitionRequest"),
             )
         }
-        self._jobs: dict[str, dict[str, str]] = {}
+        self._retry_validator = Draft202012Validator(
+            {
+                "$schema": schema["$schema"],
+                "$defs": schema["$defs"],
+                "$ref": "#/$defs/retryRequest",
+            }
+        )
+        self._jobs: dict[str, dict[str, Any]] = {}
         self._request_identities: dict[tuple[str, str], tuple[str, str]] = {}
         self._next_job = 1
 
@@ -280,7 +288,21 @@ class FixtureAcquisitionService:
                 return self._job(202, previous_job_id)
             job_id = f"fixture-{self._next_job}"
             self._next_job += 1
-            self._jobs[job_id] = {"kind": kind, "state": "complete"}
+            fixture = self._fixture(kind)
+            outcomes = copy.deepcopy(fixture["coverage_report"]["outcomes"])
+            self._jobs[job_id] = {
+                "kind": kind,
+                "state": (
+                    "partial"
+                    if kind == "acquisition-jobs"
+                    and any(
+                        outcome["status"] not in COMPLETE_STATUSES
+                        for outcome in outcomes
+                    )
+                    else "complete"
+                ),
+                "outcomes": outcomes,
+            }
             self._request_identities[identity_key] = (
                 content_sha256,
                 job_id,
@@ -298,7 +320,36 @@ class FixtureAcquisitionService:
         if action is None and method == "GET":
             return self._job(200, job_id)
         if action == "retry" and method == "POST":
-            job["state"] = "complete"
+            try:
+                retry = json.loads(body or b"")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                retry = None
+            if retry is None or not self._retry_validator.is_valid(retry):
+                return self._failure(400, "invalid_retry", job_id, False)
+            known_scopes = {
+                (
+                    outcome["provider"],
+                    outcome["category"],
+                    outcome["tile_id"],
+                )
+                for outcome in job["outcomes"]
+            }
+            requested_scopes = {
+                (scope["provider"], scope["category"], scope["tile_id"])
+                for scope in retry["scopes"]
+            }
+            if not requested_scopes.issubset(known_scopes):
+                return self._failure(
+                    409, "unknown_retry_scope", job_id, False
+                )
+            job["state"] = (
+                "partial"
+                if any(
+                    outcome["status"] not in COMPLETE_STATUSES
+                    for outcome in job["outcomes"]
+                )
+                else "complete"
+            )
             return self._job(202, job_id)
         if action == "cancel" and method == "POST":
             job["state"] = "cancelled"
@@ -368,6 +419,7 @@ class FixtureAcquisitionService:
                 "contract_version": CONTRACT_VERSION,
                 "bundle_id": self._acquisition["bundle"]["id"],
                 "state": job["state"],
+                "outcomes": job["outcomes"],
             },
         )
 

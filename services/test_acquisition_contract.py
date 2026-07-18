@@ -320,6 +320,87 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertEqual(failure["code"], "area_limit_exceeded")
         self.assertIn("Reduce", failure["suggested_action"])
 
+    def test_acquisition_job_reports_independent_outcomes_and_scoped_retry_preserves_successes(self) -> None:
+        service = FixtureAcquisitionService(FIXTURE_DIR)
+        request = {
+            "contract_version": "1.0.0",
+            "request_identity": {
+                "idempotency_key": "installation-42:project-7:foundation-baseline",
+                "content_sha256": "a" * 64,
+            },
+            "bundle_id": "cn-campus-2026-06",
+            "boundary_revision": "boundary-result-sha-256",
+            "boundary_wgs84": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [121.395, 31.202],
+                        [121.405, 31.202],
+                        [121.405, 31.212],
+                        [121.395, 31.202],
+                    ]
+                ],
+            },
+            "categories": [
+                "building",
+                "circulation",
+                "water",
+                "vegetation",
+                "sports",
+            ],
+        }
+        request["request_identity"]["content_sha256"] = request_content_sha256(request)
+        created = service.handle(
+            "POST", "/v1/acquisition-jobs", json.dumps(request).encode("utf-8")
+        )
+        job_id = json.loads(created.body)["job_id"]
+
+        before = json.loads(
+            service.handle("GET", f"/v1/acquisition-jobs/{job_id}").body
+        )
+        successful = [
+            outcome
+            for outcome in before["outcomes"]
+            if outcome["status"] in {"complete", "complete-empty"}
+        ]
+        self.assertEqual(before["state"], "partial")
+        self.assertEqual(
+            {outcome["category"] for outcome in before["outcomes"]},
+            {"building", "circulation", "water", "vegetation", "sports"},
+        )
+
+        retried = service.handle(
+            "POST",
+            f"/v1/acquisition-jobs/{job_id}/retry",
+            json.dumps(
+                {
+                    "scopes": [
+                        {
+                            "provider": "overture",
+                            "category": "vegetation",
+                            "tile_id": "31/121/2",
+                        }
+                    ]
+                }
+            ).encode("utf-8"),
+        )
+        after = json.loads(retried.body)
+        self.assertEqual(
+            [
+                outcome
+                for outcome in after["outcomes"]
+                if outcome["status"] in {"complete", "complete-empty"}
+            ],
+            successful,
+        )
+        unknown = service.handle(
+            "POST",
+            f"/v1/acquisition-jobs/{job_id}/retry",
+            b'{"scopes":[{"provider":"osm","category":"sports","tile_id":"unknown"}]}',
+        )
+        self.assertEqual(unknown.status, 409)
+        self.assertEqual(json.loads(unknown.body)["code"], "unknown_retry_scope")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 use crate::{
-    BoundaryCandidate, FoundationCategory, ResultManifest, SourceGeometry, SourceObservation,
+    BoundaryCandidate, FoundationAcquisitionCheckpoint, FoundationCategory, ProviderOutcomeStatus,
+    ResultManifest, SourceGeometry, SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -408,6 +409,8 @@ pub struct ExportedFoundationOutput {
 #[serde(rename_all = "camelCase")]
 struct FoundationTracerState {
     boundary: Option<PinnedBoundaryEvidence>,
+    #[serde(default)]
+    acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
     acquisition: Option<PinnedAcquisitionEvidence>,
     review_ledger: FoundationReviewLedger,
     generation_settings: FoundationGenerationSettings,
@@ -640,6 +643,14 @@ impl Schema2Project {
         })
     }
 
+    pub fn boundary_evidence(&self) -> Option<&PinnedBoundaryEvidence> {
+        self.foundation.boundary.as_ref()
+    }
+
+    pub fn acquisition_checkpoint(&self) -> Option<&FoundationAcquisitionCheckpoint> {
+        self.foundation.acquisition_checkpoint.as_ref()
+    }
+
     pub fn foundation_review(&self) -> &FoundationReviewLedger {
         &self.foundation.review_ledger
     }
@@ -713,6 +724,7 @@ impl Schema2Project {
         }
         self.mark_updated(actor)?;
         self.foundation.boundary = Some(evidence);
+        self.foundation.acquisition_checkpoint = None;
         self.foundation.acquisition = None;
         self.foundation.generated = None;
         self.foundation.exported = None;
@@ -721,6 +733,80 @@ impl Schema2Project {
         self.workflow.review = DurableTaskState::Pending;
         self.workflow.generation = DurableTaskState::Pending;
         self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn record_acquisition_checkpoint(
+        &mut self,
+        checkpoint: FoundationAcquisitionCheckpoint,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .ok_or("Confirm a Campus Boundary before starting Foundation acquisition")?;
+        checkpoint.validate()?;
+        if checkpoint.bundle != boundary.manifest.bundle
+            || checkpoint.boundary_revision != boundary.manifest.result_sha256
+        {
+            return Err(
+                "Foundation acquisition must reuse the confirmed Boundary Discovery Snapshot"
+                    .into(),
+            );
+        }
+        if let Some(previous) = &self.foundation.acquisition_checkpoint {
+            if checkpoint.job_id != previous.job_id
+                || checkpoint.contract_version != previous.contract_version
+                || checkpoint.bundle != previous.bundle
+                || checkpoint.boundary_revision != previous.boundary_revision
+                || checkpoint.request_identity != previous.request_identity
+                || checkpoint.retention_days != previous.retention_days
+            {
+                return Err(
+                    "Resumed Foundation acquisition changed its pinned request or bundle identity"
+                        .into(),
+                );
+            }
+            for successful in previous.outcomes.iter().filter(|outcome| {
+                matches!(
+                    outcome.status,
+                    ProviderOutcomeStatus::Complete | ProviderOutcomeStatus::CompleteEmpty
+                )
+            }) {
+                if !checkpoint
+                    .outcomes
+                    .iter()
+                    .any(|current| current == successful)
+                {
+                    return Err(
+                        "Resumed Foundation acquisition discarded successful provider evidence"
+                            .into(),
+                    );
+                }
+            }
+            for verified in &previous.verified_chunks {
+                if !checkpoint
+                    .verified_chunks
+                    .iter()
+                    .any(|current| current == verified)
+                {
+                    return Err(
+                        "Resumed Foundation acquisition discarded a verified result chunk".into(),
+                    );
+                }
+            }
+        }
+        self.mark_updated(actor)?;
+        self.foundation.acquisition_checkpoint = Some(checkpoint);
+        if self.foundation.acquisition.is_none() {
+            self.foundation.generated = None;
+            self.foundation.exported = None;
+            self.workflow.acquisition = DurableTaskState::Pending;
+            self.workflow.review = DurableTaskState::Pending;
+            self.workflow.generation = DurableTaskState::Pending;
+            self.workflow.export = DurableTaskState::Pending;
+        }
         Ok(())
     }
 
@@ -1817,6 +1903,21 @@ fn validate_schema2_project(project: &Schema2Project) -> Result<(), String> {
         || profile.block_catalog_id != expected.block_catalog_id
     {
         return Err("V1.1 requires the Minecraft Java Edition 26.1.2 compatibility profile".into());
+    }
+    if let Some(checkpoint) = &project.foundation.acquisition_checkpoint {
+        checkpoint.validate()?;
+        let boundary =
+            project.foundation.boundary.as_ref().ok_or(
+                "A Foundation acquisition checkpoint requires confirmed boundary evidence",
+            )?;
+        if checkpoint.bundle != boundary.manifest.bundle
+            || checkpoint.boundary_revision != boundary.manifest.result_sha256
+        {
+            return Err(
+                "Foundation acquisition checkpoint does not match confirmed boundary evidence"
+                    .into(),
+            );
+        }
     }
     validate_project_history(project)?;
     Ok(())
