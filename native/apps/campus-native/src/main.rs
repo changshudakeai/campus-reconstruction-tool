@@ -2333,6 +2333,13 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if let Err(error) = v11_acquisition_client::production_client_if_configured(
+        std::env::var("CAMPUS_ACQUISITION_SERVICE_URL")
+            .ok()
+            .as_deref(),
+    ) {
+        eprintln!("V1.1 production acquisition client failed: {error}");
+    }
     if let Err(error) = v11_acquisition_client::bootstrap_fixture_if_enabled(
         cfg!(debug_assertions),
         std::env::var("CAMPUS_V11_ACQUISITION_FIXTURE")
