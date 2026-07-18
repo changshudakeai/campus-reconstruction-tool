@@ -2,6 +2,7 @@
 
 mod v11_acquisition_client;
 mod v11_project_kernel;
+mod v11_tracer_bullet;
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
@@ -2358,6 +2359,20 @@ fn main() -> Result<(), slint::PlatformError> {
         std::env::var("CAMPUS_V11_PROJECT_KERNEL").ok().as_deref(),
     ) {
         eprintln!("V1.1 development project kernel failed: {error}");
+    }
+    match v11_tracer_bullet::bootstrap_if_enabled(
+        &app_data_dir(),
+        std::env::var("CAMPUS_V11_FIXED_TRACER").ok().as_deref(),
+    ) {
+        Ok(Some(report)) => eprintln!(
+            "V1.1 fixed-Dataset tracer {} exported {} bytes to {} with manifest {}",
+            report.project_id.as_str(),
+            report.schematic_bytes,
+            report.schematic_path.display(),
+            report.manifest_path.display()
+        ),
+        Ok(None) => {}
+        Err(error) => eprintln!("V1.1 fixed-Dataset tracer bullet failed: {error}"),
     }
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.iter().any(|argument| argument == "--self-test") {

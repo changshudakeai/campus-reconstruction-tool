@@ -1,3 +1,6 @@
+mod schema2_foundation;
+
+pub use schema2_foundation::*;
 use campus_state::{CampusProject, FeatureKind, GeoPoint};
 use fastnbt::{ByteArray, IntArray};
 use flate2::{write::GzEncoder, Compression};

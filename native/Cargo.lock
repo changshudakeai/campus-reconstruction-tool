@@ -784,7 +784,9 @@ dependencies = [
  "keyring",
  "rand",
  "rfd",
+ "serde",
  "serde_json",
+ "sha2",
  "slint",
  "slint-build",
  "tempfile",
@@ -809,7 +811,6 @@ name = "campus-services"
 version = "0.1.0"
 dependencies = [
  "base64",
- "campus-export",
  "campus-state",
  "flate2",
  "png 0.17.16",
@@ -817,7 +818,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
 ]
 
 [[package]]
