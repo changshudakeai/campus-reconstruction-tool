@@ -1,6 +1,7 @@
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -184,6 +185,155 @@ pub struct DurableWorkflowState {
     optional_state: Map<String, Value>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum FoundationCategory {
+    Building,
+    Circulation,
+    Water,
+    Vegetation,
+    Sports,
+}
+
+impl FoundationCategory {
+    pub const ALL: [Self; 5] = [
+        Self::Building,
+        Self::Circulation,
+        Self::Water,
+        Self::Vegetation,
+        Self::Sports,
+    ];
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedBoundaryEvidence {
+    pub bundle_id: String,
+    pub result_sha256: String,
+    pub candidate_id: String,
+    pub geometry: Vec<[f64; 2]>,
+    pub candidates: Vec<PinnedBoundaryCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedBoundaryCandidate {
+    pub id: String,
+    pub rank: u32,
+    pub geometry: Vec<[f64; 2]>,
+    pub provider: String,
+    pub dataset_release: String,
+    pub source_record_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedFoundationObservation {
+    pub id: String,
+    pub category: FoundationCategory,
+    pub review_geometry: Vec<[f64; 2]>,
+    pub source_record_id: String,
+    pub dataset_release: String,
+    pub geometry_sha256: String,
+    pub licence_identifier: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedCoverageOutcome {
+    pub provider: String,
+    pub category: FoundationCategory,
+    pub tile_id: String,
+    pub status: String,
+    pub gaps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedAcquisitionEvidence {
+    pub bundle_id: String,
+    pub result_sha256: String,
+    pub observation_count: usize,
+    pub observations: Vec<PinnedFoundationObservation>,
+    pub coverage_outcomes: Vec<PinnedCoverageOutcome>,
+    pub coverage_gaps: BTreeMap<FoundationCategory, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinnedFoundationEvidence<'a> {
+    pub boundary: &'a PinnedBoundaryEvidence,
+    pub acquisition: &'a PinnedAcquisitionEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "decision")]
+pub enum FoundationReviewDisposition {
+    SelectedEvidence { evidence_ids: Vec<String> },
+    CompleteEmpty,
+    KnownGap { reasons: Vec<String> },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationReviewState {
+    dispositions: BTreeMap<FoundationCategory, FoundationReviewDisposition>,
+}
+
+impl FoundationReviewState {
+    pub fn disposition(
+        &self,
+        category: FoundationCategory,
+    ) -> Option<&FoundationReviewDisposition> {
+        self.dispositions.get(&category)
+    }
+
+    pub fn is_complete(&self) -> bool {
+        FoundationCategory::ALL
+            .into_iter()
+            .all(|category| self.dispositions.contains_key(&category))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedFoundationOutput {
+    pub project_revision: u64,
+    pub compatibility_profile_id: String,
+    pub width: usize,
+    pub height: usize,
+    pub length: usize,
+    pub non_air_blocks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedFoundationOutput {
+    pub project_revision: u64,
+    pub schematic_sha256: String,
+    pub schematic_bytes: u64,
+    pub manifest_file_name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct FoundationTracerState {
+    boundary: Option<PinnedBoundaryEvidence>,
+    acquisition: Option<PinnedAcquisitionEvidence>,
+    review: FoundationReviewState,
+    generated: Option<GeneratedFoundationOutput>,
+    exported: Option<ExportedFoundationOutput>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundationResumePoint {
+    BoundaryReview,
+    Acquisition,
+    Review(FoundationCategory),
+    Generation,
+    Export,
+    Complete,
+}
+
 impl DurableWorkflowState {
     fn new() -> Self {
         Self {
@@ -213,6 +363,8 @@ pub struct Schema2Project {
     audit: ProjectAudit,
     compatibility_profile: V11CompatibilityProfile,
     workflow: DurableWorkflowState,
+    #[serde(default)]
+    foundation: FoundationTracerState,
     #[serde(default, flatten)]
     optional_state: Map<String, Value>,
 }
@@ -235,6 +387,7 @@ impl Schema2Project {
             },
             compatibility_profile: V11CompatibilityProfile::minecraft_java_26_1_2(),
             workflow: DurableWorkflowState::new(),
+            foundation: FoundationTracerState::default(),
             optional_state: Map::new(),
         })
     }
@@ -267,6 +420,269 @@ impl Schema2Project {
         &self.workflow
     }
 
+    pub fn pinned_evidence(&self) -> Option<PinnedFoundationEvidence<'_>> {
+        Some(PinnedFoundationEvidence {
+            boundary: self.foundation.boundary.as_ref()?,
+            acquisition: self.foundation.acquisition.as_ref()?,
+        })
+    }
+
+    pub fn foundation_review(&self) -> &FoundationReviewState {
+        &self.foundation.review
+    }
+
+    pub fn generated_output(&self) -> Option<&GeneratedFoundationOutput> {
+        self.foundation.generated.as_ref()
+    }
+
+    pub fn exported_output(&self) -> Option<&ExportedFoundationOutput> {
+        self.foundation.exported.as_ref()
+    }
+
+    pub fn resume_point(&self) -> FoundationResumePoint {
+        if self.foundation.boundary.is_none() {
+            return FoundationResumePoint::BoundaryReview;
+        }
+        if self.foundation.acquisition.is_none() {
+            return FoundationResumePoint::Acquisition;
+        }
+        for category in FoundationCategory::ALL {
+            if self.foundation.review.disposition(category).is_none() {
+                return FoundationResumePoint::Review(category);
+            }
+        }
+        if self.foundation.generated.is_none() {
+            return FoundationResumePoint::Generation;
+        }
+        if self.foundation.exported.is_none() {
+            return FoundationResumePoint::Export;
+        }
+        FoundationResumePoint::Complete
+    }
+
+    pub fn confirm_boundary(
+        &mut self,
+        evidence: PinnedBoundaryEvidence,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        if evidence.bundle_id.trim().is_empty()
+            || evidence.result_sha256.trim().is_empty()
+            || evidence.candidate_id.trim().is_empty()
+            || evidence.candidates.is_empty()
+            || !evidence
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id == evidence.candidate_id)
+            || evidence.geometry.len() < 4
+            || evidence
+                .geometry
+                .iter()
+                .flatten()
+                .any(|coordinate| !coordinate.is_finite())
+        {
+            return Err("Confirmed boundary evidence is incomplete or invalid".into());
+        }
+        self.mark_updated(actor)?;
+        self.foundation.boundary = Some(evidence);
+        self.foundation.acquisition = None;
+        self.foundation.review = FoundationReviewState::default();
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.boundary = DurableTaskState::Confirmed;
+        self.workflow.acquisition = DurableTaskState::Pending;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn pin_acquisition(
+        &mut self,
+        evidence: PinnedAcquisitionEvidence,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .ok_or("Confirm a Campus Boundary before pinning acquisition evidence")?;
+        if evidence.bundle_id != boundary.bundle_id {
+            return Err(
+                "Boundary and acquisition evidence must use the same Dataset Bundle".into(),
+            );
+        }
+        if evidence.result_sha256.trim().is_empty()
+            || evidence.observation_count != evidence.observations.len()
+            || !FoundationCategory::ALL.into_iter().all(|category| {
+                evidence
+                    .coverage_outcomes
+                    .iter()
+                    .any(|outcome| outcome.category == category)
+            })
+        {
+            return Err("Pinned acquisition evidence is incomplete".into());
+        }
+        self.mark_updated(actor)?;
+        self.foundation.acquisition = Some(evidence);
+        self.foundation.review = FoundationReviewState::default();
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.acquisition = DurableTaskState::Confirmed;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn complete_foundation_review(
+        &mut self,
+        category: FoundationCategory,
+        disposition: FoundationReviewDisposition,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let acquisition = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Foundation categories")?;
+        match &disposition {
+            FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
+                if evidence_ids.is_empty()
+                    || evidence_ids.iter().any(|id| {
+                        !acquisition
+                            .observations
+                            .iter()
+                            .any(|item| item.category == category && item.id == *id)
+                    })
+                {
+                    return Err("Selected review evidence is not pinned for this category".into());
+                }
+            }
+            FoundationReviewDisposition::CompleteEmpty => {
+                if acquisition
+                    .observations
+                    .iter()
+                    .any(|item| item.category == category)
+                    || acquisition
+                        .coverage_gaps
+                        .get(&category)
+                        .is_some_and(|gaps| !gaps.is_empty())
+                {
+                    return Err(
+                        "A non-empty or incomplete category cannot be completed empty".into(),
+                    );
+                }
+            }
+            FoundationReviewDisposition::KnownGap { reasons } if reasons.is_empty() => {
+                return Err("A known gap requires an explicit reason".into());
+            }
+            FoundationReviewDisposition::KnownGap { .. } => {}
+        }
+        self.mark_updated(actor)?;
+        self.foundation
+            .review
+            .dispositions
+            .insert(category, disposition);
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = if self.foundation.review.is_complete() {
+            DurableTaskState::Confirmed
+        } else {
+            DurableTaskState::Pending
+        };
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn reviewed_projection(&self) -> Result<ReviewedFoundationProjection, String> {
+        if !self.foundation.review.is_complete() {
+            return Err("All five Foundation categories must be explicitly reviewed".into());
+        }
+        let evidence = self
+            .pinned_evidence()
+            .ok_or("Pinned Foundation evidence is incomplete")?;
+        let selected_ids = self
+            .foundation
+            .review
+            .dispositions
+            .values()
+            .filter_map(|disposition| match disposition {
+                FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
+                    Some(evidence_ids.as_slice())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        let selected_features = evidence
+            .acquisition
+            .observations
+            .iter()
+            .filter(|observation| selected_ids.contains(&&observation.id))
+            .cloned()
+            .collect();
+        Ok(ReviewedFoundationProjection {
+            boundary: evidence.boundary.geometry.clone(),
+            selected_features,
+        })
+    }
+
+    pub fn record_generation(
+        &mut self,
+        width: usize,
+        height: usize,
+        length: usize,
+        non_air_blocks: usize,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        self.reviewed_projection()?;
+        if width == 0 || height == 0 || length == 0 || non_air_blocks == 0 {
+            return Err("Generated Foundation output must be non-empty".into());
+        }
+        self.mark_updated(actor)?;
+        self.foundation.generated = Some(GeneratedFoundationOutput {
+            project_revision: self.workflow.project_revision,
+            compatibility_profile_id: self.compatibility_profile.profile_id.clone(),
+            width,
+            height,
+            length,
+            non_air_blocks,
+        });
+        self.foundation.exported = None;
+        self.workflow.generation = DurableTaskState::Confirmed;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(())
+    }
+
+    pub fn record_export(
+        &mut self,
+        schematic_sha256: String,
+        schematic_bytes: u64,
+        manifest_file_name: String,
+    ) -> Result<(), String> {
+        let generated = self
+            .foundation
+            .generated
+            .as_ref()
+            .ok_or("Generate the current reviewed projection before export")?;
+        if generated.project_revision != self.workflow.project_revision
+            || schematic_sha256.trim().is_empty()
+            || schematic_bytes == 0
+            || manifest_file_name.trim().is_empty()
+        {
+            return Err("Export metadata is incomplete or stale".into());
+        }
+        self.foundation.exported = Some(ExportedFoundationOutput {
+            project_revision: self.workflow.project_revision,
+            schematic_sha256,
+            schematic_bytes,
+            manifest_file_name,
+        });
+        self.workflow.export = DurableTaskState::Confirmed;
+        Ok(())
+    }
+
     pub fn mark_updated(&mut self, actor: InstallationId) -> Result<(), String> {
         self.workflow.project_revision = self
             .workflow
@@ -283,6 +699,12 @@ impl Schema2Project {
         self.name = name;
         self.mark_updated(actor)
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewedFoundationProjection {
+    pub boundary: Vec<[f64; 2]>,
+    pub selected_features: Vec<PinnedFoundationObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
