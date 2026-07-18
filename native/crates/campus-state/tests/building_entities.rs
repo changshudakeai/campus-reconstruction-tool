@@ -49,6 +49,8 @@ fn boundary_evidence() -> PinnedBoundaryEvidence {
         .unwrap(),
         candidates: serde_json::from_value(fixture["candidates"].clone()).unwrap(),
         selected_candidate_id: "boundary-osm-relation-100".into(),
+        confirmed_geometry: None,
+        assessments: Default::default(),
     }
 }
 

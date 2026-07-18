@@ -12,9 +12,9 @@ use campus_state::ProjectId;
 use campus_state::Schema2Project;
 #[cfg(debug_assertions)]
 use campus_state::{
-    BoundaryCandidate, CampusProjectLibrary, CampusScope, FoundationCategory,
-    FoundationReviewDisposition, InstallationId, PinnedAcquisitionEvidence, PinnedBoundaryEvidence,
-    ResultManifest, SourceObservation, V11ConstructionCapability,
+    CampusProjectLibrary, CampusScope, FoundationCategory, FoundationReviewDisposition,
+    InstallationId, PinnedAcquisitionEvidence, ResultManifest, SourceObservation,
+    V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
 use serde::de::DeserializeOwned;
@@ -22,8 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 #[cfg(debug_assertions)]
 use sha2::{Digest, Sha256};
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(debug_assertions)]
 pub struct FixedDatasetTracer<'a, T> {
@@ -96,27 +95,17 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         snapshot: VerifiedBoundaryDiscoverySnapshot,
         candidate_id: &str,
     ) -> Result<(), String> {
-        if !snapshot
-            .candidates
-            .iter()
-            .any(|candidate| candidate.id == candidate_id)
-        {
-            return Err(
-                "The selected Campus Boundary does not exist in the pinned snapshot".into(),
-            );
-        }
+        let mut desk =
+            super::v11_boundary_evidence_desk::evidence_desk_from_verified_snapshot(&snapshot)?;
+        desk.select_candidate(candidate_id)?;
+        let _map_surface = super::v11_boundary_evidence_desk::map_boundary_desk(&desk)
+            .ok_or("The Boundary Discovery Snapshot cannot be presented on the evidence desk")?;
+        let evidence = desk.to_pinned_evidence()?;
         let mut library = self.open_library()?;
         let mut session = campus_state::Schema2ProjectSession::default();
         session.open_project(&library, &self.project_id)?;
         session.apply_semantic_operation(&mut library, "confirm Campus Boundary", |project| {
-            project.confirm_boundary(
-                PinnedBoundaryEvidence {
-                    manifest: copy_typed(&snapshot.manifest)?,
-                    candidates: copy_typed::<_, Vec<BoundaryCandidate>>(&snapshot.candidates)?,
-                    selected_candidate_id: candidate_id.into(),
-                },
-                self.actor.clone(),
-            )
+            project.confirm_boundary(evidence, self.actor.clone())
         })
     }
 

@@ -1,6 +1,13 @@
+mod boundary_review;
 mod foundation_evidence;
 mod schema2_project;
 
+pub use boundary_review::{
+    validate_boundary_geometry, BoundaryCandidateAssessment, BoundaryCandidateDerivation,
+    BoundaryCandidateValidity, BoundaryDiscoverySnapshot, BoundaryEdgeRef,
+    BoundaryEvidenceAvailability, BoundaryEvidenceDesk, BoundaryEvidenceDeskProjection,
+    BoundaryGeometryValidity, BoundaryInteractionMode, BoundaryRecoveryAction, BoundaryVertexRef,
+};
 pub use foundation_evidence::*;
 pub use schema2_project::*;
 

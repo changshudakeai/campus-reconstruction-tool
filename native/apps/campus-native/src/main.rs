@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod v11_acquisition_client;
+#[cfg(debug_assertions)]
+mod v11_boundary_evidence_desk;
 mod v11_project_kernel;
 mod v11_tracer_bullet;
 

@@ -4,7 +4,7 @@ use crate::acquisition::{
 };
 use campus_state::{
     AcquisitionRequestIdentity, FoundationAcquisitionCheckpoint, InstallationId,
-    PinnedAcquisitionEvidence, Schema2Project,
+    PinnedAcquisitionEvidence, PinnedBoundaryEvidence, Schema2Project,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -44,15 +44,13 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
         let boundary = project
             .boundary_evidence()
             .ok_or("Confirm a Campus Boundary before starting Foundation acquisition")?;
-        let selected = boundary
-            .candidates
-            .iter()
-            .find(|candidate| candidate.id == boundary.selected_candidate_id)
-            .ok_or("The confirmed Campus Boundary candidate is unavailable")?;
+        let confirmed_geometry = boundary
+            .confirmed_geometry()
+            .ok_or("The confirmed Campus Boundary geometry is unavailable")?;
         let request = FoundationAcquisitionRequest::new(
             copy_typed(&boundary.manifest.bundle)?,
             boundary.manifest.result_sha256.clone(),
-            copy_typed::<_, SourceGeometry>(&selected.geometry)?,
+            copy_typed::<_, SourceGeometry>(confirmed_geometry)?,
             idempotency_key,
         )?;
         let capabilities = self
@@ -87,6 +85,20 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
         )?;
         project.record_acquisition_checkpoint(checkpoint, actor)?;
         Ok(ProjectAcquisitionProgress::Started)
+    }
+
+    pub fn confirm_boundary_and_start(
+        &self,
+        project: &mut Schema2Project,
+        evidence: PinnedBoundaryEvidence,
+        idempotency_key: &str,
+        actor: InstallationId,
+    ) -> Result<ProjectAcquisitionProgress, String> {
+        let mut next = project.clone();
+        next.confirm_boundary(evidence, actor.clone())?;
+        let progress = self.start_after_boundary_confirmation(&mut next, idempotency_key, actor)?;
+        *project = next;
+        Ok(progress)
     }
 
     pub fn reconnect(

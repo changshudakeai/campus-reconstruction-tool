@@ -8,7 +8,8 @@ fn main() {
 #[cfg(target_os = "windows")]
 mod windows {
     use campus_tool_protocol::{
-        read_message, write_message, MapPurpose, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+        forward_tool_events, read_message, write_message, MapBoundaryDesk, MapPurpose, ToolCommand,
+        ToolEvent, ToolKind, PROTOCOL_VERSION,
     };
     use std::sync::mpsc::{self, Sender};
     use std::thread;
@@ -17,7 +18,21 @@ mod windows {
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
-    use wry::{WebView, WebViewBuilder};
+    use wry::{
+        dpi::{LogicalPosition, LogicalSize, PhysicalSize},
+        Rect, WebView, WebViewBuilder,
+    };
+
+    type PipeThread = thread::JoinHandle<Result<(), String>>;
+    type ToolConnection = (ToolCommand, Sender<ToolEvent>, PipeThread);
+
+    fn full_window_bounds(width: u32, height: u32, scale_factor: f64) -> Rect {
+        let logical = PhysicalSize::new(width, height).to_logical::<f64>(scale_factor);
+        Rect {
+            position: LogicalPosition::new(0.0, 0.0).into(),
+            size: LogicalSize::new(logical.width, logical.height).into(),
+        }
+    }
 
     pub fn run() -> Result<(), String> {
         let pipe = std::env::args()
@@ -27,20 +42,21 @@ mod windows {
         if std::env::var_os("CAMPUS_MAP_HEADLESS").is_some() {
             return run_headless(pipe, token);
         }
-        let (config, event_tx) = connect(pipe, token)?;
+        let (config, event_tx, pipe_thread) = connect(pipe, token)?;
         let event_loop = EventLoop::new().map_err(|error| error.to_string())?;
         let mut app = MapApplication {
             window: None,
             webview: None,
             config,
             event_tx,
+            pipe_thread: Some(pipe_thread),
         };
         event_loop
             .run_app(&mut app)
             .map_err(|error| error.to_string())
     }
 
-    fn connect(pipe: String, token: String) -> Result<(ToolCommand, Sender<ToolEvent>), String> {
+    fn connect(pipe: String, token: String) -> Result<ToolConnection, String> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -70,20 +86,8 @@ mod windows {
         ))?;
         let config: ToolCommand = runtime.block_on(read_message(&mut client))?;
         let (tx, rx) = mpsc::channel::<ToolEvent>();
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("map pipe runtime");
-            runtime.block_on(async move {
-                while let Ok(event) = rx.recv() {
-                    if write_message(&mut client, &event).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        });
-        Ok((config, tx))
+        let pipe_thread = thread::spawn(move || runtime.block_on(forward_tool_events(client, rx)));
+        Ok((config, tx, pipe_thread))
     }
 
     fn run_headless(pipe: String, token: String) -> Result<(), String> {
@@ -113,7 +117,10 @@ mod windows {
             )
             .await?;
             let command: ToolCommand = read_message(&mut client).await?;
-            if !matches!(command, ToolCommand::OpenMap { .. }) {
+            if !matches!(
+                command,
+                ToolCommand::OpenMap { .. } | ToolCommand::OpenBoundaryDesk { .. }
+            ) {
                 return Err("invalid map request".into());
             }
             write_message(
@@ -139,6 +146,22 @@ mod windows {
         webview: Option<WebView>,
         config: ToolCommand,
         event_tx: Sender<ToolEvent>,
+        pipe_thread: Option<thread::JoinHandle<Result<(), String>>>,
+    }
+
+    impl MapApplication {
+        fn finish(&mut self, event_loop: &ActiveEventLoop, error: Option<String>) {
+            if let Some(message) = error {
+                let _ = self.event_tx.send(ToolEvent::Error { message });
+            }
+            let _ = self.event_tx.send(ToolEvent::Closed {
+                tool: ToolKind::Map,
+            });
+            if let Some(pipe_thread) = self.pipe_thread.take() {
+                let _ = pipe_thread.join();
+            }
+            event_loop.exit();
+        }
     }
 
     impl ApplicationHandler for MapApplication {
@@ -146,24 +169,46 @@ mod windows {
             if self.window.is_some() {
                 return;
             }
-            let window = event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("高德 3D 校区工具")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1100, 760)),
-                )
-                .expect("create map window");
+            let window = match event_loop.create_window(
+                Window::default_attributes()
+                    .with_title("高德 3D 校区工具")
+                    .with_inner_size(winit::dpi::LogicalSize::new(1100, 760)),
+            ) {
+                Ok(window) => window,
+                Err(error) => {
+                    self.finish(
+                        event_loop,
+                        Some(format!("create map window failed: {error}")),
+                    );
+                    return;
+                }
+            };
             let html = map_html(&self.config);
             let tx = self.event_tx.clone();
-            let webview = WebViewBuilder::new()
+            let initial_size = window.inner_size();
+            let webview = match WebViewBuilder::new()
                 .with_html(html)
+                .with_bounds(full_window_bounds(
+                    initial_size.width,
+                    initial_size.height,
+                    window.scale_factor(),
+                ))
                 .with_ipc_handler(move |request| {
                     if let Ok(event) = serde_json::from_str::<ToolEvent>(request.body()) {
                         let _ = tx.send(event);
                     }
                 })
                 .build_as_child(&window)
-                .expect("create map webview");
+            {
+                Ok(webview) => webview,
+                Err(error) => {
+                    self.finish(
+                        event_loop,
+                        Some(format!("create map webview failed: {error}")),
+                    );
+                    return;
+                }
+            };
             let _ = self.event_tx.send(ToolEvent::Ready {
                 protocol_version: PROTOCOL_VERSION,
                 tool: ToolKind::Map,
@@ -178,16 +223,53 @@ mod windows {
             _window_id: WindowId,
             event: WindowEvent,
         ) {
-            if event == WindowEvent::CloseRequested {
-                let _ = self.event_tx.send(ToolEvent::Closed {
-                    tool: ToolKind::Map,
-                });
-                event_loop.exit();
+            match event {
+                WindowEvent::Resized(size) => {
+                    if let (Some(window), Some(webview)) =
+                        (self.window.as_ref(), self.webview.as_ref())
+                    {
+                        if let Err(error) = webview.set_bounds(full_window_bounds(
+                            size.width,
+                            size.height,
+                            window.scale_factor(),
+                        )) {
+                            let _ = self.event_tx.send(ToolEvent::Error {
+                                message: format!("map webview resize failed: {error}"),
+                            });
+                        }
+                    }
+                }
+                WindowEvent::CloseRequested => {
+                    self.finish(event_loop, None);
+                }
+                _ => {}
             }
         }
     }
 
     fn map_html(command: &ToolCommand) -> String {
+        if let ToolCommand::OpenBoundaryDesk { request } = command {
+            let open_map = ToolCommand::OpenMap {
+                campus_name: request.campus_name.clone(),
+                center_lng: request.center_lng,
+                center_lat: request.center_lat,
+                zoom: request.zoom,
+                pitch: request.pitch,
+                rotation: request.rotation,
+                js_api_key: request.js_api_key.clone(),
+                security_code: request.security_code.clone(),
+                boundary: Vec::new(),
+                purpose: MapPurpose::CampusBoundary,
+                overlays: Vec::new(),
+                feature_kind: None,
+                english: request.english,
+            };
+            return map_html_request(&open_map, Some(&request.desk));
+        }
+        map_html_request(command, None)
+    }
+
+    fn map_html_request(command: &ToolCommand, boundary_desk: Option<&MapBoundaryDesk>) -> String {
         let ToolCommand::OpenMap {
             campus_name,
             center_lng,
@@ -214,6 +296,7 @@ mod windows {
         let security = serde_json::to_string(security_code).unwrap();
         let boundary = serde_json::to_string(boundary).unwrap();
         let overlays = serde_json::to_string(overlays).unwrap();
+        let boundary_desk = serde_json::to_string(&boundary_desk).unwrap();
         let initial_points = if *purpose == MapPurpose::FoundationFeatureDrawing {
             "[]".to_string()
         } else {
@@ -222,33 +305,101 @@ mod windows {
         let feature_kind =
             serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
         let (bar, editing_script) = match purpose {
-            MapPurpose::CampusReview => (
+            MapPurpose::CampusSelection => (
                 if *english {
-                    r#"<input id="poi-query" aria-label="Campus name" placeholder="Search school or campus"><button id="poi-search" class="secondary">Gaode search</button><select id="poi-results" aria-label="Search results" hidden></select><button id="poi-confirm" hidden>Confirm campus</button><button id="draw" class="secondary">Draw boundary</button><button id="clear" class="secondary">Clear boundary</button><button id="save" class="secondary">Save boundary</button><button id="query">Query open data</button><button id="capture">Visual gap recovery</button>"#.to_string()
+                    r#"<span class="task">1 · Select campus</span><input id="poi-query" aria-label="Campus name" placeholder="Search school or campus"><button id="poi-search">Search Gaode</button><select id="poi-results" aria-label="Search results" hidden></select><button id="poi-confirm" hidden>Use this campus</button>"#.to_string()
                 } else {
-                    r#"<input id="poi-query" aria-label="校园名称" placeholder="搜索校园或校区"><button id="poi-search" class="secondary">高德搜索</button><select id="poi-results" aria-label="搜索结果" hidden></select><button id="poi-confirm" hidden>确认校园</button><button id="draw" class="secondary">绘制边界</button><button id="clear" class="secondary">清空边界</button><button id="save" class="secondary">保存边界</button><button id="query">查询开放数据</button><button id="capture">视觉截图补缺</button>"#.to_string()
+                    r#"<span class="task">1 · 选择校区</span><input id="poi-query" aria-label="校园名称" placeholder="搜索学校或校区"><button id="poi-search">搜索高德</button><select id="poi-results" aria-label="搜索结果" hidden></select><button id="poi-confirm" hidden>使用此校区</button>"#.to_string()
                 },
                 r#"
 const english=__ENGLISH__;
 let poiSearch=null,poiCandidates=[];
 AMap.plugin('AMap.PlaceSearch',()=>{poiSearch=new AMap.PlaceSearch({pageSize:12,pageIndex:1,extensions:'base'});});
+document.getElementById('poi-query').value=__CAMPUS__;
 document.getElementById('poi-search').onclick=()=>{
   const query=document.getElementById('poi-query').value.trim();
   if(!query||!poiSearch){post({type:'error',message:english?'Enter a campus name and wait for Gaode search to become ready':'请输入校园名称并等待高德搜索服务就绪'});return;}
   poiSearch.search(query,(status,result)=>{
-    poiCandidates=status==='complete'&&result.poiList?result.poiList.pois.filter(p=>p.location):[];
+    const pois=result&&result.poiList&&Array.isArray(result.poiList.pois)?result.poiList.pois:(result&&Array.isArray(result.pois)?result.pois:(result&&result.data&&Array.isArray(result.data.pois)?result.data.pois:[]));
+    poiCandidates=status==='complete'?pois.filter(p=>p&&p.location):[];
     const select=document.getElementById('poi-results');select.replaceChildren();
     poiCandidates.forEach((poi,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=[poi.name,poi.address].filter(Boolean).join(' · ');select.appendChild(option);});
     select.hidden=poiCandidates.length===0;document.getElementById('poi-confirm').hidden=poiCandidates.length===0;
     if(poiCandidates.length){const p=poiCandidates[0];map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);}
-    else post({type:'error',message:english?'Gaode returned no campus result to confirm':'高德未返回可确认的校园结果'});
+    else {const code=typeof result==='string'?result:String((result&&(result.info||result.message||result.code))||status||'UNKNOWN');post({type:'mapSearchFailed',code});}
   });
 };
 document.getElementById('poi-results').onchange=e=>{const p=poiCandidates[Number(e.target.value)];if(p)map.setZoomAndCenter(17,[p.location.lng,p.location.lat]);};
-document.getElementById('poi-confirm').onclick=()=>{const index=Number(document.getElementById('poi-results').value),p=poiCandidates[index];if(p)post({type:'mapCampusSelected',poiId:String(p.id||''),name:String(p.name||''),lng:p.location.lng,lat:p.location.lat});};
-document.getElementById('draw').onclick=()=>{drawing=!drawing;document.getElementById('draw').textContent=drawing?(english?'Finish points':'完成点选'):(english?'Draw boundary':'绘制边界');};
-document.getElementById('clear').onclick=()=>{points=[];redraw();};
-document.getElementById('save').onclick=()=>{if(points.length>=3)post({type:'mapBoundaryChanged',points:points.map(p=>({lng:p[0],lat:p[1]}))});};
+document.getElementById('poi-confirm').onclick=()=>{const index=Number(document.getElementById('poi-results').value),p=poiCandidates[index];if(!p)return;post({type:'mapCampusSelected',poiId:String(p.id||''),name:String(p.name||''),lng:p.location.lng,lat:p.location.lat});document.getElementById('bar').innerHTML='<span class="task">'+(english?'Campus selected · return to the project':'校区已选定 · 请返回项目')+'</span>';};"#
+                    .replace("__ENGLISH__", if *english { "true" } else { "false" })
+                    .replace("__CAMPUS__", &campus),
+            ),
+            MapPurpose::CampusBoundary => (
+                if *english {
+                    r#"<div class="boundary-shell"><aside class="boundary-left"><span class="task">2 · Automatic Campus Boundary</span><h2>Ranked candidates</h2><p class="hint">Invalid candidates remain diagnosable but cannot be edited.</p><div id="boundary-candidates"></div><div id="boundary-recovery"></div></aside><section class="boundary-tools"><strong id="boundary-mode-label">Review mode</strong><button id="boundary-adjust" class="secondary">Adjust boundary</button><button id="boundary-insert" class="secondary" disabled>Insert on selected edge</button><button id="boundary-delete" class="secondary" disabled>Delete selected vertex</button><button id="boundary-undo" class="secondary" disabled>Undo</button><button id="boundary-restore" class="secondary" disabled>Restore candidate original</button><span id="boundary-validity" class="hint"></span></section><aside class="boundary-right"><h2>Lineage &amp; coverage</h2><div id="boundary-evidence"></div></aside><footer class="boundary-confirmation"><div><strong>Next: acquire Buildings, Circulation, Water, Vegetation, and Sports</strong><br><span class="hint">Save the edited boundary and discovery snapshot, then reuse this Dataset Bundle.</span></div><button id="boundary-back" class="secondary">Return to Campus Target</button><button id="boundary-confirm" disabled>Confirm boundary and begin five-category acquisition</button></footer></div>"#.to_string()
+                } else {
+                    r#"<div class="boundary-shell"><aside class="boundary-left"><span class="task">2 · 自动 Campus Boundary</span><h2>排序候选</h2><p class="hint">无效候选保留诊断，但不可编辑或确认。</p><div id="boundary-candidates"></div><div id="boundary-recovery"></div></aside><section class="boundary-tools"><strong id="boundary-mode-label">审核模式</strong><button id="boundary-adjust" class="secondary">调整边界</button><button id="boundary-insert" class="secondary" disabled>在所选边插点</button><button id="boundary-delete" class="secondary" disabled>删除所选顶点</button><button id="boundary-undo" class="secondary" disabled>撤销</button><button id="boundary-restore" class="secondary" disabled>恢复候选原状</button><span id="boundary-validity" class="hint"></span></section><aside class="boundary-right"><h2>来源与覆盖</h2><div id="boundary-evidence"></div></aside><footer class="boundary-confirmation"><div><strong>下一步：获取建筑、交通、水域、植被和体育五类地物</strong><br><span class="hint">一起保存编辑后边界和发现快照，并沿用同一 Dataset Bundle。</span></div><button id="boundary-back" class="secondary">返回 Campus Target</button><button id="boundary-confirm" disabled>确认边界并开始五类采集</button></footer></div>"#.to_string()
+                },
+                r#"
+const english=__ENGLISH__;
+const desk=__BOUNDARY_DESK__;
+const candidates=desk&&Array.isArray(desk.candidates)?desk.candidates:[];
+let activeIndex=Math.max(0,candidates.findIndex(item=>item.id===(desk&&desk.selectedCandidateId)));
+let adjustment=false,selectedVertex=null,selectedEdge=null,history=[],markers=[],edgeHits=[];
+document.getElementById('bar').classList.add('boundary-mode');
+const tx=(zh,en)=>english?en:zh;
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const active=()=>candidates[activeIndex];
+const candidatePoints=item=>{const result=(item&&item.points||[]).map(p=>[p.lng,p.lat]);if(result.length>1&&result[0][0]===result[result.length-1][0]&&result[0][1]===result[result.length-1][1])result.pop();return result};
+const validGeometry=()=>!!active()&&active().valid&&points.length>=3&&points.every(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
+const blocked=()=>desk&&desk.confirmationBlockedReason?desk.confirmationBlockedReason:(!active()?tx('没有可用的自动边界候选','No automatic boundary candidate is available'):(!active().valid?(active().invalidReasons[0]||tx('候选无效','Candidate is invalid')):(!validGeometry()?tx('编辑后的边界几何无效','Edited boundary geometry is invalid'):'')));
+const emit=operation=>post({type:'mapBoundaryOperation',candidateId:active().id,operation,points:points.map(p=>({lng:p[0],lat:p[1]}))});
+const clearHandles=()=>{if(markers.length)map.remove(markers);if(edgeHits.length)map.remove(edgeHits);markers=[];edgeHits=[]};
+const renderHandles=()=>{
+  clearHandles();if(!adjustment||!active()||!active().valid)return;
+  edgeHits=points.map((point,index)=>{const line=new AMap.Polyline({path:[point,points[(index+1)%points.length]],strokeColor:selectedEdge===index?'#e1a23a':'#a54836',strokeOpacity:selectedEdge===index?.9:.03,strokeWeight:selectedEdge===index?6:18,zIndex:120});line.on('click',()=>{selectedEdge=index;selectedVertex=null;renderDesk()});return line});
+  markers=points.map((point,index)=>{const marker=new AMap.Marker({position:point,draggable:true,anchor:'center',content:`<div class="boundary-vertex ${selectedVertex===index?'selected':''}">${index+1}</div>`,zIndex:130});marker.on('click',()=>{selectedVertex=index;selectedEdge=null;renderDesk()});marker.on('dragstart',()=>history.push(points.map(p=>[...p])));marker.on('dragend',event=>{points[index]=[event.lnglat.lng,event.lnglat.lat];selectedVertex=index;redraw();emit('move_vertex');renderDesk()});return marker});
+  map.add(edgeHits);map.add(markers);
+};
+const selectCandidate=index=>{activeIndex=index;points=candidatePoints(active());adjustment=false;selectedVertex=null;selectedEdge=null;history=[];redraw();post({type:'mapBoundaryCandidateSelected',candidateId:active().id});if(polygon)map.setFitView([polygon],false,[90,360,120,360]);renderDesk()};
+const renderDesk=()=>{
+  const item=active();
+  document.getElementById('boundary-candidates').innerHTML=candidates.map((candidate,index)=>`<button class="boundary-candidate ${index===activeIndex?'selected':''} ${candidate.valid?'':'invalid'}" data-candidate="${index}"><strong>${candidate.valid?'#'+candidate.rank:tx('无效','Invalid')}</strong><span>${esc(candidate.label)}</span><small>${esc(candidate.sourceSummary)}</small><small>${esc(candidate.valid?candidate.rankingSummary:(candidate.invalidReasons[0]||''))}</small></button>`).join('');
+  document.querySelectorAll('[data-candidate]').forEach(button=>button.onclick=()=>selectCandidate(Number(button.dataset.candidate)));
+  document.getElementById('boundary-evidence').innerHTML=item?`<p><strong>${esc(item.label)}</strong></p><p>${esc(item.lineageSummary)}</p><p><strong>Dataset Bundle</strong><br>${esc(desk.datasetBundleSummary)}</p><p><strong>Coverage</strong><br>${esc(desk.coverageSummary)}</p><p><strong>${tx('排名依据','Ranking evidence')}</strong><br>${esc(item.rankingSummary)}</p><p class="${item.valid?'':'invalid-copy'}">${item.valid?tx('几何有效，可进入调整或确认。','Geometry is valid and may be adjusted or confirmed.'):esc(item.invalidReasons.join(' · '))}</p>`:'';
+  const recovery=document.getElementById('boundary-recovery'),message=(desk&&desk.recoveryMessage)||(!candidates.length?tx('没有可用边界证据；不会启用空白绘制。','No boundary evidence is available; blank-canvas drawing stays disabled.'):'');
+  recovery.innerHTML=message?`<div class="boundary-recovery"><strong>${esc(message)}</strong><button id="boundary-retry">${tx('重试同一任务','Retry same job')}</button><button id="boundary-return">${tx('返回校区确认','Return to campus')}</button></div>`:'';
+  document.getElementById('boundary-retry')?.addEventListener('click',()=>post({type:'mapBoundaryRetryRequested'}));
+  document.getElementById('boundary-return')?.addEventListener('click',()=>post({type:'mapBoundaryReturnToCampusRequested'}));
+  document.getElementById('boundary-mode-label').textContent=adjustment?tx('调整模式 · 先选择点或边','Adjustment mode · select a vertex or edge'):tx('审核模式 · 地图浏览不会修改边界','Review mode · map browsing cannot edit');
+  const adjust=document.getElementById('boundary-adjust');adjust.disabled=!item||!item.valid;adjust.textContent=adjustment?tx('退出调整','Leave adjustment'):tx('调整边界','Adjust boundary');
+  document.getElementById('boundary-insert').disabled=!adjustment||selectedEdge===null;
+  document.getElementById('boundary-delete').disabled=!adjustment||selectedVertex===null||points.length<=3;
+  document.getElementById('boundary-undo').disabled=!history.length;
+  document.getElementById('boundary-restore').disabled=!adjustment||!item;
+  const reason=blocked(),confirm=document.getElementById('boundary-confirm');confirm.disabled=!!reason;confirm.title=reason;document.getElementById('boundary-validity').textContent=reason?tx('不可确认：','Blocked: ')+reason:tx('当前编辑几何有效','Edited geometry is valid');
+  renderHandles();
+};
+points=candidates.length?candidatePoints(active()):[];redraw();
+document.getElementById('boundary-adjust').onclick=()=>{if(!active()||!active().valid)return;adjustment=!adjustment;selectedVertex=null;selectedEdge=null;renderDesk()};
+document.getElementById('boundary-insert').onclick=()=>{if(selectedEdge===null)return;history.push(points.map(p=>[...p]));const i=selectedEdge,p=points[i],q=points[(i+1)%points.length];points.splice(i+1,0,[(p[0]+q[0])/2,(p[1]+q[1])/2]);selectedVertex=i+1;selectedEdge=null;redraw();emit('insert_vertex');renderDesk()};
+document.getElementById('boundary-delete').onclick=()=>{if(selectedVertex===null||points.length<=3)return;history.push(points.map(p=>[...p]));points.splice(selectedVertex,1);selectedVertex=null;redraw();emit('delete_vertex');renderDesk()};
+document.getElementById('boundary-undo').onclick=()=>{if(!history.length)return;points=history.pop();selectedVertex=null;selectedEdge=null;redraw();emit('undo');renderDesk()};
+document.getElementById('boundary-restore').onclick=()=>{if(!active())return;history.push(points.map(p=>[...p]));points=candidatePoints(active());selectedVertex=null;selectedEdge=null;redraw();emit('restore_candidate_original');renderDesk()};
+document.getElementById('boundary-back').onclick=()=>post({type:'mapBoundaryReturnToCampusRequested'});
+document.getElementById('boundary-confirm').onclick=()=>{const reason=blocked();if(reason){post({type:'error',message:reason});return;}post({type:'mapBoundaryConfirmed',candidateId:active().id,points:points.map(p=>({lng:p[0],lat:p[1]}))})};
+renderDesk();"#
+                    .replace("__ENGLISH__", if *english { "true" } else { "false" })
+                    .replace("__BOUNDARY_DESK__", &boundary_desk),
+            ),
+            MapPurpose::FoundationReview => (
+                if *english {
+                    r#"<span class="task">3 · Review foundation data</span><button id="query">Load open data for this view</button><button id="capture" class="secondary">Visual gap recovery</button>"#.to_string()
+                } else {
+                    r#"<span class="task">3 · 审核地基数据</span><button id="query">加载当前视野开放数据</button><button id="capture" class="secondary">视觉补缺</button>"#.to_string()
+                },
+                r#"
+const english=__ENGLISH__;
 document.getElementById('query').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};
 document.getElementById('capture').onclick=()=>{
   const source=[...document.querySelectorAll('#map canvas')].sort((a,b)=>b.width*b.height-a.width*a.height)[0];
@@ -292,12 +443,20 @@ document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'
             r#"<!doctype html><html><head><meta charset="utf-8">
 <style>html,body,#map{{margin:0;width:100%;height:100%;overflow:hidden;font-family:"Microsoft YaHei UI",sans-serif}}
 #bar{{position:absolute;z-index:5;left:16px;top:16px;background:#f4f0e5;border:1px solid #23362e;padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
-button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} input,select{{min-width:170px;padding:8px;background:#fffdf7;color:#17251f;border:1px solid #6d786f}} span{{font-weight:700;color:#17251f}} span.hint{{font-weight:400;color:#506058}}</style>
-<script>window._AMapSecurityConfig={{securityJsCode:{security}}};</script>
-<script src="https://webapi.amap.com/maps?v=2.0&key={key}"></script></head>
-<body><div id="map"></div><div id="bar"><span>{campus}</span>{bar}</div>
+button{{padding:8px 12px;background:#2f765b;color:white;border:1px solid #23362e}} button.secondary{{background:#eee6d6;color:#17251f}} button:disabled{{opacity:.5;cursor:not-allowed}} input,select{{min-width:170px;padding:8px;background:#fffdf7;color:#17251f;border:1px solid #6d786f}} span{{font-weight:700;color:#17251f}} span.hint{{font-weight:400;color:#506058}}
+#bar.boundary-mode{{inset:0;background:transparent;border:0;padding:0;display:block;pointer-events:none}} #bar.boundary-mode>span{{display:none}}
+.boundary-shell button,.boundary-shell aside,.boundary-shell section,.boundary-shell footer{{pointer-events:auto}} .boundary-left,.boundary-right{{position:absolute;top:16px;bottom:92px;width:286px;padding:16px;background:rgba(244,240,229,.97);border:1px solid #23362e;overflow:auto;box-sizing:border-box}} .boundary-left{{left:16px}} .boundary-right{{right:16px}} .boundary-tools{{position:absolute;top:16px;left:318px;right:318px;padding:10px;background:rgba(244,240,229,.96);border:1px solid #23362e;display:flex;gap:8px;align-items:center;flex-wrap:wrap}} .boundary-confirmation{{position:absolute;left:16px;right:16px;bottom:16px;min-height:58px;padding:10px 14px;background:rgba(244,240,229,.98);border:1px solid #23362e;display:flex;gap:12px;align-items:center}} .boundary-confirmation>div{{flex:1}}
+.boundary-candidate{{width:100%;margin:6px 0;text-align:left;display:grid;gap:3px;background:#fffdf7;color:#17251f}} .boundary-candidate.selected{{border:3px solid #2f765b}} .boundary-candidate.invalid{{border-style:dashed;color:#7c2f25}} .boundary-candidate small{{display:block;color:#506058}} .boundary-recovery{{margin-top:12px;padding:10px;background:#f6ddd5;border:1px solid #a54836;display:grid;gap:8px}} .invalid-copy{{color:#a54836}} .boundary-vertex{{width:22px;height:22px;border-radius:50%;background:#fffdf7;border:3px solid #a54836;color:#17251f;text-align:center;line-height:22px;font-weight:700}} .boundary-vertex.selected{{background:#e1a23a}}</style>
 <script>
 const post=(value)=>window.ipc.postMessage(JSON.stringify(value));
+const pageEnglish={english};
+window.addEventListener('error',event=>post({{type:'error',message:(pageEnglish?'Map script error: ':'地图脚本错误：')+String(event.message||event.error||'unknown error')}}));
+window.addEventListener('unhandledrejection',event=>post({{type:'error',message:(pageEnglish?'Map promise rejected: ':'地图异步任务失败：')+String(event.reason||'unknown rejection')}}));
+</script>
+<script>window._AMapSecurityConfig={{securityJsCode:{security}}};</script>
+<script src="https://webapi.amap.com/maps?v=2.0&key={key}" onerror="post({{type:'error',message:pageEnglish?'Failed to load the Gaode Maps JavaScript API':'高德地图 JavaScript API 加载失败'}})"></script></head>
+<body><div id="map"></div><div id="bar"><span>{campus}</span>{bar}</div>
+<script>
 const map=new AMap.Map('map',{{viewMode:'3D',zoom:{zoom},pitch:{pitch},rotation:{rotation},center:[{center_lng},{center_lat}],showLabel:false}});
 let drawing=false;
 let points={initial_points}.map(p=>[p.lng,p.lat]);
@@ -311,6 +470,145 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
 {editing_script}
 </script></body></html>"#,
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{full_window_bounds, map_html, MapPurpose, ToolCommand};
+        use campus_tool_protocol::{
+            MapBoundaryCandidate, MapBoundaryDesk, MapBoundaryDeskRequest, MapCoordinate,
+        };
+
+        fn map_command(purpose: MapPurpose) -> ToolCommand {
+            ToolCommand::OpenMap {
+                campus_name: "East China Normal University Putuo Campus".into(),
+                center_lng: 0.0,
+                center_lat: 0.0,
+                zoom: 17.0,
+                pitch: 45.0,
+                rotation: 0.0,
+                js_api_key: String::new(),
+                security_code: String::new(),
+                boundary: Vec::new(),
+                purpose,
+                overlays: Vec::new(),
+                feature_kind: None,
+                english: true,
+            }
+        }
+
+        fn boundary_map_command() -> ToolCommand {
+            ToolCommand::OpenBoundaryDesk {
+                request: Box::new(MapBoundaryDeskRequest {
+                    campus_name: "East China Normal University Putuo Campus".into(),
+                    center_lng: 0.0,
+                    center_lat: 0.0,
+                    zoom: 17.0,
+                    pitch: 45.0,
+                    rotation: 0.0,
+                    js_api_key: String::new(),
+                    security_code: String::new(),
+                    desk: MapBoundaryDesk {
+                        candidates: vec![
+                            MapBoundaryCandidate {
+                                id: "boundary-osm-1".into(),
+                                rank: 1,
+                                label: "OSM education relation".into(),
+                                valid: true,
+                                invalid_reasons: Vec::new(),
+                                points: vec![
+                                    MapCoordinate { lng: 1.0, lat: 1.0 },
+                                    MapCoordinate { lng: 2.0, lat: 1.0 },
+                                    MapCoordinate { lng: 2.0, lat: 2.0 },
+                                ],
+                                source_summary: "OSM relation/1".into(),
+                                ranking_summary: "name match; contains anchor".into(),
+                                lineage_summary: "complete relation assembly".into(),
+                            },
+                            MapBoundaryCandidate {
+                                id: "boundary-invalid-2".into(),
+                                rank: 2,
+                                label: "Incomplete relation".into(),
+                                valid: false,
+                                invalid_reasons: vec!["missing outer relation members".into()],
+                                points: Vec::new(),
+                                source_summary: "OSM relation/2".into(),
+                                ranking_summary: "partial evidence".into(),
+                                lineage_summary: "incomplete relation assembly".into(),
+                            },
+                        ],
+                        selected_candidate_id: Some("boundary-osm-1".into()),
+                        dataset_bundle_summary: "osm-2026-06 + overture-2026-06-17.0".into(),
+                        coverage_summary: "complete 12/12 tiles".into(),
+                        confirmation_blocked_reason: None,
+                        recovery_message: None,
+                    },
+                    english: true,
+                }),
+            }
+        }
+
+        #[test]
+        fn webview_bounds_fill_the_window_at_any_scale_factor() {
+            let standard = full_window_bounds(1100, 760, 1.0);
+            let standard_size = standard.size.to_logical::<f64>(1.0);
+            assert_eq!(standard_size.width, 1100.0);
+            assert_eq!(standard_size.height, 760.0);
+
+            let scaled = full_window_bounds(1650, 1140, 1.5);
+            let scaled_size = scaled.size.to_logical::<f64>(1.0);
+            assert_eq!(scaled_size.width, 1100.0);
+            assert_eq!(scaled_size.height, 760.0);
+        }
+
+        #[test]
+        fn map_page_reports_script_failures_to_the_parent() {
+            let html = map_html(&map_command(MapPurpose::CampusSelection));
+
+            assert!(html.contains("window.addEventListener('error'"));
+            assert!(html.contains("window.addEventListener('unhandledrejection'"));
+            assert!(html.contains("Failed to load the Gaode Maps JavaScript API"));
+        }
+
+        #[test]
+        fn campus_search_preserves_gaode_errors_and_accepts_supported_result_shapes() {
+            let html = map_html(&map_command(MapPurpose::CampusSelection));
+
+            assert!(html.contains("mapSearchFailed"));
+            assert!(html.contains("result.data"));
+            assert!(!html.contains("DEBUG-gaode-search"));
+        }
+
+        #[test]
+        fn map_tasks_expose_only_controls_for_the_current_job() {
+            let selection = map_html(&map_command(MapPurpose::CampusSelection));
+            assert!(selection.contains("Select campus"));
+            assert!(selection.contains("Search Gaode"));
+            assert!(!selection.contains("Confirm campus boundary"));
+            assert!(!selection.contains("Load open data for this view"));
+            assert!(!selection.contains("Visual gap recovery"));
+
+            let boundary = map_html(&boundary_map_command());
+            assert!(boundary.contains("Automatic Campus Boundary"));
+            assert!(boundary.contains("Confirm boundary"));
+            assert!(boundary.contains("Ranked candidates"));
+            assert!(boundary.contains("Lineage &amp; coverage"));
+            assert!(boundary.contains("Adjustment mode"));
+            assert!(boundary.contains("mapBoundaryOperation"));
+            assert!(boundary.contains("mapBoundaryRetryRequested"));
+            assert!(boundary.contains("missing outer relation members"));
+            assert!(!boundary.contains("Click the map to add boundary nodes"));
+            assert!(!boundary.contains("id=\"clear\""));
+            assert!(!boundary.contains("Search Gaode"));
+            assert!(!boundary.contains("Visual gap recovery"));
+
+            let review = map_html(&map_command(MapPurpose::FoundationReview));
+            assert!(review.contains("Review foundation data"));
+            assert!(review.contains("Load open data for this view"));
+            assert!(review.contains("Visual gap recovery"));
+            assert!(!review.contains("Search Gaode"));
+            assert!(!review.contains("Confirm boundary"));
+        }
     }
 }
 

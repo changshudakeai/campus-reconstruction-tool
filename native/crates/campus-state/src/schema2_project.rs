@@ -1,5 +1,7 @@
 use crate::{
-    BoundaryCandidate, BuildingEntityDecision, BuildingEntityReviewLedger, BuildingGenerationBasis,
+    validate_boundary_geometry, BoundaryCandidate, BoundaryCandidateAssessment,
+    BoundaryCandidateValidity, BoundaryDiscoverySnapshot, BoundaryEvidenceDesk,
+    BuildingEntityDecision, BuildingEntityReviewLedger, BuildingGenerationBasis,
     BuildingNameEvidence, FoundationAcquisitionCheckpoint, FoundationCategory,
     ProviderOutcomeStatus, ResultManifest, ReviewedBuildingEntity, SourceGeometry,
     SourceObservation,
@@ -227,6 +229,21 @@ pub struct PinnedBoundaryEvidence {
     pub manifest: ResultManifest,
     pub candidates: Vec<BoundaryCandidate>,
     pub selected_candidate_id: String,
+    #[serde(default)]
+    pub confirmed_geometry: Option<SourceGeometry>,
+    #[serde(default)]
+    pub assessments: BTreeMap<String, BoundaryCandidateAssessment>,
+}
+
+impl PinnedBoundaryEvidence {
+    pub fn confirmed_geometry(&self) -> Option<&SourceGeometry> {
+        self.confirmed_geometry.as_ref().or_else(|| {
+            self.candidates
+                .iter()
+                .find(|candidate| candidate.id == self.selected_candidate_id)
+                .map(|candidate| &candidate.geometry)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -442,6 +459,8 @@ pub struct ExportedFoundationOutput {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct FoundationTracerState {
+    #[serde(default)]
+    boundary_review: Option<BoundaryEvidenceDesk>,
     boundary: Option<PinnedBoundaryEvidence>,
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
@@ -687,6 +706,47 @@ impl Schema2Project {
         self.foundation.boundary.as_ref()
     }
 
+    pub fn boundary_review(&self) -> Option<&BoundaryEvidenceDesk> {
+        self.foundation.boundary_review.as_ref()
+    }
+
+    pub fn begin_boundary_review(
+        &mut self,
+        snapshot: BoundaryDiscoverySnapshot,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let desk = BoundaryEvidenceDesk::new(snapshot)?;
+        self.mark_updated(actor)?;
+        self.foundation.boundary_review = Some(desk);
+        Ok(())
+    }
+
+    pub fn edit_boundary_review<T>(
+        &mut self,
+        actor: InstallationId,
+        edit: impl FnOnce(&mut BoundaryEvidenceDesk) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut desk = self
+            .foundation
+            .boundary_review
+            .clone()
+            .ok_or("Load automatic Campus Boundary evidence before reviewing it")?;
+        let output = edit(&mut desk)?;
+        self.mark_updated(actor)?;
+        self.foundation.boundary_review = Some(desk);
+        Ok(output)
+    }
+
+    pub fn confirm_boundary_review(&mut self, actor: InstallationId) -> Result<(), String> {
+        let evidence = self
+            .foundation
+            .boundary_review
+            .as_ref()
+            .ok_or("Load automatic Campus Boundary evidence before confirming it")?
+            .to_pinned_evidence()?;
+        self.confirm_boundary(evidence, actor)
+    }
+
     pub fn acquisition_checkpoint(&self) -> Option<&FoundationAcquisitionCheckpoint> {
         self.foundation.acquisition_checkpoint.as_ref()
     }
@@ -753,11 +813,9 @@ impl Schema2Project {
         evidence: PinnedBoundaryEvidence,
         actor: InstallationId,
     ) -> Result<(), String> {
-        let selected_geometry = evidence
-            .candidates
-            .iter()
-            .find(|candidate| candidate.id == evidence.selected_candidate_id)
-            .map(|candidate| &candidate.geometry);
+        let selected_geometry = evidence.confirmed_geometry();
+        let geometry_validity = selected_geometry.map(validate_boundary_geometry);
+        let selected_assessment = evidence.assessments.get(&evidence.selected_candidate_id);
         if evidence.manifest.bundle.id.trim().is_empty()
             || evidence.manifest.result_sha256.trim().is_empty()
             || evidence.selected_candidate_id.trim().is_empty()
@@ -771,10 +829,29 @@ impl Schema2Project {
                     .flatten()
                     .any(|coordinate| !coordinate.is_finite())
             })
+            || geometry_validity
+                .as_ref()
+                .is_some_and(|validity| !validity.valid)
+            || matches!(
+                selected_assessment.map(|assessment| &assessment.validity),
+                Some(BoundaryCandidateValidity::Invalid { .. })
+            )
         {
-            return Err("Confirmed boundary evidence is incomplete or invalid".into());
+            let reason = selected_assessment
+                .and_then(|assessment| match &assessment.validity {
+                    BoundaryCandidateValidity::Valid => None,
+                    BoundaryCandidateValidity::Invalid { reasons } => reasons.first().cloned(),
+                })
+                .or_else(|| {
+                    geometry_validity
+                        .as_ref()
+                        .and_then(|validity| validity.reasons.first().cloned())
+                })
+                .unwrap_or_else(|| "boundary evidence is incomplete".into());
+            return Err(format!("Confirmed boundary evidence is invalid: {reason}"));
         }
         self.mark_updated(actor)?;
+        self.foundation.boundary_review = None;
         self.foundation.boundary = Some(evidence);
         self.foundation.acquisition_checkpoint = None;
         self.foundation.acquisition = None;

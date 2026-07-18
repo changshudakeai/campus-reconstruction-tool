@@ -12,7 +12,7 @@ use campus_services::acquisition::{
 };
 use campus_state::{
     CampusProjectLibrary, CampusScope, InstallationId, PinnedBoundaryEvidence,
-    Schema2ProjectSession, V11ConstructionCapability,
+    Schema2ProjectSession, SourceGeometry, V11ConstructionCapability,
 };
 
 const ACQUISITION_FIXTURE: &str =
@@ -87,6 +87,8 @@ fn boundary_evidence() -> PinnedBoundaryEvidence {
         .unwrap(),
         candidates: serde_json::from_value(fixture["candidates"].clone()).unwrap(),
         selected_candidate_id: "boundary-osm-relation-100".into(),
+        confirmed_geometry: None,
+        assessments: Default::default(),
     }
 }
 
@@ -180,22 +182,45 @@ fn native_project_saves_closes_reopens_and_resumes_a_partially_delivered_live_jo
     let coordinator = ProjectAcquisitionCoordinator::new(&client);
     let mut session = Schema2ProjectSession::default();
     session.open_project(&library, &project_id).unwrap();
+    let edited_boundary = SourceGeometry::Polygon(vec![vec![
+        [121.397, 31.218],
+        [121.411, 31.218],
+        [121.410, 31.230],
+        [121.397, 31.230],
+        [121.397, 31.218],
+    ]]);
+    let mut reviewed_boundary = boundary_evidence();
+    reviewed_boundary.confirmed_geometry = Some(edited_boundary.clone());
     session
-        .apply_semantic_operation(&mut library, "confirm boundary", |project| {
-            project.confirm_boundary(boundary_evidence(), actor())
-        })
+        .apply_semantic_operation(
+            &mut library,
+            "confirm boundary and start five-category acquisition",
+            |project| {
+                coordinator
+                    .confirm_boundary_and_start(
+                        project,
+                        reviewed_boundary,
+                        "installation-42:project-7:foundation-baseline",
+                        actor(),
+                    )
+                    .map(|_| ())
+            },
+        )
         .unwrap();
-    session
-        .apply_semantic_operation(&mut library, "start live acquisition", |project| {
-            coordinator
-                .start_after_boundary_confirmation(
-                    project,
-                    "installation-42:project-7:foundation-baseline",
-                    actor(),
-                )
-                .map(|_| ())
-        })
+    let acquisition_request = requests
+        .borrow()
+        .iter()
+        .find(|request| request.path.ends_with("/acquisition-jobs"))
+        .unwrap()
+        .body
+        .as_ref()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body).unwrap())
         .unwrap();
+    assert_eq!(
+        acquisition_request["boundary_wgs84"],
+        serde_json::to_value(&edited_boundary).unwrap(),
+        "the first five-category job must use the reviewed geometry, not the source candidate"
+    );
     session
         .apply_semantic_operation(&mut library, "pin live manifest", |project| {
             coordinator.pin_manifest(project, actor()).map(|_| ())
