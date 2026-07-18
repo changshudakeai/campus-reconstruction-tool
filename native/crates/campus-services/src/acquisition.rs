@@ -10,8 +10,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub mod tracer_bullet;
-
 pub const CONTRACT_VERSION: &str = "1.0.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

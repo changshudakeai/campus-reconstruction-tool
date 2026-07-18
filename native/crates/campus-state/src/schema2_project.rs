@@ -1,7 +1,9 @@
+use crate::{
+    BoundaryCandidate, FoundationCategory, ResultManifest, SourceGeometry, SourceObservation,
+};
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -185,78 +187,19 @@ pub struct DurableWorkflowState {
     optional_state: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "lowercase")]
-pub enum FoundationCategory {
-    Building,
-    Circulation,
-    Water,
-    Vegetation,
-    Sports,
-}
-
-impl FoundationCategory {
-    pub const ALL: [Self; 5] = [
-        Self::Building,
-        Self::Circulation,
-        Self::Water,
-        Self::Vegetation,
-        Self::Sports,
-    ];
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedBoundaryEvidence {
-    pub bundle_id: String,
-    pub result_sha256: String,
-    pub candidate_id: String,
-    pub geometry: Vec<[f64; 2]>,
-    pub candidates: Vec<PinnedBoundaryCandidate>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PinnedBoundaryCandidate {
-    pub id: String,
-    pub rank: u32,
-    pub geometry: Vec<[f64; 2]>,
-    pub provider: String,
-    pub dataset_release: String,
-    pub source_record_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PinnedFoundationObservation {
-    pub id: String,
-    pub category: FoundationCategory,
-    pub review_geometry: Vec<[f64; 2]>,
-    pub source_record_id: String,
-    pub dataset_release: String,
-    pub geometry_sha256: String,
-    pub licence_identifier: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PinnedCoverageOutcome {
-    pub provider: String,
-    pub category: FoundationCategory,
-    pub tile_id: String,
-    pub status: String,
-    pub gaps: Vec<String>,
+    pub manifest: ResultManifest,
+    pub candidates: Vec<BoundaryCandidate>,
+    pub selected_candidate_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedAcquisitionEvidence {
-    pub bundle_id: String,
-    pub result_sha256: String,
-    pub observation_count: usize,
-    pub observations: Vec<PinnedFoundationObservation>,
-    pub coverage_outcomes: Vec<PinnedCoverageOutcome>,
-    pub coverage_gaps: BTreeMap<FoundationCategory, Vec<String>>,
+    pub manifest: ResultManifest,
+    pub observations: Vec<SourceObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -273,24 +216,64 @@ pub enum FoundationReviewDisposition {
     KnownGap { reasons: Vec<String> },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FoundationReviewState {
-    dispositions: BTreeMap<FoundationCategory, FoundationReviewDisposition>,
+pub struct FoundationReviewEntry {
+    pub sequence: u64,
+    pub category: FoundationCategory,
+    pub disposition: FoundationReviewDisposition,
+    pub evidence_result_sha256: String,
+    pub recorded_at_unix_ms: u64,
 }
 
-impl FoundationReviewState {
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationReviewLedger {
+    entries: Vec<FoundationReviewEntry>,
+}
+
+impl FoundationReviewLedger {
     pub fn disposition(
         &self,
         category: FoundationCategory,
     ) -> Option<&FoundationReviewDisposition> {
-        self.dispositions.get(&category)
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.category == category)
+            .map(|entry| &entry.disposition)
+    }
+
+    pub fn entries(&self) -> &[FoundationReviewEntry] {
+        &self.entries
     }
 
     pub fn is_complete(&self) -> bool {
         FoundationCategory::ALL
             .into_iter()
-            .all(|category| self.dispositions.contains_key(&category))
+            .all(|category| self.disposition(category).is_some())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationGenerationSettings {
+    pub orientation_degrees: f64,
+    pub blocks_per_meter: f64,
+    pub style_id: String,
+    pub surface_block: String,
+    pub building_block: String,
+}
+
+impl Default for FoundationGenerationSettings {
+    fn default() -> Self {
+        Self {
+            orientation_degrees: 0.0,
+            blocks_per_meter: 0.02,
+            style_id: "v1.1-fixed-campus-style".into(),
+            surface_block: "minecraft:grass_block".into(),
+            building_block: "minecraft:stone_bricks".into(),
+        }
     }
 }
 
@@ -319,7 +302,8 @@ pub struct ExportedFoundationOutput {
 struct FoundationTracerState {
     boundary: Option<PinnedBoundaryEvidence>,
     acquisition: Option<PinnedAcquisitionEvidence>,
-    review: FoundationReviewState,
+    review_ledger: FoundationReviewLedger,
+    generation_settings: FoundationGenerationSettings,
     generated: Option<GeneratedFoundationOutput>,
     exported: Option<ExportedFoundationOutput>,
 }
@@ -427,8 +411,12 @@ impl Schema2Project {
         })
     }
 
-    pub fn foundation_review(&self) -> &FoundationReviewState {
-        &self.foundation.review
+    pub fn foundation_review(&self) -> &FoundationReviewLedger {
+        &self.foundation.review_ledger
+    }
+
+    pub fn generation_settings(&self) -> &FoundationGenerationSettings {
+        &self.foundation.generation_settings
     }
 
     pub fn generated_output(&self) -> Option<&GeneratedFoundationOutput> {
@@ -447,7 +435,12 @@ impl Schema2Project {
             return FoundationResumePoint::Acquisition;
         }
         for category in FoundationCategory::ALL {
-            if self.foundation.review.disposition(category).is_none() {
+            if self
+                .foundation
+                .review_ledger
+                .disposition(category)
+                .is_none()
+            {
                 return FoundationResumePoint::Review(category);
             }
         }
@@ -465,27 +458,31 @@ impl Schema2Project {
         evidence: PinnedBoundaryEvidence,
         actor: InstallationId,
     ) -> Result<(), String> {
-        if evidence.bundle_id.trim().is_empty()
-            || evidence.result_sha256.trim().is_empty()
-            || evidence.candidate_id.trim().is_empty()
+        let selected_geometry = evidence
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == evidence.selected_candidate_id)
+            .map(|candidate| &candidate.geometry);
+        if evidence.manifest.bundle.id.trim().is_empty()
+            || evidence.manifest.result_sha256.trim().is_empty()
+            || evidence.selected_candidate_id.trim().is_empty()
             || evidence.candidates.is_empty()
-            || !evidence
-                .candidates
-                .iter()
-                .any(|candidate| candidate.id == evidence.candidate_id)
-            || evidence.geometry.len() < 4
-            || evidence
-                .geometry
-                .iter()
-                .flatten()
-                .any(|coordinate| !coordinate.is_finite())
+            || selected_geometry.is_none()
+            || selected_geometry.is_some_and(|geometry| geometry.all_points().len() < 4)
+            || selected_geometry.is_some_and(|geometry| {
+                geometry
+                    .all_points()
+                    .iter()
+                    .flatten()
+                    .any(|coordinate| !coordinate.is_finite())
+            })
         {
             return Err("Confirmed boundary evidence is incomplete or invalid".into());
         }
         self.mark_updated(actor)?;
         self.foundation.boundary = Some(evidence);
         self.foundation.acquisition = None;
-        self.foundation.review = FoundationReviewState::default();
+        self.foundation.review_ledger = FoundationReviewLedger::default();
         self.foundation.generated = None;
         self.foundation.exported = None;
         self.workflow.boundary = DurableTaskState::Confirmed;
@@ -506,16 +503,17 @@ impl Schema2Project {
             .boundary
             .as_ref()
             .ok_or("Confirm a Campus Boundary before pinning acquisition evidence")?;
-        if evidence.bundle_id != boundary.bundle_id {
+        if evidence.manifest.bundle.id != boundary.manifest.bundle.id {
             return Err(
                 "Boundary and acquisition evidence must use the same Dataset Bundle".into(),
             );
         }
-        if evidence.result_sha256.trim().is_empty()
-            || evidence.observation_count != evidence.observations.len()
+        if evidence.manifest.result_sha256.trim().is_empty()
             || !FoundationCategory::ALL.into_iter().all(|category| {
                 evidence
-                    .coverage_outcomes
+                    .manifest
+                    .coverage_report
+                    .outcomes
                     .iter()
                     .any(|outcome| outcome.category == category)
             })
@@ -524,7 +522,7 @@ impl Schema2Project {
         }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
-        self.foundation.review = FoundationReviewState::default();
+        self.foundation.review_ledger = FoundationReviewLedger::default();
         self.foundation.generated = None;
         self.foundation.exported = None;
         self.workflow.acquisition = DurableTaskState::Confirmed;
@@ -564,9 +562,12 @@ impl Schema2Project {
                     .iter()
                     .any(|item| item.category == category)
                     || acquisition
-                        .coverage_gaps
-                        .get(&category)
-                        .is_some_and(|gaps| !gaps.is_empty())
+                        .manifest
+                        .coverage_report
+                        .outcomes
+                        .iter()
+                        .filter(|outcome| outcome.category == category)
+                        .any(|outcome| !outcome.gaps.is_empty())
                 {
                     return Err(
                         "A non-empty or incomplete category cannot be completed empty".into(),
@@ -578,14 +579,22 @@ impl Schema2Project {
             }
             FoundationReviewDisposition::KnownGap { .. } => {}
         }
+        let evidence_result_sha256 = acquisition.manifest.result_sha256.clone();
         self.mark_updated(actor)?;
+        let sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
         self.foundation
-            .review
-            .dispositions
-            .insert(category, disposition);
+            .review_ledger
+            .entries
+            .push(FoundationReviewEntry {
+                sequence,
+                category,
+                disposition,
+                evidence_result_sha256,
+                recorded_at_unix_ms: now_unix_ms(),
+            });
         self.foundation.generated = None;
         self.foundation.exported = None;
-        self.workflow.review = if self.foundation.review.is_complete() {
+        self.workflow.review = if self.foundation.review_ledger.is_complete() {
             DurableTaskState::Confirmed
         } else {
             DurableTaskState::Pending
@@ -596,17 +605,15 @@ impl Schema2Project {
     }
 
     pub fn reviewed_projection(&self) -> Result<ReviewedFoundationProjection, String> {
-        if !self.foundation.review.is_complete() {
+        if !self.foundation.review_ledger.is_complete() {
             return Err("All five Foundation categories must be explicitly reviewed".into());
         }
         let evidence = self
             .pinned_evidence()
             .ok_or("Pinned Foundation evidence is incomplete")?;
-        let selected_ids = self
-            .foundation
-            .review
-            .dispositions
-            .values()
+        let selected_ids = FoundationCategory::ALL
+            .iter()
+            .filter_map(|category| self.foundation.review_ledger.disposition(*category))
             .filter_map(|disposition| match disposition {
                 FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
                     Some(evidence_ids.as_slice())
@@ -623,8 +630,16 @@ impl Schema2Project {
             .cloned()
             .collect();
         Ok(ReviewedFoundationProjection {
-            boundary: evidence.boundary.geometry.clone(),
+            boundary: evidence
+                .boundary
+                .candidates
+                .iter()
+                .find(|candidate| candidate.id == evidence.boundary.selected_candidate_id)
+                .ok_or("Selected Campus Boundary candidate is missing")?
+                .geometry
+                .clone(),
             selected_features,
+            generation_settings: self.foundation.generation_settings.clone(),
         })
     }
 
@@ -703,8 +718,9 @@ impl Schema2Project {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReviewedFoundationProjection {
-    pub boundary: Vec<[f64; 2]>,
-    pub selected_features: Vec<PinnedFoundationObservation>,
+    pub boundary: SourceGeometry,
+    pub selected_features: Vec<SourceObservation>,
+    pub generation_settings: FoundationGenerationSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
