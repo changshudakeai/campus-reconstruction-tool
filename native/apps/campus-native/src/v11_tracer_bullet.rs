@@ -90,16 +90,18 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             return Err("The selected fixture Campus Boundary does not exist".into());
         }
         let mut library = self.open_library()?;
-        let mut project = self.project()?;
-        project.confirm_boundary(
-            PinnedBoundaryEvidence {
-                manifest: copy_typed(&snapshot.manifest)?,
-                candidates: copy_typed::<_, Vec<BoundaryCandidate>>(&snapshot.candidates)?,
-                selected_candidate_id: candidate_id.into(),
-            },
-            self.actor.clone(),
-        )?;
-        library.save_project(&project)
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(&mut library, "confirm Campus Boundary", |project| {
+            project.confirm_boundary(
+                PinnedBoundaryEvidence {
+                    manifest: copy_typed(&snapshot.manifest)?,
+                    candidates: copy_typed::<_, Vec<BoundaryCandidate>>(&snapshot.candidates)?,
+                    selected_candidate_id: candidate_id.into(),
+                },
+                self.actor.clone(),
+            )
+        })
     }
 
     pub fn acquire_foundation_evidence(&self) -> Result<(), String> {
@@ -108,15 +110,23 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             .load_acquisition_result("fixed-dataset-acquisition")
             .map_err(|error| error.to_string())?;
         let mut library = self.open_library()?;
-        let mut project = self.project()?;
-        project.pin_acquisition(
-            PinnedAcquisitionEvidence {
-                manifest: copy_typed::<_, ResultManifest>(&acquisition.manifest)?,
-                observations: copy_typed::<_, Vec<SourceObservation>>(&acquisition.observations)?,
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            "pin five-category acquisition evidence",
+            |project| {
+                project.pin_acquisition(
+                    PinnedAcquisitionEvidence {
+                        manifest: copy_typed::<_, ResultManifest>(&acquisition.manifest)?,
+                        observations: copy_typed::<_, Vec<SourceObservation>>(
+                            &acquisition.observations,
+                        )?,
+                    },
+                    self.actor.clone(),
+                )
             },
-            self.actor.clone(),
-        )?;
-        library.save_project(&project)
+        )
     }
 
     pub fn complete_review(
@@ -125,9 +135,13 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         disposition: FoundationReviewDisposition,
     ) -> Result<(), String> {
         let mut library = self.open_library()?;
-        let mut project = self.project()?;
-        project.complete_foundation_review(category, disposition, self.actor.clone())?;
-        library.save_project(&project)
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            format!("confirm {category:?} review"),
+            |project| project.complete_foundation_review(category, disposition, self.actor.clone()),
+        )
     }
 
     pub fn project(&self) -> Result<Schema2Project, String> {
@@ -136,71 +150,82 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
 
     pub fn generate_and_export(&self) -> Result<FixedDatasetTracerReport, String> {
         let mut library = self.open_library()?;
-        let mut project = self.project()?;
-        let generated = arnis_core::generate_foundation(&project.reviewed_projection()?)?;
-        let model = VoxelModel {
-            width: generated.width,
-            height: generated.height,
-            length: generated.length,
-            palette: generated.palette,
-            blocks: generated.blocks,
-        };
-        let non_air_blocks = model.blocks.iter().filter(|block| **block != 0).count();
-        project.record_generation(
-            model.width,
-            model.height,
-            model.length,
-            non_air_blocks,
-            self.actor.clone(),
-        )?;
-        std::fs::create_dir_all(&self.output_root).map_err(|error| error.to_string())?;
-        let schematic_path = self
-            .output_root
-            .join(format!("{}.schem", project.id().as_str()));
-        write_schematic(&schematic_path, project.name(), &model)?;
-        let schematic_bytes = std::fs::metadata(&schematic_path)
-            .map_err(|error| error.to_string())?
-            .len();
-        let schematic_sha256 = format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(&schematic_path).map_err(|error| error.to_string())?)
-        );
-        let manifest_path = self.output_root.join(format!(
-            "{}.foundation-manifest.json",
-            project.id().as_str()
-        ));
-        let evidence = project
-            .pinned_evidence()
-            .ok_or("Pinned evidence disappeared before export")?;
-        write_foundation_manifest(
-            &manifest_path,
-            &FoundationManifest {
-                project_id: project.id().as_str().into(),
-                project_revision: project.workflow().project_revision(),
-                compatibility_profile_id: project.compatibility_profile().profile_id().into(),
-                dataset_bundle_id: evidence.acquisition.manifest.bundle.id.clone(),
-                schematic: FoundationManifestSchematic {
-                    file_name: file_name(&schematic_path)?,
-                    bytes: schematic_bytes,
-                    sha256: schematic_sha256.clone(),
-                    width: model.width,
-                    height: model.height,
-                    length: model.length,
-                },
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            "generate and export fixed-dataset Foundation",
+            |project| {
+                let generated = arnis_core::generate_foundation(&project.reviewed_projection()?)?;
+                let model = VoxelModel {
+                    width: generated.width,
+                    height: generated.height,
+                    length: generated.length,
+                    palette: generated.palette,
+                    blocks: generated.blocks,
+                };
+                let non_air_blocks = model.blocks.iter().filter(|block| **block != 0).count();
+                project.record_generation(
+                    model.width,
+                    model.height,
+                    model.length,
+                    non_air_blocks,
+                    self.actor.clone(),
+                )?;
+                std::fs::create_dir_all(&self.output_root).map_err(|error| error.to_string())?;
+                let schematic_path = self
+                    .output_root
+                    .join(format!("{}.schem", project.id().as_str()));
+                write_schematic(&schematic_path, project.name(), &model)?;
+                let schematic_bytes = std::fs::metadata(&schematic_path)
+                    .map_err(|error| error.to_string())?
+                    .len();
+                let schematic_sha256 = format!(
+                    "{:x}",
+                    Sha256::digest(
+                        std::fs::read(&schematic_path).map_err(|error| error.to_string())?
+                    )
+                );
+                let manifest_path = self.output_root.join(format!(
+                    "{}.foundation-manifest.json",
+                    project.id().as_str()
+                ));
+                let evidence = project
+                    .pinned_evidence()
+                    .ok_or("Pinned evidence disappeared before export")?;
+                write_foundation_manifest(
+                    &manifest_path,
+                    &FoundationManifest {
+                        project_id: project.id().as_str().into(),
+                        project_revision: project.workflow().project_revision(),
+                        compatibility_profile_id: project
+                            .compatibility_profile()
+                            .profile_id()
+                            .into(),
+                        dataset_bundle_id: evidence.acquisition.manifest.bundle.id.clone(),
+                        schematic: FoundationManifestSchematic {
+                            file_name: file_name(&schematic_path)?,
+                            bytes: schematic_bytes,
+                            sha256: schematic_sha256.clone(),
+                            width: model.width,
+                            height: model.height,
+                            length: model.length,
+                        },
+                    },
+                )?;
+                project.record_export(
+                    schematic_sha256,
+                    schematic_bytes,
+                    file_name(&manifest_path)?,
+                )?;
+                Ok(FixedDatasetTracerReport {
+                    project_id: self.project_id.clone(),
+                    schematic_path,
+                    schematic_bytes,
+                    manifest_path,
+                })
             },
-        )?;
-        project.record_export(
-            schematic_sha256,
-            schematic_bytes,
-            file_name(&manifest_path)?,
-        )?;
-        library.save_project(&project)?;
-        Ok(FixedDatasetTracerReport {
-            project_id: self.project_id.clone(),
-            schematic_path,
-            schematic_bytes,
-            manifest_path,
-        })
+        )
     }
 
     fn open_library(&self) -> Result<CampusProjectLibrary, String> {

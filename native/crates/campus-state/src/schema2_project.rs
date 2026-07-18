@@ -18,6 +18,7 @@ const PROJECT_FILE_NAME: &str = "project.campus.json";
 const PREVIOUS_PROJECT_FILE_NAME: &str = "previous-confirmed.campus.json";
 const RECOVERY_PROJECT_FILE_NAME: &str = "recovery.campus.json";
 const SAVE_STAGE_FILE_NAME: &str = "project.save-stage.json";
+const SAVE_ROLLBACK_FILE_NAME: &str = "project.save-rollback.json";
 const DEVELOPMENT_CANONICAL_ROLE: &str = "developmentCanonical";
 const PROJECT_HISTORY_LIMIT: usize = 50;
 
@@ -490,6 +491,14 @@ impl SaveFaultPoint {
 struct ProjectRecoveryEnvelope {
     captured_at_unix_ms: u64,
     project: Schema2Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectSaveRollback {
+    project_bytes: Vec<u8>,
+    library_index_bytes: Vec<u8>,
+    previous_project_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1007,6 +1016,7 @@ pub struct CampusProjectLibrary {
     index: LibraryIndex,
     construction_enabled: bool,
     next_save_fault: Option<SaveFaultPoint>,
+    next_save_interruption: Option<SaveFaultPoint>,
     next_migration_fault: Option<MigrationFaultPoint>,
 }
 
@@ -1022,18 +1032,20 @@ impl CampusProjectLibrary {
         }
         fs::create_dir_all(&root).map_err(|error| error.to_string())?;
         let index_path = root.join(LIBRARY_INDEX_FILE);
-        let index = if index_path.exists() {
+        let mut index = if index_path.exists() {
             serde_json::from_slice(&fs::read(&index_path).map_err(|error| error.to_string())?)
                 .map_err(|error| format!("Invalid campus project library: {error}"))?
         } else {
             LibraryIndex::default()
         };
+        recover_interrupted_save(&root, &mut index)?;
         let library = Self {
             root,
             campus_target_id,
             index,
             construction_enabled: false,
             next_save_fault: None,
+            next_save_interruption: None,
             next_migration_fault: None,
         };
         for record in &library.index.projects {
@@ -1162,7 +1174,12 @@ impl CampusProjectLibrary {
         let old_project_bytes = fs::read(&path).map_err(|error| error.to_string())?;
         decode_schema2_project(&old_project_bytes)
             .map_err(|error| format!("Previous confirmed project is invalid: {error}"))?;
-        let completed_at_unix_ms = now_unix_ms();
+        let completed_at_unix_ms = project
+            .durability
+            .last_confirmed_save_unix_ms
+            .map_or_else(now_unix_ms, |previous| {
+                now_unix_ms().max(previous.saturating_add(1))
+            });
         let mut confirmed = project.clone();
         confirmed.durability.last_confirmed_save_unix_ms = Some(completed_at_unix_ms);
         let new_project_bytes =
@@ -1170,40 +1187,8 @@ impl CampusProjectLibrary {
         let project_directory = path.parent().ok_or("Managed project path has no parent")?;
         let stage_path = project_directory.join(SAVE_STAGE_FILE_NAME);
         let previous_path = project_directory.join(PREVIOUS_PROJECT_FILE_NAME);
-
-        self.fail_save_at(SaveFaultPoint::BeforeStageWrite)?;
-        write_and_sync(&stage_path, &new_project_bytes)?;
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageWrite) {
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-        let staged = fs::read(&stage_path).map_err(|error| error.to_string())?;
-        decode_schema2_project(&staged)
-            .map_err(|error| format!("Staged project validation failed: {error}"))?;
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageValidation) {
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforePreviousConfirmedWrite) {
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-        atomic_write_bytes(&previous_path, &old_project_bytes)?;
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterPreviousConfirmedWrite) {
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeProjectReplace) {
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-        atomic_write_bytes(&path, &new_project_bytes)?;
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterProjectReplace) {
-            let _ = atomic_write_bytes(&path, &old_project_bytes);
-            remove_file_if_present(&stage_path);
-            return Err(error);
-        }
-
+        let rollback_path = project_directory.join(SAVE_ROLLBACK_FILE_NAME);
+        let old_previous_bytes = read_optional_file(&previous_path)?;
         let relative = self.index.projects[record_position]
             .managed_relative_path
             .clone();
@@ -1213,21 +1198,89 @@ impl CampusProjectLibrary {
             record_from_project(&confirmed, relative, internal_role);
         let old_index_bytes =
             serde_json::to_vec_pretty(&self.index).map_err(|error| error.to_string())?;
-        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeIndexReplace) {
-            let _ = atomic_write_bytes(&path, &old_project_bytes);
+        atomic_write_json(
+            &rollback_path,
+            &ProjectSaveRollback {
+                project_bytes: old_project_bytes.clone(),
+                library_index_bytes: old_index_bytes.clone(),
+                previous_project_bytes: old_previous_bytes.clone(),
+            },
+        )?;
+
+        self.fail_save_at(SaveFaultPoint::BeforeStageWrite)?;
+        self.interrupt_save_at(SaveFaultPoint::BeforeStageWrite)?;
+        write_and_sync(&stage_path, &new_project_bytes)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageWrite) {
             remove_file_if_present(&stage_path);
             return Err(error);
         }
+        self.interrupt_save_at(SaveFaultPoint::AfterStageWrite)?;
+        let staged = fs::read(&stage_path).map_err(|error| error.to_string())?;
+        decode_schema2_project(&staged)
+            .map_err(|error| format!("Staged project validation failed: {error}"))?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageValidation) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::AfterStageValidation)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforePreviousConfirmedWrite) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::BeforePreviousConfirmedWrite)?;
+        atomic_write_bytes(&previous_path, &old_project_bytes)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterPreviousConfirmedWrite) {
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::AfterPreviousConfirmedWrite)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeProjectReplace) {
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::BeforeProjectReplace)?;
+        if let Err(error) = atomic_write_bytes(&path, &new_project_bytes) {
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterProjectReplace) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::AfterProjectReplace)?;
+
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeIndexReplace) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::BeforeIndexReplace)?;
         if let Err(error) = atomic_write_json(&self.root.join(LIBRARY_INDEX_FILE), &next_index) {
             let _ = atomic_write_bytes(&path, &old_project_bytes);
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
             remove_file_if_present(&stage_path);
             return Err(error);
         }
         if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterIndexReplace) {
             let _ = atomic_write_bytes(&path, &old_project_bytes);
             let _ = atomic_write_bytes(&self.root.join(LIBRARY_INDEX_FILE), &old_index_bytes);
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
             remove_file_if_present(&stage_path);
             return Err(error);
+        }
+        self.interrupt_save_at(SaveFaultPoint::AfterIndexReplace)?;
+        if let Err(error) = fs::remove_file(&rollback_path) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            let _ = atomic_write_bytes(&self.root.join(LIBRARY_INDEX_FILE), &old_index_bytes);
+            restore_optional_file(&previous_path, old_previous_bytes.as_deref())?;
+            remove_file_if_present(&stage_path);
+            return Err(error.to_string());
         }
         self.index = next_index;
         remove_file_if_present(&stage_path);
@@ -1236,6 +1289,10 @@ impl CampusProjectLibrary {
 
     pub fn inject_next_save_failure(&mut self, point: SaveFaultPoint) {
         self.next_save_fault = Some(point);
+    }
+
+    pub fn inject_next_save_interruption(&mut self, point: SaveFaultPoint) {
+        self.next_save_interruption = Some(point);
     }
 
     pub fn previous_confirmed_project(
@@ -1262,10 +1319,15 @@ impl CampusProjectLibrary {
         let confirmed = self.open_project(project_id)?;
         if envelope.project.id() != project_id
             || envelope.project.campus_scope().target_id() != self.campus_target_id
-            || envelope.project.workflow().project_revision()
-                < confirmed.workflow().project_revision()
         {
             return Err("Project Recovery State is incoherent with the confirmed project".into());
+        }
+        let last_confirmed = confirmed
+            .durability
+            .last_confirmed_save_unix_ms
+            .unwrap_or(confirmed.audit.updated_at_unix_ms);
+        if envelope.captured_at_unix_ms <= last_confirmed {
+            return Ok(None);
         }
         let mut operations = envelope
             .project
@@ -1351,7 +1413,12 @@ impl CampusProjectLibrary {
         atomic_write_json(
             &self.recovery_path(project.id())?,
             &ProjectRecoveryEnvelope {
-                captured_at_unix_ms: now_unix_ms(),
+                captured_at_unix_ms: project
+                    .durability
+                    .last_confirmed_save_unix_ms
+                    .map_or_else(now_unix_ms, |previous| {
+                        now_unix_ms().max(previous.saturating_add(1))
+                    }),
                 project: project.clone(),
             },
         )
@@ -1393,6 +1460,15 @@ impl CampusProjectLibrary {
         if self.next_save_fault == Some(point) {
             self.next_save_fault = None;
             Err(format!("injected save failure at {point:?}"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn interrupt_save_at(&mut self, point: SaveFaultPoint) -> Result<(), String> {
+        if self.next_save_interruption == Some(point) {
+            self.next_save_interruption = None;
+            Err(format!("injected process interruption at {point:?}"))
         } else {
             Ok(())
         }
@@ -1533,11 +1609,11 @@ impl Schema2ProjectSession {
                 if let Some(active) = self.active.as_mut() {
                     active.durability.last_confirmed_save_unix_ms = Some(completed_at_unix_ms);
                 }
-                library.discard_recovery_candidate(&project_id)?;
                 self.save_status = ProjectSaveStatus::Saved {
                     completed_at_unix_ms,
                 };
                 self.dirty = false;
+                let _ = library.discard_recovery_candidate(&project_id);
                 Ok(())
             }
             Err(error) => {
@@ -1706,6 +1782,57 @@ fn validate_schema2_project(project: &Schema2Project) -> Result<(), String> {
     {
         return Err("V1.1 requires the Minecraft Java Edition 26.1.2 compatibility profile".into());
     }
+    validate_project_history(project)?;
+    Ok(())
+}
+
+fn validate_project_history(project: &Schema2Project) -> Result<(), String> {
+    let durability = &project.durability;
+    if durability.undo.len() + durability.redo.len() > PROJECT_HISTORY_LIMIT {
+        return Err(format!(
+            "Project history exceeds the {PROJECT_HISTORY_LIMIT}-operation limit"
+        ));
+    }
+    let mut operations = durability
+        .undo
+        .iter()
+        .chain(durability.redo.iter())
+        .collect::<Vec<_>>();
+    operations.sort_by_key(|operation| operation.sequence);
+    for pair in operations.windows(2) {
+        if pair[0].sequence == pair[1].sequence {
+            return Err("Project history contains duplicate operation sequences".into());
+        }
+        if pair[0].after != pair[1].before {
+            return Err(
+                "Project history snapshots do not form one coherent operation chain".into(),
+            );
+        }
+    }
+    for operation in &operations {
+        for snapshot in [&operation.before, &operation.after] {
+            let snapshot_project: Schema2Project = serde_json::from_value(snapshot.clone())
+                .map_err(|error| {
+                    format!("Project history contains an invalid snapshot: {error}")
+                })?;
+            if snapshot_project.id() != project.id()
+                || snapshot_project.campus_scope().target_id() != project.campus_scope().target_id()
+            {
+                return Err("Project history snapshot identity is incoherent".into());
+            }
+        }
+    }
+    let current = project_snapshot(project)?;
+    if let Some(operation) = durability.undo.iter().max_by_key(|entry| entry.sequence) {
+        if operation.after != current {
+            return Err("Project history undo branch does not reach the working state".into());
+        }
+    }
+    if let Some(operation) = durability.redo.iter().min_by_key(|entry| entry.sequence) {
+        if operation.before != current {
+            return Err("Project history redo branch does not begin at the working state".into());
+        }
+    }
     Ok(())
 }
 
@@ -1773,6 +1900,61 @@ fn remove_file_if_present(path: &Path) {
     if path.exists() {
         let _ = fs::remove_file(path);
     }
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn restore_optional_file(path: &Path, bytes: Option<&[u8]>) -> Result<(), String> {
+    match bytes {
+        Some(bytes) => atomic_write_bytes(path, bytes),
+        None if path.exists() => fs::remove_file(path).map_err(|error| error.to_string()),
+        None => Ok(()),
+    }
+}
+
+fn recover_interrupted_save(root: &Path, index: &mut LibraryIndex) -> Result<(), String> {
+    for record in index.projects.clone() {
+        let relative = Path::new(&record.managed_relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err("Campus project library contains an unsafe managed path".into());
+        }
+        let project_path = root.join(relative);
+        let project_directory = project_path
+            .parent()
+            .ok_or("Managed project path has no parent")?;
+        let rollback_path = project_directory.join(SAVE_ROLLBACK_FILE_NAME);
+        if !rollback_path.exists() {
+            continue;
+        }
+        let rollback: ProjectSaveRollback =
+            serde_json::from_slice(&fs::read(&rollback_path).map_err(|error| error.to_string())?)
+                .map_err(|error| format!("Invalid save rollback journal: {error}"))?;
+        atomic_write_bytes(&project_path, &rollback.project_bytes)?;
+        atomic_write_bytes(
+            &root.join(LIBRARY_INDEX_FILE),
+            &rollback.library_index_bytes,
+        )?;
+        restore_optional_file(
+            &project_directory.join(PREVIOUS_PROJECT_FILE_NAME),
+            rollback.previous_project_bytes.as_deref(),
+        )?;
+        remove_file_if_present(&project_directory.join(SAVE_STAGE_FILE_NAME));
+        fs::remove_file(&rollback_path).map_err(|error| error.to_string())?;
+        *index = serde_json::from_slice(&rollback.library_index_bytes)
+            .map_err(|error| format!("Invalid rolled-back campus project library: {error}"))?;
+        break;
+    }
+    Ok(())
 }
 
 fn project_snapshot(project: &Schema2Project) -> Result<Value, String> {

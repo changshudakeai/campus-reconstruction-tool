@@ -73,6 +73,18 @@ fn semantic_save_points_persist_fifty_history_operations_and_redo() {
         !reopened.can_redo(),
         "a new operation clears the redo branch"
     );
+
+    library.inject_next_save_failure(SaveFaultPoint::BeforeProjectReplace);
+    reopened.undo(&mut library).unwrap_err();
+    assert_eq!(
+        library
+            .recovery_candidate(&project_id)
+            .unwrap()
+            .unwrap()
+            .project_revision(),
+        53,
+        "a coherent undo recovery may have a lower revision than its confirmed save"
+    );
 }
 
 #[test]
@@ -210,6 +222,19 @@ fn every_injected_save_stage_keeps_the_previous_confirmed_project_valid() {
         let project_id = project.id().clone();
         let mut session = Schema2ProjectSession::default();
         session.open_project(&library, &project_id).unwrap();
+        session
+            .apply_semantic_operation(&mut library, "baseline operation", |project| {
+                project.mark_updated(actor())
+            })
+            .unwrap();
+        assert_eq!(
+            library
+                .previous_confirmed_project(&project_id)
+                .unwrap()
+                .workflow()
+                .project_revision(),
+            0
+        );
 
         library.inject_next_save_failure(fault);
         assert!(session
@@ -221,10 +246,76 @@ fn every_injected_save_stage_keeps_the_previous_confirmed_project_valid() {
         let confirmed = library.open_project(&project_id).unwrap();
         assert_eq!(
             confirmed.workflow().project_revision(),
-            0,
+            1,
             "{fault:?} must not report or expose a partial save"
         );
-        assert_eq!(session.active().unwrap().workflow().project_revision(), 1);
+        assert_eq!(
+            library
+                .previous_confirmed_project(&project_id)
+                .unwrap()
+                .workflow()
+                .project_revision(),
+            0,
+            "{fault:?} must not advance the retained rollback point"
+        );
+        assert_eq!(session.active().unwrap().workflow().project_revision(), 2);
         assert!(session.is_dirty());
+    }
+}
+
+#[test]
+fn process_interruption_at_every_save_stage_rolls_back_on_library_reopen() {
+    for fault in SaveFaultPoint::ALL {
+        let directory = tempfile::tempdir().unwrap();
+        let mut library = library(directory.path());
+        let project = library
+            .create_project(scope(), format!("interruption {fault:?}"), actor())
+            .unwrap();
+        let project_id = project.id().clone();
+        let mut session = Schema2ProjectSession::default();
+        session.open_project(&library, &project_id).unwrap();
+        session
+            .apply_semantic_operation(&mut library, "baseline operation", |project| {
+                project.mark_updated(actor())
+            })
+            .unwrap();
+
+        library.inject_next_save_interruption(fault);
+        session
+            .apply_semantic_operation(&mut library, "interrupted operation", |project| {
+                project.mark_updated(actor())
+            })
+            .unwrap_err();
+        drop(session);
+        drop(library);
+
+        let reopened = CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
+        assert_eq!(
+            reopened
+                .open_project(&project_id)
+                .unwrap()
+                .workflow()
+                .project_revision(),
+            1,
+            "{fault:?} must roll back an interrupted multi-file save"
+        );
+        assert_eq!(
+            reopened
+                .previous_confirmed_project(&project_id)
+                .unwrap()
+                .workflow()
+                .project_revision(),
+            0,
+            "{fault:?} must retain the prior rollback point"
+        );
+        assert_eq!(
+            reopened
+                .recovery_candidate(&project_id)
+                .unwrap()
+                .unwrap()
+                .project_revision(),
+            2,
+            "{fault:?} must retain the coherent unsaved recovery candidate"
+        );
     }
 }
