@@ -21,6 +21,11 @@ def canonical_sha256(value: object) -> str:
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
+def request_content_sha256(request: dict[str, object]) -> str:
+    return canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_identity"}
+    )
+
 
 class AcquisitionContractTests(unittest.TestCase):
     def test_openapi_freezes_the_complete_v1_surface(self) -> None:
@@ -213,6 +218,7 @@ class AcquisitionContractTests(unittest.TestCase):
                         ],
                     }
                 )
+            request["request_identity"]["content_sha256"] = request_content_sha256(request)
             created = service.handle(
                 "POST",
                 f"/v1/{kind}",
@@ -259,6 +265,60 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertIn("suggested_action", json.loads(failure.body))
         invalid = service.handle("POST", "/v1/acquisition-jobs", b'{"request_identity":"fixture"}')
         self.assertEqual(invalid.status, 400)
+
+    def test_boundary_submission_is_idempotent_and_rejects_conflicts_and_oversize(self) -> None:
+        service = FixtureAcquisitionService(FIXTURE_DIR)
+        request = {
+            "contract_version": "1.0.0",
+            "request_identity": {
+                "idempotency_key": "installation-42:putuo",
+                "content_sha256": "a" * 64,
+            },
+            "bundle_id": "cn-campus-2026-06",
+            "campus_target": {
+                "name": "Confirmed Campus",
+                "aliases": ["Campus Alias"],
+                "anchor_wgs84": [121.4, 31.2],
+                "search_radius_m": 2_000,
+            },
+        }
+        request["request_identity"]["content_sha256"] = request_content_sha256(request)
+
+        first = service.handle(
+            "POST", "/v1/boundary-jobs", json.dumps(request).encode("utf-8")
+        )
+        duplicate = service.handle(
+            "POST", "/v1/boundary-jobs", json.dumps(request).encode("utf-8")
+        )
+        self.assertEqual(json.loads(first.body)["job_id"], json.loads(duplicate.body)["job_id"])
+
+        request["campus_target"]["name"] = "Changed Campus"
+        forged_replay = service.handle(
+            "POST", "/v1/boundary-jobs", json.dumps(request).encode("utf-8")
+        )
+        self.assertEqual(forged_replay.status, 400)
+        self.assertEqual(json.loads(forged_replay.body)["code"], "content_digest_mismatch")
+
+        request["request_identity"]["content_sha256"] = request_content_sha256(request)
+        conflict = service.handle(
+            "POST", "/v1/boundary-jobs", json.dumps(request).encode("utf-8")
+        )
+        self.assertEqual(conflict.status, 409)
+        self.assertEqual(json.loads(conflict.body)["code"], "idempotency_conflict")
+
+        request["request_identity"] = {
+            "idempotency_key": "installation-42:oversize",
+            "content_sha256": "c" * 64,
+        }
+        request["campus_target"]["search_radius_m"] = 10_000
+        request["request_identity"]["content_sha256"] = request_content_sha256(request)
+        oversized = service.handle(
+            "POST", "/v1/boundary-jobs", json.dumps(request).encode("utf-8")
+        )
+        self.assertEqual(oversized.status, 413)
+        failure = json.loads(oversized.body)
+        self.assertEqual(failure["code"], "area_limit_exceeded")
+        self.assertIn("Reduce", failure["suggested_action"])
 
 
 if __name__ == "__main__":

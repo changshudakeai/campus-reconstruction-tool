@@ -5,7 +5,7 @@ use std::io::Read;
 use base64::Engine;
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -33,6 +33,14 @@ impl TransportRequest {
             body: None,
         }
     }
+
+    fn post(path: impl Into<String>, body: Option<Vec<u8>>) -> Self {
+        Self {
+            method: TransportMethod::Post,
+            path: path.into(),
+            body,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +62,17 @@ pub trait AcquisitionTransport {
 pub struct HttpsTransport {
     client: Client,
     base_url: String,
-    authorization: String,
+    installation_credential: String,
+}
+
+impl std::fmt::Debug for HttpsTransport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpsTransport")
+            .field("base_url", &self.base_url)
+            .field("installation_credential", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl HttpsTransport {
@@ -85,7 +103,7 @@ impl HttpsTransport {
                 explanation: format!("could not create acquisition HTTPS client: {error}"),
             })?,
             base_url,
-            authorization: format!("Bearer {credential}"),
+            installation_credential: credential,
         })
     }
 }
@@ -97,7 +115,7 @@ impl AcquisitionTransport for HttpsTransport {
             TransportMethod::Get => self.client.get(url),
             TransportMethod::Post => self.client.post(url),
         }
-        .header(AUTHORIZATION, &self.authorization)
+        .bearer_auth(&self.installation_credential)
         .header(ACCEPT, "application/json, application/gzip");
         let builder = match request.body {
             Some(body) => builder.header(CONTENT_TYPE, "application/json").body(body),
@@ -117,18 +135,49 @@ impl AcquisitionTransport for HttpsTransport {
                     .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
             })
             .collect();
+        let json_response = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.starts_with("application/json")
+                    || value.starts_with("application/problem+json")
+            });
         let body = response.bytes().map_err(|error| TransportError {
             explanation: format!("could not read acquisition service response: {error}"),
         })?;
+        let body = if json_response {
+            redact_secret(&body, self.installation_credential.as_bytes())
+        } else {
+            body.to_vec()
+        };
         Ok(TransportResponse {
             status,
             headers,
-            body: body.to_vec(),
+            body,
         })
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+fn redact_secret(body: &[u8], secret: &[u8]) -> Vec<u8> {
+    if secret.is_empty() || body.len() < secret.len() {
+        return body.to_vec();
+    }
+    let mut redacted = Vec::with_capacity(body.len());
+    let mut offset = 0;
+    while offset < body.len() {
+        if body[offset..].starts_with(secret) {
+            redacted.extend_from_slice(b"[REDACTED]");
+            offset += secret.len();
+        } else {
+            redacted.push(body[offset]);
+            offset += 1;
+        }
+    }
+    redacted
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DatasetBundle {
     pub id: String,
     pub osm_snapshot: String,
@@ -138,6 +187,129 @@ pub struct DatasetBundle {
     pub assembly_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServiceLimits {
+    pub area_square_metres: u64,
+    pub boundary_vertices: u64,
+    pub tiles: u64,
+    pub observations: u64,
+    pub result_bytes: u64,
+    pub concurrent_jobs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AcquisitionCapabilities {
+    pub contract_versions: Vec<String>,
+    pub supported_bundles: Vec<DatasetBundle>,
+    pub limits: ServiceLimits,
+    pub retention_days: u64,
+    #[serde(default)]
+    pub quota_remaining: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CampusBoundaryCandidateQuery {
+    name: String,
+    aliases: Vec<String>,
+    anchor_wgs84: [f64; 2],
+    search_radius_m: f64,
+    idempotency_key: String,
+}
+
+impl CampusBoundaryCandidateQuery {
+    pub fn new(
+        name: impl Into<String>,
+        aliases: Vec<String>,
+        anchor_wgs84: [f64; 2],
+        search_radius_m: f64,
+        idempotency_key: impl Into<String>,
+    ) -> Result<Self, String> {
+        let name = name.into();
+        let idempotency_key = idempotency_key.into();
+        if name.trim().is_empty() {
+            return Err("A confirmed Campus Target name is required.".into());
+        }
+        if aliases.iter().any(|alias| alias.trim().is_empty()) {
+            return Err("Campus Target aliases cannot be empty.".into());
+        }
+        if !anchor_wgs84.iter().all(|coordinate| coordinate.is_finite())
+            || !(-180.0..=180.0).contains(&anchor_wgs84[0])
+            || !(-90.0..=90.0).contains(&anchor_wgs84[1])
+        {
+            return Err(
+                "The Campus Target anchor must be a valid WGS-84 longitude/latitude.".into(),
+            );
+        }
+        if !search_radius_m.is_finite() || search_radius_m <= 0.0 {
+            return Err("The boundary search radius must be a positive finite distance.".into());
+        }
+        if idempotency_key.trim().is_empty() {
+            return Err("Boundary discovery requires a stable idempotency key.".into());
+        }
+        Ok(Self {
+            name,
+            aliases,
+            anchor_wgs84,
+            search_radius_m,
+            idempotency_key,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AcquisitionJobState {
+    Queued,
+    Running,
+    Partial,
+    Complete,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AcquisitionJobStatus {
+    pub job_id: String,
+    pub contract_version: String,
+    pub bundle_id: String,
+    pub state: AcquisitionJobState,
+    #[serde(default)]
+    pub outcomes: Vec<ProviderOutcome>,
+    #[serde(default)]
+    pub failure: Option<ServiceFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negotiated_bundle: Option<DatasetBundle>,
+}
+
+#[derive(Serialize)]
+struct BoundaryCampusTarget<'a> {
+    name: &'a str,
+    aliases: &'a [String],
+    anchor_wgs84: [f64; 2],
+    search_radius_m: f64,
+}
+
+#[derive(Serialize)]
+struct BoundaryRequestContent<'a> {
+    contract_version: &'static str,
+    bundle_id: &'a str,
+    campus_target: BoundaryCampusTarget<'a>,
+}
+
+#[derive(Serialize)]
+struct RequestIdentity<'a> {
+    idempotency_key: &'a str,
+    content_sha256: String,
+}
+
+#[derive(Serialize)]
+struct BoundaryRequest<'a> {
+    contract_version: &'static str,
+    request_identity: RequestIdentity<'a>,
+    bundle_id: &'a str,
+    campus_target: BoundaryCampusTarget<'a>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -472,6 +644,22 @@ pub struct VerifiedAcquisitionResult {
 pub struct VerifiedBoundaryDiscoverySnapshot {
     pub manifest: ResultManifest,
     pub candidates: Vec<BoundaryCandidate>,
+    pub validity: BTreeMap<String, BoundaryCandidateValidity>,
+    pub derivations: BTreeMap<String, BoundaryCandidateDerivation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum BoundaryCandidateValidity {
+    Valid,
+    Invalid { reasons: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundaryCandidateDerivation {
+    pub source_records: Vec<String>,
+    pub rule_versions: Vec<String>,
+    pub steps: Vec<String>,
 }
 
 pub struct AcquisitionClient<T> {
@@ -498,14 +686,194 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         Self { transport }
     }
 
+    pub fn capabilities(&self) -> Result<AcquisitionCapabilities, AcquisitionClientError> {
+        let response = self.execute(TransportRequest::get("/v1/capabilities"))?;
+        let capabilities: AcquisitionCapabilities = serde_json::from_slice(&response.body)
+            .map_err(|error| AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::InvalidResponse,
+                explanation: format!("The acquisition capabilities are invalid: {error}"),
+                action: "Update the desktop or contact the controlled-service operator.".into(),
+            })?;
+        if !capabilities
+            .contract_versions
+            .iter()
+            .any(|version| version == CONTRACT_VERSION)
+        {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IncompatibleContract,
+                explanation: format!(
+                    "The controlled service does not support desktop contract {CONTRACT_VERSION}."
+                ),
+                action: "Update the desktop or select a compatible controlled service.".into(),
+            });
+        }
+        if capabilities.supported_bundles.is_empty() {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IncompatibleContract,
+                explanation: "The controlled service offers no compatible Dataset Bundle.".into(),
+                action: "Contact the controlled-service operator before retrying.".into(),
+            });
+        }
+        Ok(capabilities)
+    }
+
+    pub fn start_boundary_discovery(
+        &self,
+        query: &CampusBoundaryCandidateQuery,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        let capabilities = self.capabilities()?;
+        let requested_area = std::f64::consts::PI * query.search_radius_m.powi(2);
+        if requested_area > capabilities.limits.area_square_metres as f64 {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::ServiceFailure,
+                explanation: format!(
+                    "The boundary search covers {requested_area:.0} m², above the service limit of {} m².",
+                    capabilities.limits.area_square_metres
+                ),
+                action: "Reduce the bounded search radius and submit a new request.".into(),
+            });
+        }
+        let bundle = &capabilities.supported_bundles[0];
+        let content = BoundaryRequestContent {
+            contract_version: CONTRACT_VERSION,
+            bundle_id: &bundle.id,
+            campus_target: BoundaryCampusTarget {
+                name: &query.name,
+                aliases: &query.aliases,
+                anchor_wgs84: query.anchor_wgs84,
+                search_radius_m: query.search_radius_m,
+            },
+        };
+        let canonical_content = serde_json::to_value(&content).map_err(|error| {
+            invalid_request_error(format!("Could not encode the boundary request: {error}"))
+        })?;
+        let content_bytes = serde_json::to_vec(&canonical_content).map_err(|error| {
+            invalid_request_error(format!("Could not encode the boundary request: {error}"))
+        })?;
+        let request = BoundaryRequest {
+            contract_version: CONTRACT_VERSION,
+            request_identity: RequestIdentity {
+                idempotency_key: &query.idempotency_key,
+                content_sha256: sha256_hex(&content_bytes),
+            },
+            bundle_id: &bundle.id,
+            campus_target: BoundaryCampusTarget {
+                name: &query.name,
+                aliases: &query.aliases,
+                anchor_wgs84: query.anchor_wgs84,
+                search_radius_m: query.search_radius_m,
+            },
+        };
+        let body = serde_json::to_vec(&request).map_err(|error| {
+            invalid_request_error(format!("Could not encode the boundary request: {error}"))
+        })?;
+        let response = self.execute(TransportRequest::post("/v1/boundary-jobs", Some(body)))?;
+        let mut job = decode_job_status(&response.body)?;
+        if job.contract_version != CONTRACT_VERSION || job.bundle_id != bundle.id {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IncompatibleContract,
+                explanation: "The boundary job changed its negotiated contract or Dataset Bundle."
+                    .into(),
+                action: "Do not use this result; contact the controlled-service operator.".into(),
+            });
+        }
+        job.negotiated_bundle = Some(bundle.clone());
+        Ok(job)
+    }
+
+    pub fn boundary_job(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_boundary_job(pinned, TransportMethod::Get, None)
+    }
+
+    pub fn retry_boundary_job(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_boundary_job(
+            pinned,
+            TransportMethod::Post,
+            Some(br#"{"scopes":[]}"#.to_vec()),
+        )
+    }
+
+    pub fn cancel_boundary_job(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_boundary_job(pinned, TransportMethod::Post, None)
+    }
+
+    pub fn resume_boundary_discovery(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<VerifiedBoundaryDiscoverySnapshot, AcquisitionClientError> {
+        let snapshot = self.load_boundary_discovery(&pinned.job_id)?;
+        if snapshot.manifest.contract_version != pinned.contract_version
+            || snapshot.manifest.bundle.id != pinned.bundle_id
+            || pinned
+                .negotiated_bundle
+                .as_ref()
+                .is_some_and(|bundle| bundle != &snapshot.manifest.bundle)
+        {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IntegrityFailure,
+                explanation:
+                    "The resumed Boundary Discovery Snapshot does not match the pinned job.".into(),
+                action: "Keep the prior job evidence and retry the same pinned job.".into(),
+            });
+        }
+        Ok(snapshot)
+    }
+
+    fn control_boundary_job(
+        &self,
+        pinned: &AcquisitionJobStatus,
+        method: TransportMethod,
+        body: Option<Vec<u8>>,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        let action = match (method, body.is_some()) {
+            (TransportMethod::Get, _) => None,
+            (TransportMethod::Post, true) => Some("retry"),
+            (TransportMethod::Post, false) => Some("cancel"),
+        };
+        let path = boundary_job_path(&pinned.job_id, action);
+        let request = match method {
+            TransportMethod::Get => TransportRequest::get(path),
+            TransportMethod::Post => TransportRequest::post(path, body),
+        };
+        let response = self.execute(request)?;
+        let mut current = decode_job_status(&response.body)?;
+        if current.job_id != pinned.job_id
+            || current.bundle_id != pinned.bundle_id
+            || current.contract_version != CONTRACT_VERSION
+        {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IntegrityFailure,
+                explanation:
+                    "The controlled service changed the pinned boundary job identity or Dataset Bundle."
+                        .into(),
+                action: "Keep the prior job evidence and contact the controlled-service operator."
+                    .into(),
+            });
+        }
+        current.negotiated_bundle = pinned.negotiated_bundle.clone();
+        Ok(current)
+    }
+
     pub fn load_boundary_discovery(
         &self,
         job_id: &str,
     ) -> Result<VerifiedBoundaryDiscoverySnapshot, AcquisitionClientError> {
         let (manifest, candidates) = self.load_result(JobKind::Boundary, job_id)?;
+        let (validity, derivations) = assess_boundary_candidates(&manifest.bundle, &candidates)?;
         Ok(VerifiedBoundaryDiscoverySnapshot {
             manifest,
             candidates,
+            validity,
+            derivations,
         })
     }
 
@@ -615,19 +983,46 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         &self,
         request: TransportRequest,
     ) -> Result<TransportResponse, AcquisitionClientError> {
-        let response = self
-            .transport
-            .execute(request)
-            .map_err(|error| AcquisitionClientError {
-                kind: AcquisitionClientErrorKind::TransportUnavailable,
-                explanation: error.explanation,
-                action: "Check connectivity and resume the pinned job.".into(),
-            })?;
-        if !(200..300).contains(&response.status) {
+        const MAX_ATTEMPTS: usize = 3;
+        for attempt in 0..MAX_ATTEMPTS {
+            let response = match self.transport.execute(request.clone()) {
+                Ok(response) => response,
+                Err(_) if attempt + 1 < MAX_ATTEMPTS => {
+                    retry_backoff(attempt);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(AcquisitionClientError {
+                        kind: AcquisitionClientErrorKind::TransportUnavailable,
+                        explanation: error.explanation,
+                        action: "Check connectivity and resume the pinned job.".into(),
+                    });
+                }
+            };
+            if (200..300).contains(&response.status) {
+                return Ok(response);
+            }
+            let structured_retry = serde_json::from_slice::<ServiceFailure>(&response.body)
+                .is_ok_and(|failure| failure.retryable);
+            let transient_status = matches!(response.status, 429 | 500 | 502 | 503 | 504);
+            if attempt + 1 < MAX_ATTEMPTS && (structured_retry || transient_status) {
+                retry_backoff(attempt);
+                continue;
+            }
             return Err(map_service_failure(response.status, &response.body));
         }
-        Ok(response)
+        unreachable!("the bounded retry loop always returns")
     }
+}
+
+fn retry_backoff(attempt: usize) {
+    #[cfg(test)]
+    let base_millis = 1;
+    #[cfg(not(test))]
+    let base_millis = 100;
+    std::thread::sleep(std::time::Duration::from_millis(
+        base_millis * (1_u64 << attempt),
+    ));
 }
 
 fn integrity_error(explanation: impl Into<String>) -> AcquisitionClientError {
@@ -635,6 +1030,136 @@ fn integrity_error(explanation: impl Into<String>) -> AcquisitionClientError {
         kind: AcquisitionClientErrorKind::IntegrityFailure,
         explanation: explanation.into(),
         action: "Discard this download and resume the pinned result chunk.".into(),
+    }
+}
+
+fn invalid_request_error(explanation: impl Into<String>) -> AcquisitionClientError {
+    AcquisitionClientError {
+        kind: AcquisitionClientErrorKind::InvalidResponse,
+        explanation: explanation.into(),
+        action: "Correct the confirmed Campus Target inputs and retry.".into(),
+    }
+}
+
+fn decode_job_status(body: &[u8]) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+    serde_json::from_slice(body).map_err(|error| AcquisitionClientError {
+        kind: AcquisitionClientErrorKind::InvalidResponse,
+        explanation: format!("The controlled service returned an invalid job status: {error}"),
+        action: "Open diagnostics and resume the pinned request later.".into(),
+    })
+}
+
+fn assess_boundary_candidates(
+    bundle: &DatasetBundle,
+    candidates: &[BoundaryCandidate],
+) -> Result<
+    (
+        BTreeMap<String, BoundaryCandidateValidity>,
+        BTreeMap<String, BoundaryCandidateDerivation>,
+    ),
+    AcquisitionClientError,
+> {
+    let mut ids = BTreeSet::new();
+    let mut validity = BTreeMap::new();
+    let mut derivations = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let expected_rank = u32::try_from(index + 1).unwrap_or(u32::MAX);
+        if candidate.rank != expected_rank || !ids.insert(&candidate.id) {
+            return Err(integrity_error(
+                "Boundary candidates are not uniquely ranked in stable order.",
+            ));
+        }
+        let mut reasons = Vec::new();
+        if !matches!(
+            &candidate.geometry,
+            SourceGeometry::Polygon(_) | SourceGeometry::MultiPolygon(_)
+        ) {
+            reasons.push("candidate geometry is not a Polygon or MultiPolygon".into());
+        }
+        if !matches!(candidate.lineage.provider.as_str(), "osm" | "overture") {
+            reasons.push("candidate provider is not OSM or Overture".into());
+        }
+        if candidate.id.trim().is_empty()
+            || candidate.lineage.source_record_id.trim().is_empty()
+            || candidate.lineage.dataset_release.trim().is_empty()
+            || candidate.licence.identifier.trim().is_empty()
+            || candidate.licence.dataset_release.trim().is_empty()
+        {
+            reasons.push("candidate lineage or licence evidence is incomplete".into());
+        }
+        let ranking = &candidate.ranking_evidence;
+        if !ranking.name_match.is_finite()
+            || !(0.0..=1.0).contains(&ranking.name_match)
+            || !ranking.distance_m.is_finite()
+            || ranking.distance_m < 0.0
+            || !ranking.area_m2.is_finite()
+            || ranking.area_m2 <= 0.0
+        {
+            reasons.push("candidate ranking evidence is invalid".into());
+        }
+        if !valid_area_geometry(&candidate.geometry) {
+            reasons.push("candidate area geometry has invalid coordinates or rings".into());
+        }
+        validity.insert(
+            candidate.id.clone(),
+            if reasons.is_empty() {
+                BoundaryCandidateValidity::Valid
+            } else {
+                BoundaryCandidateValidity::Invalid { reasons }
+            },
+        );
+        let mut source_records = vec![candidate.lineage.source_record_id.clone()];
+        source_records.extend(candidate.lineage.upstream_records.iter().cloned());
+        let mut steps = vec![format!(
+            "classified {} from {}",
+            candidate.lineage.original_classification, candidate.lineage.provider
+        )];
+        if let Some(relation) = &candidate.lineage.relation {
+            source_records.extend(relation.member_ids.iter().cloned());
+            steps.push(format!(
+                "assembled relation {} with status {}",
+                relation.relation_id, relation.assembly_status
+            ));
+        }
+        source_records.sort();
+        source_records.dedup();
+        derivations.insert(
+            candidate.id.clone(),
+            BoundaryCandidateDerivation {
+                source_records,
+                rule_versions: vec![
+                    bundle.classification_rules.clone(),
+                    bundle.assembly_rules.clone(),
+                    bundle.derivation_rules.clone(),
+                ],
+                steps,
+            },
+        );
+    }
+    Ok((validity, derivations))
+}
+
+fn valid_area_geometry(geometry: &SourceGeometry) -> bool {
+    fn valid_position(position: &[f64; 2]) -> bool {
+        position[0].is_finite()
+            && position[1].is_finite()
+            && (-180.0..=180.0).contains(&position[0])
+            && (-90.0..=90.0).contains(&position[1])
+    }
+    fn valid_ring(ring: &[[f64; 2]]) -> bool {
+        ring.len() >= 4 && ring.first() == ring.last() && ring.iter().all(valid_position)
+    }
+    match geometry {
+        SourceGeometry::Polygon(rings) => {
+            !rings.is_empty() && rings.iter().all(|ring| valid_ring(ring))
+        }
+        SourceGeometry::MultiPolygon(polygons) => {
+            !polygons.is_empty()
+                && polygons
+                    .iter()
+                    .all(|rings| !rings.is_empty() && rings.iter().all(|ring| valid_ring(ring)))
+        }
+        _ => false,
     }
 }
 
@@ -653,6 +1178,21 @@ fn result_chunk_path(job_kind: &str, job_id: &str, chunk_id: &str, cursor: &str)
         url.path(),
         url.query().expect("cursor query was appended")
     )
+}
+
+fn boundary_job_path(job_id: &str, action: Option<&str>) -> String {
+    let mut url = reqwest::Url::parse("https://contract.invalid/v1/boundary-jobs")
+        .expect("fixed boundary job base path is valid");
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .expect("fixed boundary job URL is hierarchical");
+        segments.push(job_id);
+        if let Some(action) = action {
+            segments.push(action);
+        }
+    }
+    url.path().to_owned()
 }
 
 #[cfg(debug_assertions)]
@@ -800,7 +1340,266 @@ pub mod fixture_transport {
 
 #[cfg(test)]
 mod tests {
-    use super::result_chunk_path;
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct RecordingTransport {
+        requests: Rc<RefCell<Vec<TransportRequest>>>,
+        responses: Rc<RefCell<VecDeque<TransportResponse>>>,
+    }
+
+    impl RecordingTransport {
+        fn new(responses: Vec<TransportResponse>) -> Self {
+            Self {
+                requests: Rc::new(RefCell::new(Vec::new())),
+                responses: Rc::new(RefCell::new(responses.into())),
+            }
+        }
+    }
+
+    impl AcquisitionTransport for RecordingTransport {
+        fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+            self.requests.borrow_mut().push(request);
+            self.responses
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| TransportError {
+                    explanation: "test transport ran out of responses".into(),
+                })
+        }
+    }
+
+    fn json_response(value: serde_json::Value) -> TransportResponse {
+        TransportResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: serde_json::to_vec(&value).unwrap(),
+        }
+    }
+
+    fn capabilities_response() -> TransportResponse {
+        json_response(serde_json::json!({
+            "contract_versions": [CONTRACT_VERSION],
+            "supported_bundles": [{
+                "id": "cn-campus-2026-06",
+                "osm_snapshot": "2026-06-01",
+                "overture_release": "2026-06-18.0",
+                "output_schema": "source-observation-v1",
+                "classification_rules": "classification-v1",
+                "assembly_rules": "assembly-v1",
+                "conflation_rules": "conflation-v1",
+                "derivation_rules": "derivation-v1"
+            }],
+            "limits": {
+                "area_square_metres": 100000000,
+                "boundary_vertices": 10000,
+                "tiles": 10000,
+                "observations": 1000000,
+                "result_bytes": 1000000000,
+                "concurrent_jobs": 2
+            },
+            "retention_days": 30,
+            "quota_remaining": 100
+        }))
+    }
+
+    #[test]
+    fn live_boundary_flow_negotiates_and_sends_only_confirmed_target_inputs() {
+        let transport = RecordingTransport::new(vec![
+            capabilities_response(),
+            json_response(serde_json::json!({
+                "job_id": "boundary-job-7",
+                "contract_version": CONTRACT_VERSION,
+                "bundle_id": "cn-campus-2026-06",
+                "state": "running"
+            })),
+        ]);
+        let requests = transport.requests.clone();
+        let client = AcquisitionClient::new(transport);
+        let query = CampusBoundaryCandidateQuery::new(
+            "East China Normal University Putuo Campus",
+            vec!["ECNU Putuo".into()],
+            [121.395, 31.202],
+            2_000.0,
+            "installation-42:boundary:putuo",
+        )
+        .unwrap();
+
+        let job = client.start_boundary_discovery(&query).unwrap();
+
+        assert_eq!(job.job_id, "boundary-job-7");
+        assert_eq!(job.bundle_id, "cn-campus-2026-06");
+        let requests = requests.borrow();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, TransportMethod::Get);
+        assert_eq!(requests[0].path, "/v1/capabilities");
+        assert_eq!(requests[1].method, TransportMethod::Post);
+        assert_eq!(requests[1].path, "/v1/boundary-jobs");
+        let body: serde_json::Value =
+            serde_json::from_slice(requests[1].body.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            body.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "bundle_id".into(),
+                "campus_target".into(),
+                "contract_version".into(),
+                "request_identity".into(),
+            ])
+        );
+        assert_eq!(
+            body["campus_target"],
+            serde_json::json!({
+                "name": "East China Normal University Putuo Campus",
+                "aliases": ["ECNU Putuo"],
+                "anchor_wgs84": [121.395, 31.202],
+                "search_radius_m": 2000.0
+            })
+        );
+        assert_eq!(
+            body["request_identity"]["idempotency_key"],
+            "installation-42:boundary:putuo"
+        );
+        let content = serde_json::to_vec(&serde_json::json!({
+            "contract_version": CONTRACT_VERSION,
+            "bundle_id": "cn-campus-2026-06",
+            "campus_target": body["campus_target"].clone()
+        }))
+        .unwrap();
+        assert_eq!(
+            body["request_identity"]["content_sha256"],
+            sha256_hex(&content)
+        );
+    }
+
+    #[test]
+    fn reconnect_retry_and_cancel_preserve_the_boundary_job_identity() {
+        let status = || {
+            json_response(serde_json::json!({
+                "job_id": "boundary-job-7",
+                "contract_version": CONTRACT_VERSION,
+                "bundle_id": "cn-campus-2026-06",
+                "state": "running"
+            }))
+        };
+        let transport = RecordingTransport::new(vec![status(), status(), status()]);
+        let requests = transport.requests.clone();
+        let client = AcquisitionClient::new(transport);
+        let pinned = AcquisitionJobStatus {
+            job_id: "boundary-job-7".into(),
+            contract_version: CONTRACT_VERSION.into(),
+            bundle_id: "cn-campus-2026-06".into(),
+            state: AcquisitionJobState::Running,
+            outcomes: Vec::new(),
+            failure: None,
+            negotiated_bundle: None,
+        };
+
+        assert_eq!(client.boundary_job(&pinned).unwrap().job_id, pinned.job_id);
+        assert_eq!(
+            client.retry_boundary_job(&pinned).unwrap().bundle_id,
+            pinned.bundle_id
+        );
+        assert_eq!(
+            client.cancel_boundary_job(&pinned).unwrap().job_id,
+            pinned.job_id
+        );
+        let requests = requests.borrow();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "/v1/boundary-jobs/boundary-job-7",
+                "/v1/boundary-jobs/boundary-job-7/retry",
+                "/v1/boundary-jobs/boundary-job-7/cancel",
+            ]
+        );
+        assert_eq!(
+            requests[1].body.as_deref(),
+            Some(br#"{"scopes":[]}"#.as_slice())
+        );
+        assert!(requests[2].body.is_none());
+    }
+
+    #[test]
+    fn oversized_boundary_query_fails_before_job_submission_without_clipping() {
+        let transport = RecordingTransport::new(vec![capabilities_response()]);
+        let requests = transport.requests.clone();
+        let client = AcquisitionClient::new(transport);
+        let query = CampusBoundaryCandidateQuery::new(
+            "Oversized Campus",
+            Vec::new(),
+            [121.4, 31.2],
+            10_000.0,
+            "installation-42:oversized",
+        )
+        .unwrap();
+
+        let error = client.start_boundary_discovery(&query).unwrap_err();
+
+        assert_eq!(error.kind, AcquisitionClientErrorKind::ServiceFailure);
+        assert!(error.explanation.contains("100000000 m²"));
+        assert_eq!(requests.borrow().len(), 1);
+        assert_eq!(requests.borrow()[0].path, "/v1/capabilities");
+    }
+
+    #[test]
+    fn transient_failures_retry_the_same_versioned_request() {
+        let mut unavailable = json_response(serde_json::json!({
+            "code": "temporarily_unavailable",
+            "scope": "capabilities",
+            "retryable": true,
+            "explanation": "The service is restarting.",
+            "suggested_action": "Retry."
+        }));
+        unavailable.status = 503;
+        let transport = RecordingTransport::new(vec![unavailable, capabilities_response()]);
+        let requests = transport.requests.clone();
+        let client = AcquisitionClient::new(transport);
+
+        let capabilities = client.capabilities().unwrap();
+
+        assert_eq!(capabilities.supported_bundles[0].id, "cn-campus-2026-06");
+        let requests = requests.borrow();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].path, requests[1].path);
+        assert_eq!(requests[0].body, requests[1].body);
+    }
+
+    #[test]
+    fn invalid_boundary_candidate_remains_available_with_diagnostic_reasons() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/acquisition/v1/fixtures/boundary-discovery-snapshot.json"
+        ))
+        .unwrap();
+        let mut candidate: BoundaryCandidate =
+            serde_json::from_value(fixture["candidates"][0].clone()).unwrap();
+        candidate.geometry = SourceGeometry::LineString(vec![[121.4, 31.2], [121.5, 31.3]]);
+
+        let bundle: DatasetBundle = serde_json::from_value(fixture["bundle"].clone()).unwrap();
+        let (validity, derivations) = assess_boundary_candidates(&bundle, &[candidate]).unwrap();
+
+        let BoundaryCandidateValidity::Invalid { reasons } = &validity["boundary-osm-relation-100"]
+        else {
+            panic!("invalid candidate was incorrectly accepted");
+        };
+        assert!(reasons.iter().any(|reason| reason.contains("Polygon")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("area geometry")));
+        assert!(derivations["boundary-osm-relation-100"]
+            .steps
+            .iter()
+            .any(|step| step.contains("assembled relation")));
+    }
 
     #[test]
     fn stable_cursor_is_encoded_as_an_opaque_query_value() {

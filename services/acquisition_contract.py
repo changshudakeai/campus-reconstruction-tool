@@ -1,7 +1,9 @@
 """Provider-neutral decoder for the frozen Controlled Acquisition v1 contract."""
 
 import base64
+import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,6 +189,7 @@ class FixtureAcquisitionService:
             )
         }
         self._jobs: dict[str, dict[str, str]] = {}
+        self._request_identities: dict[tuple[str, str], tuple[str, str]] = {}
         self._next_job = 1
 
     def handle(
@@ -228,9 +231,60 @@ class FixtureAcquisitionService:
             kind = path.rsplit("/", 1)[-1]
             if not self._valid_create_request(kind, request):
                 return self._failure(400, "invalid_request", path, False)
+            if request["bundle_id"] != self._acquisition["bundle"]["id"]:
+                return self._failure(409, "unsupported_bundle", request["bundle_id"], False)
+            if kind == "boundary-jobs":
+                requested_area = math.pi * request["campus_target"]["search_radius_m"] ** 2
+                if requested_area > 100_000_000:
+                    return self._failure(
+                        413,
+                        "area_limit_exceeded",
+                        "campus_target.search_radius_m",
+                        False,
+                        explanation=(
+                            f"The requested boundary search covers {requested_area:.0f} m², "
+                            "above the 100000000 m² limit."
+                        ),
+                        suggested_action="Reduce the bounded search radius and submit a new request.",
+                    )
+            identity = request["request_identity"]
+            canonical_content = {
+                key: value for key, value in request.items() if key != "request_identity"
+            }
+            content_sha256 = hashlib.sha256(
+                json.dumps(
+                    canonical_content,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if identity["content_sha256"] != content_sha256:
+                return self._failure(
+                    400,
+                    "content_digest_mismatch",
+                    "request_identity.content_sha256",
+                    False,
+                )
+            identity_key = (kind, identity["idempotency_key"])
+            previous = self._request_identities.get(identity_key)
+            if previous is not None:
+                previous_hash, previous_job_id = previous
+                if previous_hash != content_sha256:
+                    return self._failure(
+                        409,
+                        "idempotency_conflict",
+                        identity["idempotency_key"],
+                        False,
+                    )
+                return self._job(202, previous_job_id)
             job_id = f"fixture-{self._next_job}"
             self._next_job += 1
             self._jobs[job_id] = {"kind": kind, "state": "complete"}
+            self._request_identities[identity_key] = (
+                content_sha256,
+                job_id,
+            )
             return self._job(202, job_id)
 
         match = self._JOB_PATH.fullmatch(path)
@@ -328,7 +382,14 @@ class FixtureAcquisitionService:
         )
 
     def _failure(
-        self, status: int, code: str, scope: str, retryable: bool
+        self,
+        status: int,
+        code: str,
+        scope: str,
+        retryable: bool,
+        *,
+        explanation: str | None = None,
+        suggested_action: str | None = None,
     ) -> ServiceResponse:
         return self._json(
             status,
@@ -336,8 +397,9 @@ class FixtureAcquisitionService:
                 "code": code,
                 "scope": scope,
                 "retryable": retryable,
-                "explanation": f"The fixture service rejected {scope}.",
-                "suggested_action": (
+                "explanation": explanation or f"The fixture service rejected {scope}.",
+                "suggested_action": suggested_action
+                or (
                     "Retry the same pinned scope."
                     if retryable
                     else "Check the request and diagnostics."
