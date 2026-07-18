@@ -81,18 +81,15 @@ fn fixed_dataset_runs_from_confirmed_campus_to_revision_matched_exports() {
     assert_eq!(
         reopened
             .foundation_review()
-            .disposition(FoundationCategory::Building.into())
+            .disposition(FoundationCategory::Building)
             .unwrap(),
         &FoundationReviewDisposition::SelectedEvidence {
             evidence_ids: vec!["obs-osm-relation-42".into()]
         }
     );
-    assert!(FoundationCategory::ALL.into_iter().all(|category| {
-        reopened
-            .foundation_review()
-            .disposition(category.into())
-            .is_some()
-    }));
+    assert!(FoundationCategory::ALL
+        .into_iter()
+        .all(|category| { reopened.foundation_review().disposition(category).is_some() }));
     assert_eq!(
         reopened.generated_output().unwrap().project_revision,
         reopened.workflow().project_revision()
