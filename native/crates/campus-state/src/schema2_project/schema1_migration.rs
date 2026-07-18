@@ -65,6 +65,7 @@ pub enum ReconfirmationReason {
     LegacyBoundaryRequiresControlledEvidence,
     MissingLegacySubject,
     ContradictoryLegacyDecision,
+    UnsupportedLegacyDecision,
     MissingSourceSnapshot,
     ManualOrScreenshotDerivedGeometry,
 }
@@ -519,6 +520,45 @@ fn build_legacy_migration_state(
             needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingSourceSnapshot);
         }
     }
+    if let Some(reviews) = raw_portable_reviews(source_project) {
+        for (candidate_id, raw_decision) in reviews {
+            ledger_subjects.insert(candidate_id.clone(), ());
+            let subject_id = format!("candidate:{candidate_id}");
+            let Ok(decision) = serde_json::from_value::<ReviewDecision>(raw_decision.clone())
+            else {
+                needs_reconfirmation
+                    .insert(subject_id, ReconfirmationReason::UnsupportedLegacyDecision);
+                continue;
+            };
+            let Some(candidate) = candidate_by_id.get(candidate_id.as_str()) else {
+                needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingLegacySubject);
+                continue;
+            };
+            if candidate.review != decision {
+                needs_reconfirmation.insert(
+                    subject_id,
+                    ReconfirmationReason::ContradictoryLegacyDecision,
+                );
+                continue;
+            }
+            let source_snapshot_id = raw_candidate_source_snapshot_id(source_project, candidate_id);
+            let source_is_complete = source_snapshot_id
+                .and_then(|id| snapshot_by_id.get(id))
+                .copied()
+                .unwrap_or(false);
+            if source_is_complete {
+                legacy_assertions.push(LegacyAssertion {
+                    subject_id,
+                    decision,
+                    source_snapshot_id: source_snapshot_id.map(str::to_owned),
+                    lineage: lineage.clone(),
+                });
+            } else {
+                needs_reconfirmation
+                    .insert(subject_id, ReconfirmationReason::MissingSourceSnapshot);
+            }
+        }
+    }
     for candidate in &legacy.candidates {
         if candidate.review == ReviewDecision::Pending
             || ledger_subjects.contains_key(&candidate.id)
@@ -760,29 +800,36 @@ fn append_record_level_report(
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("raw-record-{}", index + 1));
+        let reconfirmation_reason =
+            review_reconfirmation_reason(needs_reconfirmation, &candidate_id);
         report_entry(
             report,
             &format!("review-ledger:{candidate_id}:record-{}", index + 1),
-            MigrationDisposition::Transformed,
-            "The legacy review record is evaluated into an assertion or targeted reconfirmation",
+            if reconfirmation_reason.is_some() {
+                MigrationDisposition::Quarantined
+            } else {
+                MigrationDisposition::Transformed
+            },
+            reconfirmation_reason
+                .map(reconfirmation_reason_report)
+                .unwrap_or("The legacy review record becomes a lineage-bearing assertion"),
         );
     }
     if let Some(reviews) = raw_portable_reviews(source_project) {
-        for (candidate_id, decision) in reviews {
-            let is_supported = serde_json::from_value::<ReviewDecision>(decision.clone()).is_ok();
+        for candidate_id in reviews.keys() {
+            let reconfirmation_reason =
+                review_reconfirmation_reason(needs_reconfirmation, candidate_id);
             report_entry(
                 report,
                 &format!("review-ledger:{candidate_id}"),
-                if is_supported {
-                    MigrationDisposition::Transformed
-                } else {
+                if reconfirmation_reason.is_some() {
                     MigrationDisposition::Quarantined
-                },
-                if is_supported {
-                    "The portable review decision is retained for targeted legacy review"
                 } else {
-                    "The portable review decision is retained but could not be decoded"
+                    MigrationDisposition::Transformed
                 },
+                reconfirmation_reason
+                    .map(reconfirmation_reason_report)
+                    .unwrap_or("The portable review decision becomes a lineage-bearing assertion"),
             );
         }
     }
@@ -909,6 +956,37 @@ fn append_undecoded_record_report(
             MigrationDisposition::Omitted,
             "The raw legacy feature could not be decoded into a supported feature record",
         );
+    }
+}
+
+fn review_reconfirmation_reason<'a>(
+    needs_reconfirmation: &'a BTreeMap<String, ReconfirmationReason>,
+    candidate_id: &str,
+) -> Option<&'a ReconfirmationReason> {
+    needs_reconfirmation
+        .get(&format!("candidate:{candidate_id}"))
+        .or_else(|| needs_reconfirmation.get(&format!("suppression:{candidate_id}")))
+}
+
+fn reconfirmation_reason_report(reason: &ReconfirmationReason) -> &'static str {
+    match reason {
+        ReconfirmationReason::MissingLegacySubject => {
+            "The review record is quarantined because its legacy subject is missing"
+        }
+        ReconfirmationReason::ContradictoryLegacyDecision => {
+            "The review record is quarantined because it contradicts the retained subject state"
+        }
+        ReconfirmationReason::UnsupportedLegacyDecision => {
+            "The review record is quarantined because its legacy decision is unsupported"
+        }
+        ReconfirmationReason::MissingSourceSnapshot => {
+            "The review record is quarantined because it lacks a complete source snapshot"
+        }
+        ReconfirmationReason::MissingLegacyCampusTargetEvidence
+        | ReconfirmationReason::LegacyBoundaryRequiresControlledEvidence
+        | ReconfirmationReason::ManualOrScreenshotDerivedGeometry => {
+            "The review record is quarantined for targeted reconfirmation"
+        }
     }
 }
 

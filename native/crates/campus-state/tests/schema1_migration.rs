@@ -391,6 +391,7 @@ fn raw_records_skipped_by_compatibility_decoding_are_reported_with_reasons() {
     let outcome = library
         .migrate_managed_schema1_project(&legacy_path, actor())
         .unwrap();
+    let migration = outcome.project.legacy_migration().unwrap().unwrap();
     let entries = &outcome.report.entries;
 
     assert!(entries.iter().any(|entry| {
@@ -405,7 +406,12 @@ fn raw_records_skipped_by_compatibility_decoding_are_reported_with_reasons() {
     }));
     assert!(entries.iter().any(|entry| {
         entry.subject == "review-ledger:legacy-road"
-            && entry.disposition == MigrationDisposition::Transformed
+            && entry.disposition == MigrationDisposition::Quarantined
+            && entry.reason.contains("legacy subject is missing")
+    }));
+    assert!(migration.needs_reconfirmation.iter().any(|item| {
+        item.subject_id == "candidate:legacy-road"
+            && item.reason == ReconfirmationReason::MissingLegacySubject
     }));
 }
 
