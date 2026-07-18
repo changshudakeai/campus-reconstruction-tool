@@ -143,6 +143,9 @@ fn typed_source_evidence_round_trips_without_flattening_or_duplicate_delivery() 
         ledger.duplicate_deliveries()["obs-campus-library-v1"],
         vec!["obs-campus-library-v1-replay"]
     );
+    assert!(entity
+        .unresolved_overlap_groups
+        .contains(&"library-conflict".into()));
 
     let round_trip: BuildingEntityReviewLedger =
         serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
@@ -254,6 +257,17 @@ fn reversible_entity_review_resolves_primary_parts_boundary_and_names_after_conf
         restored.primary_observation_id,
         "obs-campus-library-overlap"
     );
+    ledger.revoke_last().unwrap();
+    assert!(ledger
+        .entities()
+        .iter()
+        .find(|entity| entity.id == "building:campus-library")
+        .unwrap()
+        .display_name
+        .is_none());
+    assert!(ledger.entries().iter().all(|entry| {
+        entry.recorded_at_unix_ms > 0 && !entry.basis.observation_geometry_sha256.is_empty()
+    }));
 }
 
 #[test]
@@ -271,6 +285,27 @@ fn reviewed_entity_projection_keeps_sources_immutable_and_emits_distinct_generat
             BuildingEntityDecision::SetBoundary {
                 entity_id: "building:campus-library".into(),
                 decision: BuildingBoundaryDecision::RetainWhole,
+            },
+            &fixture.observations,
+        )
+        .unwrap();
+    assert!(ledger
+        .reviewed_entities(
+            &fixture.observations,
+            BuildingGenerationBasis {
+                origin_wgs84: [121.3998, 31.2098],
+                orientation_degrees: 17.5,
+                blocks_per_meter: 1.25,
+                rule_version: "building-generation-geometry/v1".into(),
+            },
+        )
+        .unwrap_err()
+        .contains("geometry conflict"));
+    ledger
+        .record(
+            BuildingEntityDecision::SetPrimary {
+                entity_id: "building:campus-library".into(),
+                observation_id: "obs-campus-library-v1".into(),
             },
             &fixture.observations,
         )
@@ -299,6 +334,7 @@ fn reviewed_entity_projection_keeps_sources_immutable_and_emits_distinct_generat
         .reviewed_entities(
             &fixture.observations,
             BuildingGenerationBasis {
+                origin_wgs84: [121.3998, 31.2098],
                 orientation_degrees: 17.5,
                 blocks_per_meter: 1.25,
                 rule_version: "building-generation-geometry/v1".into(),
@@ -321,6 +357,10 @@ fn reviewed_entity_projection_keeps_sources_immutable_and_emits_distinct_generat
     assert_eq!(
         reviewed[0].generation_geometry.source_entity_id,
         "building:campus-library"
+    );
+    assert_ne!(
+        reviewed[0].generation_geometry.geometry, reviewed[0].review_geometry,
+        "Generation Geometry is project-space, not relabelled WGS-84 review evidence"
     );
     assert_eq!(
         reviewed[0].generation_geometry.basis.orientation_degrees,
@@ -386,6 +426,43 @@ fn separate_and_merge_decisions_are_explicit_and_reversible_without_geometry_uni
 }
 
 #[test]
+fn deduplication_keeps_any_materially_changed_evidence() {
+    let mut fixture = fixture();
+    let mut changed = fixture
+        .observations
+        .iter()
+        .find(|observation| observation.id == "obs-campus-library-v1-replay")
+        .unwrap()
+        .clone();
+    changed.id = "obs-campus-library-crs-change".into();
+    changed.coordinate_semantics.axis_order = "latitude,longitude".into();
+    fixture.observations.push(changed);
+    let mut descriptor = fixture
+        .building_evidence
+        .iter()
+        .find(|descriptor| descriptor.observation_id == "obs-campus-library-v1-replay")
+        .unwrap()
+        .clone();
+    descriptor.observation_id = "obs-campus-library-crs-change".into();
+    fixture.building_evidence.push(descriptor);
+
+    let ledger = BuildingEntityReviewLedger::new(
+        &fixture.observations,
+        fixture.building_evidence,
+        fixture.name_evidence,
+    )
+    .unwrap();
+
+    assert!(ledger
+        .entities()
+        .iter()
+        .find(|entity| entity.id == "building:campus-library")
+        .unwrap()
+        .evidence_ids
+        .contains(&"obs-campus-library-crs-change".into()));
+}
+
+#[test]
 fn schema2_project_persists_entity_review_and_generation_consumes_its_projection() {
     let fixture = fixture();
     let directory = tempfile::tempdir().unwrap();
@@ -407,13 +484,17 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
         .pin_acquisition(acquisition_evidence(fixture.observations.clone()), actor())
         .unwrap();
     project
-        .initialize_building_entity_review(
-            fixture.building_evidence,
-            fixture.name_evidence,
-            actor(),
-        )
+        .initialize_building_entity_review(fixture.name_evidence, actor())
         .unwrap();
+    assert!(project
+        .initialize_building_entity_review(Vec::new(), actor())
+        .unwrap_err()
+        .contains("already initialized"));
     for decision in [
+        BuildingEntityDecision::SetPrimary {
+            entity_id: "building:campus-library".into(),
+            observation_id: "obs-campus-library-overlap".into(),
+        },
         BuildingEntityDecision::SetBoundary {
             entity_id: "building:campus-library".into(),
             decision: BuildingBoundaryDecision::RetainWhole,
@@ -432,6 +513,37 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
             .record_building_entity_decision(decision, actor())
             .unwrap();
     }
+    project
+        .revoke_last_building_entity_decision(actor())
+        .unwrap();
+    project
+        .revoke_last_building_entity_decision(actor())
+        .unwrap();
+    for decision in [
+        BuildingEntityDecision::SetBoundary {
+            entity_id: "building:annex".into(),
+            decision: BuildingBoundaryDecision::Exclude,
+        },
+        BuildingEntityDecision::AssignName {
+            entity_id: "building:campus-library".into(),
+            name_evidence_id: "name-library-exclusive".into(),
+            mode: BuildingNameAssignmentMode::Automatic,
+        },
+    ] {
+        project
+            .record_building_entity_decision(decision, actor())
+            .unwrap();
+    }
+    assert!(project
+        .complete_foundation_review(
+            FoundationCategory::Building,
+            FoundationReviewDisposition::SelectedEvidence {
+                evidence_ids: vec!["obs-campus-library-v1".into()],
+            },
+            actor(),
+        )
+        .unwrap_err()
+        .contains("Building Entities"));
     project
         .complete_foundation_review(
             FoundationCategory::Building,
@@ -491,6 +603,10 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
     assert!(projection
         .selected_features
         .iter()
+        .any(|feature| { feature.id == "building:campus-library:part:obs-campus-library-part" }));
+    assert!(projection
+        .selected_features
+        .iter()
         .all(|feature| feature.id != "obs-campus-library-v1"));
     project.record_generation(64, 8, 64, 512, actor()).unwrap();
     project
@@ -515,7 +631,7 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
 
     library.save_project(&project).unwrap();
     let reopened = library.open_project(project.id()).unwrap();
-    assert_eq!(reopened.building_entity_review().entries().len(), 3);
+    assert_eq!(reopened.building_entity_review().entries().len(), 8);
     assert_eq!(
         reopened.exported_output().unwrap().building_provenance,
         projection.building_entities
@@ -524,5 +640,13 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
     assert_eq!(
         decoded.reviewed_projection().unwrap().building_entities,
         projection.building_entities
+    );
+    let mut tampered = serde_json::to_value(&reopened).unwrap();
+    tampered["foundation"]["buildingReview"]["entities"][0]["primary_observation_id"] =
+        serde_json::json!("obs-annex");
+    assert!(
+        decode_schema2_project(&serde_json::to_vec(&tampered).unwrap())
+            .unwrap_err()
+            .contains("deterministic Building Entity projection")
     );
 }

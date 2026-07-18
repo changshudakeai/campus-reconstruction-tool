@@ -27,11 +27,11 @@
         "relation": {"relation_id": "42", "assembly_status": "complete", "member_ids": ["4201", "4202", "4203"]}
       },
       "licence": {"identifier": "ODbL-1.0", "url": "https://www.openstreetmap.org/copyright", "attribution": "OpenStreetMap contributors", "dataset_release": "2026-06-01", "acquired_at": "2026-06-10T08:00:00Z", "upstream_obligations": ["attribute"]},
-      "coordinate_semantics": {"crs": "EPSG:3857", "axis_order": "east,north"},
+      "coordinate_semantics": {"crs": "EPSG:4326", "axis_order": "longitude,latitude"},
       "unit_semantics": {"height": "m"},
       "time_semantics": {"dataset_release": "2026-06-01", "acquired_at": "2026-06-10T08:00:00Z"},
       "geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-      "derivation": {"rule_version": "geometry-review/v1", "steps": ["relation-assembly", "epsg3857-to-wgs84", "polygon-validation"], "source_geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "review_geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "derivation": {"rule_version": "geometry-review/v1", "steps": ["relation-assembly", "axis-normalization", "polygon-validation"], "source_geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "review_geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "review_geometry_proposal": {
         "type": "MultiPolygon",
         "coordinates": [
@@ -45,7 +45,7 @@
         ]
       },
       "raw_spatial_measures": {"area_m2": 8120.0},
-      "suggestions": [{"kind": "whole-building", "rule_version": "classification/v1", "reason": "complete building relation"}],
+      "suggestions": [{"kind": "whole-building", "rule_version": "classification/v1", "reason": "complete building relation", "building_entity_id": "building:campus-library", "building_role": "whole", "boundary_relationship": "straddling", "overlap_group": "library-conflict"}],
       "attribute_provenance": [
         {"attribute": "height_m", "value": 18.0, "source_observation_id": "obs-campus-library-v1", "original_value": "18 m", "unit": "m", "derivation": "direct", "rule_version": "units/v1"},
         {"attribute": "name", "value": "old source label", "source_observation_id": "obs-campus-library-v1", "original_value": "old source label", "unit": "none", "derivation": "direct", "rule_version": "source-tag/v1"}
@@ -78,11 +78,11 @@
         "relation": {"relation_id": "42", "assembly_status": "complete", "member_ids": ["4201", "4202", "4203"]}
       },
       "licence": {"identifier": "ODbL-1.0", "url": "https://www.openstreetmap.org/copyright", "attribution": "OpenStreetMap contributors", "dataset_release": "2026-06-01", "acquired_at": "2026-06-10T08:00:00Z", "upstream_obligations": ["attribute"]},
-      "coordinate_semantics": {"crs": "EPSG:3857", "axis_order": "east,north"},
+      "coordinate_semantics": {"crs": "EPSG:4326", "axis_order": "longitude,latitude"},
       "unit_semantics": {"height": "m"},
       "time_semantics": {"dataset_release": "2026-06-01", "acquired_at": "2026-06-10T08:00:00Z"},
       "geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-      "derivation": {"rule_version": "geometry-review/v1", "steps": ["relation-assembly", "epsg3857-to-wgs84", "polygon-validation"], "source_geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "review_geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "derivation": {"rule_version": "geometry-review/v1", "steps": ["relation-assembly", "axis-normalization", "polygon-validation"], "source_geometry_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "review_geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "review_geometry_proposal": {
         "type": "MultiPolygon",
         "coordinates": [
@@ -96,10 +96,10 @@
         ]
       },
       "raw_spatial_measures": {"area_m2": 8120.0},
-      "suggestions": [{"kind": "whole-building", "rule_version": "classification/v1", "reason": "complete building relation"}],
+      "suggestions": [{"kind": "whole-building", "rule_version": "classification/v1", "reason": "complete building relation", "building_entity_id": "building:campus-library", "building_role": "whole", "boundary_relationship": "straddling", "overlap_group": "library-conflict"}],
       "attribute_provenance": [
-        {"attribute": "height_m", "value": 18.0, "source_observation_id": "obs-campus-library-v1", "original_value": "18 m", "unit": "m", "derivation": "direct", "rule_version": "units/v1"},
-        {"attribute": "name", "value": "old source label", "source_observation_id": "obs-campus-library-v1", "original_value": "old source label", "unit": "none", "derivation": "direct", "rule_version": "source-tag/v1"}
+        {"attribute": "height_m", "value": 18.0, "source_observation_id": "obs-campus-library-v1-replay", "original_value": "18 m", "unit": "m", "derivation": "direct", "rule_version": "units/v1"},
+        {"attribute": "name", "value": "old source label", "source_observation_id": "obs-campus-library-v1-replay", "original_value": "old source label", "unit": "none", "derivation": "direct", "rule_version": "source-tag/v1"}
       ]
     },
     {
@@ -116,7 +116,7 @@
       "derivation": {"rule_version": "geometry-review/v1", "steps": ["relation-assembly", "polygon-validation"], "source_geometry_sha256": "2222222222222222222222222222222222222222222222222222222222222222", "review_geometry_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
       "review_geometry_proposal": {"type": "Polygon", "coordinates": [[[121.4000, 31.2100], [121.4011, 31.2100], [121.4011, 31.2111], [121.4000, 31.2111], [121.4000, 31.2100]]]},
       "raw_spatial_measures": {"area_m2": 8210.0},
-      "suggestions": [{"kind": "changed-upstream-record", "rule_version": "refresh/v1", "reason": "source version and geometry changed"}],
+      "suggestions": [{"kind": "changed-upstream-record", "rule_version": "refresh/v1", "reason": "source version and geometry changed", "building_entity_id": "building:campus-library", "building_role": "whole", "boundary_relationship": "straddling", "overlap_group": "library-conflict"}],
       "attribute_provenance": [{"attribute": "height_m", "value": 19.0, "source_observation_id": "obs-campus-library-v2", "original_value": "19 m", "unit": "m", "derivation": "direct", "rule_version": "units/v1"}]
     },
     {
@@ -133,7 +133,7 @@
       "derivation": {"rule_version": "geometry-review/v1", "steps": ["polygon-validation"], "source_geometry_sha256": "3333333333333333333333333333333333333333333333333333333333333333", "review_geometry_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
       "review_geometry_proposal": {"type": "Polygon", "coordinates": [[[121.3999, 31.2099], [121.4010, 31.2099], [121.4010, 31.2110], [121.3999, 31.2110], [121.3999, 31.2099]]]},
       "raw_spatial_measures": {"overlap_ratio": 0.91},
-      "suggestions": [{"kind": "geometry-conflict", "rule_version": "conflation/v1", "reason": "strong overlap with different shape"}],
+      "suggestions": [{"kind": "geometry-conflict", "rule_version": "conflation/v1", "reason": "strong overlap with different shape", "building_entity_id": "building:campus-library", "building_role": "unclassified", "boundary_relationship": "straddling", "overlap_group": "library-conflict"}],
       "attribute_provenance": [{"attribute": "subtype", "value": "education", "source_observation_id": "obs-campus-library-overlap", "original_value": "education", "unit": "none", "derivation": "direct", "rule_version": "classification/v1"}]
     },
     {
@@ -150,7 +150,7 @@
       "derivation": {"rule_version": "geometry-review/v1", "steps": ["polygon-validation"], "source_geometry_sha256": "4444444444444444444444444444444444444444444444444444444444444444", "review_geometry_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
       "review_geometry_proposal": {"type": "Polygon", "coordinates": [[[121.4007, 31.2101], [121.4010, 31.2101], [121.4010, 31.2105], [121.4007, 31.2105], [121.4007, 31.2101]]]},
       "raw_spatial_measures": {"area_m2": 310.0},
-      "suggestions": [{"kind": "building-part", "rule_version": "classification/v1", "reason": "explicit building:part tag"}],
+      "suggestions": [{"kind": "building-part", "rule_version": "classification/v1", "reason": "explicit building:part tag", "building_entity_id": "building:campus-library", "building_role": "part", "boundary_relationship": "inside", "overlap_group": "library-conflict"}],
       "attribute_provenance": [{"attribute": "levels", "value": 6, "source_observation_id": "obs-campus-library-part", "original_value": "6", "unit": "levels", "derivation": "direct", "rule_version": "units/v1"}]
     },
     {
@@ -167,7 +167,7 @@
       "derivation": {"rule_version": "geometry-review/v1", "steps": ["polygon-validation"], "source_geometry_sha256": "5555555555555555555555555555555555555555555555555555555555555555", "review_geometry_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
       "review_geometry_proposal": {"type": "Polygon", "coordinates": [[[121.4020, 31.2100], [121.4024, 31.2100], [121.4024, 31.2104], [121.4020, 31.2104], [121.4020, 31.2100]]]},
       "raw_spatial_measures": {"area_m2": 140.0},
-      "suggestions": [],
+      "suggestions": [{"kind": "whole-building", "rule_version": "classification/v1", "reason": "standalone building footprint", "building_entity_id": "building:annex", "building_role": "whole", "boundary_relationship": "inside"}],
       "attribute_provenance": []
     },
     {

@@ -585,11 +585,35 @@ pub struct GeometryDerivationRecord {
     pub review_geometry_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingEvidenceRole {
+    Whole,
+    Part,
+    Unclassified,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CampusBoundaryRelationship {
+    Inside,
+    Outside,
+    Straddling,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AcquisitionSuggestion {
     pub kind: String,
     pub rule_version: String,
     pub reason: String,
+    #[serde(default)]
+    pub building_entity_id: Option<String>,
+    #[serde(default)]
+    pub building_role: Option<BuildingEvidenceRole>,
+    #[serde(default)]
+    pub boundary_relationship: Option<CampusBoundaryRelationship>,
+    #[serde(default)]
+    pub overlap_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

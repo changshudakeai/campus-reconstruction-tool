@@ -1,8 +1,8 @@
 use crate::{
-    BoundaryCandidate, BuildingEntityDecision, BuildingEntityReviewLedger,
-    BuildingEvidenceDescriptor, BuildingGenerationBasis, BuildingNameEvidence,
-    FoundationAcquisitionCheckpoint, FoundationCategory, ProviderOutcomeStatus, ResultManifest,
-    ReviewedBuildingEntity, SourceGeometry, SourceObservation,
+    BoundaryCandidate, BuildingEntityDecision, BuildingEntityReviewLedger, BuildingGenerationBasis,
+    BuildingNameEvidence, FoundationAcquisitionCheckpoint, FoundationCategory,
+    ProviderOutcomeStatus, ResultManifest, ReviewedBuildingEntity, SourceGeometry,
+    SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -863,17 +863,19 @@ impl Schema2Project {
 
     pub fn initialize_building_entity_review(
         &mut self,
-        evidence: Vec<BuildingEvidenceDescriptor>,
         name_evidence: Vec<BuildingNameEvidence>,
         actor: InstallationId,
     ) -> Result<(), String> {
+        if !self.foundation.building_review.is_empty() {
+            return Err("Building Entity review is already initialized".into());
+        }
         let observations = &self
             .foundation
             .acquisition
             .as_ref()
             .ok_or("Pin acquisition evidence before reviewing Building Entities")?
             .observations;
-        let review = BuildingEntityReviewLedger::new(observations, evidence, name_evidence)?;
+        let review = BuildingEntityReviewLedger::from_observations(observations, name_evidence)?;
         self.mark_updated(actor)?;
         self.foundation.building_review = review;
         self.foundation.generated = None;
@@ -908,6 +910,22 @@ impl Schema2Project {
         Ok(sequence)
     }
 
+    pub fn revoke_last_building_entity_decision(
+        &mut self,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let mut review = self.foundation.building_review.clone();
+        let sequence = review.revoke_last()?;
+        self.mark_updated(actor)?;
+        self.foundation.building_review = review;
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(sequence)
+    }
+
     pub fn complete_foundation_review(
         &mut self,
         category: FoundationCategory,
@@ -921,6 +939,13 @@ impl Schema2Project {
             .ok_or("Pin acquisition evidence before reviewing Foundation categories")?;
         match &disposition {
             FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
+                if category == FoundationCategory::Building
+                    && !self.foundation.building_review.is_empty()
+                {
+                    return Err(
+                        "Building evidence must be completed as reviewed Building Entities".into(),
+                    );
+                }
                 if evidence_ids.is_empty()
                     || evidence_ids.iter().any(|id| {
                         !acquisition
@@ -1087,8 +1112,23 @@ impl Schema2Project {
                 .ok_or("Reviewed Building Entity primary evidence is missing")?;
             generation_feature.id = entity.id.clone();
             generation_feature.review_geometry_proposal =
-                entity.generation_geometry.geometry.clone();
+                entity.generation_geometry.wgs84_generator_geometry();
             selected_features.push(generation_feature);
+            for (part_id, geometry) in entity
+                .part_observation_ids
+                .iter()
+                .zip(entity.generation_geometry.wgs84_part_generator_geometries())
+            {
+                let mut part_feature = entity
+                    .source_observations
+                    .iter()
+                    .find(|observation| observation.id == *part_id)
+                    .cloned()
+                    .ok_or("Reviewed Building Entity part evidence is missing")?;
+                part_feature.id = format!("{}:part:{part_id}", entity.id);
+                part_feature.review_geometry_proposal = geometry;
+                selected_features.push(part_feature);
+            }
         }
         Ok(ReviewedFoundationProjection {
             boundary: evidence
@@ -1106,7 +1146,20 @@ impl Schema2Project {
     }
 
     fn building_generation_basis(&self) -> BuildingGenerationBasis {
+        let origin_wgs84 = self
+            .foundation
+            .boundary
+            .as_ref()
+            .and_then(|boundary| {
+                boundary
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.id == boundary.selected_candidate_id)
+            })
+            .and_then(|candidate| candidate.geometry.all_points().first().copied())
+            .unwrap_or([0.0, 0.0]);
         BuildingGenerationBasis {
+            origin_wgs84,
             orientation_degrees: self.foundation.generation_settings.orientation_degrees,
             blocks_per_meter: self.foundation.generation_settings.blocks_per_meter,
             rule_version: self
@@ -2066,6 +2119,14 @@ fn validate_schema2_project(project: &Schema2Project) -> Result<(), String> {
                     .into(),
             );
         }
+    }
+    if let Some(acquisition) = &project.foundation.acquisition {
+        project
+            .foundation
+            .building_review
+            .validate_against(&acquisition.observations)?;
+    } else if !project.foundation.building_review.is_empty() {
+        return Err("Building Entity review requires pinned acquisition evidence".into());
     }
     validate_project_history(project)?;
     Ok(())

@@ -219,7 +219,7 @@
         },
         "review_geometry_proposal": {"$ref": "#/$defs/geometry"},
         "raw_spatial_measures": {"type": "object", "additionalProperties": {"type": "number"}},
-        "suggestions": {"type": "array", "items": {"type": "object", "required": ["kind", "rule_version", "reason"], "properties": {"kind": {"type": "string"}, "rule_version": {"type": "string"}, "reason": {"type": "string"}}, "additionalProperties": false}},
+        "suggestions": {"type": "array", "items": {"type": "object", "required": ["kind", "rule_version", "reason"], "properties": {"kind": {"type": "string"}, "rule_version": {"type": "string"}, "reason": {"type": "string"}, "building_entity_id": {"type": "string", "minLength": 1}, "building_role": {"enum": ["whole", "part", "unclassified"]}, "boundary_relationship": {"enum": ["inside", "outside", "straddling"]}, "overlap_group": {"type": "string", "minLength": 1}}, "additionalProperties": false}},
         "attribute_provenance": {"type": "array", "items": {"$ref": "#/$defs/attributeProvenance"}}
       },
       "additionalProperties": false
