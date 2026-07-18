@@ -9,6 +9,24 @@ pub fn production_client(
     HttpsTransport::new(service_url, installation_credential).map(AcquisitionClient::new)
 }
 
+pub fn production_client_if_configured(
+    service_url: Option<&str>,
+) -> Result<Option<ProductionAcquisitionClient>, String> {
+    let Some(service_url) = service_url.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let credential =
+        keyring::Entry::new("CampusReconstructionTool", "acquisition-service-credential")
+            .map_err(|error| format!("could not open the acquisition credential store: {error}"))?
+            .get_password()
+            .map_err(|error| {
+                format!("could not read the acquisition service credential: {error}")
+            })?;
+    production_client(service_url, credential)
+        .map(Some)
+        .map_err(|error| error.explanation)
+}
+
 #[cfg(debug_assertions)]
 pub fn bootstrap_fixture_if_enabled(
     is_debug_build: bool,
@@ -55,5 +73,10 @@ mod tests {
     #[test]
     fn production_client_rejects_plaintext_remote_transport() {
         assert!(production_client("http://example.com", "secret").is_err());
+    }
+
+    #[test]
+    fn production_client_is_optional_until_a_service_is_configured() {
+        assert!(production_client_if_configured(None).unwrap().is_none());
     }
 }
