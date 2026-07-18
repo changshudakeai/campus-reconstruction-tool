@@ -1605,11 +1605,14 @@ enum ToolUpdate {
         kind: FeatureKind,
         points: Vec<GeoPoint>,
     },
+    // BEGIN DEBUG-ONLY LEGACY ACQUISITION
+    #[cfg(debug_assertions)]
     MapCapture {
         south_west: GeoPoint,
         north_east: GeoPoint,
         candidates: Result<Vec<MapCandidate>, String>,
     },
+    // END DEBUG-ONLY LEGACY ACQUISITION
     MapVisualCapture {
         south_west: GeoPoint,
         north_east: GeoPoint,
@@ -1859,6 +1862,8 @@ impl ToolSupervisor {
                                 format!("已接收手绘地物 · {count} 个节点")
                             }
                         }
+                        // BEGIN DEBUG-ONLY LEGACY ACQUISITION
+                        #[cfg(debug_assertions)]
                         ToolEvent::MapCaptureRequested {
                             south_west_lng,
                             south_west_lat,
@@ -1903,6 +1908,14 @@ impl ToolSupervisor {
                             tr(locale, "已接收当前视野范围", "Current view bounds received")
                                 .to_string()
                         }
+                        // END DEBUG-ONLY LEGACY ACQUISITION
+                        #[cfg(not(debug_assertions))]
+                        ToolEvent::MapCaptureRequested { .. } => tr(
+                            locale,
+                            "受控服务当前不可用，新采集已暂停；已保存证据仍可审核与导出",
+                            "The controlled service is unavailable, so new acquisition is paused; persisted evidence remains reviewable and exportable",
+                        )
+                        .to_string(),
                         ToolEvent::MapVisualCapture {
                             image_data_url,
                             south_west_lng,
@@ -2334,24 +2347,28 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    let production_acquisition_client = match v11_acquisition_client::production_client_if_configured(
-        std::env::var("CAMPUS_ACQUISITION_SERVICE_URL")
-            .ok()
-            .as_deref(),
-    ) {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("V1.1 production acquisition client failed: {error}");
-            None
+    let production_acquisition_client =
+        match v11_acquisition_client::production_client_if_configured(
+            std::env::var("CAMPUS_ACQUISITION_SERVICE_URL")
+                .ok()
+                .as_deref(),
+        ) {
+            Ok(client) => client,
+            Err(error) => {
+                eprintln!("V1.1 production acquisition client failed: {error}");
+                None
+            }
+        };
+    #[cfg(debug_assertions)]
+    {
+        if let Err(error) = v11_acquisition_client::bootstrap_fixture_if_enabled(
+            true,
+            std::env::var("CAMPUS_V11_ACQUISITION_FIXTURE")
+                .ok()
+                .as_deref(),
+        ) {
+            eprintln!("V1.1 development acquisition fixture failed: {error}");
         }
-    };
-    if let Err(error) = v11_acquisition_client::bootstrap_fixture_if_enabled(
-        cfg!(debug_assertions),
-        std::env::var("CAMPUS_V11_ACQUISITION_FIXTURE")
-            .ok()
-            .as_deref(),
-    ) {
-        eprintln!("V1.1 development acquisition fixture failed: {error}");
     }
     if let Err(error) = v11_project_kernel::bootstrap_if_enabled(
         &app_data_dir(),
@@ -2963,6 +2980,8 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                             }
                         }
+                        // BEGIN DEBUG-ONLY LEGACY ACQUISITION
+                        #[cfg(debug_assertions)]
                         ToolUpdate::MapCapture {
                             south_west,
                             north_east,
@@ -3028,6 +3047,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
                             }
                         },
+                        // END DEBUG-ONLY LEGACY ACQUISITION
                         ToolUpdate::MapVisualCapture {
                             south_west,
                             north_east,

@@ -261,14 +261,14 @@ impl FoundationAcquisitionCheckpoint {
         {
             return Err("Verified acquisition chunk was already persisted".into());
         }
-        if chunk.canonical_ndjson.as_bytes().len() as u64 != chunk.descriptor.uncompressed_bytes {
+        if chunk.canonical_ndjson.len() as u64 != chunk.descriptor.uncompressed_bytes {
             return Err("Verified acquisition chunk has an unexpected decoded size".into());
         }
         let decoded = chunk
             .canonical_ndjson
             .lines()
             .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_str::<SourceObservation>(line))
+            .map(serde_json::from_str::<SourceObservation>)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Verified acquisition chunk is invalid NDJSON: {error}"))?;
         if decoded != chunk.observations {

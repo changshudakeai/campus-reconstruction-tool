@@ -50,14 +50,6 @@ pub fn bootstrap_fixture_if_enabled(
     )))
 }
 
-#[cfg(not(debug_assertions))]
-pub fn bootstrap_fixture_if_enabled(
-    _is_debug_build: bool,
-    _enabled: Option<&str>,
-) -> Result<Option<(usize, usize)>, String> {
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

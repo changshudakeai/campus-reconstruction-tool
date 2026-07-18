@@ -16,6 +16,14 @@ opening the Gaode helper and is normally present on supported Windows systems.
 Existing projects, generation, preview, editing, and export remain available
 offline.
 
+New Foundation acquisition and refresh use only the authenticated Controlled
+Foundation Acquisition Service configured by `CAMPUS_ACQUISITION_SERVICE_URL`.
+The desktop negotiates the `/v1` contract and an immutable Dataset Bundle;
+public Overpass, provider-specific bridges, moving release aliases, and fixture
+transports are not present in production acquisition. If the service is
+unavailable or incompatible, new acquisition pauses while persisted evidence,
+review, generation, and export remain local and available.
+
 The installer registers a per-user uninstaller under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CampusReconstructionTool`
 and creates Start Menu shortcuts.

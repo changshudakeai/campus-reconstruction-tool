@@ -8,11 +8,13 @@ use campus_services::acquisition::{
     AcquisitionClient, AcquisitionTransport, VerifiedBoundaryDiscoverySnapshot,
 };
 use campus_state::ProjectId;
+#[cfg(test)]
+use campus_state::Schema2Project;
 #[cfg(debug_assertions)]
 use campus_state::{
     BoundaryCandidate, CampusProjectLibrary, CampusScope, FoundationCategory,
     FoundationReviewDisposition, InstallationId, PinnedAcquisitionEvidence, PinnedBoundaryEvidence,
-    ResultManifest, Schema2Project, SourceObservation, V11ConstructionCapability,
+    ResultManifest, SourceObservation, V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
 use serde::de::DeserializeOwned;
@@ -20,7 +22,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 #[cfg(debug_assertions)]
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(debug_assertions)]
 pub struct FixedDatasetTracer<'a, T> {
@@ -30,7 +33,19 @@ pub struct FixedDatasetTracer<'a, T> {
     actor: InstallationId,
     capability: &'a V11ConstructionCapability,
     acquisition_client: &'a AcquisitionClient<T>,
+    boundary_job_id: String,
+    acquisition_job_id: String,
     project_id: ProjectId,
+}
+
+#[cfg(debug_assertions)]
+pub struct FixedDatasetTracerRequest {
+    pub library_root: PathBuf,
+    pub output_root: PathBuf,
+    pub campus_scope: CampusScope,
+    pub project_name: String,
+    pub boundary_job_id: String,
+    pub acquisition_job_id: String,
 }
 
 #[derive(Debug)]
@@ -44,36 +59,35 @@ pub struct FixedDatasetTracerReport {
 #[cfg(debug_assertions)]
 impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     pub fn confirm_campus_target(
-        library_root: impl Into<PathBuf>,
-        output_root: impl Into<PathBuf>,
-        campus_scope: CampusScope,
-        project_name: &str,
+        request: FixedDatasetTracerRequest,
         actor: InstallationId,
         capability: &'a V11ConstructionCapability,
         acquisition_client: &'a AcquisitionClient<T>,
     ) -> Result<Self, String> {
-        let library_root = library_root.into();
-        let campus_target_id = campus_scope.target_id().to_string();
+        let campus_target_id = request.campus_scope.target_id().to_string();
         let mut library = CampusProjectLibrary::open_for_construction(
-            &library_root,
+            &request.library_root,
             campus_target_id.clone(),
             capability,
         )?;
-        let project = library.create_project(campus_scope, project_name, actor.clone())?;
+        let project =
+            library.create_project(request.campus_scope, request.project_name, actor.clone())?;
         Ok(Self {
-            library_root,
-            output_root: output_root.into(),
+            library_root: request.library_root,
+            output_root: request.output_root,
             campus_target_id,
             actor,
             capability,
             acquisition_client,
+            boundary_job_id: request.boundary_job_id,
+            acquisition_job_id: request.acquisition_job_id,
             project_id: project.id().clone(),
         })
     }
 
     pub fn boundary_candidates(&self) -> Result<VerifiedBoundaryDiscoverySnapshot, String> {
         self.acquisition_client
-            .load_boundary_discovery("fixed-dataset-boundary")
+            .load_boundary_discovery(&self.boundary_job_id)
             .map_err(|error| error.to_string())
     }
 
@@ -87,7 +101,9 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             .iter()
             .any(|candidate| candidate.id == candidate_id)
         {
-            return Err("The selected fixture Campus Boundary does not exist".into());
+            return Err(
+                "The selected Campus Boundary does not exist in the pinned snapshot".into(),
+            );
         }
         let mut library = self.open_library()?;
         let mut session = campus_state::Schema2ProjectSession::default();
@@ -107,7 +123,7 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     pub fn acquire_foundation_evidence(&self) -> Result<(), String> {
         let acquisition = self
             .acquisition_client
-            .load_acquisition_result("fixed-dataset-acquisition")
+            .load_acquisition_result(&self.acquisition_job_id)
             .map_err(|error| error.to_string())?;
         let mut library = self.open_library()?;
         let mut session = campus_state::Schema2ProjectSession::default();
@@ -144,6 +160,7 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         )
     }
 
+    #[cfg(test)]
     pub fn project(&self) -> Result<Schema2Project, String> {
         self.open_library()?.open_project(&self.project_id)
     }
@@ -254,14 +271,18 @@ pub fn bootstrap_if_enabled(
         .unwrap_or_default()
         .as_millis();
     let tracer = FixedDatasetTracer::confirm_campus_target(
-        application_data.join("v1.1-fixed-tracer").join("library"),
-        application_data.join("v1.1-fixed-tracer").join("output"),
-        CampusScope::new(
-            "gaode:B00155J6JH",
-            "East China Normal University Putuo Campus",
-            [121.395, 31.202],
-        )?,
-        &format!("V1.1 fixed dataset tracer {run_id}"),
+        FixedDatasetTracerRequest {
+            library_root: application_data.join("v1.1-fixed-tracer").join("library"),
+            output_root: application_data.join("v1.1-fixed-tracer").join("output"),
+            campus_scope: CampusScope::new(
+                "gaode:B00155J6JH",
+                "East China Normal University Putuo Campus",
+                [121.395, 31.202],
+            )?,
+            project_name: format!("V1.1 fixed dataset tracer {run_id}"),
+            boundary_job_id: "fixed-dataset-boundary".into(),
+            acquisition_job_id: "fixed-dataset-acquisition".into(),
+        },
         InstallationId::new("campus-native-fixed-tracer")?,
         &capability,
         &client,
@@ -319,8 +340,21 @@ fn file_name(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use campus_services::acquisition::fixture_transport::FixtureTransport;
+    use campus_services::acquisition::{
+        fixture_transport::FixtureTransport, AcquisitionClientErrorKind, TransportError,
+        TransportRequest, TransportResponse,
+    };
     use campus_state::FoundationResumePoint;
+
+    struct UnavailableControlledService;
+
+    impl AcquisitionTransport for UnavailableControlledService {
+        fn execute(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
+            Err(TransportError {
+                explanation: "controlled service unavailable".into(),
+            })
+        }
+    }
 
     #[test]
     fn user_controlled_fixed_dataset_path_resumes_and_exports() {
@@ -328,15 +362,19 @@ mod tests {
         let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
         let client = AcquisitionClient::new(FixtureTransport::canonical().unwrap());
         let tracer = FixedDatasetTracer::confirm_campus_target(
-            workspace.path().join("library"),
-            workspace.path().join("output"),
-            CampusScope::new(
-                "gaode:B00155J6JH",
-                "East China Normal University Putuo Campus",
-                [121.395, 31.202],
-            )
-            .unwrap(),
-            "V1.1 fixed dataset tracer",
+            FixedDatasetTracerRequest {
+                library_root: workspace.path().join("library"),
+                output_root: workspace.path().join("output"),
+                campus_scope: CampusScope::new(
+                    "gaode:B00155J6JH",
+                    "East China Normal University Putuo Campus",
+                    [121.395, 31.202],
+                )
+                .unwrap(),
+                project_name: "V1.1 fixed dataset tracer".into(),
+                boundary_job_id: "live-compatible-boundary-job".into(),
+                acquisition_job_id: "live-compatible-acquisition-job".into(),
+            },
             InstallationId::new("acceptance-test").unwrap(),
             &capability,
             &client,
@@ -349,6 +387,12 @@ mod tests {
             .select_boundary(boundary, "boundary-osm-relation-100")
             .unwrap();
         tracer.acquire_foundation_evidence().unwrap();
+        let unavailable_client = AcquisitionClient::new(UnavailableControlledService);
+        let service_error = unavailable_client.capabilities().unwrap_err();
+        assert_eq!(
+            service_error.kind,
+            AcquisitionClientErrorKind::TransportUnavailable
+        );
         let mut interrupted_library = tracer.open_library().unwrap();
         let mut interrupted_session = campus_state::Schema2ProjectSession::default();
         interrupted_session

@@ -7,7 +7,7 @@
 - 九步地基流程：校区、边界、朝向、建筑、道路、水域、植被、体育、导出。
 - 高德 3D 半自动取景：隐藏地图标签，开放数据查询与无标签视觉截图补缺是两个独立动作；GCJ-02/WGS-84 转换由 Rust 统一处理。
 - 地图视角、取景范围和手绘边界随项目自动保存，下次打开继续上次状态。
-- OSM/Overpass 校区地物识别；配置云端 Overture 服务后合并更完整的建筑轮廓。
+- 通过受控 `/v1` 服务获取固定 Dataset Bundle 的 OSM/Overture 边界与五类地基证据。
 - 候选接受/拒绝是主流程，不再放在补缺或高级折叠区；没有右侧地基清单卡片。
 - 精细建筑使用 Arnis 2.9.0 的 19 类固定外观规则。实测轮廓、高度和楼层不被模板修改；模板只改变方块、窗户、墙面层次、屋顶线和装饰。
 - 原生 wgpu 方块预览；Foundation 与精细建筑均可导出 gzip 压缩的 Sponge V3 `.schem`。
@@ -52,7 +52,7 @@ npm run web:dev
 npm run web:build
 ```
 
-高德密钥在应用内“地图设置”保存。可选云端 Overture 地址通过 `CAMPUS_DATA_SERVICE_URL` 或 `OVERTURE_BUILDING_ENDPOINT` 配置。
+高德密钥在应用内“地图设置”保存。生产地基采集只使用 `CAMPUS_ACQUISITION_SERVICE_URL` 指向的兼容受控 `/v1` 服务；服务不可用时暂停新采集，不回退公共 Overpass 或未固定版本的 provider。
 
 ## 打包
 
@@ -69,7 +69,7 @@ npm run verify:installer
 - `native/apps/campus-map`：独立 WebView2 高德工具。
 - `native/apps/campus-preview`：独立 wgpu 原生预览。
 - `native/crates/campus-state`：项目、自动保存、兼容导入、撤销/重做。
-- `native/crates/campus-services`：OSM 与可选 Overture 查询。
+- `native/crates/campus-services`：受控 `/v1` 采集客户端、契约校验与可恢复交付。
 - `native/crates/campus-export`：Sponge V3 `.schem`。
 - `src-tauri/crates/arnis-core`：固定上游版本的 Arnis 建筑规则移植。
 - `services/`：开发/云端 Overture 查询服务。

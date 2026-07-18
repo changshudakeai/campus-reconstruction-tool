@@ -814,6 +814,11 @@ pub struct BoundaryCandidateDerivation {
     pub steps: Vec<String>,
 }
 
+type BoundaryCandidateAssessments = (
+    BTreeMap<String, BoundaryCandidateValidity>,
+    BTreeMap<String, BoundaryCandidateDerivation>,
+);
+
 pub struct AcquisitionClient<T> {
     transport: T,
 }
@@ -865,6 +870,9 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
                 explanation: "The controlled service offers no compatible Dataset Bundle.".into(),
                 action: "Contact the controlled-service operator before retrying.".into(),
             });
+        }
+        for bundle in &capabilities.supported_bundles {
+            validate_pinned_dataset_bundle(bundle)?;
         }
         Ok(capabilities)
     }
@@ -1328,6 +1336,7 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
                 action: "Update the desktop or select a compatible controlled service.".into(),
             });
         }
+        validate_pinned_dataset_bundle(&manifest.bundle)?;
         validate_provider_outcomes(&manifest.coverage_report.outcomes)?;
         if matches!(job_kind, JobKind::Acquisition)
             && !FoundationCategory::ALL.into_iter().all(|category| {
@@ -1533,10 +1542,40 @@ fn validate_provider_outcomes(outcomes: &[ProviderOutcome]) -> Result<(), Acquis
     Ok(())
 }
 
+fn validate_pinned_dataset_bundle(bundle: &DatasetBundle) -> Result<(), AcquisitionClientError> {
+    let identities = [
+        ("bundle id", bundle.id.as_str()),
+        ("OSM snapshot", bundle.osm_snapshot.as_str()),
+        ("Overture release", bundle.overture_release.as_str()),
+        ("output schema", bundle.output_schema.as_str()),
+        ("classification rules", bundle.classification_rules.as_str()),
+        ("assembly rules", bundle.assembly_rules.as_str()),
+        ("conflation rules", bundle.conflation_rules.as_str()),
+        ("derivation rules", bundle.derivation_rules.as_str()),
+    ];
+    let aliases = ["latest", "current", "unversioned"];
+    if let Some((name, value)) = identities.into_iter().find(|(_, value)| {
+        let normalized = value.trim().to_ascii_lowercase();
+        normalized.is_empty() || aliases.contains(&normalized.as_str())
+    }) {
+        return Err(AcquisitionClientError {
+            kind: AcquisitionClientErrorKind::IncompatibleContract,
+            explanation: format!(
+                "The controlled service offered a Dataset Bundle without a pinned {name}: {value:?}."
+            ),
+            action:
+                "Pause acquisition and reconnect only to a contract-compatible /v1 deployment."
+                    .into(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_acquisition_manifest(
     manifest: &ResultManifest,
     pinned: &AcquisitionJobStatus,
 ) -> Result<(), AcquisitionClientError> {
+    validate_pinned_dataset_bundle(&manifest.bundle)?;
     if manifest.contract_version != pinned.contract_version
         || manifest.bundle.id != pinned.bundle_id
         || pinned
@@ -1598,7 +1637,7 @@ fn validate_cached_chunk(
             "A resume checkpoint chunk is not declared by the pinned manifest.",
         ));
     }
-    if verified.canonical_ndjson.as_bytes().len() as u64 != verified.descriptor.uncompressed_bytes {
+    if verified.canonical_ndjson.len() as u64 != verified.descriptor.uncompressed_bytes {
         return Err(integrity_error(
             "A resume checkpoint chunk has an unexpected decoded size.",
         ));
@@ -1681,13 +1720,7 @@ fn parse_observations(bytes: &[u8]) -> Result<Vec<SourceObservation>, Acquisitio
 fn assess_boundary_candidates(
     bundle: &DatasetBundle,
     candidates: &[BoundaryCandidate],
-) -> Result<
-    (
-        BTreeMap<String, BoundaryCandidateValidity>,
-        BTreeMap<String, BoundaryCandidateDerivation>,
-    ),
-    AcquisitionClientError,
-> {
+) -> Result<BoundaryCandidateAssessments, AcquisitionClientError> {
     let mut ids = BTreeSet::new();
     let mut validity = BTreeMap::new();
     let mut derivations = BTreeMap::new();
@@ -2058,6 +2091,26 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_reject_unpinned_dataset_release_aliases() {
+        for (field, alias) in [
+            ("osm_snapshot", "latest"),
+            ("overture_release", "current"),
+            ("classification_rules", "unversioned"),
+        ] {
+            let mut response: serde_json::Value =
+                serde_json::from_slice(&capabilities_response().body).unwrap();
+            response["supported_bundles"][0][field] = serde_json::json!(alias);
+            let client =
+                AcquisitionClient::new(RecordingTransport::new(vec![json_response(response)]));
+
+            let error = client.capabilities().unwrap_err();
+
+            assert_eq!(error.kind, AcquisitionClientErrorKind::IncompatibleContract);
+            assert!(error.explanation.contains("pinned"));
+        }
+    }
+
+    #[test]
     fn live_boundary_flow_negotiates_and_sends_only_confirmed_target_inputs() {
         let transport = RecordingTransport::new(vec![
             capabilities_response(),
@@ -2178,6 +2231,42 @@ mod tests {
             Some(br#"{"scopes":[]}"#.as_slice())
         );
         assert!(requests[2].body.is_none());
+    }
+
+    #[test]
+    fn count_limited_success_cannot_be_presented_as_complete() {
+        let transport = RecordingTransport::new(vec![json_response(serde_json::json!({
+            "job_id": "acquisition-job-limited",
+            "contract_version": CONTRACT_VERSION,
+            "bundle_id": "cn-campus-2026-06",
+            "state": "complete",
+            "outcomes": [{
+                "provider": "overture",
+                "category": "building",
+                "tile_id": "tile-1",
+                "status": "complete",
+                "pagination_exhausted": false,
+                "raw_count": 200,
+                "deduplicated_count": 200,
+                "relation_members_complete": true,
+                "gaps": ["provider result limit reached"]
+            }]
+        }))]);
+        let client = AcquisitionClient::new(transport);
+        let pinned = AcquisitionJobStatus {
+            job_id: "acquisition-job-limited".into(),
+            contract_version: CONTRACT_VERSION.into(),
+            bundle_id: "cn-campus-2026-06".into(),
+            state: AcquisitionJobState::Running,
+            outcomes: Vec::new(),
+            failure: None,
+            negotiated_bundle: None,
+        };
+
+        let error = client.acquisition_job(&pinned).unwrap_err();
+
+        assert_eq!(error.kind, AcquisitionClientErrorKind::IntegrityFailure);
+        assert!(error.explanation.contains("page exhaustion"));
     }
 
     #[test]

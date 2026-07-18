@@ -1163,7 +1163,7 @@ mod tests {
             .import_portable_project(
                 &source,
                 selected_scope,
-                CampusTargetMatchApproval::AutomaticOnly,
+                CampusTargetMatchApproval::HumanConfirmed,
                 InstallationId::new("installation-b").unwrap(),
             )
             .unwrap();
