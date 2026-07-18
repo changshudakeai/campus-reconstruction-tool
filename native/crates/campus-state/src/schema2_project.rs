@@ -5,14 +5,18 @@ use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 pub const SCHEMA_2_VERSION: u32 = 2;
 const LIBRARY_INDEX_FILE: &str = "library-index.json";
 const PROJECT_FILE_NAME: &str = "project.campus.json";
+const PREVIOUS_PROJECT_FILE_NAME: &str = "previous-confirmed.campus.json";
+const RECOVERY_PROJECT_FILE_NAME: &str = "recovery.campus.json";
+const SAVE_STAGE_FILE_NAME: &str = "project.save-stage.json";
 const DEVELOPMENT_CANONICAL_ROLE: &str = "developmentCanonical";
+const PROJECT_HISTORY_LIMIT: usize = 50;
 
 #[derive(Debug)]
 pub struct V11ConstructionCapability(());
@@ -395,6 +399,117 @@ pub enum FoundationResumePoint {
     Complete,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ProjectHistoryOperation {
+    sequence: u64,
+    description: String,
+    completed_at_unix_ms: u64,
+    before: Value,
+    after: Value,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ProjectDurabilityState {
+    #[serde(default)]
+    last_confirmed_save_unix_ms: Option<u64>,
+    #[serde(default)]
+    next_history_sequence: u64,
+    #[serde(default)]
+    undo: Vec<ProjectHistoryOperation>,
+    #[serde(default)]
+    redo: Vec<ProjectHistoryOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectHistorySummary {
+    sequence: u64,
+    description: String,
+    completed_at_unix_ms: u64,
+}
+
+impl ProjectHistorySummary {
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    pub fn completed_at_unix_ms(&self) -> u64 {
+        self.completed_at_unix_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectSaveStatus {
+    Saving,
+    Saved { completed_at_unix_ms: u64 },
+    Failed { reason: String },
+}
+
+impl ProjectSaveStatus {
+    pub fn retry_reason(&self) -> Option<&str> {
+        match self {
+            Self::Failed { reason } => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveFaultPoint {
+    BeforeStageWrite,
+    AfterStageWrite,
+    AfterStageValidation,
+    BeforePreviousConfirmedWrite,
+    AfterPreviousConfirmedWrite,
+    BeforeProjectReplace,
+    AfterProjectReplace,
+    BeforeIndexReplace,
+    AfterIndexReplace,
+}
+
+impl SaveFaultPoint {
+    pub const ALL: [Self; 9] = [
+        Self::BeforeStageWrite,
+        Self::AfterStageWrite,
+        Self::AfterStageValidation,
+        Self::BeforePreviousConfirmedWrite,
+        Self::AfterPreviousConfirmedWrite,
+        Self::BeforeProjectReplace,
+        Self::AfterProjectReplace,
+        Self::BeforeIndexReplace,
+        Self::AfterIndexReplace,
+    ];
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectRecoveryEnvelope {
+    captured_at_unix_ms: u64,
+    project: Schema2Project,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecoveryCandidate {
+    captured_at_unix_ms: u64,
+    project_revision: u64,
+    recent_operations: Vec<String>,
+}
+
+impl ProjectRecoveryCandidate {
+    pub fn captured_at_unix_ms(&self) -> u64 {
+        self.captured_at_unix_ms
+    }
+
+    pub fn project_revision(&self) -> u64 {
+        self.project_revision
+    }
+
+    pub fn recent_operations(&self) -> &[String] {
+        &self.recent_operations
+    }
+}
+
 impl DurableWorkflowState {
     fn new() -> Self {
         Self {
@@ -426,6 +541,8 @@ pub struct Schema2Project {
     workflow: DurableWorkflowState,
     #[serde(default)]
     foundation: FoundationTracerState,
+    #[serde(default)]
+    durability: ProjectDurabilityState,
     #[serde(default, flatten)]
     optional_state: Map<String, Value>,
 }
@@ -449,6 +566,7 @@ impl Schema2Project {
             compatibility_profile: V11CompatibilityProfile::minecraft_java_26_1_2(),
             workflow: DurableWorkflowState::new(),
             foundation: FoundationTracerState::default(),
+            durability: ProjectDurabilityState::default(),
             optional_state: Map::new(),
         })
     }
@@ -847,6 +965,8 @@ pub struct CampusProjectLibraryRecord {
     managed_relative_path: String,
     created_at_unix_ms: u64,
     updated_at_unix_ms: u64,
+    #[serde(default)]
+    latest_successful_save_unix_ms: u64,
     compatibility_profile_id: String,
     #[serde(default)]
     internal_role: Option<String>,
@@ -860,9 +980,17 @@ impl CampusProjectLibraryRecord {
     pub fn managed_relative_path(&self) -> &str {
         &self.managed_relative_path
     }
+
+    pub fn latest_successful_save_unix_ms(&self) -> u64 {
+        if self.latest_successful_save_unix_ms == 0 {
+            self.updated_at_unix_ms
+        } else {
+            self.latest_successful_save_unix_ms
+        }
+    }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LibraryIndex {
     #[serde(default)]
@@ -875,6 +1003,7 @@ pub struct CampusProjectLibrary {
     campus_target_id: String,
     index: LibraryIndex,
     construction_enabled: bool,
+    next_save_fault: Option<SaveFaultPoint>,
 }
 
 impl CampusProjectLibrary {
@@ -900,6 +1029,7 @@ impl CampusProjectLibrary {
             campus_target_id,
             index,
             construction_enabled: false,
+            next_save_fault: None,
         };
         for record in &library.index.projects {
             if record.campus_target_id != library.campus_target_id {
@@ -1006,6 +1136,10 @@ impl CampusProjectLibrary {
     }
 
     pub fn save_project(&mut self, project: &Schema2Project) -> Result<(), String> {
+        self.save_project_at(project).map(|_| ())
+    }
+
+    fn save_project_at(&mut self, project: &Schema2Project) -> Result<u64, String> {
         validate_schema2_project(project)?;
         if project.campus_scope().target_id() != self.campus_target_id {
             return Err("Project Campus Target does not match this Campus Project Library".into());
@@ -1020,14 +1154,140 @@ impl CampusProjectLibrary {
             return Err("Project library record does not match its Campus Target scope".into());
         }
         let path = self.managed_path(&self.index.projects[record_position])?;
-        atomic_write_json(&path, project)?;
+        let old_project_bytes = fs::read(&path).map_err(|error| error.to_string())?;
+        decode_schema2_project(&old_project_bytes)
+            .map_err(|error| format!("Previous confirmed project is invalid: {error}"))?;
+        let completed_at_unix_ms = now_unix_ms();
+        let mut confirmed = project.clone();
+        confirmed.durability.last_confirmed_save_unix_ms = Some(completed_at_unix_ms);
+        let new_project_bytes =
+            serde_json::to_vec_pretty(&confirmed).map_err(|error| error.to_string())?;
+        let project_directory = path.parent().ok_or("Managed project path has no parent")?;
+        let stage_path = project_directory.join(SAVE_STAGE_FILE_NAME);
+        let previous_path = project_directory.join(PREVIOUS_PROJECT_FILE_NAME);
+
+        self.fail_save_at(SaveFaultPoint::BeforeStageWrite)?;
+        write_and_sync(&stage_path, &new_project_bytes)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageWrite) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        let staged = fs::read(&stage_path).map_err(|error| error.to_string())?;
+        decode_schema2_project(&staged)
+            .map_err(|error| format!("Staged project validation failed: {error}"))?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterStageValidation) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforePreviousConfirmedWrite) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        atomic_write_bytes(&previous_path, &old_project_bytes)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterPreviousConfirmedWrite) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeProjectReplace) {
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        atomic_write_bytes(&path, &new_project_bytes)?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterProjectReplace) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+
         let relative = self.index.projects[record_position]
             .managed_relative_path
             .clone();
         let internal_role = self.index.projects[record_position].internal_role.clone();
-        self.index.projects[record_position] =
-            record_from_project(project, relative, internal_role);
-        self.save_index()
+        let mut next_index = self.index.clone();
+        next_index.projects[record_position] =
+            record_from_project(&confirmed, relative, internal_role);
+        let old_index_bytes =
+            serde_json::to_vec_pretty(&self.index).map_err(|error| error.to_string())?;
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::BeforeIndexReplace) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        if let Err(error) = atomic_write_json(&self.root.join(LIBRARY_INDEX_FILE), &next_index) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        if let Err(error) = self.fail_save_at(SaveFaultPoint::AfterIndexReplace) {
+            let _ = atomic_write_bytes(&path, &old_project_bytes);
+            let _ = atomic_write_bytes(&self.root.join(LIBRARY_INDEX_FILE), &old_index_bytes);
+            remove_file_if_present(&stage_path);
+            return Err(error);
+        }
+        self.index = next_index;
+        remove_file_if_present(&stage_path);
+        Ok(completed_at_unix_ms)
+    }
+
+    pub fn inject_next_save_failure(&mut self, point: SaveFaultPoint) {
+        self.next_save_fault = Some(point);
+    }
+
+    pub fn previous_confirmed_project(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<Schema2Project, String> {
+        let path = self.previous_confirmed_path(project_id)?;
+        decode_schema2_project(&fs::read(path).map_err(|error| error.to_string())?)
+    }
+
+    pub fn recovery_path(&self, project_id: &ProjectId) -> Result<PathBuf, String> {
+        Ok(self
+            .project_directory(project_id)?
+            .join(RECOVERY_PROJECT_FILE_NAME))
+    }
+
+    pub fn recovery_candidate(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<Option<ProjectRecoveryCandidate>, String> {
+        let Some(envelope) = self.read_recovery(project_id)? else {
+            return Ok(None);
+        };
+        let confirmed = self.open_project(project_id)?;
+        if envelope.project.id() != project_id
+            || envelope.project.campus_scope().target_id() != self.campus_target_id
+            || envelope.project.workflow().project_revision()
+                < confirmed.workflow().project_revision()
+        {
+            return Err("Project Recovery State is incoherent with the confirmed project".into());
+        }
+        let mut operations = envelope
+            .project
+            .durability
+            .undo
+            .iter()
+            .chain(envelope.project.durability.redo.iter())
+            .collect::<Vec<_>>();
+        operations.sort_by_key(|operation| operation.sequence);
+        Ok(Some(ProjectRecoveryCandidate {
+            captured_at_unix_ms: envelope.captured_at_unix_ms,
+            project_revision: envelope.project.workflow().project_revision(),
+            recent_operations: operations
+                .into_iter()
+                .rev()
+                .take(5)
+                .map(|operation| operation.description.clone())
+                .collect(),
+        }))
+    }
+
+    pub fn discard_recovery_candidate(&self, project_id: &ProjectId) -> Result<(), String> {
+        let path = self.recovery_path(project_id)?;
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn rename_project(
@@ -1077,11 +1337,80 @@ impl CampusProjectLibrary {
     fn save_index(&self) -> Result<(), String> {
         atomic_write_json(&self.root.join(LIBRARY_INDEX_FILE), &self.index)
     }
+
+    fn write_recovery(&self, project: &Schema2Project) -> Result<(), String> {
+        validate_schema2_project(project)?;
+        if project.campus_scope().target_id() != self.campus_target_id {
+            return Err("Recovery project does not match this Campus Target".into());
+        }
+        atomic_write_json(
+            &self.recovery_path(project.id())?,
+            &ProjectRecoveryEnvelope {
+                captured_at_unix_ms: now_unix_ms(),
+                project: project.clone(),
+            },
+        )
+    }
+
+    fn read_recovery(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<Option<ProjectRecoveryEnvelope>, String> {
+        let path = self.recovery_path(project_id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let envelope: ProjectRecoveryEnvelope =
+            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| format!("Invalid Project Recovery State: {error}"))?;
+        validate_schema2_project(&envelope.project)
+            .map_err(|error| format!("Invalid Project Recovery State: {error}"))?;
+        Ok(Some(envelope))
+    }
+
+    fn previous_confirmed_path(&self, project_id: &ProjectId) -> Result<PathBuf, String> {
+        Ok(self
+            .project_directory(project_id)?
+            .join(PREVIOUS_PROJECT_FILE_NAME))
+    }
+
+    fn project_directory(&self, project_id: &ProjectId) -> Result<PathBuf, String> {
+        let record = self
+            .record(project_id)
+            .ok_or_else(|| format!("Project not found: {}", project_id.as_str()))?;
+        self.managed_path(record)?
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "Managed project path has no parent".into())
+    }
+
+    fn fail_save_at(&mut self, point: SaveFaultPoint) -> Result<(), String> {
+        if self.next_save_fault == Some(point) {
+            self.next_save_fault = None;
+            Err(format!("injected save failure at {point:?}"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Schema2ProjectSession {
     active: Option<Schema2Project>,
+    save_status: ProjectSaveStatus,
+    dirty: bool,
+}
+
+impl Default for Schema2ProjectSession {
+    fn default() -> Self {
+        Self {
+            active: None,
+            save_status: ProjectSaveStatus::Saved {
+                completed_at_unix_ms: 0,
+            },
+            dirty: false,
+        }
+    }
 }
 
 impl Schema2ProjectSession {
@@ -1095,8 +1424,234 @@ impl Schema2ProjectSession {
         project_id: &ProjectId,
     ) -> Result<(), String> {
         let candidate = library.open_project(project_id)?;
+        let saved_at = candidate
+            .durability
+            .last_confirmed_save_unix_ms
+            .unwrap_or(candidate.audit.updated_at_unix_ms);
         self.active = Some(candidate);
+        self.save_status = ProjectSaveStatus::Saved {
+            completed_at_unix_ms: saved_at,
+        };
+        self.dirty = false;
         Ok(())
+    }
+
+    pub fn save_status(&self) -> &ProjectSaveStatus {
+        &self.save_status
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn history(&self) -> Vec<ProjectHistorySummary> {
+        let Some(project) = &self.active else {
+            return Vec::new();
+        };
+        let mut operations = project
+            .durability
+            .undo
+            .iter()
+            .chain(project.durability.redo.iter())
+            .collect::<Vec<_>>();
+        operations.sort_by_key(|operation| operation.sequence);
+        operations
+            .into_iter()
+            .map(|operation| ProjectHistorySummary {
+                sequence: operation.sequence,
+                description: operation.description.clone(),
+                completed_at_unix_ms: operation.completed_at_unix_ms,
+            })
+            .collect()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|project| !project.durability.undo.is_empty())
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|project| !project.durability.redo.is_empty())
+    }
+
+    pub fn apply_semantic_operation<T>(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+        description: impl Into<String>,
+        mutation: impl FnOnce(&mut Schema2Project) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let previous = self.active.clone().ok_or("No schema-2 project is open")?;
+        let before = project_snapshot(&previous)?;
+        let mut next = previous.clone();
+        let output = mutation(&mut next)?;
+        let after = project_snapshot(&next)?;
+        if before == after {
+            return Ok(output);
+        }
+        let sequence = next.durability.next_history_sequence;
+        next.durability.next_history_sequence = sequence.saturating_add(1);
+        next.durability.redo.clear();
+        next.durability.undo.push(ProjectHistoryOperation {
+            sequence,
+            description: description.into(),
+            completed_at_unix_ms: now_unix_ms(),
+            before,
+            after,
+        });
+        trim_history(&mut next.durability);
+        self.active = Some(next);
+        self.dirty = true;
+        self.request_save(library)?;
+        Ok(output)
+    }
+
+    pub fn request_save(&mut self, library: &mut CampusProjectLibrary) -> Result<(), String> {
+        let project = self
+            .active
+            .as_ref()
+            .ok_or("No schema-2 project is open")?
+            .clone();
+        let project_id = project.id().clone();
+        self.save_status = ProjectSaveStatus::Saving;
+        if let Err(error) = library.write_recovery(&project) {
+            self.save_status = ProjectSaveStatus::Failed {
+                reason: error.clone(),
+            };
+            self.dirty = true;
+            return Err(error);
+        }
+        match library.save_project_at(&project) {
+            Ok(completed_at_unix_ms) => {
+                if let Some(active) = self.active.as_mut() {
+                    active.durability.last_confirmed_save_unix_ms = Some(completed_at_unix_ms);
+                }
+                library.discard_recovery_candidate(&project_id)?;
+                self.save_status = ProjectSaveStatus::Saved {
+                    completed_at_unix_ms,
+                };
+                self.dirty = false;
+                Ok(())
+            }
+            Err(error) => {
+                self.save_status = ProjectSaveStatus::Failed {
+                    reason: error.clone(),
+                };
+                self.dirty = true;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn retry_save(&mut self, library: &mut CampusProjectLibrary) -> Result<(), String> {
+        self.request_save(library)
+    }
+
+    pub fn undo(&mut self, library: &mut CampusProjectLibrary) -> Result<(), String> {
+        let current = self.active.clone().ok_or("No schema-2 project is open")?;
+        let mut durability = current.durability.clone();
+        let operation = durability
+            .undo
+            .pop()
+            .ok_or("No Project History Operation is available to undo")?;
+        let mut previous = project_from_snapshot(operation.before.clone())?;
+        durability.redo.push(operation);
+        previous.durability = durability;
+        self.active = Some(previous);
+        self.dirty = true;
+        self.request_save(library)
+    }
+
+    pub fn redo(&mut self, library: &mut CampusProjectLibrary) -> Result<(), String> {
+        let current = self.active.clone().ok_or("No schema-2 project is open")?;
+        let mut durability = current.durability.clone();
+        let operation = durability
+            .redo
+            .pop()
+            .ok_or("No Project History Operation is available to redo")?;
+        let mut next = project_from_snapshot(operation.after.clone())?;
+        durability.undo.push(operation);
+        next.durability = durability;
+        self.active = Some(next);
+        self.dirty = true;
+        self.request_save(library)
+    }
+
+    pub fn prepare_context_change(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+    ) -> Result<(), String> {
+        if self.dirty {
+            self.request_save(library)?;
+        }
+        Ok(())
+    }
+
+    pub fn switch_project(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+        project_id: &ProjectId,
+    ) -> Result<(), String> {
+        self.prepare_context_change(library)?;
+        let candidate = library.open_project(project_id)?;
+        let saved_at = candidate
+            .durability
+            .last_confirmed_save_unix_ms
+            .unwrap_or(candidate.audit.updated_at_unix_ms);
+        self.active = Some(candidate);
+        self.save_status = ProjectSaveStatus::Saved {
+            completed_at_unix_ms: saved_at,
+        };
+        self.dirty = false;
+        Ok(())
+    }
+
+    pub fn gate_context_change<T>(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+        change: impl FnOnce(&mut CampusProjectLibrary) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.prepare_context_change(library)?;
+        change(library)
+    }
+
+    pub fn available_recovery(
+        &self,
+        library: &CampusProjectLibrary,
+    ) -> Result<Option<ProjectRecoveryCandidate>, String> {
+        let project = self.active.as_ref().ok_or("No schema-2 project is open")?;
+        library.recovery_candidate(project.id())
+    }
+
+    pub fn accept_recovery(&mut self, library: &CampusProjectLibrary) -> Result<(), String> {
+        let project_id = self
+            .active
+            .as_ref()
+            .ok_or("No schema-2 project is open")?
+            .id()
+            .clone();
+        library
+            .recovery_candidate(&project_id)?
+            .ok_or("No Project Recovery State is available")?;
+        let recovered = library
+            .read_recovery(&project_id)?
+            .ok_or("No Project Recovery State is available")?
+            .project;
+        self.active = Some(recovered);
+        self.dirty = true;
+        Ok(())
+    }
+
+    pub fn discard_recovery(&mut self, library: &CampusProjectLibrary) -> Result<(), String> {
+        let project_id = self
+            .active
+            .as_ref()
+            .ok_or("No schema-2 project is open")?
+            .id()
+            .clone();
+        library.discard_recovery_candidate(&project_id)
     }
 }
 
@@ -1169,6 +1724,10 @@ fn record_from_project(
         managed_relative_path,
         created_at_unix_ms: project.audit.created_at_unix_ms,
         updated_at_unix_ms: project.audit.updated_at_unix_ms,
+        latest_successful_save_unix_ms: project
+            .durability
+            .last_confirmed_save_unix_ms
+            .unwrap_or(project.audit.updated_at_unix_ms),
         compatibility_profile_id: project.compatibility_profile.profile_id().into(),
         internal_role,
     }
@@ -1178,9 +1737,72 @@ fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<(), String> 
     let parent = path.parent().ok_or("Managed path has no parent")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    atomic_write_bytes(path, &bytes)
+}
+
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or("Managed path has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     AtomicFile::new(path, AllowOverwrite)
-        .write(|file| file.write_all(&bytes))
+        .write(|file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
         .map_err(|error| error.to_string())
+}
+
+fn write_and_sync(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or("Managed path has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
+}
+
+fn remove_file_if_present(path: &Path) {
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn project_snapshot(project: &Schema2Project) -> Result<Value, String> {
+    let mut value = serde_json::to_value(project).map_err(|error| error.to_string())?;
+    value
+        .as_object_mut()
+        .ok_or("Schema-2 project snapshot must be a JSON object")?
+        .remove("durability");
+    Ok(value)
+}
+
+fn project_from_snapshot(snapshot: Value) -> Result<Schema2Project, String> {
+    let project: Schema2Project =
+        serde_json::from_value(snapshot).map_err(|error| error.to_string())?;
+    validate_schema2_project(&project)?;
+    Ok(project)
+}
+
+fn trim_history(durability: &mut ProjectDurabilityState) {
+    while durability.undo.len() + durability.redo.len() > PROJECT_HISTORY_LIMIT {
+        let oldest_undo = durability.undo.first().map(|operation| operation.sequence);
+        let oldest_redo = durability.redo.first().map(|operation| operation.sequence);
+        match (oldest_undo, oldest_redo) {
+            (Some(undo), Some(redo)) if redo < undo => {
+                durability.redo.remove(0);
+            }
+            (Some(_), _) => {
+                durability.undo.remove(0);
+            }
+            (None, Some(_)) => {
+                durability.redo.remove(0);
+            }
+            (None, None) => break,
+        }
+    }
 }
 
 fn now_unix_ms() -> u64 {

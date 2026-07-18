@@ -324,6 +324,32 @@ mod tests {
             .select_boundary(boundary, "boundary-osm-relation-100")
             .unwrap();
         tracer.acquire_foundation_evidence().unwrap();
+        let mut interrupted_library = tracer.open_library().unwrap();
+        let mut interrupted_session = campus_state::Schema2ProjectSession::default();
+        interrupted_session
+            .open_project(&interrupted_library, &tracer.project_id)
+            .unwrap();
+        interrupted_library
+            .inject_next_save_failure(campus_state::SaveFaultPoint::BeforeProjectReplace);
+        interrupted_session
+            .apply_semantic_operation(
+                &mut interrupted_library,
+                "fixture interruption checkpoint",
+                |project| project.mark_updated(tracer.actor.clone()),
+            )
+            .unwrap_err();
+        drop(interrupted_session);
+        let mut recovered_session = campus_state::Schema2ProjectSession::default();
+        recovered_session
+            .open_project(&interrupted_library, &tracer.project_id)
+            .unwrap();
+        recovered_session
+            .accept_recovery(&interrupted_library)
+            .unwrap();
+        recovered_session
+            .request_save(&mut interrupted_library)
+            .unwrap();
+        drop(recovered_session);
         assert_eq!(
             tracer.project().unwrap().resume_point(),
             FoundationResumePoint::Review(FoundationCategory::Building)
