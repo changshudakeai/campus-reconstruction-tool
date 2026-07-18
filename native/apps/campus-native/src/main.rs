@@ -2333,13 +2333,17 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    if let Err(error) = v11_acquisition_client::production_client_if_configured(
+    let production_acquisition_client = match v11_acquisition_client::production_client_if_configured(
         std::env::var("CAMPUS_ACQUISITION_SERVICE_URL")
             .ok()
             .as_deref(),
     ) {
-        eprintln!("V1.1 production acquisition client failed: {error}");
-    }
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("V1.1 production acquisition client failed: {error}");
+            None
+        }
+    };
     if let Err(error) = v11_acquisition_client::bootstrap_fixture_if_enabled(
         cfg!(debug_assertions),
         std::env::var("CAMPUS_V11_ACQUISITION_FIXTURE")
@@ -4122,7 +4126,9 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    ui.run()
+    let result = ui.run();
+    drop(production_acquisition_client);
+    result
 }
 
 #[cfg(test)]

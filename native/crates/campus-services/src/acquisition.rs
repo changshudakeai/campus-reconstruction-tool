@@ -560,9 +560,11 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         let mut canonical_result = Vec::new();
         let mut records = Vec::new();
         for chunk in &manifest.chunks {
-            let response = self.execute(TransportRequest::get(format!(
-                "/v1/{job_kind}/{job_id}/chunks/{}?cursor={}",
-                chunk.id, chunk.stable_cursor
+            let response = self.execute(TransportRequest::get(result_chunk_path(
+                job_kind,
+                job_id,
+                &chunk.id,
+                &chunk.stable_cursor,
             )))?;
             if response
                 .headers
@@ -638,6 +640,19 @@ fn integrity_error(explanation: impl Into<String>) -> AcquisitionClientError {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn result_chunk_path(job_kind: &str, job_id: &str, chunk_id: &str, cursor: &str) -> String {
+    let mut url = reqwest::Url::parse(&format!(
+        "https://contract.invalid/v1/{job_kind}/{job_id}/chunks/{chunk_id}"
+    ))
+    .expect("fixed acquisition result path is a valid URL");
+    url.query_pairs_mut().append_pair("cursor", cursor);
+    format!(
+        "{}?{}",
+        url.path(),
+        url.query().expect("cursor query was appended")
+    )
 }
 
 #[cfg(debug_assertions)]
@@ -780,5 +795,18 @@ pub mod fixture_transport {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_chunk_path;
+
+    #[test]
+    fn stable_cursor_is_encoded_as_an_opaque_query_value() {
+        assert_eq!(
+            result_chunk_path("acquisition-jobs", "job-1", "chunk-1", "page=2&token=a+b%#"),
+            "/v1/acquisition-jobs/job-1/chunks/chunk-1?cursor=page%3D2%26token%3Da%2Bb%25%23"
+        );
     }
 }

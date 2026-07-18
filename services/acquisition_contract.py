@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from jsonschema import Draft202012Validator
+
 
 CONTRACT_VERSION = "1.0.0"
 COMPLETE_STATUSES = frozenset({"complete", "complete-empty"})
@@ -168,6 +170,22 @@ class FixtureAcquisitionService:
                 encoding="utf-8"
             )
         )
+        schema = json.loads(
+            (fixture_dir.parent / "acquisition.schema.json").read_text(encoding="utf-8")
+        )
+        self._request_validators = {
+            kind: Draft202012Validator(
+                {
+                    "$schema": schema["$schema"],
+                    "$defs": schema["$defs"],
+                    "$ref": f"#/$defs/{definition}",
+                }
+            )
+            for kind, definition in (
+                ("boundary-jobs", "boundaryRequest"),
+                ("acquisition-jobs", "acquisitionRequest"),
+            )
+        }
         self._jobs: dict[str, dict[str, str]] = {}
         self._next_job = 1
 
@@ -256,75 +274,8 @@ class FixtureAcquisitionService:
         return self._boundary if kind == "boundary-jobs" else self._acquisition
 
     def _valid_create_request(self, kind: str, value: Any) -> bool:
-        if not isinstance(value, Mapping):
-            return False
-        identity = value.get("request_identity")
-        common = (
-            value.get("contract_version") == CONTRACT_VERSION
-            and value.get("bundle_id") == self._acquisition["bundle"]["id"]
-            and isinstance(identity, Mapping)
-            and isinstance(identity.get("idempotency_key"), str)
-            and self._is_sha256(identity.get("content_sha256"))
-        )
-        if not common:
-            return False
-        if kind == "boundary-jobs":
-            target = value.get("campus_target")
-            return (
-                isinstance(target, Mapping)
-                and isinstance(target.get("name"), str)
-                and isinstance(target.get("aliases"), list)
-                and self._position(target.get("anchor_wgs84"))
-                and isinstance(target.get("search_radius_m"), (int, float))
-                and target["search_radius_m"] > 0
-                and set(value) == {
-                    "contract_version",
-                    "request_identity",
-                    "bundle_id",
-                    "campus_target",
-                }
-            )
-        categories = value.get("categories")
-        return (
-            isinstance(value.get("boundary_revision"), str)
-            and self._polygon(value.get("boundary_wgs84"))
-            and isinstance(categories, list)
-            and len(categories) == 5
-            and set(categories) == KNOWN_CATEGORIES
-            and set(value) == {
-                "contract_version",
-                "request_identity",
-                "bundle_id",
-                "boundary_revision",
-                "boundary_wgs84",
-                "categories",
-            }
-        )
-
-    @staticmethod
-    def _is_sha256(value: Any) -> bool:
-        return (
-            isinstance(value, str)
-            and len(value) == 64
-            and all(character in "0123456789abcdef" for character in value)
-        )
-
-    @staticmethod
-    def _position(value: Any) -> bool:
-        return (
-            isinstance(value, list)
-            and len(value) == 2
-            and all(isinstance(coordinate, (int, float)) for coordinate in value)
-        )
-
-    @classmethod
-    def _polygon(cls, value: Any) -> bool:
-        return (
-            isinstance(value, Mapping)
-            and value.get("type") in {"Polygon", "MultiPolygon"}
-            and isinstance(value.get("coordinates"), list)
-            and bool(value["coordinates"])
-        )
+        validator = self._request_validators.get(kind)
+        return validator is not None and validator.is_valid(value)
 
     @staticmethod
     def _canonical_records(fixture: Mapping[str, Any]) -> bytes:
