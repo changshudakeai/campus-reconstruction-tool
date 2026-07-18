@@ -825,7 +825,7 @@ impl Schema2Project {
 
     pub fn pin_acquisition(
         &mut self,
-        evidence: PinnedAcquisitionEvidence,
+        mut evidence: PinnedAcquisitionEvidence,
         actor: InstallationId,
     ) -> Result<(), String> {
         let boundary = self
@@ -850,8 +850,30 @@ impl Schema2Project {
         {
             return Err("Pinned acquisition evidence is incomplete".into());
         }
+        let mut building_review = self.foundation.building_review.clone();
+        if let Some(previous) = &self.foundation.acquisition {
+            let mut merged = previous.observations.clone();
+            for observation in evidence.observations {
+                if let Some(existing) = merged.iter().find(|existing| existing.id == observation.id)
+                {
+                    if existing != &observation {
+                        return Err(format!(
+                            "Pinned Source Observation identity changed: {}",
+                            observation.id
+                        ));
+                    }
+                } else {
+                    merged.push(observation);
+                }
+            }
+            evidence.observations = merged;
+            if !building_review.is_empty() {
+                building_review.refresh_from_observations(&evidence.observations)?;
+            }
+        }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
+        self.foundation.building_review = building_review;
         self.foundation.generated = None;
         self.foundation.exported = None;
         self.workflow.acquisition = DurableTaskState::Confirmed;
@@ -1119,6 +1141,9 @@ impl Schema2Project {
                 .iter()
                 .zip(entity.generation_geometry.wgs84_part_generator_geometries())
             {
+                if part_id == &entity.primary_observation_id {
+                    continue;
+                }
                 let mut part_feature = entity
                     .source_observations
                     .iter()

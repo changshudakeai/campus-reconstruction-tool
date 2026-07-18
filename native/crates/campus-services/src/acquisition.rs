@@ -599,6 +599,7 @@ pub enum CampusBoundaryRelationship {
     Inside,
     Outside,
     Straddling,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -597,6 +597,7 @@ pub enum CampusBoundaryRelationship {
     Inside,
     Outside,
     Straddling,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -642,6 +643,15 @@ pub enum BuildingNameAssignmentMode {
     Human,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingNameResolution {
+    #[default]
+    Pending,
+    Named,
+    Unnamed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuildingEntitySplit {
     pub entity_id: String,
@@ -679,6 +689,13 @@ pub enum BuildingEntityDecision {
         name_evidence_id: String,
         mode: BuildingNameAssignmentMode,
     },
+    LeaveUnnamed {
+        entity_id: String,
+        reason: String,
+    },
+    RefreshEvidence {
+        added_observation_ids: Vec<String>,
+    },
     Revoke {
         target_sequence: u64,
     },
@@ -698,6 +715,8 @@ pub struct BuildingEntity {
     pub merged_from: Vec<String>,
     pub automatic_name_poi_id: Option<String>,
     pub unresolved_overlap_groups: Vec<String>,
+    #[serde(default)]
+    pub name_resolution: BuildingNameResolution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -750,7 +769,7 @@ impl BuildingGenerationGeometry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReviewedBuildingEntity {
     pub id: String,
-    pub display_name: String,
+    pub display_name: Option<String>,
     pub evidence_ids: Vec<String>,
     pub primary_observation_id: String,
     pub part_observation_ids: Vec<String>,
@@ -763,6 +782,8 @@ pub struct ReviewedBuildingEntity {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BuildingEntityReviewLedger {
+    #[serde(default)]
+    initial_evidence: Vec<BuildingEvidenceDescriptor>,
     evidence: Vec<BuildingEvidenceDescriptor>,
     name_evidence: Vec<BuildingNameEvidence>,
     duplicate_deliveries: BTreeMap<String, Vec<String>>,
@@ -869,6 +890,7 @@ impl BuildingEntityReviewLedger {
                     merged_from: Vec::new(),
                     automatic_name_poi_id: None,
                     unresolved_overlap_groups: Vec::new(),
+                    name_resolution: BuildingNameResolution::Pending,
                 });
             }
         }
@@ -894,6 +916,7 @@ impl BuildingEntityReviewLedger {
         validate_name_evidence(&name_evidence)?;
         let initial_entities = entities.clone();
         Ok(Self {
+            initial_evidence: canonical_evidence.clone(),
             evidence: canonical_evidence,
             name_evidence,
             duplicate_deliveries,
@@ -941,7 +964,7 @@ impl BuildingEntityReviewLedger {
                     role,
                     boundary_relationship: suggestion
                         .and_then(|suggestion| suggestion.boundary_relationship)
-                        .unwrap_or(CampusBoundaryRelationship::Inside),
+                        .unwrap_or(CampusBoundaryRelationship::Unknown),
                     overlap_group: suggestion
                         .and_then(|suggestion| suggestion.overlap_group.clone()),
                 }
@@ -972,8 +995,13 @@ impl BuildingEntityReviewLedger {
         observations: &[SourceObservation],
     ) -> Result<u64, String> {
         self.validate_against(observations)?;
-        if matches!(decision, BuildingEntityDecision::Revoke { .. }) {
-            return Err("Use revoke_last to preserve append-only reversal semantics".into());
+        if matches!(
+            decision,
+            BuildingEntityDecision::Revoke { .. } | BuildingEntityDecision::RefreshEvidence { .. }
+        ) {
+            return Err(
+                "Ledger-managed Building Entity decisions cannot be recorded directly".into(),
+            );
         }
         let before = self.entities.clone();
         let mut after = before.clone();
@@ -998,6 +1026,51 @@ impl BuildingEntityReviewLedger {
         Ok(sequence)
     }
 
+    pub fn refresh_from_observations(
+        &mut self,
+        observations: &[SourceObservation],
+    ) -> Result<Option<u64>, String> {
+        self.validate_against(observations)?;
+        let refreshed = Self::from_observations(observations, self.name_evidence.clone())?;
+        let known_ids = self
+            .evidence
+            .iter()
+            .map(|descriptor| descriptor.observation_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let added = refreshed
+            .evidence
+            .iter()
+            .filter(|descriptor| !known_ids.contains(descriptor.observation_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.duplicate_deliveries = refreshed.duplicate_deliveries;
+        if added.is_empty() {
+            return Ok(None);
+        }
+        let before = self.entities.clone();
+        let mut after = before.clone();
+        apply_evidence_refresh(&mut after, &added, &refreshed.evidence, observations)?;
+        self.evidence.extend(added.iter().cloned());
+        let sequence = self.entries.len() as u64 + 1;
+        let decision = BuildingEntityDecision::RefreshEvidence {
+            added_observation_ids: added
+                .iter()
+                .map(|descriptor| descriptor.observation_id.clone())
+                .collect(),
+        };
+        self.entries.push(BuildingEntityReviewEntry {
+            sequence,
+            subjects: decision_subjects(&decision),
+            decision,
+            before,
+            after: after.clone(),
+            basis: self.review_basis(observations)?,
+            recorded_at_unix_ms: now_unix_ms(),
+        });
+        self.entities = after;
+        Ok(Some(sequence))
+    }
+
     pub fn revoke_last(&mut self) -> Result<u64, String> {
         let revoked = self
             .entries
@@ -1012,8 +1085,11 @@ impl BuildingEntityReviewLedger {
             .iter()
             .rev()
             .find(|entry| {
-                !matches!(entry.decision, BuildingEntityDecision::Revoke { .. })
-                    && !revoked.contains(&entry.sequence)
+                !matches!(
+                    entry.decision,
+                    BuildingEntityDecision::Revoke { .. }
+                        | BuildingEntityDecision::RefreshEvidence { .. }
+                ) && !revoked.contains(&entry.sequence)
             })
             .ok_or("There is no Building Entity decision to revoke")?
             .clone();
@@ -1039,9 +1115,14 @@ impl BuildingEntityReviewLedger {
     }
 
     pub fn validate_against(&self, observations: &[SourceObservation]) -> Result<(), String> {
+        let initial_evidence = if self.initial_evidence.is_empty() && !self.evidence.is_empty() {
+            &self.evidence
+        } else {
+            &self.initial_evidence
+        };
         let rebuilt = Self::new(
             observations,
-            self.evidence.clone(),
+            initial_evidence.clone(),
             self.name_evidence.clone(),
         )?;
         if rebuilt.initial_entities != self.initial_entities {
@@ -1065,13 +1146,20 @@ impl BuildingEntityReviewLedger {
                 }
             }
         }
-        let expected_basis = self.review_basis(observations)?;
+        let canonical = Self::new(
+            observations,
+            self.evidence.clone(),
+            self.name_evidence.clone(),
+        )?;
+        if canonical.evidence != self.evidence {
+            return Err("Project has a non-deterministic Building Entity projection".into());
+        }
+        let mut replay_evidence = initial_evidence.clone();
         let mut state = self.initial_entities.clone();
         let mut active = Vec::<u64>::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if entry.sequence != index as u64 + 1
                 || entry.recorded_at_unix_ms == 0
-                || entry.basis != expected_basis
                 || entry.before != state
             {
                 return Err("Project has a non-deterministic Building Entity projection".into());
@@ -1090,12 +1178,45 @@ impl BuildingEntityReviewLedger {
                         .ok_or("Building Entity revoke target is missing")?;
                     state = target.before.clone();
                 }
+                BuildingEntityDecision::RefreshEvidence {
+                    added_observation_ids,
+                } => {
+                    if added_observation_ids.is_empty()
+                        || added_observation_ids.iter().any(|id| {
+                            replay_evidence
+                                .iter()
+                                .any(|descriptor| descriptor.observation_id == *id)
+                        })
+                    {
+                        return Err(
+                            "Project has a non-deterministic Building Entity projection".into()
+                        );
+                    }
+                    let added = added_observation_ids
+                        .iter()
+                        .map(|id| {
+                            self.evidence
+                                .iter()
+                                .find(|descriptor| descriptor.observation_id == *id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    "Building Entity refresh evidence is missing".to_string()
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut expected = state.clone();
+                    let mut expanded = replay_evidence.clone();
+                    expanded.extend(added.iter().cloned());
+                    apply_evidence_refresh(&mut expected, &added, &expanded, observations)?;
+                    replay_evidence = expanded;
+                    state = expected;
+                }
                 decision => {
                     let mut expected = state.clone();
                     apply_building_decision(
                         &mut expected,
                         decision,
-                        &self.evidence,
+                        &replay_evidence,
                         &self.name_evidence,
                         observations,
                     )?;
@@ -1103,11 +1224,13 @@ impl BuildingEntityReviewLedger {
                     active.push(entry.sequence);
                 }
             }
-            if entry.after != state {
+            if entry.basis != review_basis_for(&replay_evidence, observations)?
+                || entry.after != state
+            {
                 return Err("Project has a non-deterministic Building Entity projection".into());
             }
         }
-        if state != self.entities {
+        if state != self.entities || replay_evidence != self.evidence {
             return Err("Project has a non-deterministic Building Entity projection".into());
         }
         Ok(())
@@ -1117,45 +1240,56 @@ impl BuildingEntityReviewLedger {
         &self,
         observations: &[SourceObservation],
     ) -> Result<BuildingEntityReviewBasis, String> {
-        let observation_by_id = observations
-            .iter()
-            .map(|observation| (observation.id.as_str(), observation))
-            .collect::<BTreeMap<_, _>>();
-        let observation_geometry_sha256 = self
-            .evidence
-            .iter()
-            .map(|descriptor| {
-                observation_by_id
-                    .get(descriptor.observation_id.as_str())
-                    .map(|observation| {
-                        (
-                            descriptor.observation_id.clone(),
-                            observation.geometry_sha256.clone(),
-                        )
-                    })
-                    .ok_or_else(|| {
-                        format!(
-                            "Building evidence observation is not pinned: {}",
-                            descriptor.observation_id
-                        )
-                    })
-            })
-            .collect::<Result<_, _>>()?;
-        let mut overlap_groups = BTreeMap::<String, Vec<String>>::new();
-        for descriptor in &self.evidence {
-            if let Some(group) = &descriptor.overlap_group {
-                overlap_groups
-                    .entry(group.clone())
-                    .or_default()
-                    .push(descriptor.observation_id.clone());
-            }
-        }
-        Ok(BuildingEntityReviewBasis {
-            observation_geometry_sha256,
-            overlap_groups,
-        })
+        review_basis_for(&self.evidence, observations)
     }
+}
 
+fn review_basis_for(
+    evidence: &[BuildingEvidenceDescriptor],
+    observations: &[SourceObservation],
+) -> Result<BuildingEntityReviewBasis, String> {
+    let observation_by_id = observations
+        .iter()
+        .map(|observation| (observation.id.as_str(), observation))
+        .collect::<BTreeMap<_, _>>();
+    let observation_geometry_sha256 = evidence
+        .iter()
+        .map(|descriptor| {
+            observation_by_id
+                .get(descriptor.observation_id.as_str())
+                .map(|observation| {
+                    (
+                        descriptor.observation_id.clone(),
+                        observation.geometry_sha256.clone(),
+                    )
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Building evidence observation is not pinned: {}",
+                        descriptor.observation_id
+                    )
+                })
+        })
+        .collect::<Result<_, _>>()?;
+    let mut overlap_groups = BTreeMap::<String, Vec<String>>::new();
+    for descriptor in evidence {
+        if let Some(group) = &descriptor.overlap_group {
+            overlap_groups
+                .entry(group.clone())
+                .or_default()
+                .push(descriptor.observation_id.clone());
+        }
+    }
+    for ids in overlap_groups.values_mut() {
+        ids.sort();
+    }
+    Ok(BuildingEntityReviewBasis {
+        observation_geometry_sha256,
+        overlap_groups,
+    })
+}
+
+impl BuildingEntityReviewLedger {
     pub fn reviewed_entities(
         &self,
         observations: &[SourceObservation],
@@ -1180,7 +1314,7 @@ impl BuildingEntityReviewLedger {
             .map(|entity| {
                 if entity.boundary_decision == BuildingBoundaryDecision::Pending {
                     return Err(format!(
-                        "Straddling Building requires retain or exclude review: {}",
+                        "Building with unresolved boundary relationship requires retain or exclude review: {}",
                         entity.id
                     ));
                 }
@@ -1190,12 +1324,13 @@ impl BuildingEntityReviewLedger {
                         entity.id
                     ));
                 }
-                let display_name = entity.display_name.clone().ok_or_else(|| {
-                    format!(
+                if entity.name_resolution == BuildingNameResolution::Pending {
+                    return Err(format!(
                         "Building naming must be resolved after conflation: {}",
                         entity.id
-                    )
-                })?;
+                    ));
+                }
+                let display_name = entity.display_name.clone();
                 let primary = observation_by_id
                     .get(entity.primary_observation_id.as_str())
                     .ok_or_else(|| {
@@ -1267,8 +1402,23 @@ impl SourceObservation {
             .ok_or("Source Observation did not serialize as an object")?
             .remove("id");
         normalize_observation_self_references(&mut value, &self.id);
+        normalize_delivery_timestamps(&mut value);
         serde_json::to_string(&value)
             .map_err(|error| format!("Source Observation is not canonical: {error}"))
+    }
+}
+
+fn normalize_delivery_timestamps(value: &mut serde_json::Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    for section in ["lineage", "licence", "time_semantics"] {
+        if let Some(object) = root
+            .get_mut(section)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            object.remove("acquired_at");
+        }
     }
 }
 
@@ -1292,6 +1442,131 @@ fn normalize_observation_self_references(value: &mut serde_json::Value, observat
     }
 }
 
+fn apply_evidence_refresh(
+    entities: &mut Vec<BuildingEntity>,
+    added: &[BuildingEvidenceDescriptor],
+    all_evidence: &[BuildingEvidenceDescriptor],
+    observations: &[SourceObservation],
+) -> Result<(), String> {
+    for descriptor in added {
+        if let Some(entity) = entities
+            .iter_mut()
+            .find(|entity| entity.id == descriptor.entity_id)
+        {
+            if !entity.evidence_ids.contains(&descriptor.observation_id) {
+                entity.evidence_ids.push(descriptor.observation_id.clone());
+            }
+            if descriptor.role == BuildingEvidenceRole::Part
+                && !entity
+                    .part_observation_ids
+                    .contains(&descriptor.observation_id)
+            {
+                entity
+                    .part_observation_ids
+                    .push(descriptor.observation_id.clone());
+            }
+            let relationship = combine_boundary_relationship(
+                entity.boundary_relationship,
+                descriptor.boundary_relationship,
+            );
+            entity.boundary_relationship = relationship;
+            if matches!(
+                relationship,
+                CampusBoundaryRelationship::Unknown | CampusBoundaryRelationship::Straddling
+            ) {
+                entity.boundary_decision = BuildingBoundaryDecision::Pending;
+            }
+        } else {
+            entities.push(BuildingEntity {
+                id: descriptor.entity_id.clone(),
+                evidence_ids: vec![descriptor.observation_id.clone()],
+                primary_observation_id: descriptor.observation_id.clone(),
+                part_observation_ids: if descriptor.role == BuildingEvidenceRole::Part {
+                    vec![descriptor.observation_id.clone()]
+                } else {
+                    Vec::new()
+                },
+                boundary_relationship: descriptor.boundary_relationship,
+                boundary_decision: initial_boundary_decision(descriptor.boundary_relationship),
+                display_name: None,
+                name_evidence_ids: Vec::new(),
+                split_from: None,
+                merged_from: Vec::new(),
+                automatic_name_poi_id: None,
+                unresolved_overlap_groups: Vec::new(),
+                name_resolution: BuildingNameResolution::Pending,
+            });
+        }
+    }
+
+    for entity in entities.iter_mut() {
+        if added
+            .iter()
+            .any(|descriptor| descriptor.entity_id == entity.id)
+        {
+            if let Some(whole) = entity.evidence_ids.iter().find(|observation_id| {
+                all_evidence.iter().any(|descriptor| {
+                    descriptor.observation_id == **observation_id
+                        && descriptor.role == BuildingEvidenceRole::Whole
+                })
+            }) {
+                if all_evidence
+                    .iter()
+                    .find(|descriptor| descriptor.observation_id == entity.primary_observation_id)
+                    .is_some_and(|descriptor| descriptor.role == BuildingEvidenceRole::Part)
+                {
+                    entity.primary_observation_id = whole.clone();
+                }
+            }
+        }
+    }
+
+    let observation_by_id = observations
+        .iter()
+        .map(|observation| (observation.id.as_str(), observation))
+        .collect::<BTreeMap<_, _>>();
+    let mut group_shapes = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for descriptor in all_evidence
+        .iter()
+        .filter(|descriptor| descriptor.role != BuildingEvidenceRole::Part)
+    {
+        if let Some(group) = &descriptor.overlap_group {
+            let observation = observation_by_id
+                .get(descriptor.observation_id.as_str())
+                .ok_or("Building Entity refresh observation is not pinned")?;
+            group_shapes
+                .entry(group.clone())
+                .or_default()
+                .insert(observation.geometry_sha256.clone());
+        }
+    }
+    let reopened_groups = added
+        .iter()
+        .filter_map(|descriptor| descriptor.overlap_group.as_ref())
+        .filter(|group| {
+            group_shapes
+                .get(*group)
+                .is_some_and(|shapes| shapes.len() > 1)
+        })
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    for entity in entities.iter_mut() {
+        for group in &reopened_groups {
+            let participates = entity.evidence_ids.iter().any(|id| {
+                all_evidence.iter().any(|descriptor| {
+                    descriptor.observation_id == *id
+                        && descriptor.overlap_group.as_ref() == Some(group)
+                })
+            });
+            if participates && !entity.unresolved_overlap_groups.contains(group) {
+                entity.unresolved_overlap_groups.push(group.clone());
+                entity.unresolved_overlap_groups.sort();
+            }
+        }
+    }
+    validate_observation_references(entities, observations)
+}
+
 fn apply_building_decision(
     entities: &mut Vec<BuildingEntity>,
     decision: &BuildingEntityDecision,
@@ -1309,7 +1584,14 @@ fn apply_building_decision(
                 return Err("Primary geometry must come from retained entity evidence".into());
             }
             entity.primary_observation_id = observation_id.clone();
-            entity.unresolved_overlap_groups.clear();
+            let selected_groups = evidence
+                .iter()
+                .filter(|descriptor| descriptor.observation_id == *observation_id)
+                .filter_map(|descriptor| descriptor.overlap_group.as_ref())
+                .collect::<std::collections::BTreeSet<_>>();
+            entity
+                .unresolved_overlap_groups
+                .retain(|group| !selected_groups.contains(group));
         }
         BuildingEntityDecision::Merge {
             entity_ids,
@@ -1358,6 +1640,7 @@ fn apply_building_decision(
                 merged_from: entity_ids.clone(),
                 automatic_name_poi_id: None,
                 unresolved_overlap_groups: Vec::new(),
+                name_resolution: BuildingNameResolution::Pending,
             });
         }
         BuildingEntityDecision::Split { entity_id, outputs } => {
@@ -1423,6 +1706,7 @@ fn apply_building_decision(
                     merged_from: Vec::new(),
                     automatic_name_poi_id: None,
                     unresolved_overlap_groups: Vec::new(),
+                    name_resolution: BuildingNameResolution::Pending,
                 });
             }
         }
@@ -1437,10 +1721,30 @@ fn apply_building_decision(
             for entity_id in entity_ids {
                 entity_ref(entities, entity_id)?;
             }
+            let shared_groups = entity_ids
+                .iter()
+                .map(|entity_id| {
+                    entity_ref(entities, entity_id).map(|entity| {
+                        entity
+                            .unresolved_overlap_groups
+                            .iter()
+                            .cloned()
+                            .collect::<std::collections::BTreeSet<_>>()
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .reduce(|left, right| left.intersection(&right).cloned().collect())
+                .unwrap_or_default();
+            if shared_groups.is_empty() {
+                return Err(
+                    "Keep-separate review requires a shared unresolved overlap group".into(),
+                );
+            }
             for entity_id in entity_ids {
                 entity_mut(entities, entity_id)?
                     .unresolved_overlap_groups
-                    .clear();
+                    .retain(|group| !shared_groups.contains(group));
             }
         }
         BuildingEntityDecision::SetBoundary {
@@ -1486,6 +1790,19 @@ fn apply_building_decision(
             }
             entity.automatic_name_poi_id =
                 (*mode == BuildingNameAssignmentMode::Automatic).then(|| name.poi_id.clone());
+            entity.name_resolution = BuildingNameResolution::Named;
+        }
+        BuildingEntityDecision::LeaveUnnamed { entity_id, reason } => {
+            if reason.trim().is_empty() {
+                return Err("Leaving a Building unnamed requires an explicit reason".into());
+            }
+            let entity = entity_mut(entities, entity_id)?;
+            entity.display_name = None;
+            entity.automatic_name_poi_id = None;
+            entity.name_resolution = BuildingNameResolution::Unnamed;
+        }
+        BuildingEntityDecision::RefreshEvidence { .. } => {
+            return Err("Evidence refresh is recorded only by the ledger".into());
         }
         BuildingEntityDecision::Revoke { .. } => {
             return Err("A revoke is recorded only by the ledger".into());
@@ -1574,13 +1891,17 @@ fn combine_boundary_relationship(
     left: CampusBoundaryRelationship,
     right: CampusBoundaryRelationship,
 ) -> CampusBoundaryRelationship {
-    if left == CampusBoundaryRelationship::Straddling
-        || right == CampusBoundaryRelationship::Straddling
-        || left != right
-    {
-        CampusBoundaryRelationship::Straddling
-    } else {
-        left
+    match (left, right) {
+        (CampusBoundaryRelationship::Straddling, _)
+        | (_, CampusBoundaryRelationship::Straddling)
+        | (CampusBoundaryRelationship::Inside, CampusBoundaryRelationship::Outside)
+        | (CampusBoundaryRelationship::Outside, CampusBoundaryRelationship::Inside) => {
+            CampusBoundaryRelationship::Straddling
+        }
+        (CampusBoundaryRelationship::Unknown, _) | (_, CampusBoundaryRelationship::Unknown) => {
+            CampusBoundaryRelationship::Unknown
+        }
+        _ => left,
     }
 }
 
@@ -1588,7 +1909,9 @@ fn initial_boundary_decision(relationship: CampusBoundaryRelationship) -> Buildi
     match relationship {
         CampusBoundaryRelationship::Inside => BuildingBoundaryDecision::RetainWhole,
         CampusBoundaryRelationship::Outside => BuildingBoundaryDecision::Exclude,
-        CampusBoundaryRelationship::Straddling => BuildingBoundaryDecision::Pending,
+        CampusBoundaryRelationship::Straddling | CampusBoundaryRelationship::Unknown => {
+            BuildingBoundaryDecision::Pending
+        }
     }
 }
 
@@ -1612,12 +1935,16 @@ fn decision_subjects(decision: &BuildingEntityDecision) -> Vec<String> {
         BuildingEntityDecision::SetPrimary { entity_id, .. }
         | BuildingEntityDecision::Split { entity_id, .. }
         | BuildingEntityDecision::SetBoundary { entity_id, .. }
-        | BuildingEntityDecision::AssignName { entity_id, .. } => vec![entity_id.clone()],
+        | BuildingEntityDecision::AssignName { entity_id, .. }
+        | BuildingEntityDecision::LeaveUnnamed { entity_id, .. } => vec![entity_id.clone()],
         BuildingEntityDecision::Merge { entity_ids, .. }
         | BuildingEntityDecision::KeepSeparate { entity_ids } => entity_ids.clone(),
         BuildingEntityDecision::Revoke { target_sequence } => {
             vec![format!("building-review-entry:{target_sequence}")]
         }
+        BuildingEntityDecision::RefreshEvidence {
+            added_observation_ids,
+        } => added_observation_ids.clone(),
     }
 }
 
