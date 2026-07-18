@@ -1,9 +1,12 @@
+import gzip
 import hashlib
 import json
 import unittest
 from pathlib import Path
 
-from services.acquisition_contract import decode_contract_fixture
+from jsonschema import Draft202012Validator
+
+from services.acquisition_contract import FixtureAcquisitionService, decode_contract_fixture
 
 
 ROOT_DIR = Path(__file__).parent.parent
@@ -59,6 +62,10 @@ class AcquisitionContractTests(unittest.TestCase):
             )
         )
 
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        self.assertFalse(list(validator.iter_errors(fixture)))
+        self.assertTrue(list(validator.iter_errors({})))
         self.assertEqual(schema["$id"], "https://contracts.mcrebuild.invalid/v1/acquisition.schema.json")
         self.assertEqual(canonical_sha256(fixture), canonical_sha256(replay))
         self.assertEqual(
@@ -87,6 +94,34 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertTrue(observation["licence"]["identifier"])
 
         manifest = fixture["manifest"]
+        canonical_observation = (
+            json.dumps(
+                observation,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        canonical_geometry = json.dumps(
+            observation["geometry"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertEqual(
+            hashlib.sha256(canonical_geometry).hexdigest(),
+            observation["geometry_sha256"],
+        )
+        self.assertEqual(
+            hashlib.sha256(canonical_observation).hexdigest(),
+            manifest["chunks"][0]["sha256"],
+        )
+        self.assertEqual(len(canonical_observation), manifest["chunks"][0]["uncompressed_bytes"])
+        self.assertEqual(
+            hashlib.sha256(canonical_observation).hexdigest(),
+            manifest["result_sha256"],
+        )
         self.assertRegex(manifest["result_sha256"], r"^[0-9a-f]{64}$")
         self.assertTrue(manifest["chunks"])
         self.assertTrue(all(chunk["stable_cursor"] for chunk in manifest["chunks"]))
@@ -110,6 +145,10 @@ class AcquisitionContractTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["contract_version"], "1.0.0")
+        schema = json.loads(
+            (CONTRACT_DIR / "acquisition.schema.json").read_text(encoding="utf-8")
+        )
+        self.assertFalse(list(Draft202012Validator(schema).iter_errors(snapshot)))
         self.assertEqual(snapshot["bundle"]["id"], "cn-campus-2026-06")
         self.assertGreaterEqual(len(snapshot["candidates"]), 2)
         self.assertEqual(
@@ -124,6 +163,46 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertTrue(
             all(candidate["geometry"]["type"] in {"Polygon", "MultiPolygon"} for candidate in snapshot["candidates"])
         )
+
+    def test_python_service_implements_every_job_control_and_result_route(self) -> None:
+        service = FixtureAcquisitionService(FIXTURE_DIR)
+        self.assertEqual(service.handle("GET", "/v1/capabilities").status, 200)
+
+        for kind in ("boundary-jobs", "acquisition-jobs"):
+            created = service.handle("POST", f"/v1/{kind}", b'{"request_identity":"fixture"}')
+            self.assertEqual(created.status, 202)
+            job_id = json.loads(created.body)["job_id"]
+            self.assertEqual(service.handle("GET", f"/v1/{kind}/{job_id}").status, 200)
+            self.assertEqual(
+                service.handle("POST", f"/v1/{kind}/{job_id}/retry", b'{"scopes":[]}').status,
+                202,
+            )
+            manifest_response = service.handle(
+                "GET", f"/v1/{kind}/{job_id}/manifest"
+            )
+            self.assertEqual(manifest_response.status, 200)
+            manifest = json.loads(manifest_response.body)
+            chunk = manifest["chunks"][0]
+            chunk_response = service.handle(
+                "GET",
+                f"/v1/{kind}/{job_id}/chunks/{chunk['id']}",
+                cursor=chunk["stable_cursor"],
+            )
+            self.assertEqual(chunk_response.status, 200)
+            self.assertEqual(
+                chunk_response.headers["x-stable-cursor"], chunk["stable_cursor"]
+            )
+            decoded_chunk = gzip.decompress(chunk_response.body)
+            self.assertEqual(hashlib.sha256(decoded_chunk).hexdigest(), chunk["sha256"])
+            self.assertEqual(len(decoded_chunk), chunk["uncompressed_bytes"])
+            self.assertEqual(
+                service.handle("POST", f"/v1/{kind}/{job_id}/cancel").status,
+                202,
+            )
+
+        failure = service.handle("GET", "/v1/acquisition-jobs/missing")
+        self.assertEqual(failure.status, 404)
+        self.assertIn("suggested_action", json.loads(failure.body))
 
 
 if __name__ == "__main__":

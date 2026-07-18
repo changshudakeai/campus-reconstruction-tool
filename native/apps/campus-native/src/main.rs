@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod v11_acquisition_client;
 mod v11_project_kernel;
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
@@ -2332,6 +2333,14 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if let Err(error) = v11_acquisition_client::bootstrap_fixture_if_enabled(
+        cfg!(debug_assertions),
+        std::env::var("CAMPUS_V11_ACQUISITION_FIXTURE")
+            .ok()
+            .as_deref(),
+    ) {
+        eprintln!("V1.1 development acquisition fixture failed: {error}");
+    }
     if let Err(error) = v11_project_kernel::bootstrap_if_enabled(
         &app_data_dir(),
         cfg!(debug_assertions),

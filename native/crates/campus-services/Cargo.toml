@@ -3,9 +3,6 @@ name = "campus-services"
 version.workspace = true
 edition.workspace = true
 
-[features]
-fixture-transport = []
-
 [dependencies]
 base64 = "0.22"
 campus-state = { path = "../campus-state" }

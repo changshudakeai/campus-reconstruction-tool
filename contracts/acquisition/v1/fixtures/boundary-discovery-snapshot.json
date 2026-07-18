@@ -51,5 +51,10 @@
       {"provider": "osm", "category": "building", "tile_id": "boundary-search", "status": "complete", "pagination_exhausted": true, "raw_count": 1, "deduplicated_count": 1, "relation_members_complete": true, "gaps": []},
       {"provider": "overture", "category": "building", "tile_id": "boundary-search", "status": "complete", "pagination_exhausted": true, "raw_count": 1, "deduplicated_count": 1, "relation_members_complete": true, "gaps": []}
     ]
+  },
+  "manifest": {
+    "contract_version": "1.0.0",
+    "chunks": [{"id": "boundary-candidates-0001", "stable_cursor": "v1:boundary-candidates:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "a8bd5e884809a59eb9961a5f0819ce2ee23655a125875842d209d828ed9dacdf", "uncompressed_bytes": 1883}],
+    "result_sha256": "a8bd5e884809a59eb9961a5f0819ce2ee23655a125875842d209d828ed9dacdf"
   }
 }

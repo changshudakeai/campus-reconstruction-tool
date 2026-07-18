@@ -66,7 +66,7 @@ fn result_parts(
             "stable_cursor": "v1:observations:0001:end",
             "content_type": "application/x-ndjson",
             "content_encoding": "gzip",
-            "sha256": sha(&compressed),
+            "sha256": sha(&canonical),
             "uncompressed_bytes": canonical.len()
         }],
         "result_sha256": sha(&canonical)
@@ -198,9 +198,9 @@ fn rejects_an_incompatible_contract_before_downloading_chunks() {
     assert_eq!(error.kind, AcquisitionClientErrorKind::IncompatibleContract);
 }
 
-#[cfg(feature = "fixture-transport")]
+#[cfg(debug_assertions)]
 #[test]
-fn feature_gated_fixture_transport_serves_both_public_client_paths() {
+fn debug_only_fixture_transport_serves_both_public_client_paths() {
     use campus_services::acquisition::fixture_transport::FixtureTransport;
 
     let client = AcquisitionClient::new(FixtureTransport::canonical().unwrap());

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-#[cfg(feature = "fixture-transport")]
+#[cfg(debug_assertions)]
 use std::io::Write;
 
 use flate2::read::GzDecoder;
-#[cfg(feature = "fixture-transport")]
+#[cfg(debug_assertions)]
 use flate2::{Compression, GzBuilder};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -270,6 +270,39 @@ pub struct TimeSemantics {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GeometryDerivationRecord {
+    pub rule_version: String,
+    pub steps: Vec<String>,
+    pub source_geometry_sha256: String,
+    pub review_geometry_sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AcquisitionSuggestion {
+    pub kind: String,
+    pub rule_version: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttributeDerivation {
+    Direct,
+    Derived,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AttributeProvenance {
+    pub attribute: String,
+    pub value: serde_json::Value,
+    pub source_observation_id: String,
+    pub original_value: serde_json::Value,
+    pub unit: String,
+    pub derivation: AttributeDerivation,
+    pub rule_version: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceObservation {
     pub id: String,
     pub category: FoundationCategory,
@@ -281,6 +314,11 @@ pub struct SourceObservation {
     pub unit_semantics: BTreeMap<String, String>,
     pub time_semantics: TimeSemantics,
     pub geometry_sha256: String,
+    pub derivation: GeometryDerivationRecord,
+    pub review_geometry_proposal: SourceGeometry,
+    pub raw_spatial_measures: BTreeMap<String, f64>,
+    pub suggestions: Vec<AcquisitionSuggestion>,
+    pub attribute_provenance: Vec<AttributeProvenance>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -385,6 +423,21 @@ pub struct AcquisitionClient<T> {
     transport: T,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum JobKind {
+    Boundary,
+    Acquisition,
+}
+
+impl JobKind {
+    fn path_segment(self) -> &'static str {
+        match self {
+            Self::Boundary => "boundary-jobs",
+            Self::Acquisition => "acquisition-jobs",
+        }
+    }
+}
+
 impl<T: AcquisitionTransport> AcquisitionClient<T> {
     pub fn new(transport: T) -> Self {
         Self { transport }
@@ -394,7 +447,7 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         &self,
         job_id: &str,
     ) -> Result<VerifiedBoundaryDiscoverySnapshot, AcquisitionClientError> {
-        let (manifest, candidates) = self.load_result("boundary-jobs", job_id)?;
+        let (manifest, candidates) = self.load_result(JobKind::Boundary, job_id)?;
         Ok(VerifiedBoundaryDiscoverySnapshot {
             manifest,
             candidates,
@@ -405,7 +458,7 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         &self,
         job_id: &str,
     ) -> Result<VerifiedAcquisitionResult, AcquisitionClientError> {
-        let (manifest, observations) = self.load_result("acquisition-jobs", job_id)?;
+        let (manifest, observations) = self.load_result(JobKind::Acquisition, job_id)?;
         Ok(VerifiedAcquisitionResult {
             manifest,
             observations,
@@ -414,9 +467,10 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
 
     fn load_result<Record: DeserializeOwned>(
         &self,
-        job_kind: &str,
+        job_kind: JobKind,
         job_id: &str,
     ) -> Result<(ResultManifest, Vec<Record>), AcquisitionClientError> {
+        let job_kind = job_kind.path_segment();
         let response = self.execute(TransportRequest::get(format!(
             "/v1/{job_kind}/{job_id}/manifest"
         )))?;
@@ -464,11 +518,6 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
                     "The service returned a different resume cursor than the pinned manifest.",
                 ));
             }
-            if sha256_hex(&response.body) != chunk.sha256 {
-                return Err(integrity_error(
-                    "A downloaded result chunk failed SHA-256 verification.",
-                ));
-            }
             let mut decoded = Vec::new();
             GzDecoder::new(response.body.as_slice())
                 .read_to_end(&mut decoded)
@@ -476,6 +525,11 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
             if decoded.len() as u64 != chunk.uncompressed_bytes {
                 return Err(integrity_error(
                     "A downloaded result chunk has an unexpected decoded size.",
+                ));
+            }
+            if sha256_hex(&decoded) != chunk.sha256 {
+                return Err(integrity_error(
+                    "A decoded result chunk failed SHA-256 verification.",
                 ));
             }
             for line in decoded
@@ -531,16 +585,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-#[cfg(feature = "fixture-transport")]
+#[cfg(debug_assertions)]
 fn fixture_result_parts(
     manifest_template: &serde_json::Value,
     bundle: &serde_json::Value,
     coverage_report: &serde_json::Value,
     records: &[serde_json::Value],
-) -> Result<(Vec<u8>, Vec<u8>), serde_json::Error> {
+) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut canonical = Vec::new();
     for record in records {
-        canonical.extend(serde_json::to_vec(record)?);
+        canonical.extend(serde_json::to_vec(record).map_err(|error| error.to_string())?);
         canonical.push(b'\n');
     }
     let mut encoder = GzBuilder::new()
@@ -551,6 +605,21 @@ fn fixture_result_parts(
         .expect("Vec writes cannot fail");
     let compressed = encoder.finish().expect("Vec writes cannot fail");
     let chunk_template = &manifest_template["chunks"][0];
+    let declared_chunk_sha = chunk_template["sha256"]
+        .as_str()
+        .ok_or("fixture chunk is missing sha256")?;
+    let declared_result_sha = manifest_template["result_sha256"]
+        .as_str()
+        .ok_or("fixture manifest is missing result_sha256")?;
+    let declared_bytes = chunk_template["uncompressed_bytes"]
+        .as_u64()
+        .ok_or("fixture chunk is missing uncompressed_bytes")?;
+    if sha256_hex(&canonical) != declared_chunk_sha
+        || sha256_hex(&canonical) != declared_result_sha
+        || canonical.len() as u64 != declared_bytes
+    {
+        return Err("fixture integrity metadata does not match canonical transport bytes".into());
+    }
     let licences = records
         .iter()
         .filter_map(|record| record.get("licence").cloned())
@@ -565,15 +634,18 @@ fn fixture_result_parts(
             "stable_cursor": chunk_template["stable_cursor"],
             "content_type": "application/x-ndjson",
             "content_encoding": "gzip",
-            "sha256": sha256_hex(&compressed),
-            "uncompressed_bytes": canonical.len()
+            "sha256": declared_chunk_sha,
+            "uncompressed_bytes": declared_bytes
         }],
-        "result_sha256": sha256_hex(&canonical)
+        "result_sha256": declared_result_sha
     });
-    Ok((serde_json::to_vec(&manifest)?, compressed))
+    Ok((
+        serde_json::to_vec(&manifest).map_err(|error| error.to_string())?,
+        compressed,
+    ))
 }
 
-#[cfg(feature = "fixture-transport")]
+#[cfg(debug_assertions)]
 pub mod fixture_transport {
     use super::*;
 
@@ -582,17 +654,20 @@ pub mod fixture_transport {
         acquisition_chunk: Vec<u8>,
         boundary_manifest: Vec<u8>,
         boundary_chunk: Vec<u8>,
-        cursor: String,
+        acquisition_cursor: String,
+        boundary_cursor: String,
     }
 
     impl FixtureTransport {
-        pub fn canonical() -> Result<Self, serde_json::Error> {
+        pub fn canonical() -> Result<Self, String> {
             let fixture: serde_json::Value = serde_json::from_str(include_str!(
                 "../../../../contracts/acquisition/v1/fixtures/canonical-acquisition.json"
-            ))?;
+            ))
+            .map_err(|error| error.to_string())?;
             let boundary: serde_json::Value = serde_json::from_str(include_str!(
                 "../../../../contracts/acquisition/v1/fixtures/boundary-discovery-snapshot.json"
-            ))?;
+            ))
+            .map_err(|error| error.to_string())?;
             let (acquisition_manifest, acquisition_chunk) = fixture_result_parts(
                 &fixture["manifest"],
                 &fixture["bundle"],
@@ -602,7 +677,7 @@ pub mod fixture_transport {
                     .expect("canonical fixture observations are an array"),
             )?;
             let (boundary_manifest, boundary_chunk) = fixture_result_parts(
-                &fixture["manifest"],
+                &boundary["manifest"],
                 &boundary["bundle"],
                 &boundary["coverage_report"],
                 boundary["candidates"]
@@ -614,7 +689,11 @@ pub mod fixture_transport {
                 acquisition_chunk,
                 boundary_manifest,
                 boundary_chunk,
-                cursor: fixture["manifest"]["chunks"][0]["stable_cursor"]
+                acquisition_cursor: fixture["manifest"]["chunks"][0]["stable_cursor"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                boundary_cursor: boundary["manifest"]["chunks"][0]["stable_cursor"]
                     .as_str()
                     .unwrap_or_default()
                     .to_string(),
@@ -638,7 +717,14 @@ pub mod fixture_transport {
             } else {
                 Ok(TransportResponse {
                     status: 200,
-                    headers: BTreeMap::from([("x-stable-cursor".into(), self.cursor.clone())]),
+                    headers: BTreeMap::from([(
+                        "x-stable-cursor".into(),
+                        if boundary {
+                            self.boundary_cursor.clone()
+                        } else {
+                            self.acquisition_cursor.clone()
+                        },
+                    )]),
                     body: if boundary {
                         self.boundary_chunk.clone()
                     } else {

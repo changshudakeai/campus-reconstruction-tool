@@ -2,6 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.mcrebuild.invalid/v1/acquisition.schema.json",
   "title": "Controlled Foundation Acquisition Contract v1",
+  "oneOf": [
+    {"$ref": "#/$defs/capabilities"},
+    {"$ref": "#/$defs/boundaryRequest"},
+    {"$ref": "#/$defs/acquisitionRequest"},
+    {"$ref": "#/$defs/jobStatus"},
+    {"$ref": "#/$defs/resultManifest"},
+    {"$ref": "#/$defs/boundaryDiscoverySnapshot"},
+    {"$ref": "#/$defs/acquisitionFixture"},
+    {"$ref": "#/$defs/failure"}
+  ],
   "$defs": {
     "contractVersion": {"type": "string", "const": "1.0.0"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -162,39 +172,55 @@
       },
       "additionalProperties": false
     },
+    "sourceLineage": {
+      "type": "object",
+      "required": ["provider", "dataset_release", "source_record_id", "source_record_version", "upstream_records", "acquired_at", "original_classification"],
+      "properties": {
+        "provider": {"type": "string"},
+        "dataset_release": {"type": "string"},
+        "source_record_id": {"type": "string"},
+        "source_record_version": {"type": "string"},
+        "upstream_records": {"type": "array", "items": {"type": "string"}},
+        "acquired_at": {"type": "string", "format": "date-time"},
+        "original_classification": {"type": "string"},
+        "relation": {
+          "type": "object",
+          "required": ["relation_id", "assembly_status", "member_ids"],
+          "properties": {"relation_id": {"type": "string"}, "assembly_status": {"const": "complete"}, "member_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "sourceObservation": {
       "type": "object",
-      "required": ["id", "category", "geometry", "original_properties", "lineage", "licence", "coordinate_semantics", "unit_semantics", "time_semantics", "geometry_sha256"],
+      "required": ["id", "category", "geometry", "original_properties", "lineage", "licence", "coordinate_semantics", "unit_semantics", "time_semantics", "geometry_sha256", "derivation", "review_geometry_proposal", "raw_spatial_measures", "suggestions", "attribute_provenance"],
       "properties": {
         "id": {"type": "string"},
         "category": {"$ref": "#/$defs/category"},
         "geometry": {"$ref": "#/$defs/geometry"},
         "original_properties": {"type": "object"},
-        "lineage": {
-          "type": "object",
-          "required": ["provider", "dataset_release", "source_record_id", "source_record_version", "upstream_records", "acquired_at", "original_classification"],
-          "properties": {
-            "provider": {"type": "string"},
-            "dataset_release": {"type": "string"},
-            "source_record_id": {"type": "string"},
-            "source_record_version": {"type": "string"},
-            "upstream_records": {"type": "array", "items": {"type": "string"}},
-            "acquired_at": {"type": "string", "format": "date-time"},
-            "original_classification": {"type": "string"},
-            "relation": {
-              "type": "object",
-              "required": ["relation_id", "assembly_status", "member_ids"],
-              "properties": {"relation_id": {"type": "string"}, "assembly_status": {"const": "complete"}, "member_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
-              "additionalProperties": false
-            }
-          },
-          "additionalProperties": false
-        },
+        "lineage": {"$ref": "#/$defs/sourceLineage"},
         "licence": {"$ref": "#/$defs/licence"},
         "coordinate_semantics": {"type": "object", "required": ["crs", "axis_order"], "properties": {"crs": {"const": "OGC:CRS84"}, "axis_order": {"const": "longitude-latitude"}}, "additionalProperties": false},
         "unit_semantics": {"type": "object", "additionalProperties": {"enum": ["m", "m2", "degrees"]}},
         "time_semantics": {"type": "object", "required": ["dataset_release", "acquired_at"], "properties": {"dataset_release": {"type": "string"}, "acquired_at": {"type": "string", "format": "date-time"}}, "additionalProperties": false},
-        "geometry_sha256": {"$ref": "#/$defs/sha256"}
+        "geometry_sha256": {"$ref": "#/$defs/sha256"},
+        "derivation": {
+          "type": "object",
+          "required": ["rule_version", "steps", "source_geometry_sha256", "review_geometry_sha256"],
+          "properties": {
+            "rule_version": {"type": "string"},
+            "steps": {"type": "array", "items": {"type": "string"}},
+            "source_geometry_sha256": {"$ref": "#/$defs/sha256"},
+            "review_geometry_sha256": {"$ref": "#/$defs/sha256"}
+          },
+          "additionalProperties": false
+        },
+        "review_geometry_proposal": {"$ref": "#/$defs/geometry"},
+        "raw_spatial_measures": {"type": "object", "additionalProperties": {"type": "number"}},
+        "suggestions": {"type": "array", "items": {"type": "object", "required": ["kind", "rule_version", "reason"], "properties": {"kind": {"type": "string"}, "rule_version": {"type": "string"}, "reason": {"type": "string"}}, "additionalProperties": false}},
+        "attribute_provenance": {"type": "array", "items": {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"type": "string"}, "value": {}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"type": "string"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false}}
       },
       "additionalProperties": false
     },
@@ -205,7 +231,7 @@
         "id": {"type": "string"},
         "rank": {"type": "integer", "minimum": 1},
         "geometry": {"$ref": "#/$defs/geometry"},
-        "lineage": {"type": "object"},
+        "lineage": {"$ref": "#/$defs/sourceLineage"},
         "licence": {"$ref": "#/$defs/licence"},
         "ranking_evidence": {
           "type": "object",
@@ -223,12 +249,13 @@
     },
     "boundaryDiscoverySnapshot": {
       "type": "object",
-      "required": ["contract_version", "bundle", "candidates", "coverage_report"],
+      "required": ["contract_version", "bundle", "candidates", "coverage_report", "manifest"],
       "properties": {
         "contract_version": {"$ref": "#/$defs/contractVersion"},
         "bundle": {"$ref": "#/$defs/datasetBundle"},
         "candidates": {"type": "array", "items": {"$ref": "#/$defs/boundaryCandidate"}},
-        "coverage_report": {"$ref": "#/$defs/coverageReport"}
+        "coverage_report": {"$ref": "#/$defs/coverageReport"},
+        "manifest": {"$ref": "#/$defs/fixtureManifest"}
       },
       "additionalProperties": false
     },
@@ -255,6 +282,28 @@
         "licences": {"type": "array", "items": {"$ref": "#/$defs/licence"}},
         "chunks": {"type": "array", "items": {"$ref": "#/$defs/chunk"}},
         "result_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "fixtureManifest": {
+      "type": "object",
+      "required": ["contract_version", "chunks", "result_sha256"],
+      "properties": {
+        "contract_version": {"$ref": "#/$defs/contractVersion"},
+        "chunks": {"type": "array", "items": {"$ref": "#/$defs/chunk"}},
+        "result_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "acquisitionFixture": {
+      "type": "object",
+      "required": ["contract_version", "bundle", "coverage_report", "observations", "manifest"],
+      "properties": {
+        "contract_version": {"$ref": "#/$defs/contractVersion"},
+        "bundle": {"$ref": "#/$defs/datasetBundle"},
+        "coverage_report": {"$ref": "#/$defs/coverageReport"},
+        "observations": {"type": "array", "items": {"$ref": "#/$defs/sourceObservation"}},
+        "manifest": {"$ref": "#/$defs/fixtureManifest"}
       },
       "additionalProperties": false
     }

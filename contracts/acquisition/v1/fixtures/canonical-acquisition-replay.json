@@ -39,12 +39,17 @@
       "coordinate_semantics": {"crs": "OGC:CRS84", "axis_order": "longitude-latitude"},
       "unit_semantics": {"height": "m", "area": "m2", "angle": "degrees"},
       "time_semantics": {"dataset_release": "2026-06-30T00:00:00Z", "acquired_at": "2026-07-01T00:00:00Z"},
-      "geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "geometry_sha256": "9149fc895fea5bc585069b5cc978d74d7533a77a7bc76ec0f35c5eaf4124593c",
+      "derivation": {"rule_version": "geometry-derivation-1.0.0", "steps": ["assemble_complete_relation", "validate_rings", "preserve_crs84"], "source_geometry_sha256": "9149fc895fea5bc585069b5cc978d74d7533a77a7bc76ec0f35c5eaf4124593c", "review_geometry_sha256": "9149fc895fea5bc585069b5cc978d74d7533a77a7bc76ec0f35c5eaf4124593c"},
+      "review_geometry_proposal": {"type": "MultiPolygon", "coordinates": [[[[121.4000, 31.2200], [121.4010, 31.2200], [121.4010, 31.2210], [121.4000, 31.2200]], [[121.4003, 31.2203], [121.4005, 31.2203], [121.4005, 31.2205], [121.4003, 31.2203]]]]},
+      "raw_spatial_measures": {"area_m2": 9876.5, "perimeter_m": 421.0},
+      "suggestions": [{"kind": "classification", "rule_version": "classification-1.0.0", "reason": "The source explicitly classifies the complete relation as a university building."}],
+      "attribute_provenance": [{"attribute": "height_m", "value": 18, "source_observation_id": "obs-osm-relation-42", "original_value": "18 m", "unit": "m", "derivation": "direct", "rule_version": "attribute-normalisation-1.0.0"}]
     }
   ],
   "manifest": {
     "contract_version": "1.0.0",
-    "chunks": [{"id": "observations-0001", "stable_cursor": "v1:observations:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "uncompressed_bytes": 1}],
-    "result_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "chunks": [{"id": "observations-0001", "stable_cursor": "v1:observations:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "2e8129a17c5a210f3826f3ae979246a234d9d84792bcb046fdb59ab285b18395", "uncompressed_bytes": 2255}],
+    "result_sha256": "2e8129a17c5a210f3826f3ae979246a234d9d84792bcb046fdb59ab285b18395"
   }
 }

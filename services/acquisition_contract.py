@@ -1,6 +1,10 @@
 """Provider-neutral decoder for the frozen Controlled Acquisition v1 contract."""
 
+import gzip
+import json
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 
@@ -138,3 +142,177 @@ def decode_contract_fixture(value: Mapping[str, Any]) -> AcquisitionFixture:
         outcomes=tuple(outcomes),
         observations=tuple(observations),
     )
+
+
+@dataclass(frozen=True)
+class ServiceResponse:
+    status: int
+    body: bytes
+    headers: Mapping[str, str]
+
+
+class FixtureAcquisitionService:
+    """Executable service-side v1 contract used only by tests and development."""
+
+    _JOB_PATH = re.compile(
+        r"^/v1/(?P<kind>boundary-jobs|acquisition-jobs)/(?P<job>[^/]+)"
+        r"(?:/(?P<action>retry|cancel|manifest|chunks)(?:/(?P<chunk>[^/]+))?)?$"
+    )
+
+    def __init__(self, fixture_dir: Path):
+        self._acquisition = json.loads(
+            (fixture_dir / "canonical-acquisition.json").read_text(encoding="utf-8")
+        )
+        self._boundary = json.loads(
+            (fixture_dir / "boundary-discovery-snapshot.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self._jobs: dict[str, dict[str, str]] = {}
+        self._next_job = 1
+
+    def handle(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        *,
+        cursor: str | None = None,
+    ) -> ServiceResponse:
+        if method == "GET" and path == "/v1/health":
+            return self._json(200, {"status": "ok", "contract_version": CONTRACT_VERSION})
+        if method == "GET" and path == "/v1/capabilities":
+            return self._json(
+                200,
+                {
+                    "contract_versions": [CONTRACT_VERSION],
+                    "supported_bundles": [self._acquisition["bundle"]],
+                    "limits": {
+                        "area_square_metres": 100_000_000,
+                        "boundary_vertices": 10_000,
+                        "tiles": 10_000,
+                        "observations": 1_000_000,
+                        "result_bytes": 1_000_000_000,
+                        "concurrent_jobs": 2,
+                    },
+                    "retention_days": 30,
+                    "quota_remaining": 100,
+                },
+            )
+        if method == "POST" and path in (
+            "/v1/boundary-jobs",
+            "/v1/acquisition-jobs",
+        ):
+            if not body:
+                return self._failure(400, "invalid_request", path, False)
+            kind = path.rsplit("/", 1)[-1]
+            job_id = f"fixture-{self._next_job}"
+            self._next_job += 1
+            self._jobs[job_id] = {"kind": kind, "state": "complete"}
+            return self._job(202, job_id)
+
+        match = self._JOB_PATH.fullmatch(path)
+        if not match:
+            return self._failure(404, "route_not_found", path, False)
+        job_id = match.group("job")
+        job = self._jobs.get(job_id)
+        if job is None or job["kind"] != match.group("kind"):
+            return self._failure(404, "job_not_found", job_id, False)
+        action = match.group("action")
+        if action is None and method == "GET":
+            return self._job(200, job_id)
+        if action == "retry" and method == "POST":
+            job["state"] = "complete"
+            return self._job(202, job_id)
+        if action == "cancel" and method == "POST":
+            job["state"] = "cancelled"
+            return self._job(202, job_id)
+        fixture = self._fixture(job["kind"])
+        if action == "manifest" and method == "GET":
+            return self._json(200, self._full_manifest(fixture))
+        if action == "chunks" and method == "GET":
+            chunk = fixture["manifest"]["chunks"][0]
+            if match.group("chunk") != chunk["id"] or cursor != chunk["stable_cursor"]:
+                return self._failure(416, "invalid_cursor", job_id, True)
+            canonical = self._canonical_records(fixture)
+            return ServiceResponse(
+                status=200,
+                body=gzip.compress(canonical, mtime=0),
+                headers={
+                    "content-type": "application/gzip",
+                    "x-stable-cursor": chunk["stable_cursor"],
+                    "digest": f"sha-256={chunk['sha256']}",
+                },
+            )
+        return self._failure(405, "method_not_allowed", path, False)
+
+    def _fixture(self, kind: str) -> Mapping[str, Any]:
+        return self._boundary if kind == "boundary-jobs" else self._acquisition
+
+    @staticmethod
+    def _canonical_records(fixture: Mapping[str, Any]) -> bytes:
+        key = "candidates" if "candidates" in fixture else "observations"
+        return b"".join(
+            (
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            for record in fixture[key]
+        )
+
+    @staticmethod
+    def _full_manifest(fixture: Mapping[str, Any]) -> Mapping[str, Any]:
+        records = fixture.get("candidates") or fixture.get("observations") or ()
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "bundle": fixture["bundle"],
+            "coverage_report": fixture["coverage_report"],
+            "licences": [record["licence"] for record in records],
+            "chunks": fixture["manifest"]["chunks"],
+            "result_sha256": fixture["manifest"]["result_sha256"],
+        }
+
+    def _job(self, status: int, job_id: str) -> ServiceResponse:
+        job = self._jobs[job_id]
+        return self._json(
+            status,
+            {
+                "job_id": job_id,
+                "contract_version": CONTRACT_VERSION,
+                "bundle_id": self._acquisition["bundle"]["id"],
+                "state": job["state"],
+            },
+        )
+
+    @staticmethod
+    def _json(status: int, value: Mapping[str, Any]) -> ServiceResponse:
+        return ServiceResponse(
+            status=status,
+            body=json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+
+    def _failure(
+        self, status: int, code: str, scope: str, retryable: bool
+    ) -> ServiceResponse:
+        return self._json(
+            status,
+            {
+                "code": code,
+                "scope": scope,
+                "retryable": retryable,
+                "explanation": f"The fixture service rejected {scope}.",
+                "suggested_action": (
+                    "Retry the same pinned scope."
+                    if retryable
+                    else "Check the request and diagnostics."
+                ),
+            },
+        )
