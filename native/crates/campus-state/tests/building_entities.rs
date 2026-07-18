@@ -762,6 +762,14 @@ fn split_refresh_accepts_an_explicit_observation_to_entity_mapping() {
         .refresh_from_observations(&fixture.observations)
         .unwrap_err()
         .contains("explicit entity mapping"));
+    assert!(ledger
+        .clone()
+        .refresh_from_observations_with_mappings(
+            &fixture.observations,
+            BTreeMap::from([("obs-campus-library-v2".into(), "building:typo".into(),)]),
+        )
+        .unwrap_err()
+        .contains("target entity is missing"));
     ledger
         .refresh_from_observations_with_mappings(
             &fixture.observations,
@@ -842,6 +850,13 @@ fn reviewed_buildings_can_proceed_beside_a_structured_entity_gap() {
             actor(),
         )
         .unwrap();
+    assert!(project
+        .foundation_review()
+        .entries()
+        .last()
+        .unwrap()
+        .subjects
+        .contains(&"building:annex".into()));
 }
 
 #[test]
@@ -938,6 +953,22 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
     assert_eq!(
         refresh_record.incoming_manifest.result_sha256, "sha256:building-refresh-v2",
         "provider manifests remain byte-identity records rather than synthetic digests"
+    );
+    let first_snapshot_identity = project.acquisition_snapshot_identity().to_string();
+    let next_observations = fixture
+        .observations
+        .iter()
+        .filter(|observation| observation.id != "obs-tree-cluster")
+        .cloned()
+        .collect();
+    let mut next_refresh = acquisition_evidence(next_observations);
+    next_refresh.manifest.result_sha256 = "sha256:building-refresh-v3".into();
+    project.pin_acquisition(next_refresh, actor()).unwrap();
+    assert!(
+        project
+            .acquisition_snapshot_identity()
+            .contains(&first_snapshot_identity),
+        "the active snapshot identity accumulates the complete refresh chain"
     );
     project
         .record_building_entity_decision(

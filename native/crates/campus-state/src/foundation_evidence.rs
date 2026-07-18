@@ -1067,6 +1067,12 @@ impl BuildingEntityReviewLedger {
         }) {
             return Err("Building refresh mappings must refer to newly added evidence".into());
         }
+        if entity_mappings
+            .values()
+            .any(|entity_id| !self.entities.iter().any(|entity| entity.id == *entity_id))
+        {
+            return Err("Building refresh mapping target entity is missing".into());
+        }
         let before = self.entities.clone();
         let mut after = before.clone();
         apply_evidence_refresh(
@@ -1611,6 +1617,9 @@ fn apply_evidence_refresh(
                 "Refreshed evidence has ambiguous split lineage and requires an explicit entity mapping: {}",
                 descriptor.observation_id
             ));
+        }
+        if explicit_target.is_some() && matching_indices.is_empty() {
+            return Err("Building refresh mapping target entity is missing".into());
         }
         if let Some(index) = matching_indices.first().copied() {
             let entity = &mut entities[index];

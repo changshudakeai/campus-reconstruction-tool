@@ -282,6 +282,8 @@ pub struct FoundationReviewBasis {
     pub boundary_result_sha256: String,
     pub selected_boundary_id: String,
     pub acquisition_result_sha256: String,
+    #[serde(default)]
+    pub acquisition_snapshot_identity: String,
     pub classification_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
@@ -444,6 +446,8 @@ struct FoundationTracerState {
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
     acquisition: Option<PinnedAcquisitionEvidence>,
+    #[serde(default)]
+    acquisition_snapshot_identity: String,
     #[serde(default)]
     acquisition_refresh_history: Vec<AcquisitionRefreshRecord>,
     #[serde(default)]
@@ -699,6 +703,10 @@ impl Schema2Project {
         &self.foundation.acquisition_refresh_history
     }
 
+    pub fn acquisition_snapshot_identity(&self) -> &str {
+        &self.foundation.acquisition_snapshot_identity
+    }
+
     pub fn generation_settings(&self) -> &FoundationGenerationSettings {
         &self.foundation.generation_settings
     }
@@ -892,6 +900,7 @@ impl Schema2Project {
         }
         let mut building_review = self.foundation.building_review.clone();
         let mut refresh_history = self.foundation.acquisition_refresh_history.clone();
+        let mut acquisition_snapshot_identity = evidence.manifest.result_sha256.clone();
         if let Some(previous) = &self.foundation.acquisition {
             let incoming_manifest = evidence.manifest.clone();
             let incoming_ids = evidence
@@ -919,10 +928,20 @@ impl Schema2Project {
                 }
             }
             evidence.observations = merged;
+            let previous_snapshot_identity =
+                if self.foundation.acquisition_snapshot_identity.is_empty() {
+                    previous.manifest.result_sha256.as_str()
+                } else {
+                    self.foundation.acquisition_snapshot_identity.as_str()
+                };
             let composite_snapshot_identity = format!(
-                "composite-v1:{}:{}",
-                previous.manifest.result_sha256, incoming_manifest.result_sha256
+                "composite-v1:{}:{}:{}:{}",
+                previous_snapshot_identity.len(),
+                previous_snapshot_identity,
+                incoming_manifest.result_sha256.len(),
+                incoming_manifest.result_sha256
             );
+            acquisition_snapshot_identity = composite_snapshot_identity.clone();
             refresh_history.push(AcquisitionRefreshRecord {
                 previous_manifest: previous.manifest.clone(),
                 incoming_manifest,
@@ -943,6 +962,7 @@ impl Schema2Project {
         }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
+        self.foundation.acquisition_snapshot_identity = acquisition_snapshot_identity;
         self.foundation.acquisition_refresh_history = refresh_history;
         self.foundation.building_review = building_review;
         self.foundation.generated = None;
@@ -1140,9 +1160,14 @@ impl Schema2Project {
         let basis = self.review_basis()?;
         let subjects = match &disposition {
             FoundationReviewDisposition::SelectedEvidence { evidence_ids } => evidence_ids.clone(),
-            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids, .. } => {
-                entity_ids.clone()
-            }
+            FoundationReviewDisposition::ReviewedBuildingEntities {
+                entity_ids,
+                known_gaps,
+            } => entity_ids
+                .iter()
+                .cloned()
+                .chain(known_gaps.iter().map(|gap| gap.entity_id.clone()))
+                .collect(),
             _ => vec![format!("foundation-category:{category:?}").to_ascii_lowercase()],
         };
         let before = self
@@ -1319,6 +1344,15 @@ impl Schema2Project {
             boundary_result_sha256: boundary.manifest.result_sha256.clone(),
             selected_boundary_id: boundary.selected_candidate_id.clone(),
             acquisition_result_sha256: acquisition.manifest.result_sha256.clone(),
+            acquisition_snapshot_identity: if self
+                .foundation
+                .acquisition_snapshot_identity
+                .is_empty()
+            {
+                acquisition.manifest.result_sha256.clone()
+            } else {
+                self.foundation.acquisition_snapshot_identity.clone()
+            },
             classification_rules: acquisition.manifest.bundle.classification_rules.clone(),
             conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
             derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
