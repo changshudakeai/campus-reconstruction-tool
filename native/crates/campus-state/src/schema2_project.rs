@@ -236,6 +236,16 @@ pub struct PinnedAcquisitionEvidence {
     pub observations: Vec<SourceObservation>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcquisitionRefreshRecord {
+    pub previous_manifest: ResultManifest,
+    pub incoming_manifest: ResultManifest,
+    pub added_observation_ids: Vec<String>,
+    pub retired_observation_ids: Vec<String>,
+    pub composite_result_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinnedFoundationEvidence<'a> {
     pub boundary: &'a PinnedBoundaryEvidence,
@@ -419,6 +429,8 @@ struct FoundationTracerState {
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
     acquisition: Option<PinnedAcquisitionEvidence>,
+    #[serde(default)]
+    acquisition_refresh_history: Vec<AcquisitionRefreshRecord>,
     #[serde(default)]
     building_review: BuildingEntityReviewLedger,
     review_ledger: FoundationReviewLedger,
@@ -668,6 +680,10 @@ impl Schema2Project {
         &self.foundation.building_review
     }
 
+    pub fn acquisition_refresh_history(&self) -> &[AcquisitionRefreshRecord] {
+        &self.foundation.acquisition_refresh_history
+    }
+
     pub fn generation_settings(&self) -> &FoundationGenerationSettings {
         &self.foundation.generation_settings
     }
@@ -851,7 +867,19 @@ impl Schema2Project {
             return Err("Pinned acquisition evidence is incomplete".into());
         }
         let mut building_review = self.foundation.building_review.clone();
+        let mut refresh_history = self.foundation.acquisition_refresh_history.clone();
         if let Some(previous) = &self.foundation.acquisition {
+            let incoming_manifest = evidence.manifest.clone();
+            let incoming_ids = evidence
+                .observations
+                .iter()
+                .map(|observation| observation.id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            let previous_ids = previous
+                .observations
+                .iter()
+                .map(|observation| observation.id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
             let mut merged = previous.observations.clone();
             for observation in evidence.observations {
                 if let Some(existing) = merged.iter().find(|existing| existing.id == observation.id)
@@ -867,12 +895,34 @@ impl Schema2Project {
                 }
             }
             evidence.observations = merged;
+            for licence in &previous.manifest.licences {
+                if !evidence.manifest.licences.contains(licence) {
+                    evidence.manifest.licences.push(licence.clone());
+                }
+            }
+            for chunk in &previous.manifest.chunks {
+                if !evidence.manifest.chunks.contains(chunk) {
+                    evidence.manifest.chunks.push(chunk.clone());
+                }
+            }
+            evidence.manifest.result_sha256 = format!(
+                "composite-v1:{}:{}",
+                previous.manifest.result_sha256, incoming_manifest.result_sha256
+            );
+            refresh_history.push(AcquisitionRefreshRecord {
+                previous_manifest: previous.manifest.clone(),
+                incoming_manifest,
+                added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
+                retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
+                composite_result_sha256: evidence.manifest.result_sha256.clone(),
+            });
             if !building_review.is_empty() {
                 building_review.refresh_from_observations(&evidence.observations)?;
             }
         }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
+        self.foundation.acquisition_refresh_history = refresh_history;
         self.foundation.building_review = building_review;
         self.foundation.generated = None;
         self.foundation.exported = None;
@@ -937,7 +987,14 @@ impl Schema2Project {
         actor: InstallationId,
     ) -> Result<u64, String> {
         let mut review = self.foundation.building_review.clone();
-        let sequence = review.revoke_last()?;
+        let observations = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Building Entities")?
+            .observations
+            .clone();
+        let sequence = review.revoke_last(&observations)?;
         self.mark_updated(actor)?;
         self.foundation.building_review = review;
         self.foundation.generated = None;

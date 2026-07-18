@@ -243,7 +243,7 @@ fn reversible_entity_review_resolves_primary_parts_boundary_and_names_after_conf
         .filter(|entity| entity.split_from.as_deref() == Some("building:campus-library"))
         .all(|entity| entity.display_name.is_none()));
 
-    ledger.revoke_last().unwrap();
+    ledger.revoke_last(&fixture.observations).unwrap();
     let restored = ledger
         .entities()
         .iter()
@@ -257,7 +257,7 @@ fn reversible_entity_review_resolves_primary_parts_boundary_and_names_after_conf
         restored.primary_observation_id,
         "obs-campus-library-overlap"
     );
-    ledger.revoke_last().unwrap();
+    ledger.revoke_last(&fixture.observations).unwrap();
     assert!(ledger
         .entities()
         .iter()
@@ -420,7 +420,7 @@ fn separate_and_merge_decisions_are_explicit_and_reversible_without_geometry_uni
         "merge never copies a source or entity name implicitly"
     );
 
-    ledger.revoke_last().unwrap();
+    ledger.revoke_last(&fixture.observations).unwrap();
     assert!(ledger
         .entities()
         .iter()
@@ -519,7 +519,7 @@ fn missing_boundary_metadata_and_ambiguous_names_require_explicit_review() {
             &observations,
         )
         .unwrap();
-    let reviewed = ledger
+    let error = ledger
         .reviewed_entities(
             &observations,
             BuildingGenerationBasis {
@@ -529,8 +529,11 @@ fn missing_boundary_metadata_and_ambiguous_names_require_explicit_review() {
                 rule_version: "building-generation/v1".into(),
             },
         )
-        .unwrap();
-    assert_eq!(reviewed[0].display_name, None);
+        .unwrap_err();
+    assert!(
+        error.contains("resolved display name"),
+        "unnamed evidence remains deferred and must use the Known Feature Gap path"
+    );
 }
 
 #[test]
@@ -588,6 +591,133 @@ fn conflict_decisions_clear_only_the_overlap_groups_they_resolve() {
 }
 
 #[test]
+fn merge_and_split_preserve_conflicts_the_operation_does_not_resolve() {
+    let original = fixture();
+    let mut fixture = fixture();
+    for descriptor in &mut fixture.building_evidence {
+        descriptor.overlap_group = match descriptor.observation_id.as_str() {
+            "obs-campus-library-v1" | "obs-campus-library-v1-replay" | "obs-campus-library-v2" => {
+                Some("library-refresh".into())
+            }
+            "obs-campus-library-overlap" | "obs-annex" => Some("library-annex".into()),
+            _ => descriptor.overlap_group.clone(),
+        };
+    }
+    let mut merged_ledger = BuildingEntityReviewLedger::new(
+        &fixture.observations,
+        fixture.building_evidence.clone(),
+        fixture.name_evidence.clone(),
+    )
+    .unwrap();
+    merged_ledger
+        .record(
+            BuildingEntityDecision::Merge {
+                entity_ids: vec!["building:campus-library".into(), "building:annex".into()],
+                merged_entity_id: "building:library-complex".into(),
+                primary_observation_id: "obs-campus-library-v1".into(),
+                part_observation_ids: vec!["obs-campus-library-part".into()],
+            },
+            &fixture.observations,
+        )
+        .unwrap();
+    assert_eq!(
+        merged_ledger
+            .entities()
+            .iter()
+            .find(|entity| entity.id == "building:library-complex")
+            .unwrap()
+            .unresolved_overlap_groups,
+        vec!["library-refresh"],
+        "merging the annex conflict does not erase the independent refresh conflict"
+    );
+
+    let mut split_ledger = BuildingEntityReviewLedger::new(
+        &original.observations,
+        original.building_evidence,
+        original.name_evidence,
+    )
+    .unwrap();
+    split_ledger
+        .record(
+            BuildingEntityDecision::Split {
+                entity_id: "building:campus-library".into(),
+                outputs: vec![
+                    campus_state::BuildingEntitySplit {
+                        entity_id: "building:library-main".into(),
+                        evidence_ids: vec![
+                            "obs-campus-library-v1".into(),
+                            "obs-campus-library-v2".into(),
+                        ],
+                        primary_observation_id: "obs-campus-library-v1".into(),
+                        part_observation_ids: Vec::new(),
+                    },
+                    campus_state::BuildingEntitySplit {
+                        entity_id: "building:library-wing".into(),
+                        evidence_ids: vec![
+                            "obs-campus-library-overlap".into(),
+                            "obs-campus-library-part".into(),
+                        ],
+                        primary_observation_id: "obs-campus-library-overlap".into(),
+                        part_observation_ids: vec!["obs-campus-library-part".into()],
+                    },
+                ],
+            },
+            &original.observations,
+        )
+        .unwrap();
+    assert_eq!(
+        split_ledger
+            .entities()
+            .iter()
+            .find(|entity| entity.id == "building:library-main")
+            .unwrap()
+            .unresolved_overlap_groups,
+        vec!["library-conflict"],
+        "a split output retaining differently shaped observations keeps the conflict open"
+    );
+}
+
+#[test]
+fn refresh_follows_reviewed_merge_lineage_instead_of_recreating_source_entities() {
+    let fixture = fixture();
+    let initial = fixture
+        .observations
+        .iter()
+        .filter(|observation| {
+            !matches!(
+                observation.id.as_str(),
+                "obs-campus-library-v1-replay"
+                    | "obs-campus-library-v2"
+                    | "obs-campus-library-overlap"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut ledger =
+        BuildingEntityReviewLedger::from_observations(&initial, fixture.name_evidence).unwrap();
+    ledger
+        .record(
+            BuildingEntityDecision::Merge {
+                entity_ids: vec!["building:campus-library".into(), "building:annex".into()],
+                merged_entity_id: "building:library-complex".into(),
+                primary_observation_id: "obs-campus-library-v1".into(),
+                part_observation_ids: vec!["obs-campus-library-part".into()],
+            },
+            &initial,
+        )
+        .unwrap();
+    ledger
+        .refresh_from_observations(&fixture.observations)
+        .unwrap();
+    assert_eq!(ledger.entities().len(), 1);
+    let merged = &ledger.entities()[0];
+    assert_eq!(merged.id, "building:library-complex");
+    assert!(merged
+        .evidence_ids
+        .contains(&"obs-campus-library-v2".into()));
+}
+
+#[test]
 fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history() {
     let fixture = fixture();
     let initial_observations = fixture
@@ -639,7 +769,13 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
             .record_building_entity_decision(decision, actor())
             .unwrap();
     }
-    let mut refresh = acquisition_evidence(fixture.observations.clone());
+    let refreshed_observations = fixture
+        .observations
+        .iter()
+        .filter(|observation| observation.id != "obs-tree-cluster")
+        .cloned()
+        .collect();
+    let mut refresh = acquisition_evidence(refreshed_observations);
     refresh.manifest.result_sha256 = "sha256:building-refresh-v2".into();
     project.pin_acquisition(refresh, actor()).unwrap();
 
@@ -665,6 +801,13 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
         ledger.entries().last().unwrap().decision,
         BuildingEntityDecision::RefreshEvidence { .. }
     ));
+    let refresh_record = project.acquisition_refresh_history().last().unwrap();
+    assert!(refresh_record
+        .retired_observation_ids
+        .contains(&"obs-tree-cluster".into()));
+    assert!(refresh_record
+        .composite_result_sha256
+        .starts_with("composite-v1:"));
     project
         .record_building_entity_decision(
             BuildingEntityDecision::SetPrimary {
@@ -674,12 +817,31 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
             actor(),
         )
         .unwrap();
+    project
+        .revoke_last_building_entity_decision(actor())
+        .unwrap();
+    project
+        .revoke_last_building_entity_decision(actor())
+        .unwrap();
+    let refreshed_library = project
+        .building_entity_review()
+        .entities()
+        .iter()
+        .find(|entity| entity.id == "building:campus-library")
+        .unwrap();
+    assert!(refreshed_library
+        .evidence_ids
+        .contains(&"obs-campus-library-v2".into()));
+    assert_eq!(
+        refreshed_library.display_name, None,
+        "a pre-refresh decision remains reversible without discarding refreshed evidence"
+    );
     let project_id = project.id().clone();
     library.save_project(&project).unwrap();
     let reopened = library.open_project(&project_id).unwrap();
     assert_eq!(
         reopened.building_entity_review().entries().len(),
-        4,
+        6,
         "refresh and the follow-up decision survive persistence as append-only history"
     );
 }

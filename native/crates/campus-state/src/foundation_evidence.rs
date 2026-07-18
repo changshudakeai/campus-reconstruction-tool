@@ -1071,7 +1071,7 @@ impl BuildingEntityReviewLedger {
         Ok(Some(sequence))
     }
 
-    pub fn revoke_last(&mut self) -> Result<u64, String> {
+    pub fn revoke_last(&mut self, observations: &[SourceObservation]) -> Result<u64, String> {
         let revoked = self
             .entries
             .iter()
@@ -1093,11 +1093,18 @@ impl BuildingEntityReviewLedger {
             })
             .ok_or("There is no Building Entity decision to revoke")?
             .clone();
-        if self.entities != target.after {
+        let (target_after_refreshes, _) = self.replay_refreshes_after(
+            target.after.clone(),
+            target.sequence,
+            u64::MAX,
+            observations,
+        )?;
+        if self.entities != target_after_refreshes {
             return Err("Only the latest active Building Entity decision can be revoked".into());
         }
         let before = self.entities.clone();
-        let after = target.before;
+        let (after, _) =
+            self.replay_refreshes_after(target.before, target.sequence, u64::MAX, observations)?;
         let sequence = self.entries.len() as u64 + 1;
         self.entries.push(BuildingEntityReviewEntry {
             sequence,
@@ -1107,11 +1114,62 @@ impl BuildingEntityReviewLedger {
             },
             before,
             after: after.clone(),
-            basis: target.basis,
+            basis: self.review_basis(observations)?,
             recorded_at_unix_ms: now_unix_ms(),
         });
         self.entities = after;
         Ok(sequence)
+    }
+
+    fn replay_refreshes_after(
+        &self,
+        mut state: Vec<BuildingEntity>,
+        target_sequence: u64,
+        before_sequence: u64,
+        observations: &[SourceObservation],
+    ) -> Result<(Vec<BuildingEntity>, Vec<BuildingEvidenceDescriptor>), String> {
+        let target = self
+            .entries
+            .iter()
+            .find(|entry| entry.sequence == target_sequence)
+            .ok_or("Building Entity decision target is missing")?;
+        let mut evidence = self
+            .evidence
+            .iter()
+            .filter(|descriptor| {
+                target
+                    .basis
+                    .observation_geometry_sha256
+                    .contains_key(&descriptor.observation_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in self
+            .entries
+            .iter()
+            .filter(|entry| entry.sequence > target_sequence && entry.sequence < before_sequence)
+        {
+            if let BuildingEntityDecision::RefreshEvidence {
+                added_observation_ids,
+            } = &entry.decision
+            {
+                let added = added_observation_ids
+                    .iter()
+                    .map(|id| {
+                        self.evidence
+                            .iter()
+                            .find(|descriptor| descriptor.observation_id == *id)
+                            .cloned()
+                            .ok_or_else(|| {
+                                "Building Entity refresh evidence is missing".to_string()
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                evidence.extend(added.iter().cloned());
+                apply_evidence_refresh(&mut state, &added, &evidence, observations)?;
+            }
+        }
+        Ok((state, evidence))
     }
 
     pub fn validate_against(&self, observations: &[SourceObservation]) -> Result<(), String> {
@@ -1176,7 +1234,14 @@ impl BuildingEntityReviewLedger {
                         .iter()
                         .find(|candidate| candidate.sequence == *target_sequence)
                         .ok_or("Building Entity revoke target is missing")?;
-                    state = target.before.clone();
+                    state = self
+                        .replay_refreshes_after(
+                            target.before.clone(),
+                            target.sequence,
+                            entry.sequence,
+                            observations,
+                        )?
+                        .0;
                 }
                 BuildingEntityDecision::RefreshEvidence {
                     added_observation_ids,
@@ -1324,9 +1389,9 @@ impl BuildingEntityReviewLedger {
                         entity.id
                     ));
                 }
-                if entity.name_resolution == BuildingNameResolution::Pending {
+                if entity.name_resolution != BuildingNameResolution::Named {
                     return Err(format!(
-                        "Building naming must be resolved after conflation: {}",
+                        "Building needs a resolved display name before becoming a Reviewed Building Slot: {}",
                         entity.id
                     ));
                 }
@@ -1449,10 +1514,24 @@ fn apply_evidence_refresh(
     observations: &[SourceObservation],
 ) -> Result<(), String> {
     for descriptor in added {
-        if let Some(entity) = entities
-            .iter_mut()
-            .find(|entity| entity.id == descriptor.entity_id)
-        {
+        let matching_indices = entities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entity)| {
+                (entity.id == descriptor.entity_id
+                    || entity.merged_from.contains(&descriptor.entity_id)
+                    || entity.split_from.as_deref() == Some(descriptor.entity_id.as_str()))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if matching_indices.len() > 1 {
+            return Err(format!(
+                "Refreshed evidence has ambiguous split lineage and requires an explicit entity mapping: {}",
+                descriptor.observation_id
+            ));
+        }
+        if let Some(index) = matching_indices.first().copied() {
+            let entity = &mut entities[index];
             if !entity.evidence_ids.contains(&descriptor.observation_id) {
                 entity.evidence_ids.push(descriptor.observation_id.clone());
             }
@@ -1612,8 +1691,18 @@ fn apply_building_decision(
                 return Err("A merge requires distinct source entities and a new stable ID".into());
             }
             let mut merged_evidence = Vec::new();
+            let mut unresolved_counts = BTreeMap::<String, usize>::new();
+            let mut merge_lineage = entity_ids.clone();
             for entity_id in entity_ids {
                 let entity = entity_ref(entities, entity_id)?;
+                for predecessor in &entity.merged_from {
+                    if !merge_lineage.contains(predecessor) {
+                        merge_lineage.push(predecessor.clone());
+                    }
+                }
+                for group in &entity.unresolved_overlap_groups {
+                    *unresolved_counts.entry(group.clone()).or_default() += 1;
+                }
                 for evidence_id in &entity.evidence_ids {
                     if !merged_evidence.contains(evidence_id) {
                         merged_evidence.push(evidence_id.clone());
@@ -1637,14 +1726,22 @@ fn apply_building_decision(
                 display_name: None,
                 name_evidence_ids: Vec::new(),
                 split_from: None,
-                merged_from: entity_ids.clone(),
+                merged_from: merge_lineage,
                 automatic_name_poi_id: None,
-                unresolved_overlap_groups: Vec::new(),
+                unresolved_overlap_groups: unresolved_counts
+                    .into_iter()
+                    .filter_map(|(group, count)| (count == 1).then_some(group))
+                    .collect(),
                 name_resolution: BuildingNameResolution::Pending,
             });
         }
         BuildingEntityDecision::Split { entity_id, outputs } => {
             let source = entity_ref(entities, entity_id)?.clone();
+            let external_unresolved = entities
+                .iter()
+                .filter(|entity| entity.id != *entity_id)
+                .flat_map(|entity| entity.unresolved_overlap_groups.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>();
             if outputs.len() < 2 {
                 return Err("A Building Entity split requires at least two outputs".into());
             }
@@ -1693,6 +1790,27 @@ fn apply_building_decision(
             for output in outputs {
                 let boundary_relationship =
                     relationship_for_evidence(&output.evidence_ids, evidence)?;
+                let unresolved_overlap_groups = source
+                    .unresolved_overlap_groups
+                    .iter()
+                    .filter(|group| {
+                        let participates = output.evidence_ids.iter().any(|id| {
+                            evidence.iter().any(|descriptor| {
+                                descriptor.observation_id == *id
+                                    && descriptor.overlap_group.as_ref() == Some(*group)
+                            })
+                        });
+                        participates
+                            && (external_unresolved.contains(*group)
+                                || overlap_group_shape_count(
+                                    &output.evidence_ids,
+                                    group,
+                                    evidence,
+                                    observations,
+                                ) > 1)
+                    })
+                    .cloned()
+                    .collect();
                 entities.push(BuildingEntity {
                     id: output.entity_id.clone(),
                     evidence_ids: output.evidence_ids.clone(),
@@ -1703,9 +1821,9 @@ fn apply_building_decision(
                     display_name: None,
                     name_evidence_ids: Vec::new(),
                     split_from: Some(entity_id.clone()),
-                    merged_from: Vec::new(),
+                    merged_from: source.merged_from.clone(),
                     automatic_name_poi_id: None,
-                    unresolved_overlap_groups: Vec::new(),
+                    unresolved_overlap_groups,
                     name_resolution: BuildingNameResolution::Pending,
                 });
             }
@@ -1824,6 +1942,33 @@ fn validate_primary_and_parts(
         return Err("Primary and part geometry must remain retained entity evidence".into());
     }
     Ok(())
+}
+
+fn overlap_group_shape_count(
+    evidence_ids: &[String],
+    group: &str,
+    evidence: &[BuildingEvidenceDescriptor],
+    observations: &[SourceObservation],
+) -> usize {
+    evidence_ids
+        .iter()
+        .filter_map(|id| {
+            evidence
+                .iter()
+                .find(|descriptor| {
+                    descriptor.observation_id == *id
+                        && descriptor.overlap_group.as_deref() == Some(group)
+                        && descriptor.role != BuildingEvidenceRole::Part
+                })
+                .and_then(|descriptor| {
+                    observations
+                        .iter()
+                        .find(|observation| observation.id == descriptor.observation_id)
+                })
+                .map(|observation| observation.geometry_sha256.as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 fn validate_observation_references(
