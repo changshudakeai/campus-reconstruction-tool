@@ -1479,6 +1479,7 @@ impl CampusProjectLibrary {
 pub struct Schema2ProjectSession {
     active: Option<Schema2Project>,
     save_status: ProjectSaveStatus,
+    maintenance_warning: Option<String>,
     dirty: bool,
 }
 
@@ -1489,6 +1490,7 @@ impl Default for Schema2ProjectSession {
             save_status: ProjectSaveStatus::Saved {
                 completed_at_unix_ms: 0,
             },
+            maintenance_warning: None,
             dirty: false,
         }
     }
@@ -1513,6 +1515,7 @@ impl Schema2ProjectSession {
         self.save_status = ProjectSaveStatus::Saved {
             completed_at_unix_ms: saved_at,
         };
+        self.maintenance_warning = None;
         self.dirty = false;
         Ok(())
     }
@@ -1523,6 +1526,10 @@ impl Schema2ProjectSession {
 
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    pub fn maintenance_warning(&self) -> Option<&str> {
+        self.maintenance_warning.as_deref()
     }
 
     pub fn history(&self) -> Vec<ProjectHistorySummary> {
@@ -1613,7 +1620,10 @@ impl Schema2ProjectSession {
                     completed_at_unix_ms,
                 };
                 self.dirty = false;
-                let _ = library.discard_recovery_candidate(&project_id);
+                self.maintenance_warning = library
+                    .discard_recovery_candidate(&project_id)
+                    .err()
+                    .map(|error| format!("Saved, but recovery cleanup must be retried: {error}"));
                 Ok(())
             }
             Err(error) => {
@@ -1685,6 +1695,7 @@ impl Schema2ProjectSession {
         self.save_status = ProjectSaveStatus::Saved {
             completed_at_unix_ms: saved_at,
         };
+        self.maintenance_warning = None;
         self.dirty = false;
         Ok(())
     }

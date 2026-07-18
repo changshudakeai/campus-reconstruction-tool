@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    decode_schema1_project, CampusProject, FoundationSourceProvider, FoundationSourceStatus,
-    ReviewDecision,
-};
+use crate::{decode_schema1_project, CampusProject, ReviewDecision};
 
 const LEGACY_MIGRATION_STATE_KEY: &str = "legacyMigration";
 
@@ -58,7 +55,18 @@ pub struct LegacyAssertion {
 #[serde(rename_all = "camelCase")]
 pub struct NeedsReconfirmation {
     pub subject_id: String,
-    pub reason: String,
+    pub reason: ReconfirmationReason,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReconfirmationReason {
+    MissingLegacyCampusTargetEvidence,
+    LegacyBoundaryRequiresControlledEvidence,
+    MissingLegacySubject,
+    ContradictoryLegacyDecision,
+    MissingSourceSnapshot,
+    ManualOrScreenshotDerivedGeometry,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,10 +87,24 @@ pub struct LegacyEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoricalLegacyArtifact {
-    pub kind: String,
+    pub kind: HistoricalArtifactKind,
     pub legacy_path: String,
-    pub compatibility_status: String,
+    pub compatibility_status: LegacyArtifactCompatibility,
     pub satisfies_v11_completion: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoricalArtifactKind {
+    FoundationPreview,
+    DetailedGeneratedOutput,
+    DetailedRefinementOutput,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LegacyArtifactCompatibility {
+    CompatibilityUnverified,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +117,13 @@ pub struct LegacyMigrationState {
     pub legacy_evidence: Vec<LegacyEvidence>,
     pub historical_artifacts: Vec<HistoricalLegacyArtifact>,
     pub report: Schema1MigrationReport,
+}
+
+impl LegacyMigrationState {
+    pub fn decode_preserved_project(&self) -> Result<CampusProject, String> {
+        let bytes = serde_json::to_vec(&self.source_project).map_err(|error| error.to_string())?;
+        decode_schema1_project(&bytes)
+    }
 }
 
 #[derive(Debug)]
@@ -162,7 +191,7 @@ impl CampusProjectLibrary {
             serde_json::from_slice(&backup_bytes).map_err(|error| error.to_string())?;
         let legacy_project = decode_schema1_project(&backup_bytes)?;
         let source_format = source_format(&source_value)?;
-        validate_legacy_paths(&legacy_project)?;
+        validate_legacy_paths(&source_value)?;
         self.ensure_name_available(&legacy_project.name, None)?;
 
         let lineage = LegacyMigrationLineage {
@@ -172,7 +201,7 @@ impl CampusProjectLibrary {
             backup_file_name: file_name(&backup_path)?,
         };
         let migration =
-            build_legacy_migration_state(&legacy_project, source_value, lineage.clone());
+            build_legacy_migration_state(&legacy_project, &source_value, lineage.clone());
         let report = migration.report.clone();
         let mut candidate =
             build_schema2_candidate(&self.campus_target_id, &legacy_project, actor)?;
@@ -215,34 +244,34 @@ impl CampusProjectLibrary {
         }
         atomic_write_bytes(source_path, &candidate_bytes)?;
         if let Err(error) = self.fail_migration_at(MigrationFaultPoint::AfterProjectReplace) {
-            rollback_migration(
+            remove_file_if_present(&stage_path);
+            return Err(rollback_error(
+                error,
                 source_path,
                 &original_bytes,
                 &index_path,
                 old_index_bytes.as_deref(),
-            );
-            remove_file_if_present(&stage_path);
-            return Err(error);
+            ));
         }
         if let Err(error) = atomic_write_json(&index_path, &next_index) {
-            rollback_migration(
+            remove_file_if_present(&stage_path);
+            return Err(rollback_error(
+                error,
                 source_path,
                 &original_bytes,
                 &index_path,
                 old_index_bytes.as_deref(),
-            );
-            remove_file_if_present(&stage_path);
-            return Err(error);
+            ));
         }
         if let Err(error) = self.fail_migration_at(MigrationFaultPoint::AfterIndexReplace) {
-            rollback_migration(
+            remove_file_if_present(&stage_path);
+            return Err(rollback_error(
+                error,
                 source_path,
                 &original_bytes,
                 &index_path,
                 old_index_bytes.as_deref(),
-            );
-            remove_file_if_present(&stage_path);
-            return Err(error);
+            ));
         }
 
         self.index = next_index;
@@ -350,11 +379,11 @@ fn migrated_generation_settings(
 
 fn build_legacy_migration_state(
     legacy: &CampusProject,
-    source_project: Value,
+    source_project: &Value,
     lineage: LegacyMigrationLineage,
 ) -> LegacyMigrationState {
     let mut report = Schema1MigrationReport::default();
-    let mut needs_reconfirmation = BTreeMap::<String, String>::new();
+    let mut needs_reconfirmation = BTreeMap::<String, ReconfirmationReason>::new();
     let mut legacy_assertions = Vec::new();
     let mut legacy_evidence = Vec::new();
 
@@ -367,7 +396,7 @@ fn build_legacy_migration_state(
     if legacy.campus_target.is_none() {
         needs_reconfirmation.insert(
             "campus-target:identity".into(),
-            "missing-legacy-campus-target-evidence".into(),
+            ReconfirmationReason::MissingLegacyCampusTargetEvidence,
         );
     }
     if legacy.boundary.is_empty() {
@@ -386,7 +415,7 @@ fn build_legacy_migration_state(
         );
         needs_reconfirmation.insert(
             "boundary:campus".into(),
-            "legacy-boundary-requires-controlled-evidence".into(),
+            ReconfirmationReason::LegacyBoundaryRequiresControlledEvidence,
         );
     }
 
@@ -408,39 +437,56 @@ fn build_legacy_migration_state(
         .iter()
         .map(|candidate| (candidate.id.as_str(), candidate))
         .collect::<BTreeMap<_, _>>();
-    let snapshot_by_id = legacy
-        .foundation_source_snapshots
-        .iter()
-        .map(|snapshot| (snapshot.id.as_str(), snapshot))
+    let snapshot_by_id = raw_foundation_source_snapshots(source_project)
+        .filter_map(|snapshot| {
+            Some((
+                snapshot.get("id")?.as_str()?.to_owned(),
+                snapshot.get("status").and_then(Value::as_str) == Some("complete"),
+            ))
+        })
         .collect::<BTreeMap<_, _>>();
     let mut ledger_subjects = BTreeMap::<String, ()>::new();
-    for entry in &legacy.foundation_review_ledger {
-        let subject_id = format!("candidate:{}", entry.candidate_id);
-        ledger_subjects.insert(entry.candidate_id.clone(), ());
-        let Some(candidate) = candidate_by_id.get(entry.candidate_id.as_str()) else {
-            needs_reconfirmation.insert(subject_id, "missing-legacy-subject".into());
+    for entry in raw_foundation_review_entries(source_project) {
+        let Some(candidate_id) = entry.get("candidateId").and_then(Value::as_str) else {
             continue;
         };
-        if candidate.review != entry.decision {
-            needs_reconfirmation.insert(subject_id, "contradictory-legacy-decision".into());
+        let Some(decision) = entry
+            .get("decision")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<ReviewDecision>(value).ok())
+        else {
+            continue;
+        };
+        let subject_id = format!("candidate:{candidate_id}");
+        ledger_subjects.insert(candidate_id.to_owned(), ());
+        let Some(candidate) = candidate_by_id.get(candidate_id) else {
+            needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingLegacySubject);
+            continue;
+        };
+        if candidate.review != decision {
+            needs_reconfirmation.insert(
+                subject_id,
+                ReconfirmationReason::ContradictoryLegacyDecision,
+            );
             continue;
         }
         let source_snapshot_id = entry
-            .source_snapshot_id
-            .as_deref()
-            .or(candidate.source_snapshot_id.as_deref());
+            .get("sourceSnapshotId")
+            .and_then(Value::as_str)
+            .or_else(|| raw_candidate_source_snapshot_id(source_project, candidate_id));
         let source_is_complete = source_snapshot_id
             .and_then(|id| snapshot_by_id.get(id))
-            .is_some_and(|snapshot| snapshot.status == FoundationSourceStatus::Complete);
+            .copied()
+            .unwrap_or(false);
         if source_is_complete {
             legacy_assertions.push(LegacyAssertion {
                 subject_id,
-                decision: entry.decision,
+                decision,
                 source_snapshot_id: source_snapshot_id.map(str::to_owned),
                 lineage: lineage.clone(),
             });
         } else {
-            needs_reconfirmation.insert(subject_id, "missing-source-snapshot".into());
+            needs_reconfirmation.insert(subject_id, ReconfirmationReason::MissingSourceSnapshot);
         }
     }
     for candidate in &legacy.candidates {
@@ -451,16 +497,14 @@ fn build_legacy_migration_state(
         }
         needs_reconfirmation.insert(
             format!("candidate:{}", candidate.id),
-            "missing-source-snapshot".into(),
+            ReconfirmationReason::MissingSourceSnapshot,
         );
     }
     for suppression in &legacy.building_suppressions {
-        legacy_assertions.push(LegacyAssertion {
-            subject_id: format!("suppression:{}", suppression.source_id),
-            decision: ReviewDecision::Rejected,
-            source_snapshot_id: None,
-            lineage: lineage.clone(),
-        });
+        needs_reconfirmation.insert(
+            format!("suppression:{}", suppression.source_id),
+            ReconfirmationReason::MissingSourceSnapshot,
+        );
     }
     legacy_assertions.sort_by(|left, right| left.subject_id.cmp(&right.subject_id));
     report_entry(
@@ -482,7 +526,7 @@ fn build_legacy_migration_state(
             let subject_id = format!("feature:{}", feature.id);
             needs_reconfirmation.insert(
                 subject_id.clone(),
-                "manual-or-screenshot-derived-geometry".into(),
+                ReconfirmationReason::ManualOrScreenshotDerivedGeometry,
             );
             legacy_evidence.push(LegacyEvidence {
                 subject_id,
@@ -491,12 +535,15 @@ fn build_legacy_migration_state(
             });
         }
     }
-    for snapshot in &legacy.foundation_source_snapshots {
-        if snapshot.provider == FoundationSourceProvider::VisualFeatureProvider {
-            let subject_id = format!("source-snapshot:{}", snapshot.id);
+    for snapshot in raw_foundation_source_snapshots(source_project) {
+        if snapshot.get("provider").and_then(Value::as_str) == Some("visual_feature_provider") {
+            let Some(snapshot_id) = snapshot.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let subject_id = format!("source-snapshot:{snapshot_id}");
             needs_reconfirmation.insert(
                 subject_id.clone(),
-                "manual-or-screenshot-derived-geometry".into(),
+                ReconfirmationReason::ManualOrScreenshotDerivedGeometry,
             );
             legacy_evidence.push(LegacyEvidence {
                 subject_id,
@@ -509,7 +556,7 @@ fn build_legacy_migration_state(
         let subject_id = "visual-capture:legacy".to_string();
         needs_reconfirmation.insert(
             subject_id.clone(),
-            "manual-or-screenshot-derived-geometry".into(),
+            ReconfirmationReason::ManualOrScreenshotDerivedGeometry,
         );
         legacy_evidence.push(LegacyEvidence {
             subject_id,
@@ -518,7 +565,9 @@ fn build_legacy_migration_state(
         });
     }
     legacy_evidence.sort_by(|left, right| left.subject_id.cmp(&right.subject_id));
+    append_record_level_report(&mut report, legacy, source_project, &needs_reconfirmation);
 
+    let raw_root = raw_native_or_web_root(source_project);
     for (subject, is_empty) in [
         ("features", legacy.features.is_empty()),
         ("building-slots", legacy.building_slots.is_empty()),
@@ -530,8 +579,17 @@ fn build_legacy_migration_state(
             "building-suppressions",
             legacy.building_suppressions.is_empty(),
         ),
-        ("detailed-building-state", false),
-        ("foundation-styles", false),
+        (
+            "detailed-building-state",
+            raw_root.get("detailed").is_none(),
+        ),
+        (
+            "foundation-styles",
+            raw_root.get("foundationStylePack").is_none()
+                && raw_root
+                    .pointer("/foundation/foundationStylePack")
+                    .is_none(),
+        ),
     ] {
         report_entry(
             &mut report,
@@ -580,7 +638,7 @@ fn build_legacy_migration_state(
         .sort_by(|left, right| left.subject.cmp(&right.subject));
     LegacyMigrationState {
         lineage,
-        source_project,
+        source_project: source_project.clone(),
         legacy_assertions,
         needs_reconfirmation,
         legacy_evidence,
@@ -592,16 +650,24 @@ fn build_legacy_migration_state(
 fn collect_historical_artifacts(legacy: &CampusProject) -> Vec<HistoricalLegacyArtifact> {
     let mut artifacts = Vec::new();
     if let Some(path) = &legacy.foundation_preview_path {
-        push_artifact(&mut artifacts, "foundation-preview", path);
+        push_artifact(
+            &mut artifacts,
+            HistoricalArtifactKind::FoundationPreview,
+            path,
+        );
     }
     if let Some(path) = &legacy.detailed.generated_path {
-        push_artifact(&mut artifacts, "detailed-generated-output", path);
+        push_artifact(
+            &mut artifacts,
+            HistoricalArtifactKind::DetailedGeneratedOutput,
+            path,
+        );
     }
     for refinement in &legacy.detailed.refinements {
         if !refinement.generated_path.as_os_str().is_empty() {
             push_artifact(
                 &mut artifacts,
-                "detailed-refinement-output",
+                HistoricalArtifactKind::DetailedRefinementOutput,
                 &refinement.generated_path,
             );
         }
@@ -614,11 +680,108 @@ fn collect_historical_artifacts(legacy: &CampusProject) -> Vec<HistoricalLegacyA
     artifacts
 }
 
-fn push_artifact(artifacts: &mut Vec<HistoricalLegacyArtifact>, kind: &str, path: &Path) {
+fn append_record_level_report(
+    report: &mut Schema1MigrationReport,
+    legacy: &CampusProject,
+    source_project: &Value,
+    needs_reconfirmation: &BTreeMap<String, ReconfirmationReason>,
+) {
+    for snapshot in raw_foundation_source_snapshots(source_project) {
+        let Some(id) = snapshot.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        report_entry(
+            report,
+            &format!("source-snapshot:{id}"),
+            MigrationDisposition::Preserved,
+            "The provider outcome and its legacy lineage are retained verbatim",
+        );
+    }
+    for candidate in &legacy.candidates {
+        let subject = format!("candidate:{}", candidate.id);
+        report_entry(
+            report,
+            &subject,
+            if needs_reconfirmation.contains_key(&subject) {
+                MigrationDisposition::Quarantined
+            } else {
+                MigrationDisposition::Transformed
+            },
+            if needs_reconfirmation.contains_key(&subject) {
+                "The candidate is retained but its decision requires targeted reconfirmation"
+            } else {
+                "The candidate decision is retained as a lineage-bearing legacy assertion"
+            },
+        );
+    }
+    for feature in &legacy.features {
+        let subject = format!("feature:{}", feature.id);
+        report_entry(
+            report,
+            &subject,
+            if needs_reconfirmation.contains_key(&subject) {
+                MigrationDisposition::Quarantined
+            } else {
+                MigrationDisposition::Preserved
+            },
+            if needs_reconfirmation.contains_key(&subject) {
+                "The geometry is retained as legacy evidence and requires reconfirmation"
+            } else {
+                "The source-linked legacy feature is retained for schema-2 review"
+            },
+        );
+    }
+    for slot in &legacy.building_slots {
+        report_entry(
+            report,
+            &format!("building-slot:{}", slot.id),
+            MigrationDisposition::Preserved,
+            "The Building Slot and observed massing fields are retained",
+        );
+    }
+    for record in &legacy.building_directory {
+        report_entry(
+            report,
+            &format!("campus-building-directory:{}", record.source_id),
+            MigrationDisposition::Preserved,
+            "The reviewed campus name is retained with its legacy record",
+        );
+    }
+    for suppression in &legacy.building_suppressions {
+        report_entry(
+            report,
+            &format!("suppression:{}", suppression.source_id),
+            MigrationDisposition::Quarantined,
+            "The suppression is retained but lacks a complete source dependency basis",
+        );
+    }
+    for (collection, records) in raw_detailed_collections(source_project) {
+        for (index, record) in records.iter().enumerate() {
+            let record_id = record
+                .get("id")
+                .or_else(|| record.get("slotId"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("record-{}", index + 1));
+            report_entry(
+                report,
+                &format!("detailed-{collection}:{record_id}"),
+                MigrationDisposition::Preserved,
+                "The supported Detailed record is retained in the migration envelope",
+            );
+        }
+    }
+}
+
+fn push_artifact(
+    artifacts: &mut Vec<HistoricalLegacyArtifact>,
+    kind: HistoricalArtifactKind,
+    path: &Path,
+) {
     artifacts.push(HistoricalLegacyArtifact {
-        kind: kind.into(),
+        kind,
         legacy_path: path.to_string_lossy().into_owned(),
-        compatibility_status: "compatibility-unverified".into(),
+        compatibility_status: LegacyArtifactCompatibility::CompatibilityUnverified,
         satisfies_v11_completion: false,
     });
 }
@@ -650,9 +813,12 @@ fn source_format(value: &Value) -> Result<LegacySourceFormat, String> {
     }
 }
 
-fn validate_legacy_paths(project: &CampusProject) -> Result<(), String> {
-    for asset in &project.detailed.evidence_assets {
-        let path = Path::new(&asset.relative_path);
+fn validate_legacy_paths(source_project: &Value) -> Result<(), String> {
+    for asset in raw_detailed_evidence_assets(source_project) {
+        let Some(relative_path) = asset.get("relativePath").and_then(Value::as_str) else {
+            continue;
+        };
+        let path = Path::new(relative_path);
         if path.is_absolute()
             || path
                 .components()
@@ -660,11 +826,99 @@ fn validate_legacy_paths(project: &CampusProject) -> Result<(), String> {
         {
             return Err(format!(
                 "Legacy evidence asset has an unsafe relative path: {}",
-                asset.relative_path
+                relative_path
             ));
         }
     }
     Ok(())
+}
+
+fn raw_native_or_web_root(source_project: &Value) -> &Value {
+    source_project.get("project").unwrap_or(source_project)
+}
+
+fn raw_foundation_source_snapshots(source_project: &Value) -> impl Iterator<Item = &Value> {
+    raw_native_or_web_root(source_project)
+        .get("foundationSourceSnapshots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn raw_foundation_review_entries(source_project: &Value) -> impl Iterator<Item = &Value> {
+    raw_native_or_web_root(source_project)
+        .get("foundationReviewLedger")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn raw_candidate_source_snapshot_id<'a>(
+    source_project: &'a Value,
+    candidate_id: &str,
+) -> Option<&'a str> {
+    let root = raw_native_or_web_root(source_project);
+    let candidates = root
+        .get("candidates")
+        .or_else(|| root.pointer("/foundation/candidates"))?
+        .as_array()?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(candidate_id))?
+        .get("sourceSnapshotId")
+        .and_then(Value::as_str)
+}
+
+fn raw_detailed_evidence_assets(source_project: &Value) -> impl Iterator<Item = &Value> {
+    raw_native_or_web_root(source_project)
+        .pointer("/detailed/evidenceAssets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn raw_detailed_collections(source_project: &Value) -> Vec<(&'static str, &Vec<Value>)> {
+    let Some(detailed) = raw_native_or_web_root(source_project)
+        .get("detailed")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    [
+        ("refinement", "refinements"),
+        ("semantic-feature", "semanticFeatures"),
+        ("external-model", "externalModels"),
+        ("source-conflict", "sourceConflicts"),
+        ("evidence-asset", "evidenceAssets"),
+        ("function-classification", "functionClassifications"),
+        ("template-proposal", "templateProposals"),
+        ("selected-template", "selectedTemplates"),
+        ("facade-draft", "facadeDrafts"),
+    ]
+    .into_iter()
+    .filter_map(|(label, key)| {
+        detailed
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|records| (label, records))
+    })
+    .collect()
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn restore_optional_file(path: &Path, bytes: Option<&[u8]>) -> Result<(), String> {
+    match bytes {
+        Some(bytes) => atomic_write_bytes(path, bytes),
+        None if path.exists() => fs::remove_file(path).map_err(|error| error.to_string()),
+        None => Ok(()),
+    }
 }
 
 fn write_explicit_backup(path: &Path, source_bytes: &[u8]) -> Result<(), String> {
@@ -683,9 +937,24 @@ fn rollback_migration(
     source_bytes: &[u8],
     index_path: &Path,
     old_index_bytes: Option<&[u8]>,
-) {
-    let _ = atomic_write_bytes(source_path, source_bytes);
-    let _ = restore_optional_file(index_path, old_index_bytes);
+) -> Result<(), String> {
+    atomic_write_bytes(source_path, source_bytes)?;
+    restore_optional_file(index_path, old_index_bytes)
+}
+
+fn rollback_error(
+    migration_error: String,
+    source_path: &Path,
+    source_bytes: &[u8],
+    index_path: &Path,
+    old_index_bytes: Option<&[u8]>,
+) -> String {
+    match rollback_migration(source_path, source_bytes, index_path, old_index_bytes) {
+        Ok(()) => migration_error,
+        Err(rollback_error) => {
+            format!("{migration_error}; migration rollback failed: {rollback_error}")
+        }
+    }
 }
 
 fn sibling_path(path: &Path, suffix: &str) -> Result<PathBuf, String> {

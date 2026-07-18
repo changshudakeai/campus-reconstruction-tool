@@ -1,7 +1,7 @@
 use campus_state::{
     decode_schema1_project, CampusProjectLibrary, CampusScope, InstallationId, LegacyEvidenceKind,
-    MigrationDisposition, MigrationFaultPoint, ReviewDecision, Schema2ProjectSession,
-    V11ConstructionCapability, SCHEMA_2_VERSION,
+    MigrationDisposition, MigrationFaultPoint, ReconfirmationReason, ReviewDecision,
+    Schema2ProjectSession, V11ConstructionCapability, SCHEMA_2_VERSION,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -29,16 +29,113 @@ fn construction_capability() -> V11ConstructionCapability {
     V11ConstructionCapability::request(true, Some("1")).unwrap()
 }
 
-fn copy_fixture(root: &Path, relative: &str) -> (PathBuf, Vec<u8>) {
-    let bytes = std::fs::read(test_data(relative)).unwrap();
+fn write_managed_fixture(root: &Path, bytes: Vec<u8>) -> (PathBuf, Vec<u8>) {
     let path = root.join("managed-v1-project.campus.json");
     std::fs::write(&path, &bytes).unwrap();
     (path, bytes)
 }
 
+fn populated_native_schema1_bytes() -> Vec<u8> {
+    let mut value: Value =
+        serde_json::from_slice(&std::fs::read(test_data("v1-demo.campus.json")).unwrap()).unwrap();
+    value["name"] = json!("V1.0.1 baseline project");
+    value["campusName"] = json!("ECNU Putuo Campus");
+    value["campusTarget"] = json!({
+        "poiId": "fixture-poi-putuo",
+        "name": "ECNU Putuo Campus",
+        "gcj02": {"lng": 121.406582, "lat": 31.228318},
+        "wgs84": {"lng": 121.402037, "lat": 31.230305},
+        "acquisition": "v1.0.1-baseline-fixture"
+    });
+    value["candidates"][0]["sourceSnapshotId"] = json!("osm:v1-baseline");
+    value["foundationSourceSnapshots"] = json!([{
+        "id": "osm:v1-baseline",
+        "provider": "open_street_map",
+        "providerVersion": "fixture/2026-07-18",
+        "status": "complete",
+        "southWest": {"lng": 121.4059, "lat": 31.2277},
+        "northEast": {"lng": 121.4072, "lat": 31.2288},
+        "acquiredAtUnixMs": 1710000000000_u64,
+        "candidates": [],
+        "error": null
+    }]);
+    value["foundationReviewLedger"] = json!([{
+        "candidateId": "demo-library",
+        "sourceSnapshotId": "osm:v1-baseline",
+        "decision": "accepted",
+        "decidedAtUnixMs": 1710000000200_u64
+    }]);
+    value["buildingDirectory"] = json!([{
+        "sourceId": "demo-library",
+        "name": "Fixture Library",
+        "updatedAtUnixMs": 1710000000300_u64
+    }]);
+    value["buildingSuppressions"] = json!([{
+        "sourceId": "fixture-rejected-shed",
+        "reason": "outside campus",
+        "suppressedAtUnixMs": 1710000000400_u64
+    }]);
+    value["detailed"]["facadeDrafts"] = json!([{
+        "id": "facade-1",
+        "slotId": "demo-library",
+        "modelVersion": "fixture-v1",
+        "confidence": 90,
+        "rules": [],
+        "evidenceIds": []
+    }]);
+    serde_json::to_vec_pretty(&value).unwrap()
+}
+
+fn legacy_web_schema1_bytes() -> Vec<u8> {
+    serde_json::to_vec_pretty(&json!({
+        "project": {
+            "schemaVersion": "1.0",
+            "name": "Legacy web portable fixture",
+            "campus": {"canonicalName": "ECNU Putuo Campus"},
+            "foundation": {
+                "orientationDegrees": 18.0,
+                "foundationStyle": {"blocksPerMeter": 1.5},
+                "boundaryDraft": {"points": [
+                    {"lng": 121.40, "lat": 31.23},
+                    {"lng": 121.41, "lat": 31.23},
+                    {"lng": 121.41, "lat": 31.22}
+                ]},
+                "reviews": {
+                    "legacy-library": "accepted",
+                    "legacy-road": "rejected"
+                },
+                "candidates": [{
+                    "id": "legacy-library",
+                    "name": "Legacy Library",
+                    "kind": "building",
+                    "source": "OSM fixture",
+                    "confidence": "high",
+                    "geometry": {"points": [
+                        {"lng": 121.405, "lat": 31.228},
+                        {"lng": 121.406, "lat": 31.228},
+                        {"lng": 121.406, "lat": 31.227}
+                    ]}
+                }],
+                "manualFeatures": [{
+                    "id": "legacy-water",
+                    "name": "Legacy Pond",
+                    "kind": "water",
+                    "geometry": {"points": [
+                        {"lng": 121.405, "lat": 31.228},
+                        {"lng": 121.4052, "lat": 31.228},
+                        {"lng": 121.4052, "lat": 31.2278}
+                    ]},
+                    "block": "water"
+                }]
+            }
+        }
+    }))
+    .unwrap()
+}
+
 #[test]
 fn schema1_compatibility_decoder_is_read_only_and_rejects_other_schemas() {
-    let bytes = std::fs::read(test_data("v1-demo.campus.json")).unwrap();
+    let bytes = populated_native_schema1_bytes();
     let before = bytes.clone();
 
     let project = decode_schema1_project(&bytes).unwrap();
@@ -56,7 +153,8 @@ fn schema1_compatibility_decoder_is_read_only_and_rejects_other_schemas() {
 #[test]
 fn populated_managed_schema1_project_migrates_from_backup_without_losing_supported_work() {
     let directory = tempfile::tempdir().unwrap();
-    let (legacy_path, original_bytes) = copy_fixture(directory.path(), "v1-demo.campus.json");
+    let (legacy_path, original_bytes) =
+        write_managed_fixture(directory.path(), populated_native_schema1_bytes());
     let mut legacy_value: Value = serde_json::from_slice(&original_bytes).unwrap();
     legacy_value["foundationPreviewPath"] = json!("artifacts/foundation-preview.png");
     legacy_value["detailed"]["generatedPath"] = json!("artifacts/detailed-output.schem");
@@ -84,6 +182,9 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
     assert!(outcome.project.exported_output().is_none());
 
     let migration = outcome.project.legacy_migration().unwrap().unwrap();
+    let preserved_project = migration.decode_preserved_project().unwrap();
+    assert_eq!(preserved_project.name, "V1.0.1 baseline project");
+    assert_eq!(preserved_project.building_slots[0].id, "demo-library");
     assert_eq!(
         migration.source_project["campusTarget"]["poiId"],
         "fixture-poi-putuo"
@@ -118,6 +219,14 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
         .needs_reconfirmation
         .iter()
         .any(|item| item.subject_id == "boundary:campus"));
+    assert!(migration.needs_reconfirmation.iter().any(|item| {
+        item.subject_id == "suppression:fixture-rejected-shed"
+            && item.reason == ReconfirmationReason::MissingSourceSnapshot
+    }));
+    assert!(!migration
+        .legacy_assertions
+        .iter()
+        .any(|assertion| assertion.subject_id == "suppression:fixture-rejected-shed"));
     assert_eq!(migration.historical_artifacts.len(), 2);
     assert!(migration
         .historical_artifacts
@@ -126,6 +235,14 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
     assert!(migration.report.entries.iter().any(|entry| {
         entry.subject == "legacy-generated-completion"
             && entry.disposition == MigrationDisposition::Omitted
+    }));
+    assert!(migration.report.entries.iter().any(|entry| {
+        entry.subject == "candidate:demo-library"
+            && entry.disposition == MigrationDisposition::Transformed
+    }));
+    assert!(migration.report.entries.iter().any(|entry| {
+        entry.subject == "detailed-facade-draft:facade-1"
+            && entry.disposition == MigrationDisposition::Preserved
     }));
 
     let record = library.find_by_name("V1.0.1 baseline project").unwrap();
@@ -145,8 +262,7 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
 #[test]
 fn uncertain_and_manual_legacy_subjects_are_targeted_for_reconfirmation() {
     let directory = tempfile::tempdir().unwrap();
-    let (legacy_path, _) =
-        copy_fixture(directory.path(), "v1.0.1/legacy-web-portable-project.json");
+    let (legacy_path, _) = write_managed_fixture(directory.path(), legacy_web_schema1_bytes());
     let mut library = CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
 
     let outcome = library
@@ -155,11 +271,12 @@ fn uncertain_and_manual_legacy_subjects_are_targeted_for_reconfirmation() {
     let migration = outcome.project.legacy_migration().unwrap().unwrap();
 
     assert!(migration.needs_reconfirmation.iter().any(|item| {
-        item.subject_id == "candidate:legacy-library" && item.reason == "missing-source-snapshot"
+        item.subject_id == "candidate:legacy-library"
+            && item.reason == ReconfirmationReason::MissingSourceSnapshot
     }));
     assert!(migration.needs_reconfirmation.iter().any(|item| {
         item.subject_id == "feature:legacy-water"
-            && item.reason == "manual-or-screenshot-derived-geometry"
+            && item.reason == ReconfirmationReason::ManualOrScreenshotDerivedGeometry
     }));
     assert!(migration.legacy_evidence.iter().any(|evidence| {
         evidence.subject_id == "feature:legacy-water"
@@ -175,7 +292,8 @@ fn uncertain_and_manual_legacy_subjects_are_targeted_for_reconfirmation() {
 #[test]
 fn contradictory_legacy_decision_is_quarantined_without_becoming_an_assertion() {
     let directory = tempfile::tempdir().unwrap();
-    let (legacy_path, original_bytes) = copy_fixture(directory.path(), "v1-demo.campus.json");
+    let (legacy_path, original_bytes) =
+        write_managed_fixture(directory.path(), populated_native_schema1_bytes());
     let mut contradictory: Value = serde_json::from_slice(&original_bytes).unwrap();
     contradictory["foundationReviewLedger"][0]["decision"] = json!("rejected");
     std::fs::write(
@@ -192,7 +310,7 @@ fn contradictory_legacy_decision_is_quarantined_without_becoming_an_assertion() 
 
     assert!(migration.needs_reconfirmation.iter().any(|item| {
         item.subject_id == "candidate:demo-library"
-            && item.reason == "contradictory-legacy-decision"
+            && item.reason == ReconfirmationReason::ContradictoryLegacyDecision
     }));
     assert!(!migration
         .legacy_assertions
@@ -202,12 +320,13 @@ fn contradictory_legacy_decision_is_quarantined_without_becoming_an_assertion() 
 
 #[test]
 fn invalid_inputs_keep_an_explicit_backup_and_do_not_register_partial_state() {
-    for fixture in [
-        "v1.0.1/failures/corrupt-project.json",
-        "v1.0.1/failures/truncated-project.json",
+    for original_bytes in [
+        b"{ this is deliberately not valid JSON }".to_vec(),
+        br#"{"schemaVersion":1,"name":"partial write","campusName":"Fixture Campus","mode":"foundation","candidates":["#.to_vec(),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let (legacy_path, original_bytes) = copy_fixture(directory.path(), fixture);
+        let (legacy_path, original_bytes) =
+            write_managed_fixture(directory.path(), original_bytes);
         let mut library = CampusProjectLibrary::open(directory.path(), "gaode:B00155J6JH").unwrap();
 
         let error = library
@@ -223,7 +342,8 @@ fn invalid_inputs_keep_an_explicit_backup_and_do_not_register_partial_state() {
     }
 
     let directory = tempfile::tempdir().unwrap();
-    let (legacy_path, original_bytes) = copy_fixture(directory.path(), "v1-demo.campus.json");
+    let (legacy_path, original_bytes) =
+        write_managed_fixture(directory.path(), populated_native_schema1_bytes());
     let mut newer: Value = serde_json::from_slice(&original_bytes).unwrap();
     newer["schemaVersion"] = json!(SCHEMA_2_VERSION + 1);
     let newer_bytes = serde_json::to_vec_pretty(&newer).unwrap();
@@ -253,7 +373,8 @@ fn every_injected_migration_failure_keeps_source_backup_active_project_and_libra
             .unwrap();
         let mut session = Schema2ProjectSession::default();
         session.open_project(&library, active_project.id()).unwrap();
-        let (legacy_path, original_bytes) = copy_fixture(directory.path(), "v1-demo.campus.json");
+        let (legacy_path, original_bytes) =
+            write_managed_fixture(directory.path(), populated_native_schema1_bytes());
         let index_before = std::fs::read(directory.path().join("library-index.json")).unwrap();
         let active_id = session.active().unwrap().id().clone();
         library.inject_next_migration_failure(fault);
