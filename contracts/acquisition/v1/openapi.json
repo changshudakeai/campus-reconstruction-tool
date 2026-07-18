@@ -1,0 +1,40 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Controlled Foundation Acquisition API",
+    "version": "1.0.0"
+  },
+  "servers": [{"url": "https://acquisition.example.invalid"}],
+  "security": [{"installationCredential": []}],
+  "paths": {
+    "/v1/health": {"get": {"operationId": "health", "security": [], "responses": {"200": {"description": "Service health"}}}},
+    "/v1/capabilities": {"get": {"operationId": "capabilities", "responses": {"200": {"description": "Compatible contracts, bundles, limits, quota and retention", "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/capabilities"}}}}, "401": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs": {"post": {"operationId": "createBoundaryJob", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/boundaryRequest"}}}}, "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "400": {"$ref": "#/components/responses/error"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs/{job_id}": {"get": {"operationId": "getBoundaryJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"200": {"$ref": "#/components/responses/jobStatus"}, "404": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs/{job_id}/retry": {"post": {"operationId": "retryBoundaryJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "requestBody": {"content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/retryRequest"}}}}, "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs/{job_id}/cancel": {"post": {"operationId": "cancelBoundaryJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs/{job_id}/manifest": {"get": {"operationId": "getBoundaryManifest", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"200": {"$ref": "#/components/responses/resultManifest"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/boundary-jobs/{job_id}/chunks/{chunk_id}": {"get": {"operationId": "getBoundaryChunk", "parameters": [{"$ref": "#/components/parameters/jobId"}, {"$ref": "#/components/parameters/chunkId"}, {"$ref": "#/components/parameters/cursor"}], "responses": {"200": {"$ref": "#/components/responses/resultChunk"}, "416": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs": {"post": {"operationId": "createAcquisitionJob", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/acquisitionRequest"}}}}, "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "400": {"$ref": "#/components/responses/error"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs/{job_id}": {"get": {"operationId": "getAcquisitionJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"200": {"$ref": "#/components/responses/jobStatus"}, "404": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs/{job_id}/retry": {"post": {"operationId": "retryAcquisitionJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "requestBody": {"content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/retryRequest"}}}}, "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs/{job_id}/cancel": {"post": {"operationId": "cancelAcquisitionJob", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"202": {"$ref": "#/components/responses/jobAccepted"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs/{job_id}/manifest": {"get": {"operationId": "getAcquisitionManifest", "parameters": [{"$ref": "#/components/parameters/jobId"}], "responses": {"200": {"$ref": "#/components/responses/resultManifest"}, "409": {"$ref": "#/components/responses/error"}}}},
+    "/v1/acquisition-jobs/{job_id}/chunks/{chunk_id}": {"get": {"operationId": "getAcquisitionChunk", "parameters": [{"$ref": "#/components/parameters/jobId"}, {"$ref": "#/components/parameters/chunkId"}, {"$ref": "#/components/parameters/cursor"}], "responses": {"200": {"$ref": "#/components/responses/resultChunk"}, "416": {"$ref": "#/components/responses/error"}}}}
+  },
+  "components": {
+    "securitySchemes": {"installationCredential": {"type": "http", "scheme": "bearer"}},
+    "parameters": {
+      "jobId": {"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "chunkId": {"name": "chunk_id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "cursor": {"name": "cursor", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Opaque stable resume cursor returned by the manifest"}
+    },
+    "responses": {
+      "jobAccepted": {"description": "Idempotent job accepted", "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/jobStatus"}}}},
+      "jobStatus": {"description": "Pinned job status", "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/jobStatus"}}}},
+      "resultManifest": {"description": "Immutable result manifest", "content": {"application/json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/resultManifest"}}}},
+      "resultChunk": {"description": "gzip-compressed NDJSON Source Observations", "headers": {"Digest": {"schema": {"type": "string"}}, "X-Stable-Cursor": {"schema": {"type": "string"}}}, "content": {"application/gzip": {"schema": {"type": "string", "contentEncoding": "base64"}}}},
+      "error": {"description": "Structured acquisition failure", "content": {"application/problem+json": {"schema": {"$ref": "./acquisition.schema.json#/$defs/failure"}}}}
+    }
+  }
+}

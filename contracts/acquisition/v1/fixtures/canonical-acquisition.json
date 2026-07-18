@@ -1,0 +1,50 @@
+{
+  "contract_version": "1.0.0",
+  "bundle": {
+    "id": "cn-campus-2026-06",
+    "osm_snapshot": "osm-cn-2026-06-30",
+    "overture_release": "2026-06-17.0",
+    "output_schema": "source-observation-1.0.0",
+    "classification_rules": "classification-1.0.0",
+    "assembly_rules": "assembly-1.0.0",
+    "conflation_rules": "conflation-1.0.0",
+    "derivation_rules": "derivation-1.0.0"
+  },
+  "coverage_report": {
+    "outcomes": [
+      {"provider": "osm", "category": "building", "tile_id": "31/121/0", "status": "complete", "pagination_exhausted": true, "raw_count": 2, "deduplicated_count": 1, "relation_members_complete": true, "gaps": []},
+      {"provider": "overture", "category": "circulation", "tile_id": "31/121/0", "status": "complete-empty", "pagination_exhausted": true, "raw_count": 0, "deduplicated_count": 0, "relation_members_complete": true, "gaps": []},
+      {"provider": "osm", "category": "water", "tile_id": "31/121/1", "status": "partial", "pagination_exhausted": false, "raw_count": 1, "deduplicated_count": 1, "relation_members_complete": false, "gaps": ["relation way/88 missing"], "failure": {"code": "relation_incomplete", "scope": "osm/water/31-121-1", "retryable": true, "explanation": "One relation member was unavailable.", "suggested_action": "Retry this tile against the pinned bundle."}},
+      {"provider": "overture", "category": "vegetation", "tile_id": "31/121/2", "status": "failed", "pagination_exhausted": false, "raw_count": 0, "deduplicated_count": 0, "relation_members_complete": true, "gaps": ["provider page unavailable"], "failure": {"code": "provider_unavailable", "scope": "overture/vegetation/31-121-2", "retryable": true, "explanation": "The pinned provider page did not respond.", "suggested_action": "Retry this tile later."}},
+      {"provider": "osm", "category": "sports", "tile_id": "31/121/3", "status": "cancelled", "pagination_exhausted": false, "raw_count": 0, "deduplicated_count": 0, "relation_members_complete": true, "gaps": ["cancelled before retrieval"], "failure": {"code": "cancelled", "scope": "osm/sports/31-121-3", "retryable": true, "explanation": "The user cancelled this scope.", "suggested_action": "Resume the same pinned job when ready."}}
+    ]
+  },
+  "observations": [
+    {
+      "id": "obs-osm-relation-42",
+      "category": "building",
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[121.4000, 31.2200], [121.4010, 31.2200], [121.4010, 31.2210], [121.4000, 31.2200]], [[121.4003, 31.2203], [121.4005, 31.2203], [121.4005, 31.2205], [121.4003, 31.2203]]]]},
+      "original_properties": {"building": "university", "height": "18 m"},
+      "lineage": {
+        "provider": "osm",
+        "dataset_release": "osm-cn-2026-06-30",
+        "source_record_id": "relation/42",
+        "source_record_version": "7",
+        "upstream_records": ["way/420", "way/421", "way/422"],
+        "acquired_at": "2026-07-01T00:00:00Z",
+        "original_classification": "building=university",
+        "relation": {"relation_id": "relation/42", "assembly_status": "complete", "member_ids": ["way/420", "way/421", "way/422"]}
+      },
+      "licence": {"identifier": "ODbL-1.0", "url": "https://opendatacommons.org/licenses/odbl/1-0/", "attribution": "© OpenStreetMap contributors", "dataset_release": "osm-cn-2026-06-30", "acquired_at": "2026-07-01T00:00:00Z", "upstream_obligations": ["attribute OpenStreetMap contributors"]},
+      "coordinate_semantics": {"crs": "OGC:CRS84", "axis_order": "longitude-latitude"},
+      "unit_semantics": {"height": "m", "area": "m2", "angle": "degrees"},
+      "time_semantics": {"dataset_release": "2026-06-30T00:00:00Z", "acquired_at": "2026-07-01T00:00:00Z"},
+      "geometry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "manifest": {
+    "contract_version": "1.0.0",
+    "chunks": [{"id": "observations-0001", "stable_cursor": "v1:observations:0001:end", "content_type": "application/x-ndjson", "content_encoding": "gzip", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "uncompressed_bytes": 1}],
+    "result_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

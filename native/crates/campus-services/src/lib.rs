@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+pub mod acquisition;
+
 #[derive(Debug, Clone, Copy)]
 pub struct GeoBounds {
     pub west: f64,
