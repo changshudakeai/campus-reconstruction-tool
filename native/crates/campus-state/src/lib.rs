@@ -1,3 +1,7 @@
+mod schema2_project;
+
+pub use schema2_project::*;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;

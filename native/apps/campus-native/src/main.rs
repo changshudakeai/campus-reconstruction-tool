@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod v11_project_kernel;
+
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
     ArnisStylePreset, CampusTargetEvidence, CandidateConfidenceFilter, DesktopApplicationState,
@@ -2330,6 +2332,13 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if let Err(error) = v11_project_kernel::bootstrap_if_enabled(
+        &app_data_dir(),
+        cfg!(debug_assertions),
+        std::env::var("CAMPUS_V11_PROJECT_KERNEL").ok().as_deref(),
+    ) {
+        eprintln!("V1.1 development project kernel failed: {error}");
+    }
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.iter().any(|argument| argument == "--self-test") {
         let cycles = arguments
