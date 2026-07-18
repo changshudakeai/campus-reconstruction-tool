@@ -9,7 +9,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+mod portable_project;
 mod schema1_migration;
+pub use portable_project::*;
 pub use schema1_migration::*;
 
 pub const SCHEMA_2_VERSION: u32 = 2;
@@ -72,6 +74,8 @@ pub struct CampusScope {
     target_id: String,
     canonical_name: String,
     anchor_wgs84: [f64; 2],
+    #[serde(default)]
+    gaode_poi_id: Option<String>,
     #[serde(default, flatten)]
     optional_state: Map<String, Value>,
 }
@@ -94,6 +98,7 @@ impl CampusScope {
             target_id,
             canonical_name,
             anchor_wgs84,
+            gaode_poi_id: None,
             optional_state: Map::new(),
         })
     }
@@ -104,6 +109,23 @@ impl CampusScope {
 
     pub fn canonical_name(&self) -> &str {
         &self.canonical_name
+    }
+
+    pub fn anchor_wgs84(&self) -> [f64; 2] {
+        self.anchor_wgs84
+    }
+
+    pub fn gaode_poi_id(&self) -> Option<&str> {
+        self.gaode_poi_id.as_deref()
+    }
+
+    pub fn with_gaode_poi_id(mut self, gaode_poi_id: impl Into<String>) -> Result<Self, String> {
+        let gaode_poi_id = gaode_poi_id.into();
+        if gaode_poi_id.trim().is_empty() {
+            return Err("Gaode POI ID cannot be empty".into());
+        }
+        self.gaode_poi_id = Some(gaode_poi_id);
+        Ok(self)
     }
 }
 
@@ -1018,6 +1040,7 @@ pub struct CampusProjectLibrary {
     next_save_fault: Option<SaveFaultPoint>,
     next_save_interruption: Option<SaveFaultPoint>,
     next_migration_fault: Option<MigrationFaultPoint>,
+    next_portable_fault: Option<PortableTransferFaultPoint>,
 }
 
 impl CampusProjectLibrary {
@@ -1039,6 +1062,7 @@ impl CampusProjectLibrary {
             LibraryIndex::default()
         };
         recover_interrupted_save(&root, &mut index)?;
+        recover_interrupted_portable_import(&root, &mut index)?;
         let library = Self {
             root,
             campus_target_id,
@@ -1047,6 +1071,7 @@ impl CampusProjectLibrary {
             next_save_fault: None,
             next_save_interruption: None,
             next_migration_fault: None,
+            next_portable_fault: None,
         };
         for record in &library.index.projects {
             if record.campus_target_id != library.campus_target_id {

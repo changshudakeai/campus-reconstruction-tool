@@ -134,6 +134,55 @@ pub struct Schema1MigrationOutcome {
     pub report: Schema1MigrationReport,
 }
 
+pub(super) fn portable_schema1_scope(bytes: &[u8]) -> Result<CampusScope, String> {
+    let legacy = decode_schema1_project(bytes)?;
+    if let Some(target) = legacy.campus_target {
+        let mut scope = CampusScope::new(
+            format!("legacy-gaode:{}", target.poi_id),
+            target.name,
+            [target.wgs84.lng, target.wgs84.lat],
+        )?;
+        if !target.poi_id.trim().is_empty() {
+            scope = scope.with_gaode_poi_id(target.poi_id)?;
+        }
+        Ok(scope)
+    } else {
+        CampusScope::new(
+            "legacy-unmatched-campus",
+            legacy.campus_name,
+            [legacy.map_view.center.lng, legacy.map_view.center.lat],
+        )
+    }
+}
+
+pub(super) fn migrate_portable_schema1_copy(
+    bytes: &[u8],
+    selected_scope: CampusScope,
+    actor: InstallationId,
+) -> Result<Schema2Project, String> {
+    let mut source_project: Value =
+        serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    let source_format = source_format(&source_project)?;
+    validate_legacy_paths(&source_project)?;
+    super::portable_project::strip_non_portable_state(&mut source_project);
+    let legacy = decode_schema1_project(bytes)?;
+    let lineage = LegacyMigrationLineage {
+        source_schema_version: legacy.schema_version,
+        source_format,
+        source_file_name: "portable-project-source.campus.json".into(),
+        backup_file_name: "immutable-temporary-copy.campus.json".into(),
+    };
+    let migration = build_legacy_migration_state(&legacy, &source_project, lineage);
+    let mut candidate = build_schema2_candidate(selected_scope.target_id(), &legacy, actor)?;
+    candidate.campus_scope = selected_scope;
+    candidate.optional_state.insert(
+        LEGACY_MIGRATION_STATE_KEY.into(),
+        serde_json::to_value(migration).map_err(|error| error.to_string())?,
+    );
+    validate_schema2_project(&candidate)?;
+    Ok(candidate)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationFaultPoint {
     AfterBackupWrite,
