@@ -4,6 +4,7 @@ use crate::{
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -218,11 +219,24 @@ pub enum FoundationReviewDisposition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FoundationReviewBasis {
+    pub boundary_result_sha256: String,
+    pub selected_boundary_id: String,
+    pub acquisition_result_sha256: String,
+    pub classification_rules: String,
+    pub conflation_rules: String,
+    pub derivation_rules: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FoundationReviewEntry {
     pub sequence: u64,
     pub category: FoundationCategory,
-    pub disposition: FoundationReviewDisposition,
-    pub evidence_result_sha256: String,
+    pub subjects: Vec<String>,
+    pub basis: FoundationReviewBasis,
+    pub before: Option<FoundationReviewDisposition>,
+    pub after: FoundationReviewDisposition,
     pub recorded_at_unix_ms: u64,
 }
 
@@ -241,32 +255,29 @@ impl FoundationReviewLedger {
             .iter()
             .rev()
             .find(|entry| entry.category == category)
-            .map(|entry| &entry.disposition)
+            .map(|entry| &entry.after)
     }
 
     pub fn entries(&self) -> &[FoundationReviewEntry] {
         &self.entries
     }
 
-    fn disposition_for_evidence(
+    fn disposition_for_basis(
         &self,
         category: FoundationCategory,
-        evidence_result_sha256: &str,
+        basis: &FoundationReviewBasis,
     ) -> Option<&FoundationReviewDisposition> {
         self.entries
             .iter()
             .rev()
-            .find(|entry| {
-                entry.category == category && entry.evidence_result_sha256 == evidence_result_sha256
-            })
-            .map(|entry| &entry.disposition)
+            .find(|entry| entry.category == category && entry.basis == *basis)
+            .map(|entry| &entry.after)
     }
 
-    fn is_complete_for_evidence(&self, evidence_result_sha256: &str) -> bool {
-        FoundationCategory::ALL.into_iter().all(|category| {
-            self.disposition_for_evidence(category, evidence_result_sha256)
-                .is_some()
-        })
+    fn is_complete_for_basis(&self, basis: &FoundationReviewBasis) -> bool {
+        FoundationCategory::ALL
+            .into_iter()
+            .all(|category| self.disposition_for_basis(category, basis).is_some())
     }
 }
 
@@ -277,7 +288,15 @@ pub struct FoundationGenerationSettings {
     pub blocks_per_meter: f64,
     pub style_id: String,
     pub surface_block: String,
-    pub building_block: String,
+    pub generators: BTreeMap<FoundationCategory, FoundationGeneratorStyle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundationGeneratorStyle {
+    pub generator_id: String,
+    pub block: String,
+    pub height: usize,
 }
 
 impl Default for FoundationGenerationSettings {
@@ -287,7 +306,50 @@ impl Default for FoundationGenerationSettings {
             blocks_per_meter: 0.02,
             style_id: "v1.1-fixed-campus-style".into(),
             surface_block: "minecraft:grass_block".into(),
-            building_block: "minecraft:stone_bricks".into(),
+            generators: [
+                (
+                    FoundationCategory::Building,
+                    FoundationGeneratorStyle {
+                        generator_id: "foundation-building-footprint-v1".into(),
+                        block: "minecraft:stone_bricks".into(),
+                        height: 4,
+                    },
+                ),
+                (
+                    FoundationCategory::Circulation,
+                    FoundationGeneratorStyle {
+                        generator_id: "foundation-circulation-centreline-v1".into(),
+                        block: "minecraft:stone".into(),
+                        height: 2,
+                    },
+                ),
+                (
+                    FoundationCategory::Water,
+                    FoundationGeneratorStyle {
+                        generator_id: "foundation-water-surface-v1".into(),
+                        block: "minecraft:water".into(),
+                        height: 2,
+                    },
+                ),
+                (
+                    FoundationCategory::Vegetation,
+                    FoundationGeneratorStyle {
+                        generator_id: "foundation-vegetation-v1".into(),
+                        block: "minecraft:moss_block".into(),
+                        height: 2,
+                    },
+                ),
+                (
+                    FoundationCategory::Sports,
+                    FoundationGeneratorStyle {
+                        generator_id: "foundation-sports-surface-v1".into(),
+                        block: "minecraft:green_concrete".into(),
+                        height: 2,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 }
@@ -449,18 +511,14 @@ impl Schema2Project {
         if self.foundation.acquisition.is_none() {
             return FoundationResumePoint::Acquisition;
         }
+        let basis = self
+            .review_basis()
+            .expect("pinned boundary and acquisition produce a review basis");
         for category in FoundationCategory::ALL {
-            let evidence_sha = &self
-                .foundation
-                .acquisition
-                .as_ref()
-                .expect("acquisition was checked")
-                .manifest
-                .result_sha256;
             if self
                 .foundation
                 .review_ledger
-                .disposition_for_evidence(category, evidence_sha)
+                .disposition_for_basis(category, &basis)
                 .is_none()
             {
                 return FoundationResumePoint::Review(category);
@@ -599,7 +657,16 @@ impl Schema2Project {
             }
             FoundationReviewDisposition::KnownGap { .. } => {}
         }
-        let evidence_result_sha256 = acquisition.manifest.result_sha256.clone();
+        let basis = self.review_basis()?;
+        let subjects = match &disposition {
+            FoundationReviewDisposition::SelectedEvidence { evidence_ids } => evidence_ids.clone(),
+            _ => vec![format!("foundation-category:{category:?}").to_ascii_lowercase()],
+        };
+        let before = self
+            .foundation
+            .review_ledger
+            .disposition_for_basis(category, &basis)
+            .cloned();
         self.mark_updated(actor)?;
         let sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
         self.foundation
@@ -608,21 +675,15 @@ impl Schema2Project {
             .push(FoundationReviewEntry {
                 sequence,
                 category,
-                disposition,
-                evidence_result_sha256,
+                subjects,
+                basis: basis.clone(),
+                before,
+                after: disposition,
                 recorded_at_unix_ms: now_unix_ms(),
             });
         self.foundation.generated = None;
         self.foundation.exported = None;
-        self.workflow.review = if self.foundation.review_ledger.is_complete_for_evidence(
-            &self
-                .foundation
-                .acquisition
-                .as_ref()
-                .expect("acquisition remains pinned")
-                .manifest
-                .result_sha256,
-        ) {
+        self.workflow.review = if self.foundation.review_ledger.is_complete_for_basis(&basis) {
             DurableTaskState::Confirmed
         } else {
             DurableTaskState::Pending
@@ -633,19 +694,8 @@ impl Schema2Project {
     }
 
     pub fn reviewed_projection(&self) -> Result<ReviewedFoundationProjection, String> {
-        let evidence_sha = self
-            .foundation
-            .acquisition
-            .as_ref()
-            .ok_or("Pinned Foundation evidence is incomplete")?
-            .manifest
-            .result_sha256
-            .as_str();
-        if !self
-            .foundation
-            .review_ledger
-            .is_complete_for_evidence(evidence_sha)
-        {
+        let basis = self.review_basis()?;
+        if !self.foundation.review_ledger.is_complete_for_basis(&basis) {
             return Err("All five Foundation categories must be explicitly reviewed".into());
         }
         let evidence = self
@@ -656,7 +706,7 @@ impl Schema2Project {
             .filter_map(|category| {
                 self.foundation
                     .review_ledger
-                    .disposition_for_evidence(*category, evidence_sha)
+                    .disposition_for_basis(*category, &basis)
             })
             .filter_map(|disposition| match disposition {
                 FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
@@ -684,6 +734,27 @@ impl Schema2Project {
                 .clone(),
             selected_features,
             generation_settings: self.foundation.generation_settings.clone(),
+        })
+    }
+
+    fn review_basis(&self) -> Result<FoundationReviewBasis, String> {
+        let boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .ok_or("Confirmed Campus Boundary evidence is missing")?;
+        let acquisition = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pinned Foundation acquisition evidence is missing")?;
+        Ok(FoundationReviewBasis {
+            boundary_result_sha256: boundary.manifest.result_sha256.clone(),
+            selected_boundary_id: boundary.selected_candidate_id.clone(),
+            acquisition_result_sha256: acquisition.manifest.result_sha256.clone(),
+            classification_rules: acquisition.manifest.bundle.classification_rules.clone(),
+            conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
+            derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
         })
     }
 

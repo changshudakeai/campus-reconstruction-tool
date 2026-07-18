@@ -1,4 +1,5 @@
-use campus_state::{ReviewedFoundationProjection, SourceGeometry};
+use campus_state::{FoundationCategory, ReviewedFoundationProjection, SourceGeometry};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoundationVoxelModel {
@@ -7,6 +8,15 @@ pub struct FoundationVoxelModel {
     pub length: usize,
     pub palette: Vec<String>,
     pub blocks: Vec<u16>,
+}
+
+#[derive(Clone, Copy)]
+struct RasterBounds {
+    min_x: f64,
+    min_z: f64,
+    width: usize,
+    length: usize,
+    height: usize,
 }
 
 /// Generates Foundation voxels from the deterministic Reviewed Campus Model.
@@ -22,8 +32,15 @@ pub fn generate_foundation(
     if !settings.orientation_degrees.is_finite()
         || !settings.blocks_per_meter.is_finite()
         || settings.blocks_per_meter <= 0.0
+        || settings.style_id.trim().is_empty()
         || settings.surface_block.trim().is_empty()
-        || settings.building_block.trim().is_empty()
+        || !FoundationCategory::ALL.into_iter().all(|category| {
+            settings.generators.get(&category).is_some_and(|generator| {
+                !generator.generator_id.trim().is_empty()
+                    && !generator.block.trim().is_empty()
+                    && generator.height > 1
+            })
+        })
     {
         return Err("Reviewed Campus Model has invalid generation settings".into());
     }
@@ -66,37 +83,88 @@ pub fn generate_foundation(
     }
     let width = ((max_x - min_x).ceil() as usize + 1).clamp(2, 2048);
     let length = ((max_z - min_z).ceil() as usize + 1).clamp(2, 2048);
-    let height = 4;
+    let height = settings
+        .generators
+        .values()
+        .map(|generator| generator.height)
+        .max()
+        .unwrap_or(2);
     let mut blocks = vec![0; width * height * length];
     for z in 0..length {
         for x in 0..width {
             blocks[z * width + x] = 1;
         }
     }
-    let bounds = (min_x, min_z, width, length, height);
+    let bounds = RasterBounds {
+        min_x,
+        min_z,
+        width,
+        length,
+        height,
+    };
+    let mut palette = vec!["minecraft:air".into(), settings.surface_block.clone()];
+    let mut generator_palette = BTreeMap::new();
+    for category in FoundationCategory::ALL {
+        let generator = settings
+            .generators
+            .get(&category)
+            .expect("generator registry was validated");
+        let palette_index = palette.len() as u16;
+        palette.push(generator.block.clone());
+        generator_palette.insert(category, (palette_index, generator.height));
+    }
     for feature in &reviewed.selected_features {
+        let (palette_index, feature_height) = generator_palette[&feature.category];
         match &feature.review_geometry_proposal {
             SourceGeometry::Point(point) => {
                 let (x, z) = to_local(*point);
-                set_feature(&mut blocks, bounds, x, z, 2);
+                set_feature(&mut blocks, bounds, x, z, feature_height, palette_index);
             }
             SourceGeometry::MultiPoint(points) => {
                 for point in points {
                     let (x, z) = to_local(*point);
-                    set_feature(&mut blocks, bounds, x, z, 2);
+                    set_feature(&mut blocks, bounds, x, z, feature_height, palette_index);
                 }
             }
             SourceGeometry::LineString(line) => {
-                render_lines(std::slice::from_ref(line), &to_local, bounds, &mut blocks);
+                render_lines(
+                    std::slice::from_ref(line),
+                    &to_local,
+                    bounds,
+                    feature_height,
+                    palette_index,
+                    &mut blocks,
+                );
             }
             SourceGeometry::MultiLineString(lines) => {
-                render_lines(lines, &to_local, bounds, &mut blocks);
+                render_lines(
+                    lines,
+                    &to_local,
+                    bounds,
+                    feature_height,
+                    palette_index,
+                    &mut blocks,
+                );
             }
             SourceGeometry::Polygon(rings) => {
-                render_polygons(std::slice::from_ref(rings), &to_local, bounds, &mut blocks);
+                render_polygons(
+                    std::slice::from_ref(rings),
+                    &to_local,
+                    bounds,
+                    feature_height,
+                    palette_index,
+                    &mut blocks,
+                );
             }
             SourceGeometry::MultiPolygon(polygons) => {
-                render_polygons(polygons, &to_local, bounds, &mut blocks);
+                render_polygons(
+                    polygons,
+                    &to_local,
+                    bounds,
+                    feature_height,
+                    palette_index,
+                    &mut blocks,
+                );
             }
         }
     }
@@ -104,11 +172,7 @@ pub fn generate_foundation(
         width,
         height,
         length,
-        palette: vec![
-            "minecraft:air".into(),
-            settings.surface_block.clone(),
-            settings.building_block.clone(),
-        ],
+        palette,
         blocks,
     })
 }
@@ -116,7 +180,9 @@ pub fn generate_foundation(
 fn render_lines(
     lines: &[Vec<[f64; 2]>],
     to_local: &impl Fn([f64; 2]) -> (f64, f64),
-    bounds: (f64, f64, usize, usize, usize),
+    bounds: RasterBounds,
+    feature_height: usize,
+    palette_index: u16,
     blocks: &mut [u16],
 ) {
     for line in lines {
@@ -135,7 +201,8 @@ fn render_lines(
                     bounds,
                     start.0 + (end.0 - start.0) * progress,
                     start.1 + (end.1 - start.1) * progress,
-                    2,
+                    feature_height,
+                    palette_index,
                 );
             }
         }
@@ -144,26 +211,27 @@ fn render_lines(
 
 fn set_feature(
     blocks: &mut [u16],
-    bounds: (f64, f64, usize, usize, usize),
+    bounds: RasterBounds,
     x: f64,
     z: f64,
     feature_height: usize,
+    palette_index: u16,
 ) {
-    let (min_x, min_z, width, length, height) = bounds;
-    let x = ((x - min_x).round() as isize).clamp(0, width as isize - 1) as usize;
-    let z = ((z - min_z).round() as isize).clamp(0, length as isize - 1) as usize;
-    for y in 1..feature_height.min(height) {
-        blocks[y * width * length + z * width + x] = 2;
+    let x = ((x - bounds.min_x).round() as isize).clamp(0, bounds.width as isize - 1) as usize;
+    let z = ((z - bounds.min_z).round() as isize).clamp(0, bounds.length as isize - 1) as usize;
+    for y in 1..feature_height.min(bounds.height) {
+        blocks[y * bounds.width * bounds.length + z * bounds.width + x] = palette_index;
     }
 }
 
 fn render_polygons(
     polygons: &[Vec<Vec<[f64; 2]>>],
     to_local: &impl Fn([f64; 2]) -> (f64, f64),
-    bounds: (f64, f64, usize, usize, usize),
+    bounds: RasterBounds,
+    feature_height: usize,
+    palette_index: u16,
     blocks: &mut [u16],
 ) {
-    let (min_x, min_z, width, length, height) = bounds;
     for polygon in polygons {
         let rings = polygon
             .iter()
@@ -172,14 +240,15 @@ fn render_polygons(
         let Some(outer) = rings.first() else {
             continue;
         };
-        for z in 0..length {
-            for x in 0..width {
-                let point = (x as f64 + min_x + 0.5, z as f64 + min_z + 0.5);
+        for z in 0..bounds.length {
+            for x in 0..bounds.width {
+                let point = (x as f64 + bounds.min_x + 0.5, z as f64 + bounds.min_z + 0.5);
                 if point_in_ring(point, outer)
                     && !rings[1..].iter().any(|hole| point_in_ring(point, hole))
                 {
-                    for y in 1..height {
-                        blocks[y * width * length + z * width + x] = 2;
+                    for y in 1..feature_height.min(bounds.height) {
+                        blocks[y * bounds.width * bounds.length + z * bounds.width + x] =
+                            palette_index;
                     }
                 }
             }
