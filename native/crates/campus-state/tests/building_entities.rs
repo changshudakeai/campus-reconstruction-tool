@@ -2,12 +2,12 @@ use campus_state::{
     decode_schema2_project, BuildingBoundaryDecision, BuildingEntityDecision,
     BuildingEntityReviewLedger, BuildingEvidenceDescriptor, BuildingGenerationBasis,
     BuildingNameAssignmentMode, BuildingNameEvidence, CampusProjectLibrary, CampusScope,
-    FoundationCategory, FoundationReviewDisposition, InstallationId, PinnedAcquisitionEvidence,
-    PinnedBoundaryEvidence, ResultManifest, SourceGeometry, SourceObservation,
-    V11ConstructionCapability,
+    FoundationCategory, FoundationReviewDisposition, InstallationId, KnownBuildingEntityGap,
+    PinnedAcquisitionEvidence, PinnedBoundaryEvidence, ResultManifest, SourceGeometry,
+    SourceObservation, V11ConstructionCapability,
 };
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Deserialize)]
 struct ComplexBuildingFixture {
@@ -718,6 +718,133 @@ fn refresh_follows_reviewed_merge_lineage_instead_of_recreating_source_entities(
 }
 
 #[test]
+fn split_refresh_accepts_an_explicit_observation_to_entity_mapping() {
+    let fixture = fixture();
+    let initial = fixture
+        .observations
+        .iter()
+        .filter(|observation| {
+            !matches!(
+                observation.id.as_str(),
+                "obs-campus-library-v1-replay"
+                    | "obs-campus-library-v2"
+                    | "obs-campus-library-overlap"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut ledger =
+        BuildingEntityReviewLedger::from_observations(&initial, fixture.name_evidence).unwrap();
+    ledger
+        .record(
+            BuildingEntityDecision::Split {
+                entity_id: "building:campus-library".into(),
+                outputs: vec![
+                    campus_state::BuildingEntitySplit {
+                        entity_id: "building:library-main".into(),
+                        evidence_ids: vec!["obs-campus-library-v1".into()],
+                        primary_observation_id: "obs-campus-library-v1".into(),
+                        part_observation_ids: Vec::new(),
+                    },
+                    campus_state::BuildingEntitySplit {
+                        entity_id: "building:library-wing".into(),
+                        evidence_ids: vec!["obs-campus-library-part".into()],
+                        primary_observation_id: "obs-campus-library-part".into(),
+                        part_observation_ids: vec!["obs-campus-library-part".into()],
+                    },
+                ],
+            },
+            &initial,
+        )
+        .unwrap();
+    assert!(ledger
+        .clone()
+        .refresh_from_observations(&fixture.observations)
+        .unwrap_err()
+        .contains("explicit entity mapping"));
+    ledger
+        .refresh_from_observations_with_mappings(
+            &fixture.observations,
+            BTreeMap::from([
+                (
+                    "obs-campus-library-v2".into(),
+                    "building:library-main".into(),
+                ),
+                (
+                    "obs-campus-library-overlap".into(),
+                    "building:library-wing".into(),
+                ),
+            ]),
+        )
+        .unwrap();
+    assert!(ledger
+        .entities()
+        .iter()
+        .find(|entity| entity.id == "building:library-main")
+        .unwrap()
+        .evidence_ids
+        .contains(&"obs-campus-library-v2".into()));
+}
+
+#[test]
+fn reviewed_buildings_can_proceed_beside_a_structured_entity_gap() {
+    let fixture = fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
+    let mut library =
+        CampusProjectLibrary::open_for_construction(directory.path(), "campus:putuo", &capability)
+            .unwrap();
+    let mut project = library
+        .create_project(
+            CampusScope::new("campus:putuo", "Putuo Campus", [121.4, 31.21]).unwrap(),
+            "mixed building gaps",
+            actor(),
+        )
+        .unwrap();
+    project
+        .confirm_boundary(boundary_evidence(), actor())
+        .unwrap();
+    project
+        .pin_acquisition(acquisition_evidence(fixture.observations), actor())
+        .unwrap();
+    project
+        .initialize_building_entity_review(fixture.name_evidence, actor())
+        .unwrap();
+    for decision in [
+        BuildingEntityDecision::SetPrimary {
+            entity_id: "building:campus-library".into(),
+            observation_id: "obs-campus-library-overlap".into(),
+        },
+        BuildingEntityDecision::SetBoundary {
+            entity_id: "building:campus-library".into(),
+            decision: BuildingBoundaryDecision::RetainWhole,
+        },
+        BuildingEntityDecision::AssignName {
+            entity_id: "building:campus-library".into(),
+            name_evidence_id: "name-library-exclusive".into(),
+            mode: BuildingNameAssignmentMode::Automatic,
+        },
+    ] {
+        project
+            .record_building_entity_decision(decision, actor())
+            .unwrap();
+    }
+    project
+        .complete_foundation_review(
+            FoundationCategory::Building,
+            FoundationReviewDisposition::ReviewedBuildingEntities {
+                entity_ids: vec!["building:campus-library".into()],
+                known_gaps: vec![KnownBuildingEntityGap {
+                    entity_id: "building:annex".into(),
+                    reasons: vec!["No exclusive building-level name evidence".into()],
+                }],
+            },
+            actor(),
+        )
+        .unwrap();
+}
+
+#[test]
 fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history() {
     let fixture = fixture();
     let initial_observations = fixture
@@ -806,8 +933,12 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
         .retired_observation_ids
         .contains(&"obs-tree-cluster".into()));
     assert!(refresh_record
-        .composite_result_sha256
+        .composite_snapshot_identity
         .starts_with("composite-v1:"));
+    assert_eq!(
+        refresh_record.incoming_manifest.result_sha256, "sha256:building-refresh-v2",
+        "provider manifests remain byte-identity records rather than synthetic digests"
+    );
     project
         .record_building_entity_decision(
             BuildingEntityDecision::SetPrimary {
@@ -933,6 +1064,7 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
             FoundationCategory::Building,
             FoundationReviewDisposition::ReviewedBuildingEntities {
                 entity_ids: vec!["building:campus-library".into()],
+                known_gaps: Vec::new(),
             },
             actor(),
         )

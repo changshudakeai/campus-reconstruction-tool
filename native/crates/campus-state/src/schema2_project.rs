@@ -243,7 +243,7 @@ pub struct AcquisitionRefreshRecord {
     pub incoming_manifest: ResultManifest,
     pub added_observation_ids: Vec<String>,
     pub retired_observation_ids: Vec<String>,
-    pub composite_result_sha256: String,
+    pub composite_snapshot_identity: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,10 +255,25 @@ pub struct PinnedFoundationEvidence<'a> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "decision")]
 pub enum FoundationReviewDisposition {
-    SelectedEvidence { evidence_ids: Vec<String> },
-    ReviewedBuildingEntities { entity_ids: Vec<String> },
+    SelectedEvidence {
+        evidence_ids: Vec<String>,
+    },
+    ReviewedBuildingEntities {
+        entity_ids: Vec<String>,
+        #[serde(default)]
+        known_gaps: Vec<KnownBuildingEntityGap>,
+    },
     CompleteEmpty,
-    KnownGap { reasons: Vec<String> },
+    KnownGap {
+        reasons: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownBuildingEntityGap {
+    pub entity_id: String,
+    pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -841,7 +856,16 @@ impl Schema2Project {
 
     pub fn pin_acquisition(
         &mut self,
+        evidence: PinnedAcquisitionEvidence,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        self.pin_acquisition_with_building_mappings(evidence, BTreeMap::new(), actor)
+    }
+
+    pub fn pin_acquisition_with_building_mappings(
+        &mut self,
         mut evidence: PinnedAcquisitionEvidence,
+        building_entity_mappings: BTreeMap<String, String>,
         actor: InstallationId,
     ) -> Result<(), String> {
         let boundary = self
@@ -895,17 +919,7 @@ impl Schema2Project {
                 }
             }
             evidence.observations = merged;
-            for licence in &previous.manifest.licences {
-                if !evidence.manifest.licences.contains(licence) {
-                    evidence.manifest.licences.push(licence.clone());
-                }
-            }
-            for chunk in &previous.manifest.chunks {
-                if !evidence.manifest.chunks.contains(chunk) {
-                    evidence.manifest.chunks.push(chunk.clone());
-                }
-            }
-            evidence.manifest.result_sha256 = format!(
+            let composite_snapshot_identity = format!(
                 "composite-v1:{}:{}",
                 previous.manifest.result_sha256, incoming_manifest.result_sha256
             );
@@ -914,11 +928,18 @@ impl Schema2Project {
                 incoming_manifest,
                 added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
                 retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
-                composite_result_sha256: evidence.manifest.result_sha256.clone(),
+                composite_snapshot_identity,
             });
             if !building_review.is_empty() {
-                building_review.refresh_from_observations(&evidence.observations)?;
+                building_review.refresh_from_observations_with_mappings(
+                    &evidence.observations,
+                    building_entity_mappings,
+                )?;
+            } else if !building_entity_mappings.is_empty() {
+                return Err("Building refresh mappings require initialized entity review".into());
             }
+        } else if !building_entity_mappings.is_empty() {
+            return Err("Building refresh mappings require a previous acquisition".into());
         }
         self.mark_updated(actor)?;
         self.foundation.acquisition = Some(evidence);
@@ -1036,15 +1057,19 @@ impl Schema2Project {
                     return Err("Selected review evidence is not pinned for this category".into());
                 }
             }
-            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids } => {
+            FoundationReviewDisposition::ReviewedBuildingEntities {
+                entity_ids,
+                known_gaps,
+            } => {
                 if category != FoundationCategory::Building {
                     return Err(
                         "Reviewed Building Entities can complete only the Building category".into(),
                     );
                 }
-                let reviewed = self.foundation.building_review.reviewed_entities(
+                let reviewed = self.foundation.building_review.reviewed_entities_by_ids(
                     &acquisition.observations,
                     self.building_generation_basis(),
+                    entity_ids,
                 )?;
                 let reviewed_ids = reviewed
                     .iter()
@@ -1054,9 +1079,34 @@ impl Schema2Project {
                     .iter()
                     .map(String::as_str)
                     .collect::<std::collections::BTreeSet<_>>();
+                let gap_ids = known_gaps
+                    .iter()
+                    .map(|gap| gap.entity_id.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let retained_ids = self
+                    .foundation
+                    .building_review
+                    .entities()
+                    .iter()
+                    .filter(|entity| {
+                        entity.boundary_decision != crate::BuildingBoundaryDecision::Exclude
+                    })
+                    .map(|entity| entity.id.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let accounted_ids = selected_ids
+                    .union(&gap_ids)
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>();
                 if entity_ids.is_empty()
                     || entity_ids.len() != selected_ids.len()
                     || selected_ids != reviewed_ids
+                    || known_gaps.len() != gap_ids.len()
+                    || known_gaps.iter().any(|gap| {
+                        gap.reasons.is_empty()
+                            || gap.reasons.iter().any(|reason| reason.trim().is_empty())
+                    })
+                    || !selected_ids.is_disjoint(&gap_ids)
+                    || accounted_ids != retained_ids
                 {
                     return Err(
                         "Building review must select the complete reviewed entity projection"
@@ -1090,7 +1140,7 @@ impl Schema2Project {
         let basis = self.review_basis()?;
         let subjects = match &disposition {
             FoundationReviewDisposition::SelectedEvidence { evidence_ids } => evidence_ids.clone(),
-            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids } => {
+            FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids, .. } => {
                 entity_ids.clone()
             }
             _ => vec![format!("foundation-category:{category:?}").to_ascii_lowercase()],
@@ -1162,10 +1212,11 @@ impl Schema2Project {
             .review_ledger
             .disposition_for_basis(FoundationCategory::Building, &basis)
         {
-            Some(FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids }) => {
-                let entities = self.foundation.building_review.reviewed_entities(
+            Some(FoundationReviewDisposition::ReviewedBuildingEntities { entity_ids, .. }) => {
+                let entities = self.foundation.building_review.reviewed_entities_by_ids(
                     &evidence.acquisition.observations,
                     self.building_generation_basis(),
+                    entity_ids,
                 )?;
                 if entities
                     .iter()

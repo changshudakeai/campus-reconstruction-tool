@@ -695,6 +695,8 @@ pub enum BuildingEntityDecision {
     },
     RefreshEvidence {
         added_observation_ids: Vec<String>,
+        #[serde(default)]
+        entity_mappings: BTreeMap<String, String>,
     },
     Revoke {
         target_sequence: u64,
@@ -1030,6 +1032,14 @@ impl BuildingEntityReviewLedger {
         &mut self,
         observations: &[SourceObservation],
     ) -> Result<Option<u64>, String> {
+        self.refresh_from_observations_with_mappings(observations, BTreeMap::new())
+    }
+
+    pub fn refresh_from_observations_with_mappings(
+        &mut self,
+        observations: &[SourceObservation],
+        entity_mappings: BTreeMap<String, String>,
+    ) -> Result<Option<u64>, String> {
         self.validate_against(observations)?;
         let refreshed = Self::from_observations(observations, self.name_evidence.clone())?;
         let known_ids = self
@@ -1043,13 +1053,30 @@ impl BuildingEntityReviewLedger {
             .filter(|descriptor| !known_ids.contains(descriptor.observation_id.as_str()))
             .cloned()
             .collect::<Vec<_>>();
-        self.duplicate_deliveries = refreshed.duplicate_deliveries;
         if added.is_empty() {
+            if !entity_mappings.is_empty() {
+                return Err("Building refresh mappings refer to no new evidence".into());
+            }
+            self.duplicate_deliveries = refreshed.duplicate_deliveries;
             return Ok(None);
+        }
+        if entity_mappings.keys().any(|id| {
+            !added
+                .iter()
+                .any(|descriptor| descriptor.observation_id == *id)
+        }) {
+            return Err("Building refresh mappings must refer to newly added evidence".into());
         }
         let before = self.entities.clone();
         let mut after = before.clone();
-        apply_evidence_refresh(&mut after, &added, &refreshed.evidence, observations)?;
+        apply_evidence_refresh(
+            &mut after,
+            &added,
+            &refreshed.evidence,
+            observations,
+            &entity_mappings,
+        )?;
+        self.duplicate_deliveries = refreshed.duplicate_deliveries;
         self.evidence.extend(added.iter().cloned());
         let sequence = self.entries.len() as u64 + 1;
         let decision = BuildingEntityDecision::RefreshEvidence {
@@ -1057,6 +1084,7 @@ impl BuildingEntityReviewLedger {
                 .iter()
                 .map(|descriptor| descriptor.observation_id.clone())
                 .collect(),
+            entity_mappings,
         };
         self.entries.push(BuildingEntityReviewEntry {
             sequence,
@@ -1151,6 +1179,7 @@ impl BuildingEntityReviewLedger {
         {
             if let BuildingEntityDecision::RefreshEvidence {
                 added_observation_ids,
+                entity_mappings,
             } = &entry.decision
             {
                 let added = added_observation_ids
@@ -1166,7 +1195,13 @@ impl BuildingEntityReviewLedger {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 evidence.extend(added.iter().cloned());
-                apply_evidence_refresh(&mut state, &added, &evidence, observations)?;
+                apply_evidence_refresh(
+                    &mut state,
+                    &added,
+                    &evidence,
+                    observations,
+                    entity_mappings,
+                )?;
             }
         }
         Ok((state, evidence))
@@ -1245,6 +1280,7 @@ impl BuildingEntityReviewLedger {
                 }
                 BuildingEntityDecision::RefreshEvidence {
                     added_observation_ids,
+                    entity_mappings,
                 } => {
                     if added_observation_ids.is_empty()
                         || added_observation_ids.iter().any(|id| {
@@ -1272,7 +1308,13 @@ impl BuildingEntityReviewLedger {
                     let mut expected = state.clone();
                     let mut expanded = replay_evidence.clone();
                     expanded.extend(added.iter().cloned());
-                    apply_evidence_refresh(&mut expected, &added, &expanded, observations)?;
+                    apply_evidence_refresh(
+                        &mut expected,
+                        &added,
+                        &expanded,
+                        observations,
+                        entity_mappings,
+                    )?;
                     replay_evidence = expanded;
                     state = expected;
                 }
@@ -1360,6 +1402,35 @@ impl BuildingEntityReviewLedger {
         observations: &[SourceObservation],
         basis: BuildingGenerationBasis,
     ) -> Result<Vec<ReviewedBuildingEntity>, String> {
+        self.reviewed_entities_selected(observations, basis, None)
+    }
+
+    pub fn reviewed_entities_by_ids(
+        &self,
+        observations: &[SourceObservation],
+        basis: BuildingGenerationBasis,
+        entity_ids: &[String],
+    ) -> Result<Vec<ReviewedBuildingEntity>, String> {
+        let selected = entity_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        if selected.len() != entity_ids.len()
+            || selected
+                .iter()
+                .any(|id| !self.entities.iter().any(|entity| entity.id == **id))
+        {
+            return Err("Reviewed Building Entity selection is invalid".into());
+        }
+        self.reviewed_entities_selected(observations, basis, Some(&selected))
+    }
+
+    fn reviewed_entities_selected(
+        &self,
+        observations: &[SourceObservation],
+        basis: BuildingGenerationBasis,
+        selected: Option<&std::collections::BTreeSet<&str>>,
+    ) -> Result<Vec<ReviewedBuildingEntity>, String> {
         self.validate_against(observations)?;
         if !basis.origin_wgs84.iter().all(|value| value.is_finite())
             || !basis.orientation_degrees.is_finite()
@@ -1376,6 +1447,11 @@ impl BuildingEntityReviewLedger {
         self.entities
             .iter()
             .filter(|entity| entity.boundary_decision != BuildingBoundaryDecision::Exclude)
+            .filter(|entity| {
+                selected
+                    .map(|selected| selected.contains(entity.id.as_str()))
+                    .unwrap_or(true)
+            })
             .map(|entity| {
                 if entity.boundary_decision == BuildingBoundaryDecision::Pending {
                     return Err(format!(
@@ -1512,15 +1588,21 @@ fn apply_evidence_refresh(
     added: &[BuildingEvidenceDescriptor],
     all_evidence: &[BuildingEvidenceDescriptor],
     observations: &[SourceObservation],
+    entity_mappings: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     for descriptor in added {
+        let explicit_target = entity_mappings.get(&descriptor.observation_id);
         let matching_indices = entities
             .iter()
             .enumerate()
             .filter_map(|(index, entity)| {
-                (entity.id == descriptor.entity_id
-                    || entity.merged_from.contains(&descriptor.entity_id)
-                    || entity.split_from.as_deref() == Some(descriptor.entity_id.as_str()))
+                (explicit_target
+                    .map(|target| entity.id == *target)
+                    .unwrap_or_else(|| {
+                        entity.id == descriptor.entity_id
+                            || entity.merged_from.contains(&descriptor.entity_id)
+                            || entity.split_from.as_deref() == Some(descriptor.entity_id.as_str())
+                    }))
                 .then_some(index)
             })
             .collect::<Vec<_>>();
@@ -2089,6 +2171,7 @@ fn decision_subjects(decision: &BuildingEntityDecision) -> Vec<String> {
         }
         BuildingEntityDecision::RefreshEvidence {
             added_observation_ids,
+            ..
         } => added_observation_ids.clone(),
     }
 }
