@@ -16,14 +16,14 @@ use campus_state::ProjectId;
 use campus_state::Schema2Project;
 #[cfg(debug_assertions)]
 use campus_state::{
-    CampusProjectLibrary, CampusScope, FoundationCategory, FoundationReviewDisposition,
-    InstallationId, PinnedAcquisitionEvidence, ResultManifest, SourceObservation,
-    V11ConstructionCapability,
+    CampusProjectLibrary, CampusScope, FoundationCategory, InstallationId,
+    PinnedAcquisitionEvidence, ResultManifest, SourceObservation, V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
 use campus_tool_protocol::{
     read_message, write_message, MapBoundaryDesk, MapBoundaryDeskRequest,
-    MapBoundaryHandleSelection, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+    MapBoundaryHandleSelection, MapFoundationReviewDeskRequest, ToolCommand, ToolEvent, ToolKind,
+    PROTOCOL_VERSION,
 };
 #[cfg(all(debug_assertions, target_os = "windows"))]
 use rand::Rng;
@@ -73,7 +73,17 @@ pub struct BoundaryDeskMapOptions {
 }
 
 #[cfg(debug_assertions)]
-trait BoundaryToolSessionTransport {
+pub struct FoundationReviewDeskMapOptions {
+    pub js_api_key: String,
+    pub security_code: String,
+    pub zoom: f64,
+    pub pitch: f64,
+    pub rotation: f64,
+    pub english: bool,
+}
+
+#[cfg(debug_assertions)]
+trait ToolSessionTransport {
     fn receive_event(&mut self) -> Result<ToolEvent, String>;
     fn send_command(&mut self, command: ToolCommand) -> Result<(), String>;
 }
@@ -93,7 +103,7 @@ struct BoundaryNamedPipeTransport {
 }
 
 #[cfg(all(debug_assertions, target_os = "windows"))]
-impl BoundaryToolSessionTransport for BoundaryNamedPipeTransport {
+impl ToolSessionTransport for BoundaryNamedPipeTransport {
     fn receive_event(&mut self) -> Result<ToolEvent, String> {
         let runtime = &self.runtime;
         let server = &mut self.server;
@@ -290,7 +300,7 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     fn drive_boundary_tool_session(
         &self,
         options: BoundaryDeskMapOptions,
-        transport: &mut impl BoundaryToolSessionTransport,
+        transport: &mut impl ToolSessionTransport,
     ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
         let initial_command = self.open_boundary_review_command(options)?;
         let mut interaction = BoundaryToolInteraction {
@@ -525,24 +535,208 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                         )?,
                     },
                     self.actor.clone(),
-                )
+                )?;
+                project.initialize_building_entity_review(Vec::new(), self.actor.clone())
             },
         )
     }
 
-    pub fn complete_review(
+    fn open_foundation_review_command(
         &self,
-        category: FoundationCategory,
-        disposition: FoundationReviewDisposition,
-    ) -> Result<(), String> {
-        let mut library = self.open_library()?;
-        let mut session = campus_state::Schema2ProjectSession::default();
-        session.open_project(&library, &self.project_id)?;
-        session.apply_semantic_operation(
-            &mut library,
-            format!("confirm {category:?} review"),
-            |project| project.complete_foundation_review(category, disposition, self.actor.clone()),
-        )
+        options: FoundationReviewDeskMapOptions,
+        active_category: FoundationCategory,
+        selected_subject_id: Option<&str>,
+    ) -> Result<ToolCommand, String> {
+        let project = self.open_library()?.open_project(&self.project_id)?;
+        let scope = project.campus_scope();
+        let anchor = scope.anchor_wgs84();
+        let anchor = campus_services::wgs84_to_gcj02(campus_state::GeoPoint {
+            lng: anchor[0],
+            lat: anchor[1],
+        });
+        let desk = super::v11_foundation_review_desk::map_foundation_review_desk(
+            &project,
+            active_category,
+            selected_subject_id,
+        )?;
+        Ok(ToolCommand::OpenFoundationReviewDesk {
+            request: Box::new(MapFoundationReviewDeskRequest {
+                campus_name: scope.canonical_name().into(),
+                center_lng: anchor.lng,
+                center_lat: anchor.lat,
+                zoom: options.zoom,
+                pitch: options.pitch,
+                rotation: options.rotation,
+                js_api_key: options.js_api_key,
+                security_code: options.security_code,
+                boundary: super::v11_foundation_review_desk::map_confirmed_boundary(&project),
+                desk,
+                english: options.english,
+            }),
+        })
+    }
+
+    fn drive_foundation_review_tool_session(
+        &self,
+        options: FoundationReviewDeskMapOptions,
+        transport: &mut impl ToolSessionTransport,
+    ) -> Result<super::v11_foundation_review_desk::FoundationReviewToolEventOutcome, String> {
+        let project = self.open_library()?.open_project(&self.project_id)?;
+        let mut active_category = match project.resume_point() {
+            campus_state::FoundationResumePoint::Review(category) => category,
+            _ => FoundationCategory::Building,
+        };
+        let mut selected_subject_id = None;
+        transport.send_command(self.open_foundation_review_command(
+            options,
+            active_category,
+            selected_subject_id.as_deref(),
+        )?)?;
+        loop {
+            let event = transport.receive_event()?;
+            if matches!(
+                event,
+                ToolEvent::Closed {
+                    tool: ToolKind::Map
+                }
+            ) {
+                return Ok(
+                    super::v11_foundation_review_desk::FoundationReviewToolEventOutcome::Ignored,
+                );
+            }
+            if let ToolEvent::Error { message } = event {
+                return Err(format!("Foundation review map helper failed: {message}"));
+            }
+            if let ToolEvent::MapFoundationReviewCategorySelected { category } = &event {
+                active_category = super::v11_foundation_review_desk::parse_category(category)?;
+                selected_subject_id = None;
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
+                    desk: super::v11_foundation_review_desk::map_foundation_review_desk(
+                        &project,
+                        active_category,
+                        None,
+                    )?,
+                })?;
+                continue;
+            }
+            if let ToolEvent::MapFoundationReviewCandidateSelected {
+                category,
+                subject_id,
+            } = &event
+            {
+                active_category = super::v11_foundation_review_desk::parse_category(category)?;
+                selected_subject_id = Some(subject_id.clone());
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
+                    desk: super::v11_foundation_review_desk::map_foundation_review_desk(
+                        &project,
+                        active_category,
+                        selected_subject_id.as_deref(),
+                    )?,
+                })?;
+                continue;
+            }
+            let description = foundation_review_event_description(&event);
+            let mut library = self.open_library()?;
+            let mut session = campus_state::Schema2ProjectSession::default();
+            session.open_project(&library, &self.project_id)?;
+            let outcome =
+                session.apply_semantic_operation(&mut library, description, |project| {
+                    super::v11_foundation_review_desk::apply_foundation_review_tool_event(
+                        project,
+                        self.actor.clone(),
+                        event,
+                    )
+                })?;
+            let project = self.open_library()?.open_project(&self.project_id)?;
+            if let campus_state::FoundationResumePoint::Review(category) = project.resume_point() {
+                if matches!(
+                    outcome,
+                    super::v11_foundation_review_desk::FoundationReviewToolEventOutcome::CategoryCompleted { .. }
+                ) {
+                    active_category = category;
+                    selected_subject_id = None;
+                }
+                transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
+                    desk: super::v11_foundation_review_desk::map_foundation_review_desk(
+                        &project,
+                        active_category,
+                        selected_subject_id.as_deref(),
+                    )?,
+                })?;
+            } else {
+                transport.send_command(ToolCommand::Shutdown)?;
+                return Ok(outcome);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn run_installed_foundation_review_tool(
+        &self,
+        options: FoundationReviewDeskMapOptions,
+    ) -> Result<super::v11_foundation_review_desk::FoundationReviewToolEventOutcome, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| error.to_string())?
+            .parent()
+            .ok_or("native executable has no parent")?
+            .join("campus-map.exe");
+        if !executable.is_file() {
+            return Err("campus-map.exe is not installed beside the main application".into());
+        }
+        let pipe = format!(
+            r"\\.\pipe\campus-foundation-review-{:032x}",
+            rand::rng().random::<u128>()
+        );
+        let token = format!("{:032x}", rand::rng().random::<u128>());
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe)
+            .map_err(|error| error.to_string())?;
+        let mut child = Command::new(executable)
+            .arg(&pipe)
+            .arg(&token)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut transport = BoundaryNamedPipeTransport { runtime, server };
+        let result = (|| {
+            transport
+                .runtime
+                .block_on(transport.server.connect())
+                .map_err(|error| error.to_string())?;
+            let hello: ToolCommand = {
+                let runtime = &transport.runtime;
+                let server = &mut transport.server;
+                runtime.block_on(read_message(server))?
+            };
+            match hello {
+                ToolCommand::Hello {
+                    protocol_version,
+                    session_token,
+                    tool: ToolKind::Map,
+                } if protocol_version == PROTOCOL_VERSION && session_token == token => {}
+                _ => return Err("Foundation review map helper handshake rejected".into()),
+            }
+            self.drive_foundation_review_tool_session(options, &mut transport)
+        })();
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        result
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn run_installed_foundation_review_tool(
+        &self,
+        _options: FoundationReviewDeskMapOptions,
+    ) -> Result<super::v11_foundation_review_desk::FoundationReviewToolEventOutcome, String> {
+        Err("Foundation review map desk is supported only on Windows".into())
     }
 
     #[cfg(test)]
@@ -658,6 +852,33 @@ fn boundary_event_description(event: &ToolEvent) -> &'static str {
 }
 
 #[cfg(debug_assertions)]
+fn foundation_review_event_description(event: &ToolEvent) -> &'static str {
+    match event {
+        ToolEvent::MapFoundationReviewDecisionRequested { .. } => {
+            "record Foundation candidate review decision"
+        }
+        ToolEvent::MapFoundationBatchReviewRequested { .. } => {
+            "record atomic Foundation batch review"
+        }
+        ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+            acknowledged: true, ..
+        } => "acknowledge Known Feature Gap",
+        ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+            acknowledged: false,
+            ..
+        } => "reopen Known Feature Gap",
+        ToolEvent::MapFoundationConflictResolutionRequested { .. } => {
+            "resolve Foundation review conflict"
+        }
+        ToolEvent::MapFoundationCategoryCompletionRequested { .. } => {
+            "explicitly complete Foundation category review"
+        }
+        _ => "ignore unrelated Foundation review event",
+    }
+}
+
+#[cfg(debug_assertions)]
+#[cfg(debug_assertions)]
 fn require_boundary_adjustment(
     interaction: &BoundaryToolInteraction,
     candidate_id: &str,
@@ -761,28 +982,18 @@ pub fn bootstrap_if_enabled(
         return Ok(None);
     }
     tracer.acquire_foundation_evidence()?;
-    tracer.complete_review(
-        FoundationCategory::Building,
-        FoundationReviewDisposition::SelectedEvidence {
-            evidence_ids: vec!["obs-osm-relation-42".into()],
-        },
-    )?;
-    tracer.complete_review(
-        FoundationCategory::Circulation,
-        FoundationReviewDisposition::CompleteEmpty,
-    )?;
-    for (category, reason) in [
-        (FoundationCategory::Water, "relation way/88 missing"),
-        (FoundationCategory::Vegetation, "provider page unavailable"),
-        (FoundationCategory::Sports, "cancelled before retrieval"),
-    ] {
-        tracer.complete_review(
-            category,
-            FoundationReviewDisposition::KnownGap {
-                reasons: vec![reason.into()],
-            },
-        )?;
-    }
+    tracer.run_installed_foundation_review_tool(FoundationReviewDeskMapOptions {
+        js_api_key: std::env::var("GAODE_JS_API_KEY")
+            .or_else(|_| std::env::var("VITE_GAODE_JS_API_KEY"))
+            .unwrap_or_default(),
+        security_code: std::env::var("GAODE_SECURITY_CODE")
+            .or_else(|_| std::env::var("VITE_GAODE_SECURITY_CODE"))
+            .unwrap_or_default(),
+        zoom: 17.0,
+        pitch: 45.0,
+        rotation: 0.0,
+        english: false,
+    })?;
     tracer.generate_and_export().map(Some)
 }
 
@@ -823,7 +1034,7 @@ mod tests {
         commands: Vec<ToolCommand>,
     }
 
-    impl BoundaryToolSessionTransport for MemoryBoundaryTransport {
+    impl ToolSessionTransport for MemoryBoundaryTransport {
         fn receive_event(&mut self) -> Result<ToolEvent, String> {
             self.events
                 .pop_front()
@@ -1033,34 +1244,78 @@ mod tests {
             tracer.project().unwrap().resume_point(),
             FoundationResumePoint::Review(FoundationCategory::Building)
         );
-        tracer
-            .complete_review(
-                FoundationCategory::Building,
-                FoundationReviewDisposition::SelectedEvidence {
-                    evidence_ids: vec!["obs-osm-relation-42".into()],
+        let mut review_transport = MemoryBoundaryTransport {
+            events: VecDeque::from([
+                ToolEvent::MapFoundationReviewDecisionRequested {
+                    category: "building".into(),
+                    subject_id: "obs-osm-relation-42".into(),
+                    decision: campus_tool_protocol::MapFoundationCandidateDecision::Accept,
                 },
-            )
-            .unwrap();
+                ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+                    category: "building".into(),
+                    gap_id: "gap:building-entity:building:osm:relation/42:name".into(),
+                    acknowledged: true,
+                },
+                ToolEvent::MapFoundationCategoryCompletionRequested {
+                    category: "building".into(),
+                },
+                ToolEvent::MapFoundationCategoryCompletionRequested {
+                    category: "circulation".into(),
+                },
+                ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+                    category: "water".into(),
+                    gap_id: "gap:water:osm:31-121-1:0".into(),
+                    acknowledged: true,
+                },
+                ToolEvent::MapFoundationCategoryCompletionRequested {
+                    category: "water".into(),
+                },
+                ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+                    category: "vegetation".into(),
+                    gap_id: "gap:vegetation:overture:31-121-2:0".into(),
+                    acknowledged: true,
+                },
+                ToolEvent::MapFoundationCategoryCompletionRequested {
+                    category: "vegetation".into(),
+                },
+                ToolEvent::MapKnownFeatureGapAcknowledgementRequested {
+                    category: "sports".into(),
+                    gap_id: "gap:sports:osm:31-121-3:0".into(),
+                    acknowledged: true,
+                },
+                ToolEvent::MapFoundationCategoryCompletionRequested {
+                    category: "sports".into(),
+                },
+            ]),
+            commands: Vec::new(),
+        };
         tracer
-            .complete_review(
-                FoundationCategory::Circulation,
-                FoundationReviewDisposition::CompleteEmpty,
+            .drive_foundation_review_tool_session(
+                FoundationReviewDeskMapOptions {
+                    js_api_key: "test-key".into(),
+                    security_code: "test-security-code".into(),
+                    zoom: 17.0,
+                    pitch: 45.0,
+                    rotation: 0.0,
+                    english: true,
+                },
+                &mut review_transport,
             )
             .unwrap();
-        for category in [
-            FoundationCategory::Water,
-            FoundationCategory::Vegetation,
-            FoundationCategory::Sports,
-        ] {
-            tracer
-                .complete_review(
-                    category,
-                    FoundationReviewDisposition::KnownGap {
-                        reasons: vec!["fixture coverage gap acknowledged".into()],
-                    },
-                )
-                .unwrap();
-        }
+        assert!(matches!(
+            review_transport.commands.first(),
+            Some(ToolCommand::OpenFoundationReviewDesk { .. })
+        ));
+        assert!(review_transport.commands.iter().any(|command| matches!(
+            command,
+            ToolCommand::UpdateFoundationReviewDesk { desk }
+                if desk.active_category == "water"
+                    && desk.known_gaps.iter().all(|gap| gap.acknowledged)
+        )));
+        assert!(matches!(
+            review_transport.commands.last(),
+            Some(ToolCommand::Shutdown)
+        ));
 
         let report = tracer.generate_and_export().unwrap();
         let reopened = tracer.project().unwrap();

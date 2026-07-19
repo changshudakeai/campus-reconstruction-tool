@@ -8,8 +8,9 @@ fn main() {
 #[cfg(target_os = "windows")]
 mod windows {
     use campus_tool_protocol::{
-        forward_tool_events, read_message, write_message, MapBoundaryDesk, MapPurpose, ToolCommand,
-        ToolEvent, ToolKind, PROTOCOL_VERSION,
+        forward_tool_events, read_message, write_message, MapBoundaryDesk,
+        MapFoundationReviewDeskRequest, MapPurpose, ToolCommand, ToolEvent, ToolKind,
+        PROTOCOL_VERSION,
     };
     use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
     use std::thread;
@@ -153,7 +154,9 @@ mod windows {
             let command: ToolCommand = read_message(&mut client).await?;
             if !matches!(
                 command,
-                ToolCommand::OpenMap { .. } | ToolCommand::OpenBoundaryDesk { .. }
+                ToolCommand::OpenMap { .. }
+                    | ToolCommand::OpenBoundaryDesk { .. }
+                    | ToolCommand::OpenFoundationReviewDesk { .. }
             ) {
                 return Err("invalid map request".into());
             }
@@ -217,6 +220,26 @@ mod windows {
                                         event_loop,
                                         Some(format!(
                                             "encode Boundary desk update failed: {error}"
+                                        )),
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Ok(ToolCommand::UpdateFoundationReviewDesk { desk }) => {
+                        if let Some(webview) = self.webview.as_ref() {
+                            match serde_json::to_string(&desk) {
+                                Ok(desk) => {
+                                    let _ = webview.evaluate_script(&format!(
+                                        "window.applyFoundationReviewDesk({desk})"
+                                    ));
+                                }
+                                Err(error) => {
+                                    self.finish(
+                                        event_loop,
+                                        Some(format!(
+                                            "encode Foundation review desk update failed: {error}"
                                         )),
                                     );
                                     return;
@@ -324,6 +347,9 @@ mod windows {
     }
 
     fn map_html(command: &ToolCommand) -> String {
+        if let ToolCommand::OpenFoundationReviewDesk { request } = command {
+            return foundation_review_html(request);
+        }
         if let ToolCommand::OpenBoundaryDesk { request } = command {
             let open_map = ToolCommand::OpenMap {
                 campus_name: request.campus_name.clone(),
@@ -345,6 +371,64 @@ mod windows {
         map_html_request(command, None)
     }
 
+    fn foundation_review_html(request: &MapFoundationReviewDeskRequest) -> String {
+        let desk = serde_json::to_string(&request.desk).unwrap();
+        let campus = serde_json::to_string(&request.campus_name).unwrap();
+        let key = request
+            .js_api_key
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .collect::<String>();
+        let security = serde_json::to_string(&request.security_code).unwrap();
+        let english = if request.english { "true" } else { "false" };
+        let boundary = serde_json::to_string(&request.boundary).unwrap();
+        let template = r#"<!doctype html><html><head><meta charset="utf-8">
+<style>
+:root{--ink:#17251f;--forest:#2f765b;--forest2:#245d48;--paper:#fffdf7;--sand:#f1eadc;--line:#cfc3ae;--red:#a54836;--amber:#d08b32;--blue:#315f78}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;font:13px/1.4 "Microsoft YaHei UI",sans-serif;color:var(--ink);background:var(--sand)}
+button{border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:var(--paper);color:var(--ink);cursor:pointer}button:hover:not(:disabled){border-color:var(--forest)}button:disabled{opacity:.5;cursor:not-allowed}.primary{background:var(--forest);border-color:var(--forest);color:white;font-weight:700}.danger{color:var(--red);border-color:#d5aba0;background:#fff8f5}.small{padding:6px 8px;font-size:11px}
+#shell{height:100%;display:grid;grid-template-rows:58px 1fr 66px}.tabs{display:flex;align-items:center;gap:8px;padding:9px 16px;background:var(--paper);border-bottom:1px solid var(--line)}.tab{display:grid;grid-template-columns:1fr auto;gap:2px 8px;min-width:145px;text-align:left}.tab.active{background:var(--forest);color:white;border-color:var(--forest)}.tab small{grid-column:1/-1;opacity:.8}.route-title{font-weight:800;margin-right:8px}.spacer{flex:1}
+.workspace{min-height:0;display:grid;grid-template-columns:310px minmax(420px,1fr) 340px;gap:12px;padding:12px}.panel{min-height:0;background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:auto}.queue{padding:12px}.toolbar{position:sticky;top:-12px;z-index:4;background:var(--paper);padding:0 0 9px;display:flex;align-items:center;gap:6px}.candidate{width:100%;margin:0 0 8px;padding:10px;text-align:left;display:grid;gap:5px}.candidate.selected{border:2px solid var(--forest)}.candidate-head{display:flex;gap:7px;align-items:center}.candidate input{margin:0}.state{font-size:10px;font-weight:800;padding:2px 6px;border-radius:99px;background:#eee4d3}.state.accepted{background:#dcecdf;color:var(--forest2)}.state.rejected{background:#f5ded8;color:var(--red)}.state.deferred{background:#fff0cf;color:#865a13}.state.supporting_evidence{background:#dbe8ef;color:var(--blue)}.muted{color:#637069}.tiny{font-size:10px}
+.map-panel{position:relative;overflow:hidden}.map{width:100%;height:100%;min-height:430px}.map-badge{position:absolute;z-index:3;left:12px;top:12px;padding:7px 9px;background:rgba(23,37,31,.9);color:white;border-radius:8px}.legend{position:absolute;z-index:3;left:12px;bottom:12px;padding:7px 9px;background:rgba(255,253,247,.95);border:1px solid var(--line);border-radius:8px;font-size:10px}
+.evidence{padding:14px}.evidence h2,.evidence h3{margin:0 0 7px}.card{padding:9px;margin:0 0 8px;background:#f5efe4;border-radius:8px}.assessment{display:grid;grid-template-columns:1fr 1fr;gap:7px}.assessment div{padding:8px;background:#f5efe4;border-radius:7px;font-size:10px}.assessment strong{display:block}.gap{border:1px solid #d7ad7c;background:#fff6df}.gap.ack{border-color:#8eaa8f;background:#eef5eb}.conflict{border:1px dashed var(--red);background:#fff6f2}.actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:10px 0}.actions .wide{grid-column:1/-1}.no-draw{padding:8px;border:1px dashed var(--line);border-radius:8px;color:#637069}
+.footer{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--paper);border-top:1px solid var(--line)}.progress{height:8px;flex:1;max-width:360px;background:#ded5c7;border-radius:99px;overflow:hidden}.progress span{display:block;height:100%;background:var(--forest)}.blocked{color:var(--red)}
+@media(max-width:1000px){.workspace{grid-template-columns:280px 1fr}.evidence{display:none}.tab{min-width:115px}}
+</style>
+<script>const post=value=>window.ipc.postMessage(JSON.stringify(value));const english=__ENGLISH__;window._AMapSecurityConfig={securityJsCode:__SECURITY__};</script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__KEY__" onerror="post({type:'error',message:'Failed to load Gaode Maps'})"></script>
+</head><body><main id="shell"><header class="tabs" id="tabs"></header><section class="workspace"><aside class="panel queue"><div class="toolbar"><strong id="queue-title"></strong><span class="spacer"></span><button class="small" id="batch-accept">Batch accept</button><button class="small danger" id="batch-reject">Batch reject</button></div><div id="candidates"></div></aside><section class="panel map-panel"><div id="map" class="map"></div><div class="map-badge" id="map-badge"></div><div class="legend">Colour = category · line style = ledger state · map is review-only</div></section><aside class="panel evidence" id="evidence"></aside></section><footer class="footer"><div><strong id="footer-title"></strong><div class="tiny muted" id="footer-state"></div></div><div class="progress"><span id="progress"></span></div><button class="primary" id="complete">Complete category</button></footer></main>
+<script>
+const tx=(zh,en)=>english?en:zh;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let desk=__DESK__,selected=new Set(),overlays=[],pending=false;
+const map=new AMap.Map('map',{viewMode:'3D',zoom:__ZOOM__,pitch:__PITCH__,rotation:__ROTATION__,center:[__LNG__,__LAT__],showLabel:false});
+const boundary=__BOUNDARY__.map(p=>[p.lng,p.lat]);if(boundary.length>=3){const outline=new AMap.Polygon({path:boundary,strokeColor:'#17251f',strokeWeight:3,fillOpacity:0,zIndex:2});map.add(outline)}
+const activeTab=()=>desk.categories.find(c=>c.id===desk.activeCategory);const activeCandidate=()=>desk.candidates.find(c=>c.id===desk.selectedCandidateId)||desk.candidates[0];
+function draw(){if(overlays.length)map.remove(overlays);overlays=[];desk.candidates.forEach((candidate,index)=>{const color=candidate.disposition==='accepted'?'#2f765b':candidate.disposition==='rejected'?'#a54836':candidate.disposition==='deferred'?'#d08b32':'#315f78';candidate.geometry.forEach(path=>{if(!path.length)return;const points=path.map(p=>[p.lng,p.lat]);let item;if(candidate.geometryForm==='point')item=new AMap.Marker({position:points[0],title:candidate.label,zIndex:candidate.id===desk.selectedCandidateId?120:20});else if(candidate.geometryForm==='centreline')item=new AMap.Polyline({path:points,strokeColor:color,strokeWeight:candidate.id===desk.selectedCandidateId?8:5,strokeStyle:candidate.disposition==='rejected'?'dashed':'solid',zIndex:candidate.id===desk.selectedCandidateId?120:20});else item=new AMap.Polygon({path:points,strokeColor:color,strokeWeight:candidate.id===desk.selectedCandidateId?7:4,strokeStyle:candidate.disposition==='rejected'?'dashed':'solid',fillColor:color,fillOpacity:candidate.disposition==='rejected'?.06:.18,zIndex:candidate.id===desk.selectedCandidateId?120:20});item.on('click',()=>selectCandidate(candidate.id));overlays.push(item)})});if(overlays.length)map.add(overlays)}
+function selectCandidate(id){desk.selectedCandidateId=id;post({type:'mapFoundationReviewCandidateSelected',category:desk.activeCategory,subjectId:id});render()}
+function decision(value){const item=activeCandidate();if(!item)return;pending=true;post({type:'mapFoundationReviewDecisionRequested',category:desk.activeCategory,subjectId:item.id,decision:value});render()}
+function renderTabs(){document.getElementById('tabs').innerHTML=`<span class="route-title">${tx('Foundation 五类审核','Foundation five-category review')}</span>`+desk.categories.map(c=>`<button class="tab ${c.id===desk.activeCategory?'active':''}" data-category="${c.id}"><strong>${esc(c.label)}</strong><span>${c.complete?'✓':c.pending}</span><small>${esc(c.acquisitionState)} · ${c.disposed}/${c.total}</small></button>`).join('');document.querySelectorAll('[data-category]').forEach(button=>button.onclick=()=>{pending=true;selected.clear();post({type:'mapFoundationReviewCategorySelected',category:button.dataset.category})})}
+function renderQueue(){const tab=activeTab();document.getElementById('queue-title').textContent=tx('候选队列','Candidate queue')+' · '+(tab?.total||0);document.getElementById('candidates').innerHTML=desk.candidates.map(c=>`<button class="candidate ${c.id===desk.selectedCandidateId?'selected':''}" data-id="${esc(c.id)}"><div class="candidate-head"><input type="checkbox" data-check="${esc(c.id)}" ${selected.has(c.id)?'checked':''}><span class="state ${esc(c.disposition)}">${esc(c.disposition)}</span><span class="spacer"></span><span class="tiny">${esc(c.priority)}</span></div><strong>${esc(c.label)}</strong><span class="tiny muted">${esc(c.sourceSummary)}</span></button>`).join('');document.querySelectorAll('.candidate[data-id]').forEach(button=>button.onclick=e=>{if(e.target.matches('input'))return;selectCandidate(button.dataset.id)});document.querySelectorAll('[data-check]').forEach(input=>input.onchange=()=>{input.checked?selected.add(input.dataset.check):selected.delete(input.dataset.check);renderQueue()});document.getElementById('batch-accept').disabled=!selected.size||pending;document.getElementById('batch-reject').disabled=!selected.size||pending}
+function renderEvidence(){const c=activeCandidate();const providers=desk.providerOutcomes.map(p=>`<div class="card"><strong>${esc(p.provider)} · ${esc(p.state)}</strong><div class="tiny">${esc(p.tileId)} · ${esc(p.summary)}</div></div>`).join('');const gaps=desk.knownGaps.map(g=>`<div class="card gap ${g.acknowledged?'ack':''}"><strong>${esc(g.attemptedEvidence)}</strong><p class="tiny">${esc(g.generationImpact)}</p><button class="small" data-gap="${esc(g.id)}" data-ack="${!g.acknowledged}">${g.acknowledged?tx('重新打开缺口','Reopen gap'):tx('确认缺口','Acknowledge gap')}</button></div>`).join('');const conflicts=desk.conflicts.map(x=>`<div class="card conflict"><strong>${esc(x.kind)} ${x.resolved?'✓':''}</strong><p class="tiny">${esc(x.explanation)}</p>${x.resolved?'':`<button class="small" data-separate="${esc(x.id)}">${tx('保留为独立地物','Keep separate')}</button>${x.kind==='Containment'?`<button class="small" data-contain="${esc(x.id)}">${tx('记录容器关系','Record containment')}</button>`:''}${x.kind==='GeometryOverlap'?`<button class="small" data-group="${esc(x.id)}">${tx('主证据 + 支持证据','Primary + supporting')}</button><button class="small" data-repair="${esc(x.id)}">${tx('记录几何修复','Record geometry repair')}</button>`:''}${x.kind==='Naming'?`<button class="small" data-name="${esc(x.id)}">${tx('记录名称','Record name')}</button>`:''}${x.kind==='Attribute'?`<button class="small" data-attribute="${esc(x.id)}">${tx('记录属性','Record attribute')}</button>`:''}`}</div>`).join('');document.getElementById('evidence').innerHTML=c?`<h2>${esc(c.label)}</h2><div class="tiny muted">${esc(c.lineageSummary)}</div><div class="card tiny"><strong>${tx('审核几何','Review geometry')}</strong><br>${esc(c.geometryForm)}${c.subtype?' · '+esc(c.subtype):''}${c.widthSummary?' · '+esc(c.widthSummary):''}</div><div class="actions"><button class="primary" id="accept">${tx('接受','Accept')}</button><button class="danger" id="reject">${tx('拒绝','Reject')}</button><button id="defer">${tx('延后','Defer')}</button><button id="revoke">${tx('撤销决定','Revoke')}</button></div><h3>${tx('多维证据评估','Evidence assessment')}</h3><div class="assessment"><div><strong>${tx('几何','Geometry')}</strong>${esc(c.assessment.geometry)}</div><div><strong>${tx('分类','Semantics')}</strong>${esc(c.assessment.semantics)}</div><div><strong>${tx('实体','Entity')}</strong>${esc(c.assessment.entityMatch)}</div><div><strong>${tx('名称','Name')}</strong>${esc(c.assessment.nameMatch)}</div></div><p class="tiny"><strong>${tx('来源与许可','Provenance')}</strong><br>${esc(c.provenanceSummary)}</p><h3>${tx('来源状态','Provider state')}</h3>${providers}<h3>${tx('已知地物缺口','Known Feature Gaps')}</h3>${gaps||`<div class="card">${tx('无已知缺口','No known gaps')}</div>`}<h3>${tx('冲突','Conflicts')}</h3>${conflicts||`<div class="card">${tx('无未决冲突','No unresolved conflicts')}</div>`}<div class="no-draw">${tx('本工作流只审核来源证据；不提供五类空白绘制或截图恢复。','This workflow reviews source evidence only; no blank-canvas drawing or screenshot recovery is available.')}</div>`:`<h2>${tx('本类没有候选','No candidates in this category')}</h2>${providers}${gaps}`;document.getElementById('accept')?.addEventListener('click',()=>decision('accept'));document.getElementById('reject')?.addEventListener('click',()=>decision('reject'));document.getElementById('defer')?.addEventListener('click',()=>{const gap=desk.knownGaps.find(g=>g.acknowledged),reason=gap&&prompt(tx('输入结构化延后原因','Enter a structured deferral reason'));if(c&&gap&&reason){pending=true;post({type:'mapFoundationReviewDeferredRequested',category:desk.activeCategory,subjectId:c.id,structuredReason:reason,acknowledgedGapId:gap.id});render()}else if(!gap)alert(tx('请先确认一个已知地物缺口。','Acknowledge a Known Feature Gap first.'))});document.getElementById('revoke')?.addEventListener('click',()=>decision('revoke'));document.querySelectorAll('[data-gap]').forEach(b=>b.onclick=()=>post({type:'mapKnownFeatureGapAcknowledgementRequested',category:desk.activeCategory,gapId:b.dataset.gap,acknowledged:b.dataset.ack==='true'}));document.querySelectorAll('[data-separate]').forEach(b=>b.onclick=()=>post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:b.dataset.separate,resolution:{resolution:'keep_separate'}}));document.querySelectorAll('[data-contain]').forEach(b=>b.onclick=()=>{const x=desk.conflicts.find(v=>v.id===b.dataset.contain);post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:x.id,resolution:{resolution:'containment',containerId:x.subjectIds[0],memberId:x.subjectIds[1],containerGeneratesSurface:false}})});document.querySelectorAll('[data-group]').forEach(b=>b.onclick=()=>{const x=desk.conflicts.find(v=>v.id===b.dataset.group);post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:x.id,resolution:{resolution:'grouping',groupId:'group:'+x.id,primarySubjectId:x.subjectIds[0],supportingSubjectIds:x.subjectIds.slice(1)}})});document.querySelectorAll('[data-name]').forEach(b=>b.onclick=()=>{const x=desk.conflicts.find(v=>v.id===b.dataset.name),displayName=prompt(tx('输入证据支持的名称','Enter the evidence-backed name')),evidence=prompt(tx('输入证据 ID（逗号分隔）','Enter evidence IDs (comma-separated)'));if(displayName&&evidence)post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:x.id,resolution:{resolution:'naming',subjectId:x.subjectIds[0],displayName,evidenceIds:evidence.split(',').map(v=>v.trim()).filter(Boolean)}})});document.querySelectorAll('[data-repair]').forEach(b=>b.onclick=()=>{const x=desk.conflicts.find(v=>v.id===b.dataset.repair),digest=prompt(tx('输入审核几何 SHA-256','Enter review geometry SHA-256'));if(digest)post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:x.id,resolution:{resolution:'geometry_repair',subjectId:x.subjectIds[0],reviewGeometrySha256:digest}})});document.querySelectorAll('[data-attribute]').forEach(b=>b.onclick=()=>{const x=desk.conflicts.find(v=>v.id===b.dataset.attribute),attribute=prompt(tx('输入属性判定','Enter the attribute decision')),provenance=prompt(tx('输入来源 ID（逗号分隔）','Enter provenance IDs (comma-separated)'));if(attribute&&provenance)post({type:'mapFoundationConflictResolutionRequested',category:desk.activeCategory,conflictId:x.id,resolution:{resolution:'attribute',subjectId:x.subjectIds[0],attribute,provenanceIds:provenance.split(',').map(v=>v.trim()).filter(Boolean)}})})}
+function renderFooter(){const tab=activeTab(),pct=tab&&tab.total?Math.round(tab.disposed/tab.total*100):(desk.completionBlockedReason?0:100);document.getElementById('footer-title').textContent=(tab?.label||desk.activeCategory)+' · '+(tab?.disposed||0)+'/'+(tab?.total||0);const state=document.getElementById('footer-state');state.textContent=desk.completionBlockedReason||tx('所有候选已有处置，可明确完成本类审核。','Every candidate has a disposition; this category can be explicitly completed.');state.className='tiny '+(desk.completionBlockedReason?'blocked':'muted');document.getElementById('progress').style.width=pct+'%';const complete=document.getElementById('complete');complete.disabled=!!desk.completionBlockedReason||!!tab?.complete||pending;complete.textContent=tab?.complete?tx('✓ 已完成','✓ Complete'):tx('完成本类审核','Complete category')}
+function render(){renderTabs();renderQueue();renderEvidence();renderFooter();document.getElementById('map-badge').textContent=(activeTab()?.label||desk.activeCategory)+' · '+tx('地图仅供空间上下文','spatial context only');draw()}
+function batch(decision){if(!selected.size)return;pending=true;post({type:'mapFoundationBatchReviewRequested',category:desk.activeCategory,exactSubjectIds:[...selected],basisToken:desk.basisToken,expectedLedgerSequence:desk.ledgerSequence,decision});render()}
+document.getElementById('batch-accept').onclick=()=>batch('accept');document.getElementById('batch-reject').onclick=()=>batch('reject');document.getElementById('complete').onclick=()=>{pending=true;post({type:'mapFoundationCategoryCompletionRequested',category:desk.activeCategory});render()};
+window.applyFoundationReviewDesk=next=>{desk=next;selected.clear();pending=false;render()};render();if(boundary.length>=3)map.setFitView(null,false,[80,360,90,330]);
+</script></body></html>"#;
+        template
+            .replace("__ENGLISH__", english)
+            .replace("__SECURITY__", &security)
+            .replace("__KEY__", &key)
+            .replace("__DESK__", &desk)
+            .replace("__ZOOM__", &request.zoom.to_string())
+            .replace("__PITCH__", &request.pitch.to_string())
+            .replace("__ROTATION__", &request.rotation.to_string())
+            .replace("__LNG__", &request.center_lng.to_string())
+            .replace("__LAT__", &request.center_lat.to_string())
+            .replace("__BOUNDARY__", &boundary)
+            .replace("__CAMPUS__", &campus)
+    }
+
     fn map_html_request(command: &ToolCommand, boundary_desk: Option<&MapBoundaryDesk>) -> String {
         let ToolCommand::OpenMap {
             campus_name,
@@ -358,7 +442,7 @@ mod windows {
             boundary,
             purpose,
             overlays,
-            feature_kind,
+            feature_kind: _,
             english,
         } = command
         else {
@@ -373,13 +457,7 @@ mod windows {
         let boundary = serde_json::to_string(boundary).unwrap();
         let overlays = serde_json::to_string(overlays).unwrap();
         let boundary_desk = serde_json::to_string(&boundary_desk).unwrap();
-        let initial_points = if *purpose == MapPurpose::FoundationFeatureDrawing {
-            "[]".to_string()
-        } else {
-            boundary.clone()
-        };
-        let feature_kind =
-            serde_json::to_string(feature_kind.as_deref().unwrap_or("building")).unwrap();
+        let initial_points = boundary.clone();
         let (bar, editing_script) = match purpose {
             MapPurpose::CampusSelection => (
                 if *english {
@@ -469,41 +547,11 @@ renderDesk();"#
             ),
             MapPurpose::FoundationReview => (
                 if *english {
-                    r#"<span class="task">3 · Review foundation data</span><button id="query">Load open data for this view</button><button id="capture" class="secondary">Visual gap recovery</button>"#.to_string()
+                    r#"<span class="task">3 · Review pinned Foundation evidence</span><span class="hint">Use the list-first review queue; this map has no drawing or screenshot-recovery actions.</span>"#.to_string()
                 } else {
-                    r#"<span class="task">3 · 审核地基数据</span><button id="query">加载当前视野开放数据</button><button id="capture" class="secondary">视觉补缺</button>"#.to_string()
+                    r#"<span class="task">3 · 审核已固定的 Foundation 证据</span><span class="hint">请使用列表优先审核队列；此地图不提供绘制或截图恢复操作。</span>"#.to_string()
                 },
-                r#"
-const english=__ENGLISH__;
-document.getElementById('query').onclick=()=>{const b=map.getBounds();const sw=b.getSouthWest(),ne=b.getNorthEast();post({type:'mapCaptureRequested',southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat})};
-document.getElementById('capture').onclick=()=>{
-  const source=[...document.querySelectorAll('#map canvas')].sort((a,b)=>b.width*b.height-a.width*a.height)[0];
-  if(!source){post({type:'error',message:english?'No map canvas is available to capture':'当前地图没有可截取的画布'});return;}
-  const maxSide=800,scale=Math.min(1,maxSide/Math.max(source.width,source.height));
-  const target=document.createElement('canvas');
-  target.width=Math.max(1,Math.round(source.width*scale));target.height=Math.max(1,Math.round(source.height*scale));
-  const context=target.getContext('2d',{alpha:false});context.drawImage(source,0,0,target.width,target.height);
-  const b=map.getBounds(),sw=b.getSouthWest(),ne=b.getNorthEast();
-  post({type:'mapVisualCapture',imageDataUrl:target.toDataURL('image/png'),southWestLng:sw.lng,southWestLat:sw.lat,northEastLng:ne.lng,northEastLat:ne.lat});
-};"#
-                    .replace("__ENGLISH__", if *english { "true" } else { "false" }),
-            ),
-            MapPurpose::FoundationFeatureDrawing => (
-                if *english {
-                    r#"<button id="draw" class="secondary">Start points</button><button id="clear" class="secondary">Clear</button><button id="save">Save manual feature</button><span class="hint">Click to add nodes; roads need 2+, areas need 3+</span>"#.to_string()
-                } else {
-                    r#"<button id="draw" class="secondary">开始点选</button><button id="clear" class="secondary">清空</button><button id="save">保存手绘地物</button><span class="hint">单击依次添加节点；道路至少 2 点，区域至少 3 点</span>"#.to_string()
-                },
-                format!(
-                    r#"
-const featureKind={feature_kind};
-const english={english};
-drawing=true;
-document.getElementById('draw').onclick=()=>{{drawing=!drawing;document.getElementById('draw').textContent=drawing?(english?'Finish points':'完成点选'):(english?'Continue points':'继续点选');}};
-document.getElementById('clear').onclick=()=>{{points=[];redraw();}};
-document.getElementById('save').onclick=()=>{{const minimum=featureKind==='road'?2:3;if(points.length>=minimum)post({{type:'mapFeatureDrawn',kind:featureKind,points:points.map(p=>({{lng:p[0],lat:p[1]}}))}});}};"#,
-                    english = english
-                ),
+                String::new(),
             ),
             MapPurpose::BuildingEvidence => (
                 if *english {
@@ -552,6 +600,8 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
         use super::{full_window_bounds, map_html, MapPurpose, ToolCommand};
         use campus_tool_protocol::{
             MapBoundaryCandidate, MapBoundaryDesk, MapBoundaryDeskRequest, MapCoordinate,
+            MapEvidenceAssessment, MapFoundationReviewCandidate, MapFoundationReviewCategory,
+            MapFoundationReviewDesk, MapFoundationReviewDeskRequest, MapProviderOutcome,
         };
 
         fn map_command(purpose: MapPurpose) -> ToolCommand {
@@ -629,6 +679,69 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             }
         }
 
+        fn review_desk_command() -> ToolCommand {
+            ToolCommand::OpenFoundationReviewDesk {
+                request: Box::new(MapFoundationReviewDeskRequest {
+                    campus_name: "East China Normal University Putuo Campus".into(),
+                    center_lng: 121.4,
+                    center_lat: 31.2,
+                    zoom: 17.0,
+                    pitch: 45.0,
+                    rotation: 0.0,
+                    js_api_key: String::new(),
+                    security_code: String::new(),
+                    boundary: Vec::new(),
+                    desk: MapFoundationReviewDesk {
+                        categories: vec![MapFoundationReviewCategory {
+                            id: "building".into(),
+                            label: "Buildings".into(),
+                            acquisition_state: "complete".into(),
+                            disposed: 0,
+                            total: 1,
+                            pending: 1,
+                            blockers: 1,
+                            complete: false,
+                        }],
+                        active_category: "building".into(),
+                        candidates: vec![MapFoundationReviewCandidate {
+                            id: "building-1".into(),
+                            label: "Library".into(),
+                            disposition: "pending".into(),
+                            priority: "normal".into(),
+                            source_summary: "OSM relation/1".into(),
+                            lineage_summary: "OSM 2026-06".into(),
+                            provenance_summary: "ODbL-1.0".into(),
+                            geometry_form: "area".into(),
+                            subtype: Some("university".into()),
+                            width_summary: None,
+                            assessment: MapEvidenceAssessment {
+                                geometry: "source geometry".into(),
+                                semantics: "typed building".into(),
+                                entity_match: "entity review".into(),
+                                name_match: "unconfirmed".into(),
+                            },
+                            geometry: Vec::new(),
+                        }],
+                        selected_candidate_id: Some("building-1".into()),
+                        provider_outcomes: vec![MapProviderOutcome {
+                            provider: "osm".into(),
+                            tile_id: "tile-1".into(),
+                            state: "complete".into(),
+                            summary: "1 record".into(),
+                        }],
+                        known_gaps: Vec::new(),
+                        conflicts: Vec::new(),
+                        basis_token: "{}".into(),
+                        ledger_sequence: 0,
+                        completion_blocked_reason: Some(
+                            "1 pending candidate requires a disposition".into(),
+                        ),
+                    },
+                    english: true,
+                }),
+            }
+        }
+
         #[test]
         fn webview_bounds_fill_the_window_at_any_scale_factor() {
             let standard = full_window_bounds(1100, 760, 1.0);
@@ -691,11 +804,26 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             assert!(!boundary.contains("Visual gap recovery"));
 
             let review = map_html(&map_command(MapPurpose::FoundationReview));
-            assert!(review.contains("Review foundation data"));
-            assert!(review.contains("Load open data for this view"));
-            assert!(review.contains("Visual gap recovery"));
+            assert!(review.contains("Review pinned Foundation evidence"));
+            assert!(review.contains("list-first review queue"));
+            assert!(!review.contains("Load open data for this view"));
+            assert!(!review.contains("Visual gap recovery"));
+            assert!(!review.contains("mapCaptureRequested"));
+            assert!(!review.contains("mapVisualCapture"));
+            assert!(!review.contains("mapFeatureDrawn"));
             assert!(!review.contains("Search Gaode"));
             assert!(!review.contains("Confirm boundary"));
+
+            let review_queue = map_html(&review_desk_command());
+            assert!(review_queue.contains("Foundation five-category review"));
+            assert!(review_queue.contains("Candidate queue"));
+            assert!(review_queue.contains("Evidence assessment"));
+            assert!(review_queue.contains("Known Feature Gaps"));
+            assert!(review_queue.contains("mapFoundationBatchReviewRequested"));
+            assert!(review_queue.contains("window.applyFoundationReviewDesk"));
+            assert!(review_queue.contains("no blank-canvas drawing or screenshot recovery"));
+            assert!(!review_queue.contains("Visual gap recovery"));
+            assert!(!review_queue.contains("MapFeatureDrawn"));
         }
     }
 }

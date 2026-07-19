@@ -1,6 +1,10 @@
 mod boundary_review;
-mod foundation_evidence;
-mod schema2_project;
+mod detailed_building_workspace;
+mod detailed_rule_stack;
+mod foundation_sources;
+mod foundation_workflow;
+mod project_session;
+mod reconstruction_workflow;
 
 pub use boundary_review::{
     validate_boundary_geometry, BoundaryCandidateAssessment, BoundaryCandidateDerivation,
@@ -8,8 +12,23 @@ pub use boundary_review::{
     BoundaryEvidenceAvailability, BoundaryEvidenceDesk, BoundaryEvidenceDeskProjection,
     BoundaryGeometryValidity, BoundaryInteractionMode, BoundaryRecoveryAction, BoundaryVertexRef,
 };
-pub use foundation_evidence::*;
-pub use schema2_project::*;
+pub use detailed_building_workspace::{
+    DetailedBuildingWorkspace, DetailedBuildingWorkspaceProjection, DetailedBuildingWorkspaceTask,
+};
+pub use detailed_rule_stack::{CompiledDetailedBuildingRules, DetailedBuildingRuleStack};
+pub use foundation_sources::{
+    normalize_candidate_confidence, FoundationReviewLedgerEntry, FoundationSourceProvider,
+    FoundationSourceRegistry, FoundationSourceSnapshot, FoundationSourceStatus,
+};
+
+pub use foundation_workflow::{
+    FoundationMapTask, FoundationPhase, FoundationWorkflow, FoundationWorkflowIntent,
+    FoundationWorkflowProjection,
+};
+pub use reconstruction_workflow::{
+    CampusReconstructionWorkflow, CampusReconstructionWorkflowProjection, DetailedBuildingHandoff,
+    ReconstructionWorkflowError, ReconstructionWorkflowIntent,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -437,6 +456,33 @@ pub enum ReviewDecision {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CandidateConfidence {
+    #[default]
+    #[serde(rename = "high", alias = "较高", alias = "高")]
+    High,
+    #[serde(rename = "medium", alias = "中等", alias = "中", alias = "manual")]
+    Medium,
+    #[serde(rename = "low", alias = "较低", alias = "低")]
+    Low,
+}
+
+impl CandidateConfidence {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::High => "高",
+            Self::Medium => "中",
+            Self::Low => "低",
+        }
+    }
+}
+
+impl std::fmt::Display for CandidateConfidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CandidateConfidenceFilter {
     #[default]
@@ -519,7 +565,10 @@ pub struct MapCandidate {
     pub name: String,
     pub kind: FeatureKind,
     pub source: String,
-    pub confidence: String,
+    #[serde(default)]
+    pub confidence: CandidateConfidence,
+    #[serde(default)]
+    pub source_snapshot_id: Option<String>,
     pub points: Vec<GeoPoint>,
     #[serde(default)]
     pub height_m: Option<f64>,
@@ -598,6 +647,7 @@ pub struct BuildingRefinement {
     pub slot_id: String,
     pub version: u32,
     pub status: RefinementStatus,
+    #[serde(default, skip_serializing)]
     pub generated_path: PathBuf,
     pub style_preset: ArnisStylePreset,
     pub wall_block: Option<String>,
@@ -945,6 +995,143 @@ impl ArnisStylePreset {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingFunction {
+    Teaching,
+    Dormitory,
+    Library,
+    Administration,
+    Laboratory,
+    Sports,
+    Dining,
+    Service,
+    #[default]
+    Unknown,
+}
+
+impl BuildingFunction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Teaching => "教学",
+            Self::Dormitory => "宿舍",
+            Self::Library => "图书馆",
+            Self::Administration => "行政办公",
+            Self::Laboratory => "实验科研",
+            Self::Sports => "体育",
+            Self::Dining => "餐饮",
+            Self::Service => "后勤服务",
+            Self::Unknown => "待识别用途",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildingFunctionClassification {
+    pub slot_id: String,
+    pub function: BuildingFunction,
+    pub confidence: u8,
+    pub reasons: Vec<String>,
+    pub inferred_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ParametricBuildingTemplate {
+    pub id: String,
+    pub version: String,
+    pub label: String,
+    pub building_function: BuildingFunction,
+    pub arnis_style: ArnisStylePreset,
+    pub project_local: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateMatchProposal {
+    pub slot_id: String,
+    pub template: ParametricBuildingTemplate,
+    pub confidence: u8,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedBuildingTemplate {
+    pub slot_id: String,
+    pub template: ParametricBuildingTemplate,
+    pub selected_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum FacadeRuleKind {
+    FloorRhythm,
+    BayRhythm,
+    WindowPattern,
+    Entrance,
+    Roof,
+    WallMaterial,
+    AccentMaterial,
+    Cornice,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DetailedRuleSource {
+    Template,
+    AutomatedDraft,
+    PhotoOverride,
+    ManualOverride,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DetailedRuleStatus {
+    #[default]
+    Proposed,
+    Accepted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableFacadeRule {
+    pub id: String,
+    pub slot_id: String,
+    pub kind: FacadeRuleKind,
+    pub value: String,
+    pub source: DetailedRuleSource,
+    pub status: DetailedRuleStatus,
+    pub confidence: u8,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FacadeReconstructionDraft {
+    pub id: String,
+    pub slot_id: String,
+    pub model_version: String,
+    pub confidence: u8,
+    #[serde(default)]
+    pub rules: Vec<EditableFacadeRule>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEvidenceAsset {
+    pub id: String,
+    pub slot_id: String,
+    pub relative_path: String,
+    pub source_name: String,
+    pub added_at_unix_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailedBuildingState {
@@ -953,6 +1140,7 @@ pub struct DetailedBuildingState {
     pub wall_block: Option<String>,
     pub window_density: u8,
     pub wall_depth: u8,
+    #[serde(default, skip_serializing)]
     pub generated_path: Option<PathBuf>,
     #[serde(default)]
     pub refinements: Vec<BuildingRefinement>,
@@ -962,6 +1150,16 @@ pub struct DetailedBuildingState {
     pub external_models: Vec<ExternalModelReview>,
     #[serde(default)]
     pub source_conflicts: Vec<SourceConflictReview>,
+    #[serde(default)]
+    pub evidence_assets: Vec<LocalEvidenceAsset>,
+    #[serde(default)]
+    pub function_classifications: Vec<BuildingFunctionClassification>,
+    #[serde(default)]
+    pub template_proposals: Vec<TemplateMatchProposal>,
+    #[serde(default)]
+    pub selected_templates: Vec<SelectedBuildingTemplate>,
+    #[serde(default)]
+    pub facade_drafts: Vec<FacadeReconstructionDraft>,
 }
 
 impl Default for DetailedBuildingState {
@@ -977,6 +1175,11 @@ impl Default for DetailedBuildingState {
             semantic_features: Vec::new(),
             external_models: Vec::new(),
             source_conflicts: Vec::new(),
+            evidence_assets: Vec::new(),
+            function_classifications: Vec::new(),
+            template_proposals: Vec::new(),
+            selected_templates: Vec::new(),
+            facade_drafts: Vec::new(),
         }
     }
 }
@@ -1004,6 +1207,10 @@ pub struct CampusProject {
     pub map_view: MapViewState,
     #[serde(default)]
     pub candidates: Vec<MapCandidate>,
+    #[serde(default)]
+    pub foundation_source_snapshots: Vec<FoundationSourceSnapshot>,
+    #[serde(default)]
+    pub foundation_review_ledger: Vec<FoundationReviewLedgerEntry>,
     #[serde(default)]
     pub features: Vec<MapFeature>,
     #[serde(default)]
@@ -1043,6 +1250,8 @@ impl CampusProject {
             blocks_per_meter: 1.0,
             map_view: MapViewState::default(),
             candidates: Vec::new(),
+            foundation_source_snapshots: Vec::new(),
+            foundation_review_ledger: Vec::new(),
             features: Vec::new(),
             building_slots: Vec::new(),
             building_directory: Vec::new(),
@@ -1099,6 +1308,7 @@ impl CampusProject {
                 updated_at_unix_ms: now_unix_ms(),
             });
         }
+        FoundationSourceRegistry::record_review(self, id, ReviewDecision::Accepted);
         true
     }
 
@@ -1124,6 +1334,236 @@ impl CampusProject {
             .style(FeatureKind::Road)
             .and_then(|style| style.width)
             .unwrap_or_else(|| self.foundation_style_preset.road_width_blocks())
+    }
+
+    pub fn refresh_detailed_plan_for_slot(
+        &mut self,
+        slot_id: &str,
+    ) -> Option<BuildingFunctionClassification> {
+        let slot = self
+            .building_slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .cloned()?;
+        let candidate = self
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == slot_id);
+        let mut searchable = slot.name.to_lowercase();
+        if let Some(candidate) = candidate {
+            searchable.push(' ');
+            searchable.push_str(&candidate.name.to_lowercase());
+            for (key, value) in &candidate.tags {
+                searchable.push(' ');
+                searchable.push_str(&key.to_lowercase());
+                searchable.push(' ');
+                searchable.push_str(&value.to_lowercase());
+            }
+        }
+        let (function, confidence, reason) =
+            if contains_any(&searchable, &["宿舍", "dorm", "residential"]) {
+                (
+                    BuildingFunction::Dormitory,
+                    92,
+                    "名称或地图标签指向宿舍/居住用途",
+                )
+            } else if contains_any(&searchable, &["图书", "library"]) {
+                (BuildingFunction::Library, 94, "名称或地图标签指向图书馆")
+            } else if contains_any(&searchable, &["行政", "办公", "office", "administration"]) {
+                (
+                    BuildingFunction::Administration,
+                    86,
+                    "名称或地图标签指向行政办公",
+                )
+            } else if contains_any(
+                &searchable,
+                &["实验", "科研", "lab", "laboratory", "research"],
+            ) {
+                (
+                    BuildingFunction::Laboratory,
+                    86,
+                    "名称或地图标签指向实验科研",
+                )
+            } else if contains_any(&searchable, &["体育", "球场", "gym", "stadium", "sports"]) {
+                (BuildingFunction::Sports, 86, "名称或地图标签指向体育用途")
+            } else if contains_any(
+                &searchable,
+                &["食堂", "餐厅", "dining", "canteen", "restaurant"],
+            ) {
+                (BuildingFunction::Dining, 90, "名称或地图标签指向餐饮用途")
+            } else if contains_any(&searchable, &["后勤", "维修", "service", "utility"]) {
+                (BuildingFunction::Service, 78, "名称或地图标签指向后勤服务")
+            } else if contains_any(
+                &searchable,
+                &["教学", "教室", "lecture", "classroom", "school"],
+            ) {
+                (BuildingFunction::Teaching, 84, "名称或地图标签指向教学用途")
+            } else {
+                (
+                    BuildingFunction::Unknown,
+                    35,
+                    "缺少可验证的名称或地图用途证据",
+                )
+            };
+        let classification = BuildingFunctionClassification {
+            slot_id: slot_id.to_string(),
+            function,
+            confidence,
+            reasons: vec![reason.into()],
+            inferred_at_unix_ms: now_unix_ms(),
+        };
+        self.detailed
+            .function_classifications
+            .retain(|entry| entry.slot_id != slot_id);
+        self.detailed
+            .function_classifications
+            .push(classification.clone());
+        self.detailed
+            .template_proposals
+            .retain(|proposal| proposal.slot_id != slot_id);
+        for (index, style) in template_styles_for_function(function).iter().enumerate() {
+            let template = ParametricBuildingTemplate {
+                id: format!("arnis:{}:v1", style.slug()),
+                version: "v1".into(),
+                label: style.label().into(),
+                building_function: function,
+                arnis_style: *style,
+                project_local: false,
+            };
+            self.detailed
+                .template_proposals
+                .push(TemplateMatchProposal {
+                    slot_id: slot_id.to_string(),
+                    template,
+                    confidence: [82, 63, 45].get(index).copied().unwrap_or(40),
+                    rationale: format!(
+                        "依据{}用途分类；可在生成前显式选择或更换。",
+                        function.label()
+                    ),
+                });
+        }
+        Some(classification)
+    }
+
+    pub fn select_template_for_slot(
+        &mut self,
+        slot_id: &str,
+        template_id: &str,
+    ) -> Result<(), String> {
+        let proposal = self
+            .detailed
+            .template_proposals
+            .iter()
+            .find(|proposal| proposal.slot_id == slot_id && proposal.template.id == template_id)
+            .cloned()
+            .ok_or("建筑模板提案不存在，请先刷新自动匹配")?;
+        let slot = self
+            .building_slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .cloned()
+            .ok_or("建筑槽位不存在")?;
+        self.detailed
+            .selected_templates
+            .retain(|selection| selection.slot_id != slot_id);
+        self.detailed
+            .selected_templates
+            .push(SelectedBuildingTemplate {
+                slot_id: slot_id.to_string(),
+                template: proposal.template.clone(),
+                selected_at_unix_ms: now_unix_ms(),
+            });
+        self.detailed.style_preset = proposal.template.arnis_style;
+        let rules = vec![
+            EditableFacadeRule {
+                id: format!("{slot_id}:template:floor-rhythm"),
+                slot_id: slot_id.to_string(),
+                kind: FacadeRuleKind::FloorRhythm,
+                value: slot
+                    .floors
+                    .map(|floors| format!("{floors} floors"))
+                    .unwrap_or_else(|| "infer from massing".into()),
+                source: DetailedRuleSource::Template,
+                status: DetailedRuleStatus::Accepted,
+                confidence: 100,
+                evidence_ids: Vec::new(),
+            },
+            EditableFacadeRule {
+                id: format!("{slot_id}:template:window-pattern"),
+                slot_id: slot_id.to_string(),
+                kind: FacadeRuleKind::WindowPattern,
+                value: format!("density:{}", self.detailed.window_density),
+                source: DetailedRuleSource::Template,
+                status: DetailedRuleStatus::Accepted,
+                confidence: 100,
+                evidence_ids: Vec::new(),
+            },
+            EditableFacadeRule {
+                id: format!("{slot_id}:template:roof"),
+                slot_id: slot_id.to_string(),
+                kind: FacadeRuleKind::Roof,
+                value: slot.roof_shape.unwrap_or_else(|| "template-default".into()),
+                source: DetailedRuleSource::Template,
+                status: DetailedRuleStatus::Accepted,
+                confidence: 100,
+                evidence_ids: Vec::new(),
+            },
+        ];
+        self.detailed.facade_drafts.push(FacadeReconstructionDraft {
+            id: format!("{slot_id}:template:{}", proposal.template.id),
+            slot_id: slot_id.to_string(),
+            model_version: "template-catalog/v1".into(),
+            confidence: proposal.confidence,
+            rules,
+            evidence_ids: Vec::new(),
+        });
+        Ok(())
+    }
+
+    pub fn record_local_evidence(
+        &mut self,
+        slot_id: &str,
+        relative_path: impl Into<String>,
+        source_name: impl Into<String>,
+    ) -> Result<String, String> {
+        if !self.building_slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("建筑槽位不存在".into());
+        }
+        let relative_path = relative_path.into();
+        if relative_path.is_empty() || std::path::Path::new(&relative_path).is_absolute() {
+            return Err("照片证据必须使用项目内相对路径".into());
+        }
+        let id = format!(
+            "{slot_id}:evidence:{}",
+            self.detailed.evidence_assets.len() + 1
+        );
+        self.detailed.evidence_assets.push(LocalEvidenceAsset {
+            id: id.clone(),
+            slot_id: slot_id.to_string(),
+            relative_path,
+            source_name: source_name.into(),
+            added_at_unix_ms: now_unix_ms(),
+        });
+        Ok(id)
+    }
+
+    pub fn classification_for_slot(
+        &self,
+        slot_id: &str,
+    ) -> Option<&BuildingFunctionClassification> {
+        self.detailed
+            .function_classifications
+            .iter()
+            .find(|classification| classification.slot_id == slot_id)
+    }
+
+    pub fn template_proposals_for_slot(&self, slot_id: &str) -> Vec<&TemplateMatchProposal> {
+        self.detailed
+            .template_proposals
+            .iter()
+            .filter(|proposal| proposal.slot_id == slot_id)
+            .take(3)
+            .collect()
     }
 
     pub fn next_refinement_version(&self, slot_id: &str) -> u32 {
@@ -1316,6 +1756,11 @@ impl CampusProject {
         }
     }
 
+    pub fn select_campus_target(&mut self, target: CampusTargetEvidence) {
+        let _ =
+            FoundationWorkflow::apply(self, FoundationWorkflowIntent::SelectCampusTarget(target));
+    }
+
     pub fn review_external_model(
         &mut self,
         id: &str,
@@ -1385,6 +1830,7 @@ impl CampusProject {
         self.features
             .retain(|feature| feature.source_id.as_deref() != Some(id));
         self.building_slots.retain(|slot| slot.id != id);
+        FoundationSourceRegistry::record_review(self, id, ReviewDecision::Rejected);
         true
     }
 
@@ -1396,6 +1842,7 @@ impl CampusProject {
         self.features
             .retain(|feature| feature.source_id.as_deref() != Some(id));
         self.building_slots.retain(|slot| slot.id != id);
+        FoundationSourceRegistry::record_review(self, id, ReviewDecision::Pending);
         true
     }
 
@@ -1532,10 +1979,61 @@ impl CampusProject {
     }
 
     pub fn confirm_step(&mut self) {
-        if !self.completed_steps.contains(&self.foundation_step) {
-            self.completed_steps.push(self.foundation_step);
-        }
-        self.foundation_step = self.foundation_step.next();
+        let _ = FoundationWorkflow::apply(self, FoundationWorkflowIntent::CompleteCurrentStep);
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn template_styles_for_function(function: BuildingFunction) -> [ArnisStylePreset; 3] {
+    match function {
+        BuildingFunction::Teaching => [
+            ArnisStylePreset::School,
+            ArnisStylePreset::Office,
+            ArnisStylePreset::Historic,
+        ],
+        BuildingFunction::Dormitory => [
+            ArnisStylePreset::Residential,
+            ArnisStylePreset::House,
+            ArnisStylePreset::School,
+        ],
+        BuildingFunction::Library => [
+            ArnisStylePreset::School,
+            ArnisStylePreset::Historic,
+            ArnisStylePreset::Commercial,
+        ],
+        BuildingFunction::Administration => [
+            ArnisStylePreset::Office,
+            ArnisStylePreset::School,
+            ArnisStylePreset::Historic,
+        ],
+        BuildingFunction::Laboratory => [
+            ArnisStylePreset::School,
+            ArnisStylePreset::Industrial,
+            ArnisStylePreset::Office,
+        ],
+        BuildingFunction::Sports => [
+            ArnisStylePreset::School,
+            ArnisStylePreset::Warehouse,
+            ArnisStylePreset::Commercial,
+        ],
+        BuildingFunction::Dining => [
+            ArnisStylePreset::Commercial,
+            ArnisStylePreset::School,
+            ArnisStylePreset::Hotel,
+        ],
+        BuildingFunction::Service => [
+            ArnisStylePreset::Warehouse,
+            ArnisStylePreset::Garage,
+            ArnisStylePreset::School,
+        ],
+        BuildingFunction::Unknown => [
+            ArnisStylePreset::School,
+            ArnisStylePreset::Office,
+            ArnisStylePreset::Residential,
+        ],
     }
 }
 
@@ -2048,11 +2546,13 @@ fn legacy_project_from_value(value: &serde_json::Value) -> Result<CampusProject,
                     .and_then(|value| value.as_str())
                     .unwrap_or("旧版项目")
                     .to_string(),
-                confidence: candidate
-                    .get("confidence")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("medium")
-                    .to_string(),
+                confidence: normalize_candidate_confidence(
+                    candidate
+                        .get("confidence")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("medium"),
+                ),
+                source_snapshot_id: None,
                 points: points_from_value(
                     candidate
                         .pointer("/geometry/points")
@@ -2300,7 +2800,8 @@ mod tests {
             name: "图书馆".into(),
             kind: FeatureKind::Building,
             source: "osm".into(),
-            confidence: "high".into(),
+            confidence: CandidateConfidence::High,
+            source_snapshot_id: None,
             points: vec![GeoPoint { lng: 1.0, lat: 2.0 }],
             height_m: Some(18.0),
             floors: Some(4),
@@ -2384,7 +2885,8 @@ mod tests {
             name: "Neighbor".into(),
             kind: FeatureKind::Building,
             source: "osm".into(),
-            confidence: "low".into(),
+            confidence: CandidateConfidence::Low,
+            source_snapshot_id: None,
             points: vec![
                 GeoPoint { lng: 1.0, lat: 2.0 },
                 GeoPoint {
@@ -2528,4 +3030,110 @@ mod tests {
         assert_eq!(project.detailed.semantic_features.len(), 1);
         assert_eq!(project.detailed.semantic_features[0].affected_blocks, 15);
     }
+
+    #[test]
+    fn detailed_template_plan_is_explicit_and_portable() {
+        let mut project = CampusProject::new("test", "campus");
+        project.building_slots.push(BuildingSlot {
+            id: "dormitory-a".into(),
+            name: "第一学生宿舍".into(),
+            footprint: Vec::new(),
+            height_m: Some(18.0),
+            floors: Some(5),
+            roof_shape: Some("flat".into()),
+            refined: false,
+        });
+        project.record_refinement_draft(
+            "dormitory-a",
+            1,
+            PathBuf::from(r"C:\machine-specific\dormitory-a-v1.json"),
+        );
+
+        let classification = project
+            .refresh_detailed_plan_for_slot("dormitory-a")
+            .expect("slot is present");
+        assert_eq!(classification.function, BuildingFunction::Dormitory);
+        let proposals = project.template_proposals_for_slot("dormitory-a");
+        assert_eq!(proposals.len(), 3);
+        assert_eq!(
+            proposals[0].template.arnis_style,
+            ArnisStylePreset::Residential
+        );
+        let template_id = proposals[0].template.id.clone();
+        project
+            .select_template_for_slot("dormitory-a", &template_id)
+            .unwrap();
+        assert_eq!(project.detailed.selected_templates.len(), 1);
+        assert_eq!(project.detailed.facade_drafts.len(), 1);
+        assert!(project.detailed.facade_drafts[0]
+            .rules
+            .iter()
+            .all(|rule| rule.source == DetailedRuleSource::Template));
+        project
+            .record_local_evidence("dormitory-a", "evidence/dormitory-a/front.jpg", "front.jpg")
+            .unwrap();
+        assert!(project
+            .record_local_evidence("dormitory-a", r"C:\absolute.jpg", "absolute.jpg")
+            .is_err());
+
+        let serialized = serde_json::to_string(&project).unwrap();
+        assert!(!serialized.contains("machine-specific"));
+        assert!(serialized.contains("templateProposals"));
+        assert!(serialized.contains("evidence/dormitory-a/front.jpg"));
+    }
+
+    #[test]
+    fn campus_selection_advances_scope_and_prevents_cross_campus_data_leaks() {
+        let target = |poi_id: &str, name: &str| CampusTargetEvidence {
+            poi_id: poi_id.into(),
+            name: name.into(),
+            gcj02: GeoPoint {
+                lng: 121.4,
+                lat: 31.2,
+            },
+            wgs84: GeoPoint {
+                lng: 121.395,
+                lat: 31.202,
+            },
+            acquisition: "gaode_poi_search".into(),
+        };
+        let mut project = CampusProject::new("test", "search terms");
+
+        project.select_campus_target(target("campus-a", "校区 A"));
+        assert_eq!(project.foundation_step, FoundationStep::Boundary);
+        assert_eq!(project.completed_steps, vec![FoundationStep::Campus]);
+
+        project.boundary = vec![GeoPoint { lng: 1.0, lat: 1.0 }];
+        project.completed_steps.push(FoundationStep::Orientation);
+        project.select_campus_target(target("campus-a", "校区 A"));
+        assert_eq!(
+            project.boundary.len(),
+            1,
+            "same-campus re-selection is non-destructive"
+        );
+        assert!(project
+            .completed_steps
+            .contains(&FoundationStep::Orientation));
+
+        project.building_slots.push(BuildingSlot {
+            id: "old-building".into(),
+            name: "旧校区建筑".into(),
+            footprint: Vec::new(),
+            height_m: None,
+            floors: None,
+            roof_shape: None,
+            refined: false,
+        });
+        project.select_campus_target(target("campus-b", "校区 B"));
+        assert!(project.boundary.is_empty());
+        assert!(project.building_slots.is_empty());
+        assert_eq!(project.campus_name, "校区 B");
+    }
 }
+mod foundation_evidence;
+mod foundation_review;
+mod schema2_project;
+
+pub use foundation_evidence::*;
+pub use foundation_review::*;
+pub use schema2_project::*;

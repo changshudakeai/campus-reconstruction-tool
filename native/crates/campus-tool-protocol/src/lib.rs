@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -18,7 +18,6 @@ pub enum MapPurpose {
     CampusSelection,
     CampusBoundary,
     FoundationReview,
-    FoundationFeatureDrawing,
     BuildingEvidence,
 }
 
@@ -81,6 +80,158 @@ pub struct MapBoundaryDeskRequest {
     pub desk: MapBoundaryDesk,
     #[serde(default)]
     pub english: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapFoundationReviewCategory {
+    pub id: String,
+    pub label: String,
+    pub acquisition_state: String,
+    pub disposed: usize,
+    pub total: usize,
+    pub pending: usize,
+    pub blockers: usize,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapEvidenceAssessment {
+    pub geometry: String,
+    pub semantics: String,
+    pub entity_match: String,
+    pub name_match: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapFoundationReviewCandidate {
+    pub id: String,
+    pub label: String,
+    pub disposition: String,
+    pub priority: String,
+    pub source_summary: String,
+    pub lineage_summary: String,
+    pub provenance_summary: String,
+    pub geometry_form: String,
+    #[serde(default)]
+    pub subtype: Option<String>,
+    #[serde(default)]
+    pub width_summary: Option<String>,
+    pub assessment: MapEvidenceAssessment,
+    #[serde(default)]
+    pub geometry: Vec<Vec<MapCoordinate>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapProviderOutcome {
+    pub provider: String,
+    pub tile_id: String,
+    pub state: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapKnownFeatureGap {
+    pub id: String,
+    pub location_summary: String,
+    pub attempted_evidence: String,
+    pub generation_impact: String,
+    pub status: String,
+    pub history_summary: String,
+    pub acknowledged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapReviewConflict {
+    pub id: String,
+    pub kind: String,
+    pub explanation: String,
+    pub subject_ids: Vec<String>,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapFoundationReviewDesk {
+    pub categories: Vec<MapFoundationReviewCategory>,
+    pub active_category: String,
+    pub candidates: Vec<MapFoundationReviewCandidate>,
+    #[serde(default)]
+    pub selected_candidate_id: Option<String>,
+    pub provider_outcomes: Vec<MapProviderOutcome>,
+    pub known_gaps: Vec<MapKnownFeatureGap>,
+    pub conflicts: Vec<MapReviewConflict>,
+    pub basis_token: String,
+    pub ledger_sequence: u64,
+    #[serde(default)]
+    pub completion_blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapFoundationReviewDeskRequest {
+    pub campus_name: String,
+    pub center_lng: f64,
+    pub center_lat: f64,
+    pub zoom: f64,
+    pub pitch: f64,
+    pub rotation: f64,
+    pub js_api_key: String,
+    pub security_code: String,
+    pub boundary: Vec<MapCoordinate>,
+    pub desk: MapFoundationReviewDesk,
+    #[serde(default)]
+    pub english: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MapFoundationCandidateDecision {
+    Accept,
+    Reject,
+    Revoke,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MapFoundationBatchDecision {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "resolution")]
+pub enum MapFoundationConflictResolution {
+    KeepSeparate,
+    Grouping {
+        group_id: String,
+        primary_subject_id: String,
+        supporting_subject_ids: Vec<String>,
+    },
+    Containment {
+        container_id: String,
+        member_id: String,
+        container_generates_surface: bool,
+    },
+    Naming {
+        subject_id: String,
+        display_name: String,
+        evidence_ids: Vec<String>,
+    },
+    GeometryRepair {
+        subject_id: String,
+        review_geometry_sha256: String,
+    },
+    Attribute {
+        subject_id: String,
+        attribute: String,
+        provenance_ids: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -152,6 +303,12 @@ pub enum ToolCommand {
     UpdateBoundaryDesk {
         desk: MapBoundaryDesk,
     },
+    OpenFoundationReviewDesk {
+        request: Box<MapFoundationReviewDeskRequest>,
+    },
+    UpdateFoundationReviewDesk {
+        desk: MapFoundationReviewDesk,
+    },
     OpenPreview {
         model_path: String,
         title: String,
@@ -222,22 +379,43 @@ pub enum ToolEvent {
     },
     MapBoundaryRetryRequested,
     MapBoundaryReturnToCampusRequested,
-    MapFeatureDrawn {
-        kind: String,
-        points: Vec<MapCoordinate>,
+    MapFoundationReviewCategorySelected {
+        category: String,
     },
-    MapCaptureRequested {
-        south_west_lng: f64,
-        south_west_lat: f64,
-        north_east_lng: f64,
-        north_east_lat: f64,
+    MapFoundationReviewCandidateSelected {
+        category: String,
+        subject_id: String,
     },
-    MapVisualCapture {
-        image_data_url: String,
-        south_west_lng: f64,
-        south_west_lat: f64,
-        north_east_lng: f64,
-        north_east_lat: f64,
+    MapFoundationReviewDecisionRequested {
+        category: String,
+        subject_id: String,
+        decision: MapFoundationCandidateDecision,
+    },
+    MapFoundationReviewDeferredRequested {
+        category: String,
+        subject_id: String,
+        structured_reason: String,
+        acknowledged_gap_id: String,
+    },
+    MapFoundationBatchReviewRequested {
+        category: String,
+        exact_subject_ids: Vec<String>,
+        basis_token: String,
+        expected_ledger_sequence: u64,
+        decision: MapFoundationBatchDecision,
+    },
+    MapKnownFeatureGapAcknowledgementRequested {
+        category: String,
+        gap_id: String,
+        acknowledged: bool,
+    },
+    MapFoundationConflictResolutionRequested {
+        category: String,
+        conflict_id: String,
+        resolution: MapFoundationConflictResolution,
+    },
+    MapFoundationCategoryCompletionRequested {
+        category: String,
     },
     PreviewBlockSelected {
         x: i32,
@@ -344,6 +522,36 @@ mod tests {
         assert_eq!(json["operation"]["type"], "move_vertex");
         assert_eq!(json["operation"]["vertexIndex"], 2);
         assert!(json["operation"].get("points").is_none());
+    }
+
+    #[tokio::test]
+    async fn list_first_foundation_review_actions_round_trip_without_drawing_commands() {
+        let event = ToolEvent::MapFoundationBatchReviewRequested {
+            category: "vegetation".into(),
+            exact_subject_ids: vec!["tree-row".into(), "tree-area".into()],
+            basis_token: "basis-v7".into(),
+            expected_ledger_sequence: 12,
+            decision: MapFoundationBatchDecision::Reject,
+        };
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &event).await.unwrap();
+        let restored: ToolEvent = read_message(&mut bytes.as_slice()).await.unwrap();
+        assert_eq!(restored, event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "mapFoundationBatchReviewRequested");
+        assert_eq!(json["decision"], "reject");
+        assert_eq!(json["exactSubjectIds"].as_array().unwrap().len(), 2);
+
+        let deferred = ToolEvent::MapFoundationReviewDeferredRequested {
+            category: "water".into(),
+            subject_id: "water-centreline".into(),
+            structured_reason: "source coverage ended before the full channel".into(),
+            acknowledged_gap_id: "gap:water:overture:tile-7".into(),
+        };
+        let json = serde_json::to_value(&deferred).unwrap();
+        assert_eq!(json["type"], "mapFoundationReviewDeferredRequested");
+        assert_eq!(json["subjectId"], "water-centreline");
+        assert_eq!(json["acknowledgedGapId"], "gap:water:overture:tile-7");
     }
 
     #[tokio::test]

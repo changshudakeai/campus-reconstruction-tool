@@ -1,10 +1,15 @@
 use crate::{
     validate_boundary_geometry, BoundaryCandidate, BoundaryCandidateAssessment,
     BoundaryCandidateValidity, BoundaryDiscoverySnapshot, BoundaryEvidenceDesk,
-    BuildingEntityDecision, BuildingEntityReviewLedger, BuildingGenerationBasis,
-    BuildingNameEvidence, FoundationAcquisitionCheckpoint, FoundationCategory,
-    ProviderOutcomeStatus, ResultManifest, ReviewedBuildingEntity, SourceGeometry,
-    SourceObservation,
+    BuildingBoundaryDecision, BuildingEntityDecision, BuildingEntityReviewLedger,
+    BuildingGenerationBasis, BuildingNameEvidence, BuildingNameResolution,
+    CandidateReviewDisposition, FoundationAcquisitionCheckpoint, FoundationBatchDecision,
+    FoundationBatchReview, FoundationCandidateDecision, FoundationCategory,
+    FoundationCategoryProgress, FoundationReviewAction, FoundationReviewConflict,
+    FoundationReviewOperation, FoundationReviewQueueProjection, FoundationReviewState,
+    KnownFeatureGap, KnownFeatureGapHistoryAction, KnownFeatureGapLocation, KnownFeatureGapStatus,
+    ProviderOutcomeStatus, ResultManifest, ReviewConflictResolution, ReviewedBuildingEntity,
+    SourceGeometry, SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -284,6 +289,12 @@ pub enum FoundationReviewDisposition {
     KnownGap {
         reasons: Vec<String>,
     },
+    ReviewedQueue {
+        accepted_evidence_ids: Vec<String>,
+        rejected_evidence_ids: Vec<String>,
+        deferred_evidence_ids: Vec<String>,
+        acknowledged_gap_ids: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -318,12 +329,16 @@ pub struct FoundationReviewEntry {
     pub before: Option<FoundationReviewDisposition>,
     pub after: FoundationReviewDisposition,
     pub recorded_at_unix_ms: u64,
+    #[serde(default)]
+    pub operation_sequence: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundationReviewLedger {
     entries: Vec<FoundationReviewEntry>,
+    #[serde(default)]
+    operations: Vec<FoundationReviewOperation>,
 }
 
 impl FoundationReviewLedger {
@@ -331,15 +346,33 @@ impl FoundationReviewLedger {
         &self,
         category: FoundationCategory,
     ) -> Option<&FoundationReviewDisposition> {
-        self.entries
+        let entry = self
+            .entries
             .iter()
             .rev()
-            .find(|entry| entry.category == category)
-            .map(|entry| &entry.after)
+            .find(|entry| entry.category == category)?;
+        let invalidated = self.operations.iter().any(|operation| {
+            operation.category == category
+                && operation.basis == entry.basis
+                && operation.sequence > entry.operation_sequence
+                && !matches!(operation.action, FoundationReviewAction::CategoryCompleted)
+        });
+        (!invalidated).then_some(&entry.after)
     }
 
     pub fn entries(&self) -> &[FoundationReviewEntry] {
         &self.entries
+    }
+
+    pub fn operations(&self) -> &[FoundationReviewOperation] {
+        &self.operations
+    }
+
+    pub fn current_sequence(&self) -> u64 {
+        self.operations
+            .last()
+            .map(|operation| operation.sequence)
+            .unwrap_or(0)
     }
 
     fn disposition_for_basis(
@@ -347,11 +380,18 @@ impl FoundationReviewLedger {
         category: FoundationCategory,
         basis: &FoundationReviewBasis,
     ) -> Option<&FoundationReviewDisposition> {
-        self.entries
+        let entry = self
+            .entries
             .iter()
             .rev()
-            .find(|entry| entry.category == category && entry.basis == *basis)
-            .map(|entry| &entry.after)
+            .find(|entry| entry.category == category && entry.basis == *basis)?;
+        let invalidated = self.operations.iter().any(|operation| {
+            operation.category == category
+                && operation.basis == *basis
+                && operation.sequence > entry.operation_sequence
+                && !matches!(operation.action, FoundationReviewAction::CategoryCompleted)
+        });
+        (!invalidated).then_some(&entry.after)
     }
 
     fn is_complete_for_basis(&self, basis: &FoundationReviewBasis) -> bool {
@@ -807,6 +847,675 @@ impl Schema2Project {
         &self.foundation.review_ledger
     }
 
+    pub fn foundation_review_queue(
+        &self,
+        category: FoundationCategory,
+    ) -> Result<FoundationReviewQueueProjection, String> {
+        let acquisition = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before opening the Foundation review queue")?;
+        let basis = self.review_basis()?;
+        let mut dispositions = crate::foundation_review::candidate_dispositions(
+            category,
+            &basis,
+            &acquisition.observations,
+            &self.foundation.review_ledger.operations,
+        );
+        if category == FoundationCategory::Building && !self.foundation.building_review.is_empty() {
+            dispositions.values_mut().for_each(|disposition| {
+                *disposition = CandidateReviewDisposition::Pending;
+            });
+            for entity in self.foundation.building_review.entities() {
+                if entity.boundary_decision == crate::BuildingBoundaryDecision::Exclude {
+                    for evidence_id in &entity.evidence_ids {
+                        if let Some(disposition) = dispositions.get_mut(evidence_id) {
+                            *disposition = CandidateReviewDisposition::Rejected;
+                        }
+                    }
+                    continue;
+                }
+                if self
+                    .foundation
+                    .building_review
+                    .reviewed_entities_by_ids(
+                        &acquisition.observations,
+                        self.building_generation_basis(),
+                        std::slice::from_ref(&entity.id),
+                    )
+                    .is_ok()
+                {
+                    for evidence_id in &entity.evidence_ids {
+                        if let Some(disposition) = dispositions.get_mut(evidence_id) {
+                            *disposition = if evidence_id == &entity.primary_observation_id {
+                                CandidateReviewDisposition::Accepted
+                            } else {
+                                CandidateReviewDisposition::SupportingEvidence {
+                                    primary_subject_id: entity.primary_observation_id.clone(),
+                                }
+                            };
+                        }
+                    }
+                } else if entity.name_resolution == BuildingNameResolution::Unnamed {
+                    let gap_id = building_entity_name_gap_id(&entity.id);
+                    if foundation_gap_acknowledged(
+                        FoundationCategory::Building,
+                        &basis,
+                        &gap_id,
+                        &self.foundation.review_ledger.operations,
+                    ) {
+                        for evidence_id in &entity.evidence_ids {
+                            if let Some(disposition) = dispositions.get_mut(evidence_id) {
+                                *disposition = CandidateReviewDisposition::Deferred {
+                                    structured_reason:
+                                        "No exclusive building-level name evidence was available"
+                                            .into(),
+                                    acknowledged_gap_id: gap_id.clone(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let items = acquisition
+            .observations
+            .iter()
+            .filter(|observation| observation.category == category)
+            .map(|observation| {
+                crate::foundation_review::project_queue_item(
+                    observation,
+                    dispositions
+                        .get(&observation.id)
+                        .cloned()
+                        .unwrap_or(CandidateReviewDisposition::Pending),
+                )
+            })
+            .collect::<Vec<_>>();
+        let provider_outcomes = acquisition
+            .manifest
+            .coverage_report
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.category == category)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut known_gaps = crate::foundation_review::known_gaps_for_category(
+            category,
+            &basis,
+            &provider_outcomes,
+            &self.foundation.review_ledger.operations,
+        );
+        if category == FoundationCategory::Building && !self.foundation.building_review.is_empty() {
+            for entity in self
+                .foundation
+                .building_review
+                .entities()
+                .iter()
+                .filter(|entity| entity.name_resolution == BuildingNameResolution::Unnamed)
+            {
+                let gap_id = building_entity_name_gap_id(&entity.id);
+                let (status, history) = foundation_gap_history(
+                    category,
+                    &basis,
+                    &gap_id,
+                    &self.foundation.review_ledger.operations,
+                );
+                let acknowledged = status == KnownFeatureGapStatus::Acknowledged;
+                let geometry = acquisition
+                    .observations
+                    .iter()
+                    .find(|observation| observation.id == entity.primary_observation_id)
+                    .map(|observation| observation.review_geometry_proposal.clone());
+                known_gaps.push(KnownFeatureGap {
+                    id: gap_id,
+                    category,
+                    location: KnownFeatureGapLocation {
+                        tile_id: format!("building-entity:{}", entity.id),
+                        geometry,
+                    },
+                    attempted_evidence: vec![
+                        "No exclusive building-level name evidence was available".into(),
+                    ],
+                    generation_impact:
+                        "The unnamed Building Entity is omitted until name evidence is resolved"
+                            .into(),
+                    provider: "building-entity-review".into(),
+                    tile_id: format!("building-entity:{}", entity.id),
+                    acknowledged,
+                    status,
+                    history,
+                });
+            }
+        }
+        let (mut conflicts, resolved_conflict_ids) = crate::foundation_review::review_conflicts(
+            category,
+            &basis,
+            &self.foundation.review_ledger.operations,
+        );
+        if category != FoundationCategory::Building || self.foundation.building_review.is_empty() {
+            for conflict in
+                crate::foundation_review::suggested_conflicts(category, &acquisition.observations)
+            {
+                if !conflicts.iter().any(|existing| existing.id == conflict.id) {
+                    conflicts.push(conflict);
+                }
+            }
+        }
+        let disposed = items
+            .iter()
+            .filter(|item| item.disposition.is_terminal())
+            .count();
+        let pending = items.len().saturating_sub(disposed);
+        let unresolved_conflicts = conflicts
+            .iter()
+            .filter(|conflict| !resolved_conflict_ids.contains(&conflict.id))
+            .count();
+        let unacknowledged_gaps = known_gaps
+            .iter()
+            .filter(|gap| gap.status == KnownFeatureGapStatus::Open)
+            .count();
+        let mut completion_blockers = Vec::new();
+        if pending > 0 {
+            completion_blockers.push(format!(
+                "{pending} pending candidate(s) require a disposition"
+            ));
+        }
+        if unresolved_conflicts > 0 {
+            completion_blockers.push(format!(
+                "{unresolved_conflicts} unresolved conflict(s) require a review decision"
+            ));
+        }
+        if unacknowledged_gaps > 0 {
+            completion_blockers.push(format!(
+                "{unacknowledged_gaps} Known Feature Gap(s) require acknowledgement"
+            ));
+        }
+        let complete = self
+            .foundation
+            .review_ledger
+            .disposition_for_basis(category, &basis)
+            .is_some();
+        Ok(FoundationReviewQueueProjection {
+            category,
+            basis,
+            ledger_sequence: self.foundation.review_ledger.current_sequence(),
+            items,
+            provider_outcomes,
+            known_gaps,
+            conflicts,
+            resolved_conflict_ids: resolved_conflict_ids.into_iter().collect(),
+            progress: FoundationCategoryProgress {
+                total: dispositions.len(),
+                disposed,
+                pending,
+                unresolved_conflicts,
+                unacknowledged_gaps,
+                complete,
+                completion_blockers,
+            },
+        })
+    }
+
+    pub fn review_foundation_candidate(
+        &mut self,
+        category: FoundationCategory,
+        subject_id: &str,
+        decision: FoundationCandidateDecision,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(category)?;
+        if category == FoundationCategory::Building && !self.foundation.building_review.is_empty() {
+            return self.review_building_queue_subject(subject_id, decision, actor);
+        }
+        if !queue.items.iter().any(|item| item.subject_id == subject_id) {
+            return Err("The Foundation review subject is not pinned in this category".into());
+        }
+        match &decision {
+            FoundationCandidateDecision::Reject { reason }
+                if !reason.is_empty() && reason.trim().is_empty() =>
+            {
+                return Err("A rejection reason cannot contain only whitespace".into());
+            }
+            FoundationCandidateDecision::SupportingEvidence { primary_subject_id } => {
+                if primary_subject_id == subject_id
+                    || !queue
+                        .items
+                        .iter()
+                        .any(|item| item.subject_id == *primary_subject_id)
+                {
+                    return Err(
+                        "Supporting evidence requires a different pinned primary subject".into(),
+                    );
+                }
+            }
+            FoundationCandidateDecision::Defer {
+                structured_reason,
+                acknowledged_gap_id,
+            } if structured_reason.trim().is_empty()
+                || !queue
+                    .known_gaps
+                    .iter()
+                    .any(|gap| gap.id == *acknowledged_gap_id && gap.acknowledged) =>
+            {
+                return Err(
+                    "A Deferred Source Observation requires a structured reason and linked acknowledged Known Feature Gap"
+                        .into(),
+                );
+            }
+            _ => {}
+        }
+        self.append_foundation_review_operation(
+            category,
+            vec![subject_id.to_string()],
+            queue.basis,
+            FoundationReviewAction::Candidate {
+                subject_id: subject_id.to_string(),
+                decision,
+            },
+            actor,
+        )
+    }
+
+    pub fn revoke_foundation_candidate_review(
+        &mut self,
+        category: FoundationCategory,
+        subject_id: &str,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(category)?;
+        let item = queue
+            .items
+            .iter()
+            .find(|item| item.subject_id == subject_id)
+            .ok_or("The Foundation review subject is not pinned in this category")?;
+        if category == FoundationCategory::Building && !self.foundation.building_review.is_empty() {
+            return self.revoke_building_entity_decision_for_subject(subject_id, actor);
+        }
+        if !item.disposition.is_terminal() {
+            return Err("The Foundation review subject has no decision to revoke".into());
+        }
+        self.append_foundation_review_operation(
+            category,
+            vec![subject_id.to_string()],
+            queue.basis,
+            FoundationReviewAction::Revoke {
+                subject_id: subject_id.to_string(),
+            },
+            actor,
+        )
+    }
+
+    pub fn batch_review_foundation(
+        &mut self,
+        request: FoundationBatchReview,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(request.category)?;
+        let requested = request
+            .exact_subject_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let pinned = queue
+            .items
+            .iter()
+            .map(|item| item.subject_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if request.exact_subject_ids.is_empty()
+            || requested.len() != request.exact_subject_ids.len()
+            || !requested.is_subset(&pinned)
+        {
+            return Err(
+                "Batch review exact subject set is empty, duplicated, or no longer pinned".into(),
+            );
+        }
+        if request.expected_basis != queue.basis
+            || request.expected_ledger_sequence != queue.ledger_sequence
+        {
+            return Err(
+                "Batch review dependency basis or exact subject set became stale; no decisions were recorded"
+                    .into(),
+            );
+        }
+        if request.category == FoundationCategory::Building
+            && !self.foundation.building_review.is_empty()
+        {
+            return self.batch_review_building_queue_subjects(
+                &queue,
+                &request.exact_subject_ids,
+                request.decision,
+                actor,
+            );
+        }
+        self.append_foundation_review_operation(
+            request.category,
+            request.exact_subject_ids,
+            queue.basis,
+            FoundationReviewAction::Batch {
+                decision: request.decision,
+            },
+            actor,
+        )
+    }
+
+    pub fn acknowledge_feature_gap(
+        &mut self,
+        category: FoundationCategory,
+        gap_id: &str,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(category)?;
+        let gap = queue
+            .known_gaps
+            .iter()
+            .find(|gap| gap.id == gap_id)
+            .ok_or("The Known Feature Gap is not linked to this pinned category evidence")?;
+        if gap.acknowledged {
+            return Err("The Known Feature Gap is already acknowledged".into());
+        }
+        if gap.status == KnownFeatureGapStatus::Resolved {
+            return Err("The Known Feature Gap is already resolved".into());
+        }
+        self.append_foundation_review_operation(
+            category,
+            vec![gap_id.to_string()],
+            queue.basis,
+            FoundationReviewAction::GapAcknowledged {
+                gap_id: gap_id.to_string(),
+            },
+            actor,
+        )
+    }
+
+    pub fn reopen_feature_gap(
+        &mut self,
+        category: FoundationCategory,
+        gap_id: &str,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(category)?;
+        let gap = queue
+            .known_gaps
+            .iter()
+            .find(|gap| gap.id == gap_id)
+            .ok_or("The Known Feature Gap is not linked to this pinned category evidence")?;
+        if gap.status == KnownFeatureGapStatus::Open {
+            return Err("The Known Feature Gap is already open".into());
+        }
+        self.append_foundation_review_operation(
+            category,
+            vec![gap_id.to_string()],
+            queue.basis,
+            FoundationReviewAction::GapReopened {
+                gap_id: gap_id.to_string(),
+            },
+            actor,
+        )
+    }
+
+    pub fn declare_foundation_review_conflict(
+        &mut self,
+        conflict: FoundationReviewConflict,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(conflict.category)?;
+        let subjects = conflict
+            .subject_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let pinned = queue
+            .items
+            .iter()
+            .map(|item| item.subject_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if conflict.id.trim().is_empty()
+            || conflict.explanation.trim().is_empty()
+            || conflict.subject_ids.len() < 2
+            || subjects.len() != conflict.subject_ids.len()
+            || !subjects.is_subset(&pinned)
+            || queue.conflicts.iter().any(|item| item.id == conflict.id)
+        {
+            return Err("Foundation review conflict identity or subjects are invalid".into());
+        }
+        self.append_foundation_review_operation(
+            conflict.category,
+            conflict.subject_ids.clone(),
+            queue.basis,
+            FoundationReviewAction::ConflictDeclared { conflict },
+            actor,
+        )
+    }
+
+    pub fn resolve_foundation_review_conflict(
+        &mut self,
+        category: FoundationCategory,
+        conflict_id: &str,
+        resolution: ReviewConflictResolution,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let queue = self.foundation_review_queue(category)?;
+        let conflict = queue
+            .conflicts
+            .iter()
+            .find(|conflict| conflict.id == conflict_id)
+            .ok_or("The Foundation review conflict is not pinned in this category")?;
+        let (_, resolved) = crate::foundation_review::review_conflicts(
+            category,
+            &queue.basis,
+            &self.foundation.review_ledger.operations,
+        );
+        if resolved.contains(conflict_id) {
+            return Err("The Foundation review conflict is already resolved".into());
+        }
+        validate_conflict_resolution(conflict, &resolution)?;
+        if let ReviewConflictResolution::GeometryRepair {
+            subject_id,
+            review_geometry_sha256,
+        } = &resolution
+        {
+            let subject = queue
+                .items
+                .iter()
+                .find(|item| item.subject_id == *subject_id)
+                .ok_or("The geometry repair subject is not in the current queue")?;
+            if subject.review_geometry_derivation.review_geometry_sha256 != *review_geometry_sha256
+            {
+                return Err(
+                    "The geometry repair must select retained, traceable review geometry".into(),
+                );
+            }
+        }
+        self.append_foundation_review_operation(
+            category,
+            conflict.subject_ids.clone(),
+            queue.basis,
+            FoundationReviewAction::ConflictResolved {
+                conflict_id: conflict_id.to_string(),
+                resolution,
+            },
+            actor,
+        )
+    }
+
+    pub fn complete_foundation_category(
+        &mut self,
+        category: FoundationCategory,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let queue = self.foundation_review_queue(category)?;
+        if !queue.progress.completion_blockers.is_empty() {
+            return Err(format!(
+                "Foundation category completion is blocked: {}",
+                queue.progress.completion_blockers.join("; ")
+            ));
+        }
+        if queue.progress.complete {
+            return Ok(());
+        }
+        let accepted_evidence_ids = queue
+            .items
+            .iter()
+            .filter(|item| item.disposition.enters_reviewed_model())
+            .map(|item| item.subject_id.clone())
+            .collect::<Vec<_>>();
+        let rejected_evidence_ids = queue
+            .items
+            .iter()
+            .filter(|item| matches!(item.disposition, CandidateReviewDisposition::Rejected))
+            .map(|item| item.subject_id.clone())
+            .collect::<Vec<_>>();
+        let deferred_evidence_ids = queue
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.disposition,
+                    CandidateReviewDisposition::Deferred { .. }
+                )
+            })
+            .map(|item| item.subject_id.clone())
+            .collect::<Vec<_>>();
+        let acknowledged_gap_ids = queue
+            .known_gaps
+            .iter()
+            .filter(|gap| gap.acknowledged)
+            .map(|gap| gap.id.clone())
+            .collect::<Vec<_>>();
+        let subjects = queue
+            .items
+            .iter()
+            .map(|item| item.subject_id.clone())
+            .chain(acknowledged_gap_ids.iter().cloned())
+            .collect::<Vec<_>>();
+        let completion_disposition = if category == FoundationCategory::Building
+            && !self.foundation.building_review.is_empty()
+        {
+            let acquisition = self
+                .foundation
+                .acquisition
+                .as_ref()
+                .ok_or("Pinned acquisition evidence is missing")?;
+            let mut entity_ids = Vec::new();
+            let mut known_entity_gaps = Vec::new();
+            for entity in self
+                .foundation
+                .building_review
+                .entities()
+                .iter()
+                .filter(|entity| entity.boundary_decision != BuildingBoundaryDecision::Exclude)
+            {
+                if self
+                    .foundation
+                    .building_review
+                    .reviewed_entities_by_ids(
+                        &acquisition.observations,
+                        self.building_generation_basis(),
+                        std::slice::from_ref(&entity.id),
+                    )
+                    .is_ok()
+                {
+                    entity_ids.push(entity.id.clone());
+                } else {
+                    let gap_id = building_entity_name_gap_id(&entity.id);
+                    let acknowledged = queue
+                        .known_gaps
+                        .iter()
+                        .any(|gap| gap.id == gap_id && gap.acknowledged);
+                    if entity.name_resolution != BuildingNameResolution::Unnamed || !acknowledged {
+                        return Err(
+                            "A retained Building Entity is neither reviewed nor linked to an acknowledged gap"
+                                .into(),
+                        );
+                    }
+                    known_entity_gaps.push(KnownBuildingEntityGap {
+                        entity_id: entity.id.clone(),
+                        reasons: vec![
+                            "No exclusive building-level name evidence was available".into()
+                        ],
+                    });
+                }
+            }
+            FoundationReviewDisposition::ReviewedBuildingEntities {
+                entity_ids,
+                known_gaps: known_entity_gaps,
+            }
+        } else {
+            FoundationReviewDisposition::ReviewedQueue {
+                accepted_evidence_ids,
+                rejected_evidence_ids,
+                deferred_evidence_ids,
+                acknowledged_gap_ids,
+            }
+        };
+        self.mark_updated(actor)?;
+        let operation_sequence = self.push_foundation_review_operation(
+            category,
+            subjects.clone(),
+            queue.basis.clone(),
+            FoundationReviewAction::CategoryCompleted,
+        )?;
+        let sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
+        self.foundation
+            .review_ledger
+            .entries
+            .push(FoundationReviewEntry {
+                sequence,
+                category,
+                subjects,
+                basis: queue.basis.clone(),
+                before: self
+                    .foundation
+                    .review_ledger
+                    .disposition_for_basis(category, &queue.basis)
+                    .cloned(),
+                after: completion_disposition,
+                recorded_at_unix_ms: now_unix_ms(),
+                operation_sequence,
+            });
+        self.update_review_workflow_after_operation(&queue.basis);
+        Ok(())
+    }
+
+    pub fn reviewed_features_for_completed_category(
+        &self,
+        category: FoundationCategory,
+    ) -> Result<Vec<SourceObservation>, String> {
+        let queue = self.foundation_review_queue(category)?;
+        if !queue.progress.complete {
+            return Err("The Foundation category is not explicitly complete".into());
+        }
+        let acquisition = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pinned acquisition evidence is missing")?;
+        let non_generating_containers = crate::foundation_review::non_generating_container_ids(
+            category,
+            &queue.basis,
+            &self.foundation.review_ledger.operations,
+        );
+        let selected = queue
+            .items
+            .iter()
+            .filter(|item| {
+                item.disposition.enters_reviewed_model()
+                    && !non_generating_containers.contains(&item.subject_id)
+            })
+            .map(|item| item.subject_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(acquisition
+            .observations
+            .iter()
+            .filter(|observation| {
+                observation.category == category && selected.contains(observation.id.as_str())
+            })
+            .cloned()
+            .collect())
+    }
+
     pub fn building_entity_review(&self) -> &BuildingEntityReviewLedger {
         &self.foundation.building_review
     }
@@ -1154,6 +1863,121 @@ impl Schema2Project {
         Ok(sequence)
     }
 
+    fn review_building_queue_subject(
+        &mut self,
+        subject_id: &str,
+        decision: FoundationCandidateDecision,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let observations = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Building Entities")?
+            .observations
+            .clone();
+        let mut review = self.foundation.building_review.clone();
+        let sequence =
+            apply_building_queue_decision(&mut review, &observations, subject_id, decision)?;
+        self.mark_updated(actor)?;
+        self.foundation.building_review = review;
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(sequence)
+    }
+
+    fn batch_review_building_queue_subjects(
+        &mut self,
+        queue: &FoundationReviewQueueProjection,
+        subject_ids: &[String],
+        decision: FoundationBatchDecision,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let observations = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin acquisition evidence before reviewing Building Entities")?
+            .observations
+            .clone();
+        let mut review = self.foundation.building_review.clone();
+        let mut subjects_by_entity = BTreeMap::<String, Vec<String>>::new();
+        for subject_id in subject_ids {
+            let entity = review
+                .entities()
+                .iter()
+                .find(|entity| entity.evidence_ids.contains(subject_id))
+                .ok_or("The Building queue subject has no stable Building Entity")?;
+            subjects_by_entity
+                .entry(entity.id.clone())
+                .or_default()
+                .push(subject_id.clone());
+        }
+        let mut final_sequence = None;
+        for (entity_id, subjects) in subjects_by_entity {
+            let entity = review
+                .entities()
+                .iter()
+                .find(|entity| entity.id == entity_id)
+                .cloned()
+                .ok_or("The Building Entity changed during exact-set batch review")?;
+            let subject_id = if subjects.contains(&entity.primary_observation_id) {
+                entity.primary_observation_id
+            } else {
+                subjects[0].clone()
+            };
+            let candidate_decision = match decision {
+                FoundationBatchDecision::Accept => FoundationCandidateDecision::Accept,
+                FoundationBatchDecision::Reject => FoundationCandidateDecision::Reject {
+                    reason: "explicit exact-set Building queue rejection".into(),
+                },
+            };
+            final_sequence = Some(apply_building_queue_decision(
+                &mut review,
+                &observations,
+                &subject_id,
+                candidate_decision,
+            )?);
+        }
+        let sequence = final_sequence.ok_or("The Building exact-set batch is empty")?;
+        let before = foundation_review_state_from_queue(queue);
+        let original_review =
+            std::mem::replace(&mut self.foundation.building_review, review.clone());
+        let after_queue = self.foundation_review_queue(FoundationCategory::Building);
+        self.foundation.building_review = original_review;
+        let after_queue = after_queue?;
+        let after = foundation_review_state_from_queue(&after_queue);
+        self.mark_updated(actor)?;
+        self.foundation.building_review = review;
+        let operation_sequence = self.foundation.review_ledger.current_sequence() + 1;
+        self.foundation
+            .review_ledger
+            .operations
+            .push(FoundationReviewOperation {
+                sequence: operation_sequence,
+                category: FoundationCategory::Building,
+                subjects: subject_ids.to_vec(),
+                basis: after_queue.basis.clone(),
+                action: FoundationReviewAction::Batch { decision },
+                before,
+                after,
+                explanation: Some(format!(
+                    "Atomic exact-set Building Entity batch covering {} selected observation(s) and ending at entity ledger sequence {sequence}",
+                    subject_ids.len()
+                )),
+                recorded_at_unix_ms: now_unix_ms(),
+            });
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = DurableTaskState::Pending;
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
+        Ok(operation_sequence)
+    }
+
     pub fn revoke_last_building_entity_decision(
         &mut self,
         actor: InstallationId,
@@ -1175,6 +1999,115 @@ impl Schema2Project {
         self.workflow.generation = DurableTaskState::Pending;
         self.workflow.export = DurableTaskState::Pending;
         Ok(sequence)
+    }
+
+    fn revoke_building_entity_decision_for_subject(
+        &mut self,
+        subject_id: &str,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        let entity_id = self
+            .foundation
+            .building_review
+            .entities()
+            .iter()
+            .find(|entity| entity.evidence_ids.iter().any(|id| id == subject_id))
+            .map(|entity| entity.id.clone())
+            .ok_or("The selected Building queue subject has no stable entity")?;
+        let revoked = self
+            .foundation
+            .building_review
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry.decision {
+                BuildingEntityDecision::Revoke { target_sequence } => Some(target_sequence),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let latest = self
+            .foundation
+            .building_review
+            .entries()
+            .iter()
+            .rev()
+            .find(|entry| {
+                !matches!(
+                    entry.decision,
+                    BuildingEntityDecision::Revoke { .. }
+                        | BuildingEntityDecision::RefreshEvidence { .. }
+                ) && !revoked.contains(&entry.sequence)
+            })
+            .ok_or("There is no Building Entity decision to revoke")?;
+        if !latest.subjects.iter().any(|subject| subject == &entity_id) {
+            return Err(
+                "The selected Building Entity is not the latest reversible entity decision".into(),
+            );
+        }
+        self.revoke_last_building_entity_decision(actor)
+    }
+
+    fn append_foundation_review_operation(
+        &mut self,
+        category: FoundationCategory,
+        subjects: Vec<String>,
+        basis: FoundationReviewBasis,
+        action: FoundationReviewAction,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        self.mark_updated(actor)?;
+        let sequence =
+            self.push_foundation_review_operation(category, subjects, basis.clone(), action)?;
+        self.update_review_workflow_after_operation(&basis);
+        Ok(sequence)
+    }
+
+    fn push_foundation_review_operation(
+        &mut self,
+        category: FoundationCategory,
+        subjects: Vec<String>,
+        basis: FoundationReviewBasis,
+        action: FoundationReviewAction,
+    ) -> Result<u64, String> {
+        let mut before = self.foundation_review_operation_state(category)?;
+        let mut after = before.clone();
+        apply_foundation_review_action_to_state(&mut after, &action, &subjects);
+        let explanation = foundation_review_action_explanation(&action);
+        let sequence = self.foundation.review_ledger.current_sequence() + 1;
+        self.foundation
+            .review_ledger
+            .operations
+            .push(FoundationReviewOperation {
+                sequence,
+                category,
+                subjects,
+                basis,
+                action,
+                before: std::mem::take(&mut before),
+                after,
+                explanation,
+                recorded_at_unix_ms: now_unix_ms(),
+            });
+        Ok(sequence)
+    }
+
+    fn foundation_review_operation_state(
+        &self,
+        category: FoundationCategory,
+    ) -> Result<FoundationReviewState, String> {
+        let queue = self.foundation_review_queue(category)?;
+        Ok(foundation_review_state_from_queue(&queue))
+    }
+
+    fn update_review_workflow_after_operation(&mut self, basis: &FoundationReviewBasis) {
+        self.foundation.generated = None;
+        self.foundation.exported = None;
+        self.workflow.review = if self.foundation.review_ledger.is_complete_for_basis(basis) {
+            DurableTaskState::Confirmed
+        } else {
+            DurableTaskState::Pending
+        };
+        self.workflow.generation = DurableTaskState::Pending;
+        self.workflow.export = DurableTaskState::Pending;
     }
 
     pub fn complete_foundation_review(
@@ -1287,6 +2220,9 @@ impl Schema2Project {
                 return Err("A known gap requires an explicit reason".into());
             }
             FoundationReviewDisposition::KnownGap { .. } => {}
+            FoundationReviewDisposition::ReviewedQueue { .. } => {
+                return Err("Queue review completion must use complete_foundation_category".into());
+            }
         }
         let basis = self.review_basis()?;
         let subjects = match &disposition {
@@ -1299,6 +2235,18 @@ impl Schema2Project {
                 .cloned()
                 .chain(known_gaps.iter().map(|gap| gap.entity_id.clone()))
                 .collect(),
+            FoundationReviewDisposition::ReviewedQueue {
+                accepted_evidence_ids,
+                rejected_evidence_ids,
+                deferred_evidence_ids,
+                acknowledged_gap_ids,
+            } => accepted_evidence_ids
+                .iter()
+                .chain(rejected_evidence_ids)
+                .chain(deferred_evidence_ids)
+                .chain(acknowledged_gap_ids)
+                .cloned()
+                .collect(),
             _ => vec![format!("foundation-category:{category:?}").to_ascii_lowercase()],
         };
         let before = self
@@ -1307,6 +2255,12 @@ impl Schema2Project {
             .disposition_for_basis(category, &basis)
             .cloned();
         self.mark_updated(actor)?;
+        let operation_sequence = self.push_foundation_review_operation(
+            category,
+            subjects.clone(),
+            basis.clone(),
+            FoundationReviewAction::CategoryCompleted,
+        )?;
         let sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
         self.foundation
             .review_ledger
@@ -1319,16 +2273,9 @@ impl Schema2Project {
                 before,
                 after: disposition,
                 recorded_at_unix_ms: now_unix_ms(),
+                operation_sequence,
             });
-        self.foundation.generated = None;
-        self.foundation.exported = None;
-        self.workflow.review = if self.foundation.review_ledger.is_complete_for_basis(&basis) {
-            DurableTaskState::Confirmed
-        } else {
-            DurableTaskState::Pending
-        };
-        self.workflow.generation = DurableTaskState::Pending;
-        self.workflow.export = DurableTaskState::Pending;
+        self.update_review_workflow_after_operation(&basis);
         Ok(())
     }
 
@@ -1351,6 +2298,10 @@ impl Schema2Project {
                 FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
                     Some(evidence_ids.as_slice())
                 }
+                FoundationReviewDisposition::ReviewedQueue {
+                    accepted_evidence_ids,
+                    ..
+                } => Some(accepted_evidence_ids.as_slice()),
                 FoundationReviewDisposition::ReviewedBuildingEntities { .. } => None,
                 _ => None,
             })
@@ -1363,6 +2314,47 @@ impl Schema2Project {
             .filter(|observation| selected_ids.contains(&&observation.id))
             .cloned()
             .collect::<Vec<_>>();
+        let non_generating_containers = FoundationCategory::ALL
+            .into_iter()
+            .flat_map(|category| {
+                crate::foundation_review::non_generating_container_ids(
+                    category,
+                    &basis,
+                    &self.foundation.review_ledger.operations,
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        selected_features
+            .retain(|observation| !non_generating_containers.contains(&observation.id));
+        let reviewed_feature_resolutions = FoundationCategory::ALL
+            .into_iter()
+            .flat_map(|category| {
+                crate::foundation_review::reviewed_feature_resolutions(
+                    category,
+                    &basis,
+                    &self.foundation.review_ledger.operations,
+                )
+            })
+            .filter(|resolution| {
+                selected_features
+                    .iter()
+                    .any(|feature| feature.id == resolution.subject_id)
+            })
+            .collect::<Vec<_>>();
+        for resolution in &reviewed_feature_resolutions {
+            if let Some(review_geometry_sha256) = &resolution.review_geometry_sha256 {
+                let feature = selected_features
+                    .iter()
+                    .find(|feature| feature.id == resolution.subject_id)
+                    .ok_or("Reviewed geometry repair subject is not selected")?;
+                if feature.derivation.review_geometry_sha256 != *review_geometry_sha256 {
+                    return Err(
+                        "Reviewed geometry repair does not match the retained review geometry"
+                            .into(),
+                    );
+                }
+            }
+        }
         let building_entities = match self
             .foundation
             .review_ledger
@@ -1429,6 +2421,7 @@ impl Schema2Project {
                 .geometry
                 .clone(),
             selected_features,
+            reviewed_feature_resolutions,
             building_entities,
             generation_settings: self.foundation.generation_settings.clone(),
         })
@@ -1566,11 +2559,346 @@ impl Schema2Project {
     }
 }
 
+fn validate_conflict_resolution(
+    conflict: &FoundationReviewConflict,
+    resolution: &ReviewConflictResolution,
+) -> Result<(), String> {
+    let subjects = conflict
+        .subject_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let valid = match resolution {
+        ReviewConflictResolution::KeepSeparate => true,
+        ReviewConflictResolution::Grouping {
+            group_id,
+            primary_subject_id,
+            supporting_subject_ids,
+        } => {
+            let supporting = supporting_subject_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            !group_id.trim().is_empty()
+                && subjects.contains(primary_subject_id.as_str())
+                && !supporting.is_empty()
+                && supporting.len() == supporting_subject_ids.len()
+                && supporting.is_subset(&subjects)
+                && !supporting.contains(primary_subject_id.as_str())
+        }
+        ReviewConflictResolution::Containment {
+            container_id,
+            member_id,
+            ..
+        } => {
+            conflict.kind == crate::FoundationReviewConflictKind::Containment
+                && container_id != member_id
+                && subjects.contains(container_id.as_str())
+                && subjects.contains(member_id.as_str())
+        }
+        ReviewConflictResolution::Naming {
+            subject_id,
+            display_name,
+            evidence_ids,
+        } => {
+            conflict.kind == crate::FoundationReviewConflictKind::Naming
+                && subjects.contains(subject_id.as_str())
+                && !display_name.trim().is_empty()
+                && !evidence_ids.is_empty()
+        }
+        ReviewConflictResolution::GeometryRepair {
+            subject_id,
+            review_geometry_sha256,
+        } => {
+            subjects.contains(subject_id.as_str())
+                && review_geometry_sha256.len() == 64
+                && review_geometry_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+        }
+        ReviewConflictResolution::Attribute {
+            subject_id,
+            attribute,
+            provenance_ids,
+        } => {
+            conflict.kind == crate::FoundationReviewConflictKind::Attribute
+                && subjects.contains(subject_id.as_str())
+                && !attribute.trim().is_empty()
+                && !provenance_ids.is_empty()
+        }
+    };
+    valid
+        .then_some(())
+        .ok_or_else(|| "The conflict resolution does not match the exact conflict subjects".into())
+}
+
+fn foundation_review_state_from_queue(
+    queue: &FoundationReviewQueueProjection,
+) -> FoundationReviewState {
+    FoundationReviewState {
+        candidate_dispositions: queue
+            .items
+            .iter()
+            .map(|item| (item.subject_id.clone(), item.disposition.clone()))
+            .collect(),
+        acknowledged_gap_ids: queue
+            .known_gaps
+            .iter()
+            .filter(|gap| gap.acknowledged)
+            .map(|gap| gap.id.clone())
+            .collect(),
+        resolved_gap_ids: queue
+            .known_gaps
+            .iter()
+            .filter(|gap| gap.status == KnownFeatureGapStatus::Resolved)
+            .map(|gap| gap.id.clone())
+            .collect(),
+        unresolved_conflict_ids: queue
+            .conflicts
+            .iter()
+            .filter(|conflict| !queue.resolved_conflict_ids.contains(&conflict.id))
+            .map(|conflict| conflict.id.clone())
+            .collect(),
+        category_complete: queue.progress.complete,
+    }
+}
+
+fn apply_foundation_review_action_to_state(
+    state: &mut FoundationReviewState,
+    action: &FoundationReviewAction,
+    subjects: &[String],
+) {
+    if !matches!(action, FoundationReviewAction::CategoryCompleted) {
+        state.category_complete = false;
+    }
+    match action {
+        FoundationReviewAction::Candidate {
+            subject_id,
+            decision,
+        } => {
+            let disposition = match decision {
+                FoundationCandidateDecision::Accept => CandidateReviewDisposition::Accepted,
+                FoundationCandidateDecision::Reject { .. } => CandidateReviewDisposition::Rejected,
+                FoundationCandidateDecision::SupportingEvidence { primary_subject_id } => {
+                    CandidateReviewDisposition::SupportingEvidence {
+                        primary_subject_id: primary_subject_id.clone(),
+                    }
+                }
+                FoundationCandidateDecision::Defer {
+                    structured_reason,
+                    acknowledged_gap_id,
+                } => CandidateReviewDisposition::Deferred {
+                    structured_reason: structured_reason.clone(),
+                    acknowledged_gap_id: acknowledged_gap_id.clone(),
+                },
+            };
+            state
+                .candidate_dispositions
+                .insert(subject_id.clone(), disposition);
+        }
+        FoundationReviewAction::Batch { decision } => {
+            let disposition = match decision {
+                FoundationBatchDecision::Accept => CandidateReviewDisposition::Accepted,
+                FoundationBatchDecision::Reject => CandidateReviewDisposition::Rejected,
+            };
+            for subject_id in subjects {
+                state
+                    .candidate_dispositions
+                    .insert(subject_id.clone(), disposition.clone());
+            }
+        }
+        FoundationReviewAction::Revoke { subject_id } => {
+            state
+                .candidate_dispositions
+                .insert(subject_id.clone(), CandidateReviewDisposition::Pending);
+        }
+        FoundationReviewAction::ConflictDeclared { conflict } => {
+            state.unresolved_conflict_ids.insert(conflict.id.clone());
+        }
+        FoundationReviewAction::ConflictResolved {
+            conflict_id,
+            resolution,
+        } => {
+            state.unresolved_conflict_ids.remove(conflict_id);
+            if let ReviewConflictResolution::Grouping {
+                primary_subject_id,
+                supporting_subject_ids,
+                ..
+            } = resolution
+            {
+                state.candidate_dispositions.insert(
+                    primary_subject_id.clone(),
+                    CandidateReviewDisposition::Accepted,
+                );
+                for subject_id in supporting_subject_ids {
+                    state.candidate_dispositions.insert(
+                        subject_id.clone(),
+                        CandidateReviewDisposition::SupportingEvidence {
+                            primary_subject_id: primary_subject_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        FoundationReviewAction::GapAcknowledged { gap_id } => {
+            state.acknowledged_gap_ids.insert(gap_id.clone());
+        }
+        FoundationReviewAction::GapReopened { gap_id } => {
+            state.acknowledged_gap_ids.remove(gap_id);
+            state.resolved_gap_ids.remove(gap_id);
+        }
+        FoundationReviewAction::GapResolved { gap_id, .. } => {
+            state.acknowledged_gap_ids.remove(gap_id);
+            state.resolved_gap_ids.insert(gap_id.clone());
+        }
+        FoundationReviewAction::CategoryCompleted => {
+            state.category_complete = true;
+        }
+    }
+}
+
+fn apply_building_queue_decision(
+    review: &mut BuildingEntityReviewLedger,
+    observations: &[SourceObservation],
+    subject_id: &str,
+    decision: FoundationCandidateDecision,
+) -> Result<u64, String> {
+    let entity = review
+        .entities()
+        .iter()
+        .find(|entity| entity.evidence_ids.iter().any(|id| id == subject_id))
+        .cloned()
+        .ok_or("The Building queue subject has no stable Building Entity")?;
+    match decision {
+        FoundationCandidateDecision::Accept => {
+            if entity.primary_observation_id == subject_id
+                && entity.unresolved_overlap_groups.is_empty()
+                && entity.boundary_decision == BuildingBoundaryDecision::RetainWhole
+                && entity.name_resolution != BuildingNameResolution::Pending
+            {
+                return Err("The Building Entity already has this reviewed disposition".into());
+            }
+            review.record(
+                BuildingEntityDecision::ResolveFromQueue {
+                    entity_id: entity.id,
+                    primary_observation_id: subject_id.to_string(),
+                    boundary_decision: BuildingBoundaryDecision::RetainWhole,
+                    leave_unnamed_reason: (entity.name_resolution
+                        == BuildingNameResolution::Pending)
+                        .then(|| {
+                            "The reviewer accepted this Building Entity without exclusive name evidence"
+                                .into()
+                        }),
+                },
+                observations,
+            )
+        }
+        FoundationCandidateDecision::Reject { .. } => review.record(
+            BuildingEntityDecision::SetBoundary {
+                entity_id: entity.id,
+                decision: BuildingBoundaryDecision::Exclude,
+            },
+            observations,
+        ),
+        FoundationCandidateDecision::SupportingEvidence { primary_subject_id } => review.record(
+            BuildingEntityDecision::SetPrimary {
+                entity_id: entity.id,
+                observation_id: primary_subject_id,
+            },
+            observations,
+        ),
+        FoundationCandidateDecision::Defer { .. } => Err(
+            "A Building Entity deferral must be recorded as a structured entity-level gap".into(),
+        ),
+    }
+}
+
+fn building_entity_name_gap_id(entity_id: &str) -> String {
+    format!("gap:building-entity:{entity_id}:name")
+}
+
+fn foundation_gap_acknowledged(
+    category: FoundationCategory,
+    basis: &FoundationReviewBasis,
+    gap_id: &str,
+    operations: &[FoundationReviewOperation],
+) -> bool {
+    foundation_gap_history(category, basis, gap_id, operations).0
+        == KnownFeatureGapStatus::Acknowledged
+}
+
+fn foundation_gap_history(
+    category: FoundationCategory,
+    basis: &FoundationReviewBasis,
+    gap_id: &str,
+    operations: &[FoundationReviewOperation],
+) -> (KnownFeatureGapStatus, Vec<KnownFeatureGapHistoryAction>) {
+    let mut status = KnownFeatureGapStatus::Open;
+    let mut history = vec![KnownFeatureGapHistoryAction::Observed];
+    for operation in operations
+        .iter()
+        .filter(|operation| operation.category == category && operation.basis == *basis)
+    {
+        match &operation.action {
+            FoundationReviewAction::GapAcknowledged {
+                gap_id: operation_gap_id,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Acknowledged;
+                history.push(KnownFeatureGapHistoryAction::Acknowledged {
+                    sequence: operation.sequence,
+                });
+            }
+            FoundationReviewAction::GapReopened {
+                gap_id: operation_gap_id,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Open;
+                history.push(KnownFeatureGapHistoryAction::Reopened {
+                    sequence: operation.sequence,
+                });
+            }
+            FoundationReviewAction::GapResolved {
+                gap_id: operation_gap_id,
+                evidence_ids,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Resolved;
+                history.push(KnownFeatureGapHistoryAction::Resolved {
+                    sequence: operation.sequence,
+                    evidence_ids: evidence_ids.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+    (status, history)
+}
+
+fn foundation_review_action_explanation(action: &FoundationReviewAction) -> Option<String> {
+    match action {
+        FoundationReviewAction::Candidate {
+            decision: FoundationCandidateDecision::Reject { reason },
+            ..
+        } if !reason.trim().is_empty() => Some(reason.clone()),
+        FoundationReviewAction::Candidate {
+            decision:
+                FoundationCandidateDecision::Defer {
+                    structured_reason, ..
+                },
+            ..
+        } => Some(structured_reason.clone()),
+        FoundationReviewAction::ConflictDeclared { conflict } => Some(conflict.explanation.clone()),
+        FoundationReviewAction::ConflictResolved { resolution, .. } => {
+            Some(format!("Resolved as {resolution:?}"))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewedFoundationProjection {
     pub boundary: SourceGeometry,
     pub selected_features: Vec<SourceObservation>,
+    pub reviewed_feature_resolutions: Vec<crate::ReviewedFeatureResolution>,
     pub building_entities: Vec<ReviewedBuildingEntity>,
     pub generation_settings: FoundationGenerationSettings,
 }

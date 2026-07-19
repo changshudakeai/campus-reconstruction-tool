@@ -49,20 +49,29 @@ component CandidateItem inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Minecraft 校园复刻工具";
     width: 1280px;
-    height: 820px;
+    height: 720px;
     background: #f4f0e5;
     default-font-family: "Microsoft YaHei UI";
     forward-focus: shortcut-scope;
 
     in-out property <string> project-name: "未命名项目";
     in-out property <string> campus-name: "华东师范大学普陀校区";
+    in-out property <bool> has-campus-target: false;
     in-out property <string> save-status: "未保存";
     in-out property <string> tool-status: "";
+    in-out property <bool> error-visible: false;
+    in-out property <string> error-summary: "";
+    in-out property <string> error-details: "";
     in-out property <string> page-title: "选择学校与具体校区";
     in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
     in-out property <string> project-summary: "尚未建立项目";
     in-out property <bool> detailed-active: false;
+    in-out property <bool> can-enter-detailed: false;
+    // 0 blocked, 1 select building, 2 evidence/template, 3 facade rules, 4 preview
+    in-out property <int> detailed-task: 0;
     in-out property <int> active-step: 0;
+    in-out property <bool> can-review-foundation: false;
+    in-out property <bool> can-generate-foundation: false;
     in-out property <[string]> step-labels: ["校区", "边界", "朝向", "建筑", "道路", "水域", "植被", "体育", "导出"];
     in-out property <[CandidateRow]> candidates: [];
     in-out property <[string]> candidate-filters: [];
@@ -73,6 +82,11 @@ export component AppWindow inherits Window {
     in-out property <int> selected-slot: 0;
     in-out property <[string]> arnis-styles: [];
     in-out property <int> selected-style: 8;
+    in-out property <string> function-classification-summary: "尚未识别用途";
+    in-out property <[string]> template-proposals: [];
+    in-out property <int> selected-template-proposal: 0;
+    in-out property <string> facade-rule-summary: "尚未建立立面规则草案";
+    in-out property <string> local-evidence-summary: "尚未添加本地照片";
     in-out property <[string]> foundation-styles: [];
     in-out property <int> selected-foundation-style: 0;
     in-out property <string> foundation-style-name: "Arnis Classic";
@@ -81,6 +95,7 @@ export component AppWindow inherits Window {
     in-out property <string> primary-label: "确认校区并继续";
     in-out property <bool> settings-visible: false;
     in-out property <bool> about-visible: false;
+    in-out property <bool> utilities-visible: false;
     in-out property <string> gaode-key: "";
     in-out property <string> gaode-security: "";
     in-out property <float> orientation-degrees: 0;
@@ -147,9 +162,10 @@ export component AppWindow inherits Window {
     callback change-candidate-page(int);
     callback open-map();
     callback open-detailed-map();
-    callback draw-foundation-feature();
     callback open-preview();
     callback choose-style(int, float, float);
+    callback choose-template-proposal(int);
+    callback import-local-evidence();
     callback choose-foundation-style(int);
     callback import-foundation-style();
     callback preview-foundation();
@@ -175,6 +191,8 @@ export component AppWindow inherits Window {
     callback suppress-selected-building(string);
     callback restore-building-suppression(int);
     callback set-locale(bool);
+    callback dismiss-error();
+    callback open-diagnostics();
 
     shortcut-scope := FocusScope {
       VerticalLayout {
@@ -190,7 +208,7 @@ export component AppWindow inherits Window {
                 Rectangle { width: 1px; height: 30px; background: #b7ad9a; }
                 Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.save-status; color: root.save-status == "保存失败" || root.save-status == "Save failed" ? #a54836 : #4c665b; vertical-alignment: center; }
+                Text { text: root.save-status; color: root.error-visible ? #a54836 : #4c665b; vertical-alignment: center; }
                 if root.tool-status != "" : Text {
                     text: root.tool-status;
                     color: #617068;
@@ -199,41 +217,97 @@ export component AppWindow inherits Window {
                 Button { text: root.english ? "中文" : "EN"; clicked => { root.set-locale(!root.english); } }
                 Button { text: root.english ? "Undo" : "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
                 Button { text: root.english ? "Redo" : "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
-                Button { text: root.english ? "Map settings" : "地图设置"; clicked => { root.settings-visible = true; } }
-                Button { text: root.english ? "About" : "关于"; clicked => { root.about-visible = true; } }
-                Button { text: root.english ? "Open" : "打开"; clicked => { root.open-project(); } }
-                Button { text: root.english ? "Save as" : "另存为"; clicked => { root.save-project-as(); } }
+                Button { text: root.english ? "More" : "更多"; clicked => { root.utilities-visible = true; } }
                 Button { text: root.english ? "Save" : "保存"; clicked => { root.save-project(); } }
             }
         }
         Rectangle { height: 2px; background: #23362e; }
+        if root.error-visible : Rectangle {
+            height: 88px;
+            background: #f6ddd5;
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 18px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: root.error-summary;
+                        color: #7c2f25;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.error-details;
+                        color: #6d4840;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+                Button {
+                    text: root.english ? "Open logs" : "打开日志";
+                    clicked => { root.open-diagnostics(); }
+                }
+                Button {
+                    text: root.english ? "Dismiss" : "关闭";
+                    clicked => { root.dismiss-error(); }
+                }
+            }
+        }
 
         HorizontalLayout {
             spacing: 0px;
             Rectangle {
-                width: 244px;
+                width: 260px;
                 background: #ece4d3;
                 VerticalLayout {
                     padding: 20px;
                     spacing: 10px;
-                    SectionLabel { text: root.english ? "WORK MODE" : "工作模式"; }
-                    Button { text: root.english ? "Foundation & Campus" : "地基与校区"; enabled: root.detailed-active; clicked => { root.switch-mode(false); } }
-                    Button { text: root.english ? "Detailed Building" : "精细建筑"; enabled: !root.detailed-active; clicked => { root.switch-mode(true); } }
+                    SectionLabel { text: root.english ? "PROJECT TASKS" : "项目任务"; }
+                    Text { text: root.project-name; color: #17251f; font-size: 16px; font-weight: 700; wrap: word-wrap; }
+                    Text { text: root.campus-name; color: #506058; font-size: 12px; wrap: word-wrap; }
                     Rule {}
-                    if !root.detailed-active : VerticalLayout {
-                        spacing: 5px;
-                        SectionLabel { text: root.english ? "WORKFLOW" : "工作步骤"; }
-                        for label[index] in root.step-labels: Button {
-                            text: (index + 1) + ". " + label;
-                            enabled: root.active-step != index;
-                            clicked => { root.select-step(index); }
-                        }
+                    Button {
+                        text: root.has-campus-target
+                            ? (root.english ? "1. Campus selected" : "1. 校区已选择")
+                            : (root.english ? "1. Select campus" : "1. 选择校区");
+                        enabled: root.detailed-active || root.active-step != 0;
+                        clicked => { root.switch-mode(false); root.select-step(0); }
                     }
-                    if root.detailed-active : VerticalLayout {
-                        spacing: 8px;
-                        SectionLabel { text: root.english ? "BUILDING QUEUE" : "建筑清单"; }
-                        Text { text: root.project-summary; color: #506058; wrap: word-wrap; }
+                    Button {
+                        text: root.active-step > 1
+                            ? (root.english ? "2. Boundary confirmed" : "2. 范围已确认")
+                            : (root.english ? "2. Confirm boundary" : "2. 确认范围");
+                        enabled: false;
                     }
+                    Button {
+                        text: root.english ? "3. Review Foundation" : "3. 审核地基";
+                        enabled: root.can-review-foundation && (root.detailed-active || root.active-step < 3 || root.active-step > 7);
+                        clicked => { root.switch-mode(false); root.select-step(3); }
+                    }
+                    Button {
+                        text: root.english ? "4. Generate Foundation" : "4. 生成地基";
+                        enabled: root.can-generate-foundation && (root.detailed-active || root.active-step != 8);
+                        clicked => { root.switch-mode(false); root.select-step(8); }
+                    }
+                    Button {
+                        text: root.can-enter-detailed
+                            ? (root.english ? "5. Refine a building" : "5. 单栋精修")
+                            : (root.english ? "5. Refine a building · blocked" : "5. 单栋精修 · 未解锁");
+                        enabled: !root.detailed-active;
+                        clicked => { root.switch-mode(true); }
+                    }
+                    if !root.can-enter-detailed : Text {
+                        text: root.english ? "Confirm at least one building in task 3." : "在任务 3 中确认至少一栋建筑后解锁。";
+                        color: #6d665b;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    Rule {}
+                    SectionLabel { text: root.english ? "PROGRESS" : "项目进度"; }
+                    Text { text: root.project-summary; color: #506058; wrap: word-wrap; }
                     Rectangle { vertical-stretch: 1; background: transparent; }
                 }
             }
@@ -249,6 +323,12 @@ export component AppWindow inherits Window {
                     Text { text: root.page-help; font-size: 15px; color: #5b665f; wrap: word-wrap; }
                     Rule {}
 
+                    workflow-scroll := ScrollView {
+                        preferred-height: 0px;
+                        workflow-content := VerticalLayout {
+                        alignment: start;
+                        padding-right: 12px;
+                        spacing: 14px;
                     if !root.detailed-active && root.active-step == 0 : Rectangle {
                         height: 270px;
                         background: #f4f0e5;
@@ -260,8 +340,37 @@ export component AppWindow inherits Window {
                             SectionLabel { text: root.english ? "LOCAL PROJECT" : "本地项目"; }
                             LineEdit { text <=> root.project-name; placeholder-text: root.english ? "Project name" : "项目名称"; }
                             LineEdit { text <=> root.campus-name; placeholder-text: root.english ? "School and campus" : "学校与校区"; }
-                            Button { text: root.english ? "Choose campus in Gaode" : "在高德中选择校区"; clicked => { root.open-map(); } }
-                            Button { text: root.english ? "Create local project" : "创建本地项目"; clicked => { root.create-project(root.project-name, root.campus-name); } }
+                            Button {
+                                text: root.has-campus-target
+                                    ? (root.english ? "Change campus in Gaode" : "在高德中更换校区")
+                                    : (root.english ? "Create project and select campus" : "创建项目并选择高德校区");
+                                clicked => {
+                                    if !root.has-campus-target {
+                                        root.create-project(root.project-name, root.campus-name);
+                                    }
+                                    root.open-map();
+                                }
+                            }
+                        }
+                    }
+
+                    if !root.detailed-active && root.active-step == 1 : Rectangle {
+                        height: 210px;
+                        background: #f4f0e5;
+                        border-color: #23362e;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+                            SectionLabel { text: root.english ? "CAMPUS BOUNDARY" : "校区边界"; }
+                            Text {
+                                text: root.english
+                                    ? "Edit one campus boundary on the Gaode base map. Confirming it opens orientation setup."
+                                    : "在高德底图上编辑唯一的校区边界；确认后直接进入朝向设置。";
+                                color: #506058;
+                                wrap: word-wrap;
+                            }
+                            Button { text: root.english ? "Edit and confirm boundary" : "编辑并确认校区边界"; clicked => { root.open-map(); } }
                         }
                     }
 
@@ -293,16 +402,11 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if !root.detailed-active && root.active-step > 0 && root.active-step < 8 && root.active-step != 2 : VerticalLayout {
+                    if !root.detailed-active && root.active-step > 2 && root.active-step < 8 : VerticalLayout {
                         spacing: 10px;
                         HorizontalLayout {
                             Text { text: root.project-summary; color: #506058; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                            Button {
-                                text: root.english ? "Draw current type" : "手绘当前类型";
-                                enabled: root.active-step > 2;
-                                clicked => { root.draw-foundation-feature(); }
-                            }
                             Button { text: root.english ? "Edit on map" : "在地图中编辑"; clicked => { root.open-map(); } }
                         }
                         HorizontalLayout {
@@ -331,7 +435,7 @@ export component AppWindow inherits Window {
                             border-color: #c7bca8;
                             border-width: 1px;
                             Text {
-                                text: root.english ? "No pending objects in this step. Open the map to query, draw, or capture the current view." : "当前步骤没有待审核对象。可打开地图查询、绘制或截取当前视野。";
+                                text: root.english ? "No pending objects in this step. Review pinned source coverage and acknowledge any Known Feature Gaps." : "当前步骤没有待审核对象。请检查已固定的来源覆盖，并确认所有已知地物缺口。";
                                 color: #68756e; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
                             }
                         }
@@ -378,30 +482,53 @@ export component AppWindow inherits Window {
                         Button { text: root.english ? "Export Foundation project and .schem" : "导出 Foundation 工程与 .schem"; clicked => { root.export-project(); } }
                     }
 
-                    if root.detailed-active : VerticalLayout {
+                    if root.detailed-active && root.detailed-task == 1 : VerticalLayout {
                         spacing: 12px;
-                        SectionLabel { text: root.english ? "TARGET BUILDING" : "目标建筑"; }
-                        slot-box := ComboBox {
+                        SectionLabel { text: root.english ? "CHOOSE ONE REVIEWED BUILDING" : "选择一栋已审阅建筑"; }
+                        task-slot-box := ComboBox {
                             model: root.building-slots;
                             current-index <=> root.selected-slot;
-                            selected(value) => { root.choose-slot(slot-box.current-index); }
                         }
+                        Button {
+                            text: root.english ? "Use this building" : "精修这栋建筑";
+                            clicked => { root.choose-slot(task-slot-box.current-index); }
+                        }
+                    }
+
+                    if root.detailed-active && root.detailed-task == 2 : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: root.english ? "MEASURED GEOMETRY" : "实测几何"; }
                         HorizontalLayout {
                             spacing: 10px;
-                            LineEdit { text <=> root.measured-height; placeholder-text: root.english ? "Measured height (m)" : "实测高度（米）"; }
-                            LineEdit { text <=> root.measured-floors; placeholder-text: root.english ? "Measured floors" : "实测楼层"; }
-                            LineEdit { text <=> root.measured-roof; placeholder-text: root.english ? "Roof (flat/gabled/hipped)" : "屋顶形状（flat/gabled/hipped）"; }
+                            LineEdit { text <=> root.measured-height; placeholder-text: root.english ? "Height (m)" : "高度（米）"; }
+                            LineEdit { text <=> root.measured-floors; placeholder-text: root.english ? "Floors" : "楼层"; }
+                            LineEdit { text <=> root.measured-roof; placeholder-text: root.english ? "Roof shape" : "屋顶形状"; }
                             Button {
-                                text: root.english ? "Save measurements" : "保存实测值";
+                                text: root.english ? "Save" : "保存";
                                 clicked => { root.update-building-measurements(root.measured-height, root.measured-floors, root.measured-roof); }
                             }
                         }
-                        SectionLabel { text: root.english ? "ARNIS APPEARANCE PRESET" : "Arnis 外观预设"; }
-                        style-box := ComboBox {
-                            model: root.arnis-styles;
-                            current-index <=> root.selected-style;
-                            selected(value) => { root.choose-style(style-box.current-index, root.window-density, root.wall-depth); }
+                        SectionLabel { text: root.english ? "AUTOMATIC MATCH" : "自动匹配"; }
+                        Text { text: root.function-classification-summary; color: #33463d; wrap: word-wrap; }
+                        Text { text: root.local-evidence-summary; color: #506058; wrap: word-wrap; }
+                        Button {
+                            text: root.english ? "Add building photos" : "添加建筑照片";
+                            clicked => { root.import-local-evidence(); }
                         }
+                        task-template-box := ComboBox {
+                            model: root.template-proposals;
+                            current-index <=> root.selected-template-proposal;
+                        }
+                        Button {
+                            text: root.english ? "Use this template" : "采用此模板";
+                            clicked => { root.choose-template-proposal(task-template-box.current-index); }
+                        }
+                    }
+
+                    if root.detailed-active && root.detailed-task == 3 : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: root.english ? "EDITABLE FACADE RULES" : "可编辑立面规则"; }
+                        Text { text: root.facade-rule-summary; color: #33463d; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 12px;
                             Text { text: root.english ? "Window density" : "窗户密度"; width: 110px; vertical-alignment: center; }
@@ -414,59 +541,73 @@ export component AppWindow inherits Window {
                             Slider { value <=> root.wall-depth; minimum: 0; maximum: 100; }
                             Text { text: round(root.wall-depth) + "%"; width: 48px; vertical-alignment: center; }
                         }
-                        Button { text: root.english ? "Generate and open native preview" : "生成并打开原生预览"; clicked => { root.generate-building(); } }
+                        Button {
+                            text: root.english ? "Generate and open preview" : "生成并打开预览";
+                            clicked => { root.generate-building(); }
+                        }
+                    }
+
+                    if root.detailed-active && root.detailed-task == 4 : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: root.english ? "REVIEW GENERATED BUILDING" : "审阅生成建筑"; }
+                        Text { text: root.refinement-summary; color: #33463d; wrap: word-wrap; }
                         HorizontalLayout {
-                            Text {
-                                text: root.refinement-summary;
-                                color: #506058;
-                                vertical-alignment: center;
-                            }
-                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            spacing: 10px;
+                            Button { text: root.english ? "Open preview" : "打开预览"; clicked => { root.open-preview(); } }
                             Button {
                                 text: root.english ? "Confirm this version" : "确认此版本";
                                 enabled: root.can-confirm-refinement;
                                 clicked => { root.confirm-refinement(); }
                             }
                         }
+                        Text { text: (root.english ? "Selected block: " : "选中方块：") + root.selected-block-summary; color: #506058; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { text <=> root.selected-block-target; placeholder-text: root.english ? "Replacement block ID" : "替换方块 ID"; }
+                            Button { text: root.english ? "Replace selected" : "替换选中方块"; clicked => { root.replace-selected-block(root.selected-block-target); } }
+                        }
                         Button {
-                            text: root.english ? "Evidence and semantic features" : "证据与识别特征";
+                            text: root.english ? "Evidence and detected features" : "证据与识别特征";
                             clicked => { root.evidence-visible = true; }
                         }
-                        Button { text: root.english ? "Open latest preview" : "打开上次生成的预览"; clicked => { root.open-preview(); } }
-                        Text {
-                            text: (root.english ? "Preview selection: " : "预览选择：") + root.selected-block-summary;
-                            color: #506058;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            LineEdit {
-                                text <=> root.selected-block-target;
-                                placeholder-text: root.english ? "New ID for selected block" : "选中方块的新 ID";
-                            }
-                            Button {
-                                text: root.english ? "Replace selected block" : "替换选中方块";
-                                clicked => { root.replace-selected-block(root.selected-block-target); }
-                            }
-                        }
-                        SectionLabel { text: root.english ? "BATCH BLOCK REPLACEMENT" : "批量方块替换"; }
-                        Text { text: root.palette-summary; color: #506058; wrap: word-wrap; }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            LineEdit { text <=> root.replace-source; placeholder-text: root.english ? "Source, e.g. minecraft:bricks" : "原方块，例如 minecraft:bricks"; }
-                            LineEdit { text <=> root.replace-target; placeholder-text: root.english ? "Target, e.g. minecraft:white_concrete" : "新方块，例如 minecraft:white_concrete"; }
-                            Button {
-                                text: root.english ? "Replace all" : "全部替换";
-                                clicked => { root.replace-generated-block(root.replace-source, root.replace-target); }
-                            }
-                        }
-                        Button { text: root.english ? "Export detailed building .schem" : "导出当前精细建筑 .schem"; clicked => { root.export-building(); } }
                     }
 
+                      }
+                    }
+                    if root.detailed-active && root.detailed-task == 4 : detailed-export := Button {
+                        text: root.english ? "Export detailed building .schem" : "导出当前精细建筑 .schem";
+                        clicked => { root.export-building(); }
+                    }
+                }
+            }
+            Rectangle { width: 1px; background: #d0c7b6; }
+            Rectangle {
+                width: 270px;
+                background: #f2eee4;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    SectionLabel { text: root.english ? "CURRENT TASK" : "当前任务"; }
+                    Text { text: root.page-title; color: #17251f; font-size: 19px; font-weight: 700; wrap: word-wrap; }
+                    Text { text: root.page-help; color: #5b665f; font-size: 12px; wrap: word-wrap; }
+                    Rule {}
+                    SectionLabel { text: root.english ? "PROJECT STATUS" : "项目状态"; }
+                    Text { text: root.project-summary; color: #33463d; wrap: word-wrap; }
+                    Text {
+                        text: root.save-status;
+                        color: root.error-visible ? #a54836 : #4c665b;
+                        font-size: 12px;
+                    }
                     Rectangle { vertical-stretch: 1; background: transparent; }
-                    if !root.detailed-active : HorizontalLayout {
-                        Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Button { text: root.primary-label; clicked => { root.confirm-step(); } }
+                    if !root.detailed-active && root.active-step > 1 : Button {
+                        text: root.primary-label;
+                        clicked => { root.confirm-step(); }
+                    }
+                    if root.detailed-active && !root.can-confirm-refinement : Text {
+                        text: root.english ? "Generate a preview before confirming or exporting." : "先生成预览，再确认或导出精修版本。";
+                        color: #6d665b;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
                 }
             }
@@ -493,7 +634,13 @@ export component AppWindow inherits Window {
             SectionLabel { text: root.english ? "GAODE MAP SERVICE" : "高德地图服务"; }
             Text { text: root.english ? "Credentials are stored only in Windows Credential Manager, never in projects or the repository." : "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
             LineEdit { text <=> root.gaode-key; placeholder-text: "Web JS API Key"; }
-            LineEdit { text <=> root.gaode-security; placeholder-text: root.english ? "Security JS Code" : "安全密钥 Security JS Code"; }
+            LineEdit { text <=> root.gaode-security; placeholder-text: root.english ? "securityJsCode paired with this Web JS API Key" : "与此 Web JS API Key 配对的 securityJsCode"; }
+            Text {
+                text: root.english ? "The key and securityJsCode must come from the same Web (JS API) entry in the Gaode console." : "Key 与 securityJsCode 必须来自高德控制台中的同一条 Web（JS API）配置。";
+                color: #506058;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
             Rectangle { vertical-stretch: 1; background: transparent; }
             HorizontalLayout {
                 Rectangle { horizontal-stretch: 1; background: transparent; }
@@ -506,6 +653,45 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    if root.utilities-visible : Rectangle {
+        x: 700px;
+        y: 78px;
+        width: 300px;
+        height: 290px;
+        background: #f4f0e5;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 10px;
+            SectionLabel { text: root.english ? "PROJECT & TOOLS" : "项目与工具"; }
+            Button {
+                text: root.english ? "Open project" : "打开项目";
+                clicked => { root.open-project(); root.utilities-visible = false; }
+            }
+            Button {
+                text: root.english ? "Save as" : "另存为";
+                clicked => { root.save-project-as(); root.utilities-visible = false; }
+            }
+            Button {
+                text: root.english ? "Map settings" : "地图设置";
+                clicked => { root.settings-visible = true; root.utilities-visible = false; }
+            }
+            Button {
+                text: root.english ? "Diagnostics" : "诊断日志";
+                clicked => { root.open-diagnostics(); root.utilities-visible = false; }
+            }
+            Button {
+                text: root.english ? "About" : "关于";
+                clicked => { root.about-visible = true; root.utilities-visible = false; }
+            }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            Button { text: root.english ? "Close" : "关闭"; clicked => { root.utilities-visible = false; } }
         }
     }
 

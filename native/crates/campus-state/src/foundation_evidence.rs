@@ -663,6 +663,12 @@ pub struct BuildingEntitySplit {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum BuildingEntityDecision {
+    ResolveFromQueue {
+        entity_id: String,
+        primary_observation_id: String,
+        boundary_decision: BuildingBoundaryDecision,
+        leave_unnamed_reason: Option<String>,
+    },
     SetPrimary {
         entity_id: String,
         observation_id: String,
@@ -1745,6 +1751,38 @@ fn apply_building_decision(
     observations: &[SourceObservation],
 ) -> Result<(), String> {
     match decision {
+        BuildingEntityDecision::ResolveFromQueue {
+            entity_id,
+            primary_observation_id,
+            boundary_decision,
+            leave_unnamed_reason,
+        } => {
+            if *boundary_decision == BuildingBoundaryDecision::Pending {
+                return Err("A queue resolution requires retain or exclude".into());
+            }
+            let selected_groups = evidence
+                .iter()
+                .filter(|descriptor| descriptor.observation_id == *primary_observation_id)
+                .filter_map(|descriptor| descriptor.overlap_group.as_ref())
+                .collect::<std::collections::BTreeSet<_>>();
+            let entity = entity_mut(entities, entity_id)?;
+            if !entity.evidence_ids.contains(primary_observation_id) {
+                return Err("Primary geometry must come from retained entity evidence".into());
+            }
+            entity.primary_observation_id = primary_observation_id.clone();
+            entity
+                .unresolved_overlap_groups
+                .retain(|group| !selected_groups.contains(group));
+            entity.boundary_decision = *boundary_decision;
+            if let Some(reason) = leave_unnamed_reason {
+                if reason.trim().is_empty() {
+                    return Err("Leaving a Building unnamed requires an explicit reason".into());
+                }
+                entity.display_name = None;
+                entity.automatic_name_poi_id = None;
+                entity.name_resolution = BuildingNameResolution::Unnamed;
+            }
+        }
         BuildingEntityDecision::SetPrimary {
             entity_id,
             observation_id,
@@ -2168,7 +2206,8 @@ fn validate_name_evidence(evidence: &[BuildingNameEvidence]) -> Result<(), Strin
 
 fn decision_subjects(decision: &BuildingEntityDecision) -> Vec<String> {
     match decision {
-        BuildingEntityDecision::SetPrimary { entity_id, .. }
+        BuildingEntityDecision::ResolveFromQueue { entity_id, .. }
+        | BuildingEntityDecision::SetPrimary { entity_id, .. }
         | BuildingEntityDecision::Split { entity_id, .. }
         | BuildingEntityDecision::SetBoundary { entity_id, .. }
         | BuildingEntityDecision::AssignName { entity_id, .. }

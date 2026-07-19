@@ -1,33 +1,38 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod desktop_tool_adapters;
+mod desktop_tool_process;
+mod diagnostics;
 mod v11_acquisition_client;
 #[cfg(debug_assertions)]
 mod v11_boundary_evidence_desk;
+mod v11_foundation_review_desk;
 mod v11_project_kernel;
 mod v11_tracer_bullet;
 
+use desktop_tool_process::DesktopToolProcessSupervisor;
+
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, CampusTargetEvidence, CandidateConfidenceFilter, DesktopApplicationState,
-    DesktopLocale, DesktopMode, ExternalModelDecision, FeatureKind, FoundationStep,
-    FoundationStylePack, FoundationStylePreset, GeoPoint, MapCandidate, MapViewState,
-    ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide,
-    SemanticHeightBand, SemanticStrength, SourceConflictDecision,
+    ArnisStylePreset, CampusProject, CampusReconstructionWorkflow, CampusTargetEvidence,
+    CandidateConfidence, CandidateConfidenceFilter, DesktopApplicationState, DesktopLocale,
+    DesktopMode, DetailedBuildingHandoff, DetailedBuildingRuleStack, DetailedBuildingWorkspace,
+    DetailedBuildingWorkspaceTask, ExternalModelDecision, FeatureKind, FoundationMapTask,
+    FoundationPhase, FoundationStep, FoundationStylePack, FoundationStylePreset,
+    FoundationWorkflow, FoundationWorkflowIntent, GeoPoint, MapCandidate, MapViewState,
+    ReconstructionWorkflowIntent, ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind,
+    SemanticFeatureSide, SemanticHeightBand, SemanticStrength, SourceConflictDecision,
 };
-use campus_tool_protocol::{
-    read_message, write_message, MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent,
-    ToolKind, PROTOCOL_VERSION,
-};
+use campus_tool_protocol::{MapCoordinate, MapOverlay, MapPurpose};
+#[cfg(test)]
+use campus_tool_protocol::{ToolEvent, ToolKind, PROTOCOL_VERSION};
 use rand::Rng;
 use slint::{ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
-use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
-#[cfg(target_os = "windows")]
-use tokio::net::windows::named_pipe::ServerOptions;
+use std::sync::mpsc;
 
 slint::include_modules!();
 
@@ -38,16 +43,39 @@ fn app_data_dir() -> PathBuf {
         .join("CampusReconstructionTool")
 }
 
+fn install_diagnostics() {
+    let log_directory = app_data_dir().join("logs");
+    if diagnostics::initialise(&log_directory).is_ok() {
+        let executable = std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+        diagnostics::record(
+            diagnostics::DiagnosticLevel::Info,
+            "application.start",
+            "Campus Reconstruction Tool started",
+            &[("executable", executable.as_str())],
+        );
+    }
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info.to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+        diagnostics::record(
+            diagnostics::DiagnosticLevel::Error,
+            "application.panic",
+            &message,
+            &[("backtrace", backtrace.as_str())],
+        );
+        previous(info);
+    }));
+}
+
 fn default_project_path() -> PathBuf {
     app_data_dir().join("projects").join("active.campus.json")
 }
 
 fn generated_model_dir() -> PathBuf {
     app_data_dir().join("generated")
-}
-
-fn visual_capture_dir() -> PathBuf {
-    app_data_dir().join("captures")
 }
 
 fn locale_path() -> PathBuf {
@@ -109,6 +137,13 @@ fn foundation_style_file_dialog() -> Option<PathBuf> {
         .pick_file()
 }
 
+fn local_evidence_file_dialog() -> Vec<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Image files", &["jpg", "jpeg", "png", "webp"])
+        .pick_files()
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Default)]
 struct MapCredentials {
     js_api_key: String,
@@ -124,6 +159,8 @@ fn load_map_credentials() -> MapCredentials {
         credential_entry(account)
             .and_then(|entry| entry.get_password().map_err(|error| error.to_string()))
             .unwrap_or_default()
+            .trim()
+            .to_string()
     };
     let stored_key = from_store("gaode-js-api-key");
     let stored_security = from_store("gaode-security-code");
@@ -132,6 +169,8 @@ fn load_map_credentials() -> MapCredentials {
             std::env::var("GAODE_JS_API_KEY")
                 .or_else(|_| std::env::var("VITE_GAODE_JS_API_KEY"))
                 .unwrap_or_default()
+                .trim()
+                .to_string()
         } else {
             stored_key
         },
@@ -139,6 +178,8 @@ fn load_map_credentials() -> MapCredentials {
             std::env::var("GAODE_SECURITY_CODE")
                 .or_else(|_| std::env::var("VITE_GAODE_SECURITY_CODE"))
                 .unwrap_or_default()
+                .trim()
+                .to_string()
         } else {
             stored_security
         },
@@ -147,10 +188,10 @@ fn load_map_credentials() -> MapCredentials {
 
 fn save_map_credentials(credentials: &MapCredentials) -> Result<(), String> {
     credential_entry("gaode-js-api-key")?
-        .set_password(&credentials.js_api_key)
+        .set_password(credentials.js_api_key.trim())
         .map_err(|error| error.to_string())?;
     credential_entry("gaode-security-code")?
-        .set_password(&credentials.security_code)
+        .set_password(credentials.security_code.trim())
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -186,8 +227,8 @@ fn page_copy(
                 "Confirm orientation and continue",
             ),
             FoundationStep::Building => (
-                "Review buildings and fill gaps",
-                "Accept reliable building candidates, then recover missing geometry from the map view or manual drawing.",
+                "Review building evidence",
+                "Resolve Building Entities from pinned source evidence and acknowledge any unsupported gaps.",
                 "Complete building review",
             ),
             FoundationStep::Road => (
@@ -479,6 +520,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     };
     ui.set_project_name(project.name.clone().into());
     ui.set_campus_name(project.campus_name.clone().into());
+    ui.set_has_campus_target(project.campus_target.is_some());
     ui.set_tool_status(state.tool_status.clone().unwrap_or_default().into());
     ui.set_selected_block_summary(
         state
@@ -500,14 +542,30 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
             })
             .into(),
     );
-    ui.set_detailed_active(project.mode == DesktopMode::Detailed);
+    let reconstruction_workflow = CampusReconstructionWorkflow::projection(project);
+    ui.set_detailed_active(reconstruction_workflow.mode == DesktopMode::Detailed);
+    ui.set_can_enter_detailed(matches!(
+        reconstruction_workflow.detailed_building_handoff,
+        DetailedBuildingHandoff::Ready { .. }
+    ));
+    let detailed_workspace = DetailedBuildingWorkspace::projection(project);
+    ui.set_detailed_task(match detailed_workspace.task {
+        DetailedBuildingWorkspaceTask::BlockedNoReviewedBuildingSlot => 0,
+        DetailedBuildingWorkspaceTask::SelectBuilding => 1,
+        DetailedBuildingWorkspaceTask::ChooseEvidenceOrTemplate => 2,
+        DetailedBuildingWorkspaceTask::ReviewFacadeRules => 3,
+        DetailedBuildingWorkspaceTask::ReviewPreview => 4,
+    });
+    let foundation_workflow = FoundationWorkflow::projection(project);
     ui.set_active_step(
         FoundationStep::ALL
             .iter()
-            .position(|step| *step == project.foundation_step)
+            .position(|step| *step == foundation_workflow.step)
             .unwrap_or(0) as i32,
     );
-    let (title, help, primary) = if project.mode == DesktopMode::Detailed {
+    ui.set_can_review_foundation(foundation_workflow.can_enter_review);
+    ui.set_can_generate_foundation(foundation_workflow.can_enter_generate);
+    let (title, help, primary) = if reconstruction_workflow.mode == DesktopMode::Detailed {
         if english {
             (
                 "Detailed building template",
@@ -527,6 +585,49 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_page_title(title.into());
     ui.set_page_help(help.into());
     ui.set_primary_label(primary.into());
+    if reconstruction_workflow.mode == DesktopMode::Detailed {
+        let (task_title, task_help) = match (detailed_workspace.task, english) {
+            (DetailedBuildingWorkspaceTask::SelectBuilding, true) => (
+                "Choose a building",
+                "Start from one building already reviewed in Foundation.",
+            ),
+            (DetailedBuildingWorkspaceTask::SelectBuilding, false) => (
+                "选择要精修的建筑",
+                "从地基模式已经审阅确认的建筑中选择一栋。",
+            ),
+            (DetailedBuildingWorkspaceTask::ChooseEvidenceOrTemplate, true) => (
+                "Match photos and template",
+                "Building use is inferred from its name and map tags. Add photos when available, then choose the closest Arnis template.",
+            ),
+            (DetailedBuildingWorkspaceTask::ChooseEvidenceOrTemplate, false) => (
+                "匹配照片与模板",
+                "系统根据建筑名称与地图标签自动识别用途；有照片时补充照片，然后选择最接近的 Arnis 模板。",
+            ),
+            (DetailedBuildingWorkspaceTask::ReviewFacadeRules, true) => (
+                "Review editable facade rules",
+                "Keep measured geometry fixed, adjust the facade parameters, then generate a preview.",
+            ),
+            (DetailedBuildingWorkspaceTask::ReviewFacadeRules, false) => (
+                "审阅可编辑立面规则",
+                "实测轮廓、高度和楼层保持不变；调整立面参数后生成预览。",
+            ),
+            (DetailedBuildingWorkspaceTask::ReviewPreview, true) => (
+                "Review and confirm preview",
+                "Inspect the generated building, correct blocks if needed, then confirm or export.",
+            ),
+            (DetailedBuildingWorkspaceTask::ReviewPreview, false) => (
+                "审阅并确认预览",
+                "检查生成结果，必要时修正方块，然后确认版本或导出。",
+            ),
+            (_, true) => (
+                "Detailed building unavailable",
+                "Review a building in Foundation first.",
+            ),
+            (_, false) => ("单栋精修暂不可用", "请先在地基模式确认至少一栋建筑。"),
+        };
+        ui.set_page_title(task_title.into());
+        ui.set_page_help(task_help.into());
+    }
     ui.set_save_status(
         if state.last_error.is_some() {
             tr(
@@ -690,6 +791,129 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_selected_slot(selected_slot as i32);
     let selected_measurements = project.building_slots.get(selected_slot);
     let selected_slot_id = selected_measurements.map(|slot| slot.id.as_str());
+    let template_proposals = selected_slot_id
+        .map(|slot_id| project.template_proposals_for_slot(slot_id))
+        .unwrap_or_default();
+    let selected_template_id = selected_slot_id.and_then(|slot_id| {
+        project
+            .detailed
+            .selected_templates
+            .iter()
+            .find(|selection| selection.slot_id == slot_id)
+            .map(|selection| selection.template.id.as_str())
+    });
+    let selected_template_proposal = template_proposals
+        .iter()
+        .position(|proposal| Some(proposal.template.id.as_str()) == selected_template_id)
+        .unwrap_or(0);
+    ui.set_template_proposals(ModelRc::new(VecModel::from(
+        if template_proposals.is_empty() {
+            vec![SharedString::from(tr(
+                locale,
+                "请选择建筑以生成模板提案",
+                "Choose a building to generate template proposals",
+            ))]
+        } else {
+            template_proposals
+                .iter()
+                .map(|proposal| {
+                    SharedString::from(format!(
+                        "{} · {}% · {}",
+                        proposal.template.label, proposal.confidence, proposal.rationale
+                    ))
+                })
+                .collect()
+        },
+    )));
+    ui.set_selected_template_proposal(selected_template_proposal as i32);
+    ui.set_function_classification_summary(
+        selected_slot_id
+            .and_then(|slot_id| project.classification_for_slot(slot_id))
+            .map(|classification| {
+                let reason = classification
+                    .reasons
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("");
+                if english {
+                    format!(
+                        "Inferred function: {} · {}% · {}",
+                        classification.function.label(),
+                        classification.confidence,
+                        reason
+                    )
+                } else {
+                    format!(
+                        "自动用途：{} · {}% · {}",
+                        classification.function.label(),
+                        classification.confidence,
+                        reason
+                    )
+                }
+            })
+            .unwrap_or_else(|| {
+                tr(
+                    locale,
+                    "尚未识别用途；选择建筑后将根据名称和地图标签自动匹配。",
+                    "No function inferred yet. Select a building to match its name and map tags.",
+                )
+                .into()
+            })
+            .into(),
+    );
+    ui.set_facade_rule_summary(
+        selected_slot_id
+            .and_then(|slot_id| {
+                project
+                    .detailed
+                    .facade_drafts
+                    .iter()
+                    .rev()
+                    .find(|draft| draft.slot_id == slot_id)
+            })
+            .map(|draft| {
+                if english {
+                    format!(
+                        "Editable facade rule draft · {} rules · {}% template confidence",
+                        draft.rules.len(),
+                        draft.confidence
+                    )
+                } else {
+                    format!(
+                        "可编辑立面规则草案 · {} 条规则 · 模板置信度 {}%",
+                        draft.rules.len(),
+                        draft.confidence
+                    )
+                }
+            })
+            .unwrap_or_else(|| {
+                tr(
+                    locale,
+                    "选择一个模板后建立可编辑立面规则草案。",
+                    "Select a template to create an editable facade rule draft.",
+                )
+                .into()
+            })
+            .into(),
+    );
+    let local_evidence_count = selected_slot_id
+        .map(|slot_id| {
+            project
+                .detailed
+                .evidence_assets
+                .iter()
+                .filter(|asset| asset.slot_id == slot_id)
+                .count()
+        })
+        .unwrap_or(0);
+    ui.set_local_evidence_summary(
+        if english {
+            format!("{local_evidence_count} local photo(s) · kept beside the project")
+        } else {
+            format!("{local_evidence_count} 张本地照片 · 与项目并列保存")
+        }
+        .into(),
+    );
     let external_models = project
         .detailed
         .external_models
@@ -1061,16 +1285,15 @@ fn candidate_matches_filter(candidate: &MapCandidate, filter: CandidateConfidenc
         CandidateConfidenceFilter::All => candidate.review == ReviewDecision::Pending,
         CandidateConfidenceFilter::High => {
             candidate.review == ReviewDecision::Pending
-                && candidate.confidence.eq_ignore_ascii_case("high")
+                && candidate.confidence == CandidateConfidence::High
         }
         CandidateConfidenceFilter::Medium => {
             candidate.review == ReviewDecision::Pending
-                && (candidate.confidence.eq_ignore_ascii_case("medium")
-                    || candidate.confidence.eq_ignore_ascii_case("manual"))
+                && candidate.confidence == CandidateConfidence::Medium
         }
         CandidateConfidenceFilter::Low => {
             candidate.review == ReviewDecision::Pending
-                && candidate.confidence.eq_ignore_ascii_case("low")
+                && candidate.confidence == CandidateConfidence::Low
         }
         CandidateConfidenceFilter::Confirmed => candidate.review == ReviewDecision::Accepted,
         CandidateConfidenceFilter::Rejected => candidate.review == ReviewDecision::Rejected,
@@ -1086,12 +1309,55 @@ fn save_and_sync(
     Ok(())
 }
 
+#[track_caller]
 fn set_error(ui: &AppWindow, message: impl AsRef<str>) {
-    ui.set_save_status(
+    set_error_for(ui, "desktop.operation", message);
+}
+
+#[track_caller]
+fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
+    let location = std::panic::Location::caller();
+    let source = format!("{}:{}", location.file(), location.line());
+    let record = diagnostics::record(
+        diagnostics::DiagnosticLevel::Error,
+        event,
+        message.as_ref(),
+        &[("source", source.as_str())],
+    );
+    let incident_id = record
+        .as_ref()
+        .map(|record| record.id.as_str())
+        .unwrap_or("log-unavailable");
+    let log_path = record
+        .as_ref()
+        .map(|record| record.log_path.display().to_string())
+        .unwrap_or_else(|| {
+            diagnostics::log_directory()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "diagnostic log unavailable".into())
+        });
+    ui.set_error_visible(true);
+    ui.set_error_summary(
         if ui.get_english() {
             format!("Operation failed: {}", message.as_ref())
         } else {
-            format!("保存失败：{}", message.as_ref())
+            format!("操作失败：{}", message.as_ref())
+        }
+        .into(),
+    );
+    ui.set_error_details(
+        if ui.get_english() {
+            format!("Incident {incident_id} · {log_path}")
+        } else {
+            format!("事件编号 {incident_id} · {log_path}")
+        }
+        .into(),
+    );
+    ui.set_save_status(
+        if ui.get_english() {
+            "Operation failed"
+        } else {
+            "操作失败"
         }
         .into(),
     );
@@ -1108,11 +1374,26 @@ fn set_status(ui: &AppWindow, zh: impl Into<String>, en: impl Into<String>) {
     );
 }
 
+#[track_caller]
+fn set_localized_error(ui: &AppWindow, event: &str, zh: impl Into<String>, en: impl Into<String>) {
+    let message = if ui.get_english() {
+        en.into()
+    } else {
+        zh.into()
+    };
+    set_error_for(ui, event, message);
+}
+
+fn compile_foundation(project: &CampusProject) -> Result<campus_export::VoxelModel, String> {
+    let reviewed = campus_export::ReviewedCampusModel::from(project);
+    campus_export::foundation_model_from_reviewed(&reviewed)
+}
+
 fn generate_foundation_preview(
     state: &Rc<RefCell<DesktopApplicationState>>,
 ) -> Result<(PathBuf, String), String> {
     let project = state.borrow().project.clone().ok_or("请先创建项目")?;
-    let model = campus_export::foundation_model(&project)?;
+    let model = compile_foundation(&project)?;
     let directory = generated_model_dir();
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let path = directory.join("foundation-preview.json");
@@ -1126,7 +1407,14 @@ fn generate_foundation_preview(
 fn generate_detailed_model(
     state: &Rc<RefCell<DesktopApplicationState>>,
 ) -> Result<(PathBuf, String), String> {
-    let (slot, style, density, depth, scale, version) = {
+    generate_detailed_model_to(state, &generated_model_dir())
+}
+
+fn generate_detailed_model_to(
+    state: &Rc<RefCell<DesktopApplicationState>>,
+    output_directory: &Path,
+) -> Result<(PathBuf, String), String> {
+    let (slot, rules, scale, version) = {
         let borrowed = state.borrow();
         let project = borrowed.project.as_ref().ok_or("请先创建项目")?;
         let slot = project
@@ -1138,15 +1426,20 @@ fn generate_detailed_model(
             .cloned()
             .ok_or("请先在地基模式接受至少一个建筑候选")?;
         let version = project.next_refinement_version(&slot.id);
-        (
-            slot,
-            project.detailed.style_preset,
-            project.detailed.window_density,
-            project.detailed.wall_depth,
-            project.blocks_per_meter,
-            version,
-        )
+        let rules = DetailedBuildingRuleStack::compile(project, &slot.id)?;
+        (slot, rules, project.blocks_per_meter, version)
     };
+    let mut correction_notes = vec![format!(
+        "Detailed Building Rule Stack: {}",
+        if rules.applied_rule_ids.is_empty() {
+            "legacy-compatible baseline".into()
+        } else {
+            rules.applied_rule_ids.join(",")
+        }
+    )];
+    if rules.template_provisional {
+        correction_notes.push("Template-Provisional Detailed Building".into());
+    }
     let generated = arnis_core::generate_building(GenerateBuildingRequest {
         candidate_id: slot.id.clone(),
         source: "campus-project".into(),
@@ -1162,18 +1455,22 @@ fn generate_detailed_model(
             interior_rings: Vec::new(),
         }],
         height_m: slot.height_m,
-        floors: slot.floors,
-        roof_shape: slot.roof_shape.clone(),
+        floors: rules.floors,
+        roof_shape: rules.roof_shape.clone(),
         blocks_per_meter: scale,
         seed: 42,
-        materials: MaterialOverrides::default(),
-        correction_notes: vec![format!("V1 fixed Arnis preset: {}", style.slug())],
+        materials: MaterialOverrides {
+            wall: rules.wall_material.clone(),
+            accent: rules.accent_material.clone(),
+            ..MaterialOverrides::default()
+        },
+        correction_notes,
         parts: Vec::new(),
-        style_preset: style.slug().into(),
-        window_density: density,
-        wall_depth: depth,
+        style_preset: rules.style_preset.slug().into(),
+        window_density: rules.window_density,
+        wall_depth: rules.wall_depth,
     })?;
-    std::fs::create_dir_all(generated_model_dir()).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(output_directory).map_err(|error| error.to_string())?;
     let safe_id = slot
         .id
         .chars()
@@ -1185,7 +1482,7 @@ fn generate_detailed_model(
             }
         })
         .collect::<String>();
-    let path = generated_model_dir().join(format!("{safe_id}-v{version}.arnis.json"));
+    let path = output_directory.join(format!("{safe_id}-v{version}.arnis.json"));
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&generated).map_err(|error| error.to_string())?,
@@ -1588,6 +1885,10 @@ fn compress_palette_indices(blocks: &[u16]) -> Vec<arnis_core::BlockRun> {
 
 enum ToolUpdate {
     Status(String),
+    Error {
+        event: String,
+        message: String,
+    },
     PreviewBlockSelected {
         x: i32,
         y: i32,
@@ -1603,29 +1904,16 @@ enum ToolUpdate {
     MapPoint(GeoPoint),
     MapCampusTarget(CampusTargetEvidence),
     MapBoundary(Vec<GeoPoint>),
-    ManualFeature {
-        kind: FeatureKind,
-        points: Vec<GeoPoint>,
-    },
-    // BEGIN DEBUG-ONLY LEGACY ACQUISITION
-    #[cfg(debug_assertions)]
-    MapCapture {
-        south_west: GeoPoint,
-        north_east: GeoPoint,
-        candidates: Result<Vec<MapCandidate>, String>,
-    },
-    // END DEBUG-ONLY LEGACY ACQUISITION
-    MapVisualCapture {
-        south_west: GeoPoint,
-        north_east: GeoPoint,
-        png_bytes: Vec<u8>,
-        candidates: Result<Vec<MapCandidate>, String>,
-    },
+}
+
+#[cfg(test)]
+fn tool_event_ends_stream(event: &ToolEvent) -> bool {
+    matches!(event, ToolEvent::Closed { .. })
 }
 
 #[derive(Clone)]
 struct ToolSupervisor {
-    children: Arc<Mutex<Vec<Child>>>,
+    processes: DesktopToolProcessSupervisor,
     updates: mpsc::Sender<ToolUpdate>,
 }
 
@@ -1639,505 +1927,6 @@ struct MapLaunchRequest {
     overlays: Vec<MapOverlay>,
     feature_kind: Option<String>,
     english: bool,
-}
-
-impl ToolSupervisor {
-    fn tool_executable(name: &str) -> Result<PathBuf, String> {
-        let directory = std::env::current_exe()
-            .map_err(|error| error.to_string())?
-            .parent()
-            .ok_or("native executable has no parent")?
-            .to_path_buf();
-        let executable = directory.join(format!("{name}.exe"));
-        executable
-            .exists()
-            .then_some(executable)
-            .ok_or_else(|| format!("{name}.exe is not installed beside the main application"))
-    }
-
-    #[cfg(target_os = "windows")]
-    fn launch_map(
-        &self,
-        ui: slint::Weak<AppWindow>,
-        request: MapLaunchRequest,
-    ) -> Result<(), String> {
-        let executable = Self::tool_executable("campus-map")?;
-        let random: u128 = rand::rng().random();
-        let pipe = format!(r"\\.\pipe\campus-reconstruction-{random:032x}");
-        let token = format!("{:032x}", rand::rng().random::<u128>());
-        let server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&pipe)
-            .map_err(|error| error.to_string())?;
-        let child = Command::new(executable)
-            .arg(&pipe)
-            .arg(&token)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-        self.children
-            .lock()
-            .map_err(|_| "tool child lock poisoned")?
-            .push(child);
-        let updates = self.updates.clone();
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("map supervisor runtime");
-            let error_ui = ui.clone();
-            let result: Result<(), String> = runtime.block_on(async move {
-                let mut server = server;
-                server.connect().await.map_err(|error| error.to_string())?;
-                let hello: ToolCommand = read_message(&mut server).await?;
-                match hello {
-                    ToolCommand::Hello {
-                        protocol_version,
-                        session_token,
-                        tool: ToolKind::Map,
-                    } if protocol_version == PROTOCOL_VERSION && session_token == token => {}
-                    _ => return Err("map tool handshake rejected".into()),
-                }
-                let analysis_campus = request.title.clone();
-                let locale = if request.english {
-                    DesktopLocale::En
-                } else {
-                    DesktopLocale::ZhCn
-                };
-                write_message(
-                    &mut server,
-                    &ToolCommand::OpenMap {
-                        campus_name: request.title,
-                        center_lng: request.view.center.lng,
-                        center_lat: request.view.center.lat,
-                        zoom: request.view.zoom,
-                        pitch: request.view.pitch,
-                        rotation: request.view.rotation,
-                        js_api_key: request.js_api_key,
-                        security_code: request.security_code,
-                        boundary: request
-                            .boundary
-                            .into_iter()
-                            .map(campus_services::wgs84_to_gcj02)
-                            .map(|point| MapCoordinate {
-                                lng: point.lng,
-                                lat: point.lat,
-                            })
-                            .collect(),
-                        purpose: request.purpose,
-                        overlays: request
-                            .overlays
-                            .into_iter()
-                            .map(|overlay| MapOverlay {
-                                label: overlay.label,
-                                points: overlay
-                                    .points
-                                    .into_iter()
-                                    .map(|point| {
-                                        let point = campus_services::wgs84_to_gcj02(GeoPoint {
-                                            lng: point.lng,
-                                            lat: point.lat,
-                                        });
-                                        MapCoordinate {
-                                            lng: point.lng,
-                                            lat: point.lat,
-                                        }
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                        feature_kind: request.feature_kind,
-                        english: request.english,
-                    },
-                )
-                .await?;
-                loop {
-                    let event: ToolEvent = read_message(&mut server).await?;
-                    let message = match event {
-                        ToolEvent::Ready { .. } => {
-                            tr(locale, "高德工具已连接", "Gaode tool connected").to_string()
-                        }
-                        ToolEvent::MapCamera {
-                            center_lng,
-                            center_lat,
-                            zoom,
-                            pitch,
-                            rotation,
-                        } => {
-                            let _ = updates.send(ToolUpdate::MapCamera {
-                                center: GeoPoint {
-                                    lng: center_lng,
-                                    lat: center_lat,
-                                },
-                                zoom,
-                                pitch,
-                                rotation,
-                            });
-                            if locale == DesktopLocale::En {
-                                format!("Map view recorded · zoom {zoom:.1} · pitch {pitch:.0}")
-                            } else {
-                                format!("地图视角已记录 · zoom {zoom:.1} · pitch {pitch:.0}")
-                            }
-                        }
-                        ToolEvent::MapPointSelected { lng, lat } => {
-                            let _ = updates.send(ToolUpdate::MapPoint(GeoPoint { lng, lat }));
-                            if locale == DesktopLocale::En {
-                                format!("Selected location {lng:.6}, {lat:.6}")
-                            } else {
-                                format!("已选择位置 {lng:.6}, {lat:.6}")
-                            }
-                        }
-                        ToolEvent::MapCampusSelected {
-                            poi_id,
-                            name,
-                            lng,
-                            lat,
-                        } => {
-                            let gcj02 = GeoPoint { lng, lat };
-                            let evidence = CampusTargetEvidence {
-                                poi_id,
-                                name: name.clone(),
-                                gcj02,
-                                wgs84: campus_services::gcj02_to_wgs84(gcj02),
-                                acquisition: "gaode_poi_search".into(),
-                            };
-                            let _ = updates.send(ToolUpdate::MapCampusTarget(evidence));
-                            if locale == DesktopLocale::En {
-                                format!("Campus confirmed: {name}")
-                            } else {
-                                format!("已确认校园：{name}")
-                            }
-                        }
-                        ToolEvent::MapBoundaryChanged { points } => {
-                            let count = points.len();
-                            let _ = updates.send(ToolUpdate::MapBoundary(
-                                points
-                                    .into_iter()
-                                    .map(|point| {
-                                        campus_services::gcj02_to_wgs84(GeoPoint {
-                                            lng: point.lng,
-                                            lat: point.lat,
-                                        })
-                                    })
-                                    .collect(),
-                            ));
-                            if locale == DesktopLocale::En {
-                                format!("Campus boundary saved · {count} nodes")
-                            } else {
-                                format!("校区边界已保存 · {count} 个节点")
-                            }
-                        }
-                        ToolEvent::MapFeatureDrawn { kind, points } => {
-                            let kind = match kind.as_str() {
-                                "building" => FeatureKind::Building,
-                                "road" => FeatureKind::Road,
-                                "water" => FeatureKind::Water,
-                                "vegetation" => FeatureKind::Vegetation,
-                                "sports" => FeatureKind::Sports,
-                                _ => {
-                                    let _ = updates.send(ToolUpdate::Status(
-                                        tr(
-                                            locale,
-                                            "手绘地物类型无效",
-                                            "Invalid manual feature type",
-                                        )
-                                        .into(),
-                                    ));
-                                    continue;
-                                }
-                            };
-                            let count = points.len();
-                            let _ = updates.send(ToolUpdate::ManualFeature {
-                                kind,
-                                points: points
-                                    .into_iter()
-                                    .map(|point| {
-                                        campus_services::gcj02_to_wgs84(GeoPoint {
-                                            lng: point.lng,
-                                            lat: point.lat,
-                                        })
-                                    })
-                                    .collect(),
-                            });
-                            if locale == DesktopLocale::En {
-                                format!("Manual feature received · {count} nodes")
-                            } else {
-                                format!("已接收手绘地物 · {count} 个节点")
-                            }
-                        }
-                        // BEGIN DEBUG-ONLY LEGACY ACQUISITION
-                        #[cfg(debug_assertions)]
-                        ToolEvent::MapCaptureRequested {
-                            south_west_lng,
-                            south_west_lat,
-                            north_east_lng,
-                            north_east_lat,
-                        } => {
-                            let south_west = campus_services::gcj02_to_wgs84(GeoPoint {
-                                lng: south_west_lng,
-                                lat: south_west_lat,
-                            });
-                            let north_east = campus_services::gcj02_to_wgs84(GeoPoint {
-                                lng: north_east_lng,
-                                lat: north_east_lat,
-                            });
-                            let _ = updates.send(ToolUpdate::Status(
-                                tr(
-                                    locale,
-                                    "已锁定当前视野，正在识别校区地物…",
-                                    "Current view locked; discovering campus features…",
-                                )
-                                .into(),
-                            ));
-                            let bounds = campus_services::GeoBounds {
-                                west: south_west.lng,
-                                south: south_west.lat,
-                                east: north_east.lng,
-                                north: north_east.lat,
-                            };
-                            let overture_endpoint = std::env::var("CAMPUS_DATA_SERVICE_URL")
-                                .or_else(|_| std::env::var("OVERTURE_BUILDING_ENDPOINT"))
-                                .ok();
-                            let candidates = campus_services::query_campus_data(
-                                bounds,
-                                overture_endpoint.as_deref(),
-                            )
-                            .await;
-                            let _ = updates.send(ToolUpdate::MapCapture {
-                                south_west,
-                                north_east,
-                                candidates,
-                            });
-                            tr(locale, "已接收当前视野范围", "Current view bounds received")
-                                .to_string()
-                        }
-                        // END DEBUG-ONLY LEGACY ACQUISITION
-                        #[cfg(not(debug_assertions))]
-                        ToolEvent::MapCaptureRequested { .. } => tr(
-                            locale,
-                            "受控服务当前不可用，新采集已暂停；已保存证据仍可审核与导出",
-                            "The controlled service is unavailable, so new acquisition is paused; persisted evidence remains reviewable and exportable",
-                        )
-                        .to_string(),
-                        ToolEvent::MapVisualCapture {
-                            image_data_url,
-                            south_west_lng,
-                            south_west_lat,
-                            north_east_lng,
-                            north_east_lat,
-                        } => {
-                            let south_west = campus_services::gcj02_to_wgs84(GeoPoint {
-                                lng: south_west_lng,
-                                lat: south_west_lat,
-                            });
-                            let north_east = campus_services::gcj02_to_wgs84(GeoPoint {
-                                lng: north_east_lng,
-                                lat: north_east_lat,
-                            });
-                            let bounds = campus_services::GeoBounds {
-                                west: south_west.lng,
-                                south: south_west.lat,
-                                east: north_east.lng,
-                                north: north_east.lat,
-                            };
-                            let analysis = campus_services::analyze_visual_capture(
-                                &image_data_url,
-                                bounds,
-                                &analysis_campus,
-                            );
-                            match analysis {
-                                Ok((png_bytes, candidates)) => {
-                                    let count = candidates.len();
-                                    let _ = updates.send(ToolUpdate::MapVisualCapture {
-                                        south_west,
-                                        north_east,
-                                        png_bytes,
-                                        candidates: Ok(candidates),
-                                    });
-                                    if locale == DesktopLocale::En {
-                                        format!("Visual recovery complete · {count} candidates")
-                                    } else {
-                                        format!("视觉补缺完成 · {count} 个候选")
-                                    }
-                                }
-                                Err(error) => {
-                                    let _ = updates.send(ToolUpdate::MapVisualCapture {
-                                        south_west,
-                                        north_east,
-                                        png_bytes: Vec::new(),
-                                        candidates: Err(error.clone()),
-                                    });
-                                    if locale == DesktopLocale::En {
-                                        format!("Visual recovery failed: {error}")
-                                    } else {
-                                        format!("视觉补缺失败：{error}")
-                                    }
-                                }
-                            }
-                        }
-                        ToolEvent::Error { message } => {
-                            if locale == DesktopLocale::En {
-                                format!("Map error: {message}")
-                            } else {
-                                format!("地图错误：{message}")
-                            }
-                        }
-                        ToolEvent::Closed { .. } => {
-                            tr(locale, "高德工具已关闭", "Gaode tool closed").to_string()
-                        }
-                        _ => continue,
-                    };
-                    let weak = ui.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak.upgrade() {
-                            ui.set_save_status(message.into());
-                        }
-                    });
-                }
-            });
-            if let Err(error) = result {
-                let weak = error_ui;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak.upgrade() {
-                        set_status(
-                            &ui,
-                            format!("地图连接失败：{error}"),
-                            format!("Map connection failed: {error}"),
-                        );
-                    }
-                });
-            }
-        });
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn launch_map(
-        &self,
-        _ui: slint::Weak<AppWindow>,
-        _request: MapLaunchRequest,
-    ) -> Result<(), String> {
-        Err("map tool is supported only on Windows".into())
-    }
-
-    #[cfg(target_os = "windows")]
-    fn launch_preview(
-        &self,
-        _ui: slint::Weak<AppWindow>,
-        model_path: PathBuf,
-        title: String,
-        english: bool,
-    ) -> Result<(), String> {
-        let executable = Self::tool_executable("campus-preview")?;
-        let random: u128 = rand::rng().random();
-        let pipe = format!(r"\\.\pipe\campus-reconstruction-preview-{random:032x}");
-        let token = format!("{:032x}", rand::rng().random::<u128>());
-        let server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&pipe)
-            .map_err(|error| error.to_string())?;
-        let child = Command::new(executable)
-            .arg(&pipe)
-            .arg(&token)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-        self.children
-            .lock()
-            .map_err(|_| "tool child lock poisoned")?
-            .push(child);
-        let updates = self.updates.clone();
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("preview supervisor runtime");
-            let event_updates = updates.clone();
-            let result: Result<(), String> = runtime.block_on(async move {
-                let mut server = server;
-                server.connect().await.map_err(|error| error.to_string())?;
-                let hello: ToolCommand = read_message(&mut server).await?;
-                match hello {
-                    ToolCommand::Hello {
-                        protocol_version,
-                        session_token,
-                        tool: ToolKind::Preview,
-                    } if protocol_version == PROTOCOL_VERSION && session_token == token => {}
-                    _ => return Err("preview tool handshake rejected".into()),
-                }
-                write_message(
-                    &mut server,
-                    &ToolCommand::OpenPreview {
-                        model_path: model_path.to_string_lossy().into_owned(),
-                        title,
-                        english,
-                    },
-                )
-                .await?;
-                loop {
-                    let event: ToolEvent = read_message(&mut server).await?;
-                    let update = match event {
-                        ToolEvent::Ready { .. } => ToolUpdate::Status(
-                            if english {
-                                "Native 3D preview connected"
-                            } else {
-                                "原生 3D 预览已连接"
-                            }
-                            .into(),
-                        ),
-                        ToolEvent::PreviewBlockSelected { x, y, z, block } => {
-                            ToolUpdate::PreviewBlockSelected { x, y, z, block }
-                        }
-                        ToolEvent::Error { message } => ToolUpdate::Status(if english {
-                            format!("Preview error: {message}")
-                        } else {
-                            format!("预览错误：{message}")
-                        }),
-                        ToolEvent::Closed { .. } => ToolUpdate::Status(
-                            if english {
-                                "Native preview closed"
-                            } else {
-                                "原生预览已关闭"
-                            }
-                            .into(),
-                        ),
-                        _ => continue,
-                    };
-                    let _ = event_updates.send(update);
-                }
-            });
-            if let Err(error) = result {
-                let _ = updates.send(ToolUpdate::Status(if english {
-                    format!("Preview connection failed: {error}")
-                } else {
-                    format!("预览连接失败：{error}")
-                }));
-            }
-        });
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn launch_preview(
-        &self,
-        _ui: slint::Weak<AppWindow>,
-        _model_path: PathBuf,
-        _title: String,
-        _english: bool,
-    ) -> Result<(), String> {
-        Err("preview tool is supported only on Windows".into())
-    }
-}
-
-impl Drop for ToolSupervisor {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.children) != 1 {
-            return;
-        }
-        if let Ok(mut children) = self.children.lock() {
-            for child in children.iter_mut() {
-                let _ = child.kill();
-            }
-        }
-    }
 }
 
 fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
@@ -2261,14 +2050,12 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
                 .as_mut()
                 .expect("recovered project")
                 .apply_foundation_style(preset);
-            let model =
-                campus_export::foundation_model(recovered.project.as_ref().expect("project"))?;
+            let model = compile_foundation(recovered.project.as_ref().expect("project"))?;
             if !model.blocks.iter().any(|block| *block != 0) {
                 return Err(format!("Foundation preset {:?} produced no blocks", preset));
             }
         }
-        let foundation_model =
-            campus_export::foundation_model(recovered.project.as_ref().expect("project"))?;
+        let foundation_model = compile_foundation(recovered.project.as_ref().expect("project"))?;
         let foundation_path = temp.join("foundation.schem");
         campus_export::write_schematic(
             &foundation_path,
@@ -2399,6 +2186,7 @@ fn main() -> Result<(), slint::PlatformError> {
             Some(error)
         }
     };
+    install_diagnostics();
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.iter().any(|argument| argument == "--self-test") {
         let cycles = arguments
@@ -2506,13 +2294,15 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_gaode_security(map_credentials.borrow().security_code.clone().into());
     let (tool_update_tx, tool_update_rx) = mpsc::channel();
     let tools = ToolSupervisor {
-        children: Arc::new(Mutex::new(Vec::new())),
+        processes: DesktopToolProcessSupervisor::new(),
         updates: tool_update_tx,
     };
     let tool_update_rx = Rc::new(RefCell::new(tool_update_rx));
-    if default_project_path().exists() {
-        let _ = state.borrow_mut().open(default_project_path());
-    }
+    let startup_open_error = if default_project_path().exists() {
+        state.borrow_mut().open(default_project_path()).err()
+    } else {
+        None
+    };
     if state.borrow().project.is_none() {
         state
             .borrow_mut()
@@ -2522,8 +2312,49 @@ fn main() -> Result<(), slint::PlatformError> {
     if let Some(error) = v11_tracer_error {
         set_error(&ui, error);
     }
+    if let Some(error) = startup_open_error {
+        diagnostics::record(
+            diagnostics::DiagnosticLevel::Warning,
+            "project.autoload",
+            &error,
+            &[("path", default_project_path().to_string_lossy().as_ref())],
+        );
+        set_error_for(&ui, "project.autoload", error);
+    }
 
     let tool_timer = Timer::default();
+    {
+        let weak = ui.as_weak();
+        ui.on_dismiss_error(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_error_visible(false);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_open_diagnostics(move || {
+            let Some(directory) = diagnostics::log_directory() else {
+                if let Some(ui) = weak.upgrade() {
+                    set_error_for(&ui, "diagnostics.open", "诊断日志目录不可用");
+                }
+                return;
+            };
+            #[cfg(target_os = "windows")]
+            let result = Command::new("explorer").arg(&directory).spawn();
+            #[cfg(not(target_os = "windows"))]
+            let result = Command::new("xdg-open").arg(&directory).spawn();
+            if let Err(error) = result {
+                if let Some(ui) = weak.upgrade() {
+                    set_error_for(
+                        &ui,
+                        "diagnostics.open",
+                        format!("无法打开诊断日志目录：{error}"),
+                    );
+                }
+            }
+        });
+    }
     {
         let state = state.clone();
         let weak = ui.as_weak();
@@ -2647,8 +2478,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "building.rename",
                             format!("建筑名称保存失败：{error}"),
                             format!("Failed to save building name: {error}"),
                         );
@@ -2688,8 +2520,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "building.suppress",
                             format!("建筑抑制失败：{error}"),
                             format!("Failed to suppress building: {error}"),
                         );
@@ -2793,8 +2626,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "external-model.review",
                             format!("外部模型审核失败：{error}"),
                             format!("External model review failed: {error}"),
                         );
@@ -2860,8 +2694,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "source-conflict.review",
                             format!("来源冲突审核失败：{error}"),
                             format!("Source conflict review failed: {error}"),
                         );
@@ -2875,18 +2710,44 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         ui.on_save_map_settings(move |key, security| {
             let updated = MapCredentials {
-                js_api_key: key.to_string(),
-                security_code: security.to_string(),
+                js_api_key: key.trim().to_string(),
+                security_code: security.trim().to_string(),
             };
             if let Some(ui) = weak.upgrade() {
-                match save_map_credentials(&updated) {
+                let validation = if updated.js_api_key.is_empty() {
+                    Err(tr(
+                        if ui.get_english() {
+                            DesktopLocale::En
+                        } else {
+                            DesktopLocale::ZhCn
+                        },
+                        "请填写高德 Web JS API Key",
+                        "Enter a Gaode Web JS API Key",
+                    )
+                    .to_string())
+                } else if updated.security_code.is_empty() {
+                    Err(tr(
+                        if ui.get_english() {
+                            DesktopLocale::En
+                        } else {
+                            DesktopLocale::ZhCn
+                        },
+                        "请填写与该 Key 配对的 securityJsCode",
+                        "Enter the securityJsCode paired with this key",
+                    )
+                    .to_string())
+                } else {
+                    save_map_credentials(&updated)
+                };
+                match validation {
                     Ok(()) => {
                         *map_credentials.borrow_mut() = updated;
                         set_status(&ui, "地图密钥已安全保存", "Map credentials saved securely");
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "map-credentials.save",
                             format!("地图密钥保存失败：{error}"),
                             format!("Failed to save map credentials: {error}"),
                         );
@@ -2910,6 +2771,12 @@ fn main() -> Result<(), slint::PlatformError> {
                             state.borrow_mut().tool_status = Some(message.clone());
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_tool_status(message.into());
+                            }
+                        }
+                        ToolUpdate::Error { event, message } => {
+                            state.borrow_mut().tool_status = Some(message.clone());
+                            if let Some(ui) = weak.upgrade() {
+                                set_error_for(&ui, &event, message);
                             }
                         }
                         ToolUpdate::PreviewBlockSelected { x, y, z, block } => {
@@ -2948,187 +2815,30 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         ToolUpdate::MapCampusTarget(target) => {
                             let name = target.name.clone();
-                            state.borrow_mut().mutate_project(|project| {
-                                project.campus_name = name.clone();
-                                project.map_view.center = target.gcj02;
-                                project.campus_target = Some(target);
-                            });
+                            let result = state.borrow_mut().apply_foundation_intent(
+                                FoundationWorkflowIntent::SelectCampusTarget(target),
+                            );
                             if let Some(ui) = weak.upgrade() {
-                                set_status(
-                                    &ui,
-                                    format!("高德校园目标已确认：{name}"),
-                                    format!("Gaode campus target confirmed: {name}"),
-                                );
+                                match &result {
+                                    Ok(()) => set_status(
+                                        &ui,
+                                        format!("高德校园目标已确认：{name}"),
+                                        format!("Gaode campus target confirmed: {name}"),
+                                    ),
+                                    Err(error) => set_error(&ui, error),
+                                }
                             }
-                            changed = true;
+                            changed = result.is_ok();
                         }
                         ToolUpdate::MapBoundary(points) => {
-                            state.borrow_mut().mutate_project(|project| {
-                                project.boundary = points;
-                            });
-                            changed = true;
+                            let result = state.borrow_mut().apply_foundation_intent(
+                                FoundationWorkflowIntent::ConfirmCampusBoundary(points),
+                            );
+                            if let (Err(error), Some(ui)) = (&result, weak.upgrade()) {
+                                set_error(&ui, error);
+                            }
+                            changed = result.is_ok();
                         }
-                        ToolUpdate::ManualFeature { kind, points } => {
-                            let mut result = Ok(String::new());
-                            state.borrow_mut().mutate_project(|project| {
-                                result = project.add_manual_feature(kind, points);
-                            });
-                            match result {
-                                Ok(id) => {
-                                    if let Some(ui) = weak.upgrade() {
-                                        ui.set_tool_status(
-                                            format!("手绘地物已加入审核结果 · {id}").into(),
-                                        );
-                                    }
-                                    changed = true;
-                                }
-                                Err(error) => {
-                                    if let Some(ui) = weak.upgrade() {
-                                        ui.set_tool_status(
-                                            format!("手绘地物保存失败：{error}").into(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        // BEGIN DEBUG-ONLY LEGACY ACQUISITION
-                        #[cfg(debug_assertions)]
-                        ToolUpdate::MapCapture {
-                            south_west,
-                            north_east,
-                            candidates,
-                        } => match candidates {
-                            Ok(mut discovered) => {
-                                let mut count = 0usize;
-                                state.borrow_mut().mutate_project(|project| {
-                                    project.map_view.capture_bounds =
-                                        Some([south_west, north_east]);
-                                    if project.boundary.is_empty() {
-                                        project.boundary = vec![
-                                            south_west,
-                                            GeoPoint {
-                                                lng: north_east.lng,
-                                                lat: south_west.lat,
-                                            },
-                                            north_east,
-                                            GeoPoint {
-                                                lng: south_west.lng,
-                                                lat: north_east.lat,
-                                            },
-                                        ];
-                                    }
-                                    for candidate in &mut discovered {
-                                        if let Some(previous) = project
-                                            .candidates
-                                            .iter()
-                                            .find(|previous| previous.id == candidate.id)
-                                        {
-                                            candidate.review = previous.review;
-                                        }
-                                    }
-                                    discovered.retain(|candidate| {
-                                        !project
-                                            .building_suppressions
-                                            .iter()
-                                            .any(|record| record.source_id == candidate.id)
-                                    });
-                                    count = discovered.len();
-                                    project.candidates.retain(|candidate| {
-                                        candidate.review != ReviewDecision::Pending
-                                            || candidate.source != "OpenStreetMap / Overpass"
-                                    });
-                                    project.candidates.extend(discovered);
-                                });
-                                if let Some(ui) = weak.upgrade() {
-                                    set_status(
-                                        &ui,
-                                        format!("识别完成：发现 {count} 个校区候选"),
-                                        format!("Discovery complete: {count} campus candidates"),
-                                    );
-                                }
-                                changed = true;
-                            }
-                            Err(error) => {
-                                if let Some(ui) = weak.upgrade() {
-                                    set_status(
-                                        &ui,
-                                        format!("识别失败：{error}"),
-                                        format!("Discovery failed: {error}"),
-                                    );
-                                }
-                            }
-                        },
-                        // END DEBUG-ONLY LEGACY ACQUISITION
-                        ToolUpdate::MapVisualCapture {
-                            south_west,
-                            north_east,
-                            png_bytes,
-                            candidates,
-                        } => match candidates {
-                            Ok(mut discovered) => {
-                                let capture_path = visual_capture_dir().join("latest.png");
-                                let persisted = std::fs::create_dir_all(visual_capture_dir())
-                                    .and_then(|_| std::fs::write(&capture_path, png_bytes))
-                                    .map(|_| capture_path.clone())
-                                    .map_err(|error| error.to_string());
-                                match persisted {
-                                    Ok(path) => {
-                                        let mut count = 0usize;
-                                        state.borrow_mut().mutate_project(|project| {
-                                            project.map_view.capture_bounds =
-                                                Some([south_west, north_east]);
-                                            project.visual_capture_path = Some(path);
-                                            for candidate in &mut discovered {
-                                                if let Some(previous) = project
-                                                    .candidates
-                                                    .iter()
-                                                    .find(|previous| previous.id == candidate.id)
-                                                {
-                                                    candidate.review = previous.review;
-                                                }
-                                            }
-                                            count = discovered.len();
-                                            project.candidates.retain(|candidate| {
-                                                candidate.review != ReviewDecision::Pending
-                                                    || candidate.source
-                                                        != "截图规则分割（确定性 v2）"
-                                            });
-                                            project.candidates.extend(discovered);
-                                        });
-                                        if let Some(ui) = weak.upgrade() {
-                                            set_status(
-                                                &ui,
-                                                format!(
-                                                    "视觉补缺完成：{count} 个候选，截图已随项目记录"
-                                                ),
-                                                format!(
-                                                    "Visual recovery complete: {count} candidates; screenshot recorded with the project"
-                                                ),
-                                            );
-                                        }
-                                        changed = true;
-                                    }
-                                    Err(error) => {
-                                        if let Some(ui) = weak.upgrade() {
-                                            set_status(
-                                                &ui,
-                                                format!("视觉截图保存失败：{error}"),
-                                                format!("Failed to save visual capture: {error}"),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                if let Some(ui) = weak.upgrade() {
-                                    set_status(
-                                        &ui,
-                                        format!("视觉补缺失败：{error}"),
-                                        format!("Visual recovery failed: {error}"),
-                                    );
-                                }
-                            }
-                        },
                     }
                 }
                 if changed {
@@ -3262,15 +2972,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     sync_ui(&ui, &state.borrow());
                 }
                 state.borrow_mut().active_preview_path = Some(path.clone());
-                if let Err(error) = tools.launch_preview(
-                    weak.clone(),
+                if let Err(error) = tools.launch_preview_supervised(
                     path,
                     title,
                     state.borrow().locale == DesktopLocale::En,
                 ) {
                     if let Some(ui) = weak.upgrade() {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "foundation-preview.launch",
                             format!("Foundation 已生成，预览启动失败：{error}"),
                             format!("Foundation generated, but preview failed to start: {error}"),
                         );
@@ -3279,8 +2989,9 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
+                    set_localized_error(
                         &ui,
+                        "foundation-preview.generate",
                         format!("Foundation 预览失败：{error}"),
                         format!("Foundation preview failed: {error}"),
                     );
@@ -3292,15 +3003,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_set_foundation_metrics(move |orientation, scale| {
-            state.borrow_mut().mutate_project(|project| {
-                project.orientation_degrees = orientation.clamp(-180.0, 180.0) as f64;
-                project.blocks_per_meter = scale.clamp(0.25, 4.0) as f64;
-            });
+            let result = state.borrow_mut().apply_foundation_intent(
+                FoundationWorkflowIntent::SetCampusMetrics {
+                    orientation_degrees: orientation as f64,
+                    blocks_per_meter: scale as f64,
+                },
+            );
             if let Some(ui) = weak.upgrade() {
-                if let Err(error) = save_and_sync(&ui, &state) {
-                    set_error(&ui, error);
-                } else {
-                    set_status(&ui, "朝向与比例已应用", "Orientation and scale applied");
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            set_status(&ui, "朝向与比例已应用", "Orientation and scale applied");
+                        }
+                    }
+                    Err(error) => set_error(&ui, error),
                 }
             }
         });
@@ -3355,7 +3073,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(path) = project_file_dialog(true) else {
                 return;
             };
-            let result = state.borrow_mut().save_to(path);
+            let result = state.borrow_mut().save_as_portable(path);
             if let Some(ui) = weak.upgrade() {
                 match result {
                     Ok(()) => sync_ui(&ui, &state.borrow()),
@@ -3368,30 +3086,40 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_switch_mode(move |detailed| {
-            let mut borrowed = state.borrow_mut();
-            borrowed.set_mode(if detailed {
-                DesktopMode::Detailed
+            let intent = if detailed {
+                ReconstructionWorkflowIntent::EnterDetailedBuilding
             } else {
-                DesktopMode::Foundation
-            });
-            if detailed {
-                borrowed.mutate_project(|project| {
-                    let ids = project
-                        .building_slots
-                        .iter()
-                        .map(|slot| slot.id.clone())
-                        .collect::<Vec<_>>();
-                    for id in ids {
-                        project.discover_external_models_for_slot(&id);
-                    }
-                });
-            }
-            drop(borrowed);
+                ReconstructionWorkflowIntent::EnterFoundation
+            };
+            let result = state.borrow_mut().apply_reconstruction_intent(intent);
             if let Some(ui) = weak.upgrade() {
-                if let Err(error) = save_and_sync(&ui, &state) {
-                    set_error(&ui, error);
+                match result {
+                    Ok(()) => {
+                        if detailed {
+                            state.borrow_mut().mutate_project(|project| {
+                                let ids = project
+                                    .building_slots
+                                    .iter()
+                                    .map(|slot| slot.id.clone())
+                                    .collect::<Vec<_>>();
+                                for id in ids {
+                                    project.refresh_detailed_plan_for_slot(&id);
+                                    project.discover_external_models_for_slot(&id);
+                                }
+                            });
+                        }
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        }
+                        ui.window().request_redraw();
+                    }
+                    Err(error) => set_localized_error(
+                        &ui,
+                        "workflow.enter-detailed",
+                        format!("暂时不能进入单栋精修：{error}。请先在地基审核中确认至少一栋建筑。"),
+                        "Detailed Building is not available yet. Confirm at least one building in Foundation review first.",
+                    ),
                 }
-                ui.window().request_redraw();
             }
         });
     }
@@ -3402,16 +3130,30 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(step) = FoundationStep::ALL.get(index.max(0) as usize).copied() else {
                 return;
             };
-            {
+            let phase = match step {
+                FoundationStep::Campus | FoundationStep::Boundary | FoundationStep::Orientation => {
+                    FoundationPhase::Scope
+                }
+                FoundationStep::Building
+                | FoundationStep::Road
+                | FoundationStep::Water
+                | FoundationStep::Vegetation
+                | FoundationStep::Sports => FoundationPhase::Review,
+                FoundationStep::Export => FoundationPhase::Generate,
+            };
+            let result = {
                 let mut borrowed = state.borrow_mut();
                 borrowed.candidate_page = 0;
-                borrowed.mutate_project(|project| {
-                    project.foundation_step = step;
-                });
-            }
+                borrowed.apply_foundation_intent(FoundationWorkflowIntent::EnterPhase(phase))
+            };
             if let Some(ui) = weak.upgrade() {
-                if let Err(error) = save_and_sync(&ui, &state) {
-                    set_error(&ui, error);
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        }
+                    }
+                    Err(error) => set_error(&ui, error),
                 }
             }
         });
@@ -3420,12 +3162,17 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         ui.on_confirm_step(move || {
-            state
+            let result = state
                 .borrow_mut()
-                .mutate_project(|project| project.confirm_step());
+                .apply_foundation_intent(FoundationWorkflowIntent::CompleteCurrentStep);
             if let Some(ui) = weak.upgrade() {
-                if let Err(error) = save_and_sync(&ui, &state) {
-                    set_error(&ui, error);
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        }
+                    }
+                    Err(error) => set_error(&ui, error),
                 }
             }
         });
@@ -3509,6 +3256,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     .map(|slot| slot.id.clone());
                 project.detailed.selected_slot_id = slot_id.clone();
                 if let Some(slot_id) = slot_id {
+                    project.refresh_detailed_plan_for_slot(&slot_id);
                     project.discover_external_models_for_slot(&slot_id);
                 }
             });
@@ -3541,61 +3289,87 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
-        let tools = tools.clone();
         let state = state.clone();
-        let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
-        ui.on_open_map(move || {
-            let campus_name = state
-                .borrow()
-                .project
-                .as_ref()
-                .map(|project| project.campus_name.clone())
-                .unwrap_or_else(|| "未命名校区".into());
-            let view = state
-                .borrow()
-                .project
-                .as_ref()
-                .map(|project| project.map_view.clone())
-                .unwrap_or_default();
-            let boundary = state
-                .borrow()
-                .project
-                .as_ref()
-                .map(|project| project.boundary.clone())
-                .unwrap_or_default();
-            let credentials = map_credentials.borrow().clone();
-            if credentials.js_api_key.trim().is_empty() {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_settings_visible(true);
-                    set_status(
-                        &ui,
-                        "请先配置高德 Web JS API 密钥",
-                        "Configure the Gaode Web JS API key first",
-                    );
+        ui.on_choose_template_proposal(move |index| {
+            let result = {
+                let mut borrowed = state.borrow_mut();
+                let mut selection = None;
+                borrowed.mutate_project(|project| {
+                    let slot_id = project
+                        .detailed
+                        .selected_slot_id
+                        .clone()
+                        .or_else(|| project.building_slots.first().map(|slot| slot.id.clone()));
+                    if let Some(slot_id) = slot_id {
+                        project.refresh_detailed_plan_for_slot(&slot_id);
+                        let proposal_id = project
+                            .template_proposals_for_slot(&slot_id)
+                            .get(index.max(0) as usize)
+                            .map(|proposal| proposal.template.id.clone());
+                        selection = Some(
+                            proposal_id
+                                .as_deref()
+                                .map(|template_id| {
+                                    project.select_template_for_slot(&slot_id, template_id)
+                                })
+                                .unwrap_or_else(|| Err("没有可选的建筑模板提案".into())),
+                        );
+                    } else {
+                        selection = Some(Err("请先选择已审核建筑".into()));
+                    }
+                });
+                selection.unwrap_or_else(|| Err("请先选择已审核建筑".into()))
+            };
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            set_status(
+                                &ui,
+                                "已选择模板并建立可编辑立面规则草案",
+                                "Template selected and editable facade rules drafted",
+                            );
+                        }
+                    }
+                    Err(error) => set_error(&ui, error),
                 }
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = ui.as_weak();
+        ui.on_import_local_evidence(move || {
+            let sources = local_evidence_file_dialog();
+            if sources.is_empty() {
                 return;
             }
-            if let Err(error) = tools.launch_map(
-                weak.clone(),
-                MapLaunchRequest {
-                    title: campus_name,
-                    view,
-                    boundary,
-                    js_api_key: credentials.js_api_key,
-                    security_code: credentials.security_code,
-                    purpose: MapPurpose::CampusReview,
-                    overlays: Vec::new(),
-                    feature_kind: None,
-                    english: state.borrow().locale == DesktopLocale::En,
-                },
-            ) {
-                if let Some(ui) = weak.upgrade() {
-                    set_status(
-                        &ui,
-                        format!("地图启动失败：{error}"),
-                        format!("Map failed to start: {error}"),
-                    );
+            let result = autosave(&state)
+                .and_then(|()| state.borrow_mut().import_local_evidence_files(&sources));
+            match result {
+                Ok(0) => {}
+                Ok(count) => {
+                    if let Some(ui) = weak.upgrade() {
+                        if let Err(error) = save_and_sync(&ui, &state) {
+                            set_error(&ui, error);
+                        } else {
+                            set_status(
+                                &ui,
+                                format!("已添加 {count} 张本地照片，已作为立面规则的本地证据保存"),
+                                format!(
+                                    "Added {count} local photo(s) as local facade-rule evidence"
+                                ),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    if let Some(ui) = weak.upgrade() {
+                        set_error(&ui, error);
+                    }
                 }
             }
         });
@@ -3605,54 +3379,35 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
-        ui.on_draw_foundation_feature(move || {
-            let snapshot = {
-                let state = state.borrow();
-                state.project.as_ref().and_then(|project| {
-                    let (kind, slug, label) = match project.foundation_step {
-                        FoundationStep::Building => (FeatureKind::Building, "building", "建筑"),
-                        FoundationStep::Road => (FeatureKind::Road, "road", "道路"),
-                        FoundationStep::Water => (FeatureKind::Water, "water", "水域"),
-                        FoundationStep::Vegetation => {
-                            (FeatureKind::Vegetation, "vegetation", "植被")
-                        }
-                        FoundationStep::Sports => (FeatureKind::Sports, "sports", "体育设施"),
-                        _ => return None,
-                    };
-                    let overlays = if project.boundary.len() >= 3 {
-                        vec![MapOverlay {
-                            label: "校区边界".into(),
-                            points: project
-                                .boundary
-                                .iter()
-                                .map(|point| MapCoordinate {
-                                    lng: point.lng,
-                                    lat: point.lat,
-                                })
-                                .collect(),
-                        }]
-                    } else {
-                        Vec::new()
-                    };
-                    Some((
-                        kind,
-                        slug.to_string(),
-                        label.to_string(),
-                        project.campus_name.clone(),
-                        project.map_view.clone(),
-                        overlays,
-                    ))
-                })
-            };
-            let Some((_kind, slug, label, campus_name, view, overlays)) = snapshot else {
+        ui.on_open_map(move || {
+            let snapshot = state.borrow().project.as_ref().map(|project| {
+                (
+                    project.campus_name.clone(),
+                    project.map_view.clone(),
+                    project.boundary.clone(),
+                    FoundationWorkflow::projection(project).map_task,
+                )
+            });
+            let Some((campus_name, view, boundary, map_task)) = snapshot else {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
-                        &ui,
-                        "当前步骤不支持手绘地物",
-                        "The current step does not support manual drawing",
-                    );
+                    set_error(&ui, "请先创建 Campus Reconstruction Project");
                 }
                 return;
+            };
+            let purpose = match map_task {
+                Some(FoundationMapTask::CampusSelection) => MapPurpose::CampusSelection,
+                Some(FoundationMapTask::CampusBoundary) => MapPurpose::CampusBoundary,
+                Some(FoundationMapTask::FoundationReview) => MapPurpose::FoundationReview,
+                None => {
+                    if let Some(ui) = weak.upgrade() {
+                        set_status(
+                            &ui,
+                            "当前 Foundation Workflow 任务不需要地图窗口",
+                            "The current Foundation Workflow task does not use the map window",
+                        );
+                    }
+                    return;
+                }
             };
             let credentials = map_credentials.borrow().clone();
             if credentials.js_api_key.trim().is_empty() {
@@ -3666,23 +3421,23 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 return;
             }
-            let request = MapLaunchRequest {
-                title: format!("{campus_name} · 手绘{label}"),
+            if let Err(error) = tools.launch_map_supervised(MapLaunchRequest {
+                title: campus_name,
                 view,
-                boundary: Vec::new(),
+                boundary,
                 js_api_key: credentials.js_api_key,
                 security_code: credentials.security_code,
-                purpose: MapPurpose::FoundationFeatureDrawing,
-                overlays,
-                feature_kind: Some(slug),
+                purpose,
+                overlays: Vec::new(),
+                feature_kind: None,
                 english: state.borrow().locale == DesktopLocale::En,
-            };
-            if let Err(error) = tools.launch_map(weak.clone(), request) {
+            }) {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
+                    set_localized_error(
                         &ui,
-                        format!("手绘地图启动失败：{error}"),
-                        format!("Drawing map failed to start: {error}"),
+                        "map.launch",
+                        format!("地图启动失败：{error}"),
+                        format!("Map failed to start: {error}"),
                     );
                 }
             }
@@ -3766,10 +3521,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 feature_kind: None,
                 english: state.borrow().locale == DesktopLocale::En,
             };
-            if let Err(error) = tools.launch_map(weak.clone(), request) {
+            if let Err(error) = tools.launch_map_supervised(request) {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
+                    set_localized_error(
                         &ui,
+                        "map.evidence.launch",
                         format!("建筑证据地图启动失败：{error}"),
                         format!("Building evidence map failed to start: {error}"),
                     );
@@ -3811,15 +3567,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 })
                 .unwrap_or_else(|| "精细建筑".into());
             state.borrow_mut().active_preview_path = Some(model.clone());
-            if let Err(error) = tools.launch_preview(
-                weak.clone(),
+            if let Err(error) = tools.launch_preview_supervised(
                 model,
                 title,
                 state.borrow().locale == DesktopLocale::En,
             ) {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
+                    set_localized_error(
                         &ui,
+                        "preview.launch",
                         format!("预览启动失败：{error}"),
                         format!("Preview failed to start: {error}"),
                     );
@@ -3878,15 +3634,15 @@ fn main() -> Result<(), slint::PlatformError> {
                     sync_ui(&ui, &state.borrow());
                 }
                 state.borrow_mut().active_preview_path = Some(path.clone());
-                if let Err(error) = tools.launch_preview(
-                    weak.clone(),
+                if let Err(error) = tools.launch_preview_supervised(
                     path,
                     title,
                     state.borrow().locale == DesktopLocale::En,
                 ) {
                     if let Some(ui) = weak.upgrade() {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "generation.preview.launch",
                             format!("生成成功，预览启动失败：{error}"),
                             format!("Generation succeeded, but preview failed to start: {error}"),
                         );
@@ -3895,8 +3651,9 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             Err(error) => {
                 if let Some(ui) = weak.upgrade() {
-                    set_status(
+                    set_localized_error(
                         &ui,
+                        "generation.run",
                         format!("生成失败：{error}"),
                         format!("Generation failed: {error}"),
                     );
@@ -3988,8 +3745,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "semantic-feature.apply",
                             format!("语义特征应用失败：{error}"),
                             format!("Failed to apply semantic feature: {error}"),
                         );
@@ -4038,8 +3796,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         );
                         set_status(&ui, format!("已编辑 {detail}"), format!("Edited {detail}"));
                     }
-                    Err(error) => set_status(
+                    Err(error) => set_localized_error(
                         &ui,
+                        "preview-block.replace",
                         format!("单点编辑失败：{error}"),
                         format!("Single-block edit failed: {error}"),
                     ),
@@ -4071,8 +3830,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         );
                     }
                     Err(error) => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "generated-block.replace",
                             format!("替换失败：{error}"),
                             format!("Replacement failed: {error}"),
                         );
@@ -4121,8 +3881,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         );
                     }
                     Err(error) if error != "已取消导出" => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "detailed-building.export",
                             format!("导出失败：{error}"),
                             format!("Export failed: {error}"),
                         );
@@ -4140,7 +3901,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let project = state.borrow().project.clone().ok_or("请先创建项目")?;
                 let default_name = format!("{}.schem", project.name);
                 let path = schematic_file_dialog(&default_name).ok_or("已取消导出")?;
-                let model = campus_export::foundation_model(&project)?;
+                let model = compile_foundation(&project)?;
                 campus_export::write_schematic(&path, &project.name, &model)?;
                 let project_path = path.with_extension("campus.json");
                 std::fs::write(
@@ -4160,8 +3921,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         );
                     }
                     Err(error) if error != "已取消导出" => {
-                        set_status(
+                        set_localized_error(
                             &ui,
+                            "foundation.export",
                             format!("导出失败：{error}"),
                             format!("Export failed: {error}"),
                         );
@@ -4183,15 +3945,16 @@ mod tests {
 
     #[test]
     fn detailed_fixture_generates_preview_model() {
+        let output = tempfile::tempdir().unwrap();
         let fixture =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/v1-demo.campus.json");
         let mut loaded = DesktopApplicationState::default();
         loaded.open(fixture).unwrap();
         let state = Rc::new(RefCell::new(loaded));
-        let (path, title) = generate_detailed_model(&state).unwrap();
+        let (path, title) = generate_detailed_model_to(&state, output.path()).unwrap();
         let generated: arnis_core::GeneratedBuilding =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(title, "验收图书馆");
+        assert_eq!(title, "Fixture Library");
         assert!(generated.report.non_air_blocks > 1_000);
         assert!(generated
             .palette
@@ -4237,6 +4000,80 @@ mod tests {
     }
 
     #[test]
+    fn accepted_facade_rules_change_the_generated_voxels() {
+        let output = tempfile::tempdir().unwrap();
+        fn glass_blocks(generated: &arnis_core::GeneratedBuilding) -> u64 {
+            let glass_indices = generated
+                .palette
+                .iter()
+                .enumerate()
+                .filter(|(_, block)| block.contains("glass"))
+                .map(|(index, _)| index as u16)
+                .collect::<Vec<_>>();
+            generated
+                .block_runs
+                .iter()
+                .filter(|run| glass_indices.contains(&run.palette_index))
+                .map(|run| run.run_length as u64)
+                .sum()
+        }
+
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/v1-demo.campus.json");
+        let mut loaded = DesktopApplicationState::default();
+        loaded.open(fixture).unwrap();
+        let slot_id = loaded
+            .project
+            .as_ref()
+            .and_then(|project| project.detailed.selected_slot_id.clone())
+            .or_else(|| {
+                loaded
+                    .project
+                    .as_ref()
+                    .and_then(|project| project.building_slots.first().map(|slot| slot.id.clone()))
+            })
+            .unwrap();
+        let state = Rc::new(RefCell::new(loaded));
+        let add_rule = |state: &Rc<RefCell<DesktopApplicationState>>, id: &str, density: u8| {
+            state.borrow_mut().mutate_project(|project| {
+                project
+                    .detailed
+                    .facade_drafts
+                    .push(campus_state::FacadeReconstructionDraft {
+                        id: id.into(),
+                        slot_id: slot_id.clone(),
+                        model_version: "test".into(),
+                        confidence: 100,
+                        rules: vec![campus_state::EditableFacadeRule {
+                            id: format!("{id}:windows"),
+                            slot_id: slot_id.clone(),
+                            kind: campus_state::FacadeRuleKind::WindowPattern,
+                            value: format!("density:{density}"),
+                            source: campus_state::DetailedRuleSource::ManualOverride,
+                            status: campus_state::DetailedRuleStatus::Accepted,
+                            confidence: 100,
+                            evidence_ids: Vec::new(),
+                        }],
+                        evidence_ids: Vec::new(),
+                    });
+            });
+        };
+
+        add_rule(&state, "low", 5);
+        let (low_path, _) = generate_detailed_model_to(&state, output.path()).unwrap();
+        let low: arnis_core::GeneratedBuilding =
+            serde_json::from_slice(&std::fs::read(&low_path).unwrap()).unwrap();
+        add_rule(&state, "high", 95);
+        let (high_path, _) = generate_detailed_model_to(&state, output.path()).unwrap();
+        let high: arnis_core::GeneratedBuilding =
+            serde_json::from_slice(&std::fs::read(&high_path).unwrap()).unwrap();
+
+        assert!(glass_blocks(&high) > glass_blocks(&low));
+        let _ = std::fs::remove_file(low_path);
+        let _ = std::fs::remove_file(high_path);
+    }
+
+    #[test]
     fn locale_changes_copy_without_changing_project_state() {
         let (title, _, action) = page_copy(FoundationStep::Boundary, DesktopLocale::En);
         assert_eq!(title, "Confirm campus boundary");
@@ -4246,5 +4083,125 @@ mod tests {
         state.new_project("test", "campus");
         assert_eq!(state.locale, DesktopLocale::En);
         assert_eq!(state.project.as_ref().unwrap().campus_name, "campus");
+    }
+
+    #[test]
+    fn foundation_phase_navigation_requires_completed_prerequisites() {
+        let mut project = CampusProject::new("test", "campus");
+        let initial = FoundationWorkflow::projection(&project);
+        assert!(!initial.can_enter_review);
+        assert!(!initial.can_enter_generate);
+
+        project.campus_target = Some(CampusTargetEvidence {
+            poi_id: "campus".into(),
+            name: "campus".into(),
+            gcj02: GeoPoint { lng: 1.0, lat: 1.0 },
+            wgs84: GeoPoint { lng: 1.0, lat: 1.0 },
+            acquisition: "test".into(),
+        });
+        project.boundary = vec![
+            GeoPoint { lng: 1.0, lat: 1.0 },
+            GeoPoint { lng: 2.0, lat: 1.0 },
+            GeoPoint { lng: 2.0, lat: 2.0 },
+        ];
+        project.completed_steps.push(FoundationStep::Orientation);
+        assert!(FoundationWorkflow::projection(&project).can_enter_review);
+        project.completed_steps.push(FoundationStep::Sports);
+        assert!(FoundationWorkflow::projection(&project).can_enter_generate);
+    }
+
+    #[test]
+    fn closed_tool_event_terminates_the_ipc_read_loop() {
+        assert!(tool_event_ends_stream(&ToolEvent::Closed {
+            tool: ToolKind::Map
+        }));
+        assert!(tool_event_ends_stream(&ToolEvent::Closed {
+            tool: ToolKind::Preview
+        }));
+        assert!(!tool_event_ends_stream(&ToolEvent::Ready {
+            protocol_version: PROTOCOL_VERSION,
+            tool: ToolKind::Map,
+        }));
+    }
+
+    #[test]
+    fn main_workflow_content_is_scrollable() {
+        let ui = include_str!("../ui/app.slint");
+        assert!(
+            ui.contains("workflow-scroll := ScrollView"),
+            "the workflow body must scroll so detailed export and long candidate lists stay reachable"
+        );
+        assert!(
+            ui.contains(
+                "workflow-content := VerticalLayout {\n                        alignment: start;"
+            ),
+            "scroll content must keep its natural height instead of compressing its last controls"
+        );
+        assert!(
+            ui.contains("detailed-export := Button"),
+            "the detailed export action must remain fixed outside the scroll viewport"
+        );
+        assert!(
+            ui.contains(
+                "workflow-scroll := ScrollView {\n                        preferred-height: 0px;"
+            ),
+            "the scroll viewport must yield space to the fixed footer action"
+        );
+        assert!(
+            ui.contains("width: 1280px;\n    height: 720px;"),
+            "the default window must fit a common 1366x768 desktop work area"
+        );
+    }
+
+    #[test]
+    fn project_workbench_exposes_tasks_current_work_and_project_context() {
+        let ui = include_str!("../ui/app.slint");
+        assert!(
+            ui.contains("PROJECT TASKS")
+                && ui.contains("CURRENT TASK")
+                && ui.contains("PROJECT STATUS"),
+            "the selected project workbench must expose tasks, current work, and project context"
+        );
+        assert!(
+            ui.contains("1. 选择校区")
+                && ui.contains("2. 确认范围")
+                && ui.contains("3. 审核地基")
+                && ui.contains("4. 生成地基")
+                && ui.contains("5. 单栋精修"),
+            "the task rail must use user goals rather than internal workflow phases"
+        );
+        assert!(
+            !ui.contains("for label[index] in root.step-labels"),
+            "Foundation navigation must not expose all internal workflow states as sidebar buttons"
+        );
+        assert!(
+            ui.contains("root.detailed-task == 1")
+                && ui.contains("root.detailed-task == 2")
+                && ui.contains("root.detailed-task == 3")
+                && ui.contains("root.detailed-task == 4")
+                && ui.contains("CHOOSE ONE REVIEWED BUILDING")
+                && ui.contains("AUTOMATIC MATCH")
+                && ui.contains("EDITABLE FACADE RULES")
+                && ui.contains("REVIEW GENERATED BUILDING"),
+            "Detailed Building must expose one progressive task at a time"
+        );
+        assert!(
+            !ui.contains("visible: false;\n                        spacing: 12px;\n                        SectionLabel { text: root.english ? \"TARGET BUILDING\""),
+            "the retired all-in-one detailed editor must not remain as hidden dead UI"
+        );
+        assert!(
+            ui.contains("text: root.english ? \"More\" : \"更多\""),
+            "secondary project and diagnostic actions must be consolidated"
+        );
+        assert!(
+            ui.contains("创建项目并选择高德校区")
+                && !ui.contains("创建本地项目\"; clicked")
+                && !ui.contains("在高德中选择校区\"; clicked"),
+            "project creation and campus selection must be one continuous action"
+        );
+        assert!(
+            ui.contains("root.active-step > 2 && root.active-step < 8"),
+            "campus boundary must not render the candidate-review toolbar"
+        );
     }
 }
