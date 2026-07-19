@@ -515,6 +515,49 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         Ok(super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted)
     }
 
+    fn complete_explicit_foundation_refresh(&self) -> Result<ProjectAcquisitionProgress, String> {
+        let mut library = self.open_library()?;
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        let current_bundle_id = session
+            .active()
+            .and_then(campus_state::Schema2Project::pinned_evidence)
+            .map(|evidence| evidence.acquisition.manifest.bundle.id.clone())
+            .ok_or("Pin the initial Foundation acquisition before requesting a refresh")?;
+        let idempotency_key = format!(
+            "{}:explicit-foundation-refresh:{current_bundle_id}",
+            self.project_id.as_str()
+        );
+        let coordinator = ProjectAcquisitionCoordinator::new(self.acquisition_client);
+        session.apply_semantic_operation(
+            &mut library,
+            "start explicit Foundation Dataset Bundle refresh",
+            |project| {
+                coordinator.start_explicit_refresh(project, &idempotency_key, self.actor.clone())
+            },
+        )?;
+        session.apply_semantic_operation(
+            &mut library,
+            "pin explicit Foundation refresh manifest",
+            |project| coordinator.pin_manifest(project, self.actor.clone()),
+        )?;
+        loop {
+            let progress = session.apply_semantic_operation(
+                &mut library,
+                "persist explicit Foundation refresh evidence chunk",
+                |project| coordinator.download_next_chunk(project, self.actor.clone()),
+            )?;
+            if progress == ProjectAcquisitionProgress::AllChunksVerified {
+                break;
+            }
+        }
+        session.apply_semantic_operation(
+            &mut library,
+            "finalize explicit Foundation refresh",
+            |project| coordinator.finalize(project, self.actor.clone()),
+        )
+    }
+
     pub fn acquire_foundation_evidence(&self) -> Result<(), String> {
         let acquisition = self
             .acquisition_client
@@ -606,6 +649,22 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             }
             if let ToolEvent::Error { message } = event {
                 return Err(format!("Foundation review map helper failed: {message}"));
+            }
+            if matches!(event, ToolEvent::MapFoundationRefreshRequested) {
+                if self.complete_explicit_foundation_refresh()?
+                    != ProjectAcquisitionProgress::EvidencePinned
+                {
+                    return Err("Explicit Foundation refresh did not pin verified evidence".into());
+                }
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
+                    desk: super::v11_foundation_review_desk::map_foundation_review_desk(
+                        &project,
+                        active_category,
+                        selected_subject_id.as_deref(),
+                    )?,
+                })?;
+                continue;
             }
             if let ToolEvent::MapFoundationReviewCategorySelected { category } = &event {
                 active_category = super::v11_foundation_review_desk::parse_category(category)?;
@@ -872,6 +931,9 @@ fn foundation_review_event_description(event: &ToolEvent) -> &'static str {
         }
         ToolEvent::MapFoundationCategoryCompletionRequested { .. } => {
             "explicitly complete Foundation category review"
+        }
+        ToolEvent::MapFoundationRefreshRequested => {
+            "start explicit Foundation Dataset Bundle refresh"
         }
         _ => "ignore unrelated Foundation review event",
     }

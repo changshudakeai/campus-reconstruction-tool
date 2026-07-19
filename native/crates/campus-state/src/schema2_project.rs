@@ -269,7 +269,8 @@ pub struct AcquisitionRefreshRecord {
     pub previous_manifest: ResultManifest,
     pub incoming_manifest: ResultManifest,
     pub added_observation_ids: Vec<String>,
-    pub retired_observation_ids: Vec<String>,
+    #[serde(default, alias = "retiredObservationIds")]
+    pub withdrawn_observation_ids: Vec<String>,
     pub composite_snapshot_identity: String,
     #[serde(default)]
     pub difference: Option<FoundationSourceRefreshDifference>,
@@ -934,7 +935,6 @@ impl Schema2Project {
                     let gap_id = building_entity_name_gap_id(&entity.id);
                     if foundation_gap_acknowledged(
                         FoundationCategory::Building,
-                        &basis,
                         &gap_id,
                         &self.foundation.review_ledger.operations,
                     ) {
@@ -976,7 +976,6 @@ impl Schema2Project {
             .collect::<Vec<_>>();
         let mut known_gaps = crate::foundation_review::known_gaps_for_category(
             category,
-            &basis,
             &provider_outcomes,
             &self.foundation.review_ledger.operations,
         );
@@ -997,7 +996,6 @@ impl Schema2Project {
         {
             for historical_gap in crate::foundation_review::known_gaps_for_category(
                 category,
-                &basis,
                 &historical_outcomes,
                 &self.foundation.review_ledger.operations,
             ) {
@@ -1018,9 +1016,8 @@ impl Schema2Project {
                 .filter(|entity| entity.name_resolution == BuildingNameResolution::Unnamed)
             {
                 let gap_id = building_entity_name_gap_id(&entity.id);
-                let (status, history) = foundation_gap_history(
+                let (status, history) = crate::foundation_review::known_gap_history(
                     category,
-                    &basis,
                     &gap_id,
                     &self.foundation.review_ledger.operations,
                 );
@@ -1377,42 +1374,12 @@ impl Schema2Project {
         category: FoundationCategory,
         gap_id: &str,
     ) -> Vec<KnownFeatureGapHistoryAction> {
-        let mut history = vec![KnownFeatureGapHistoryAction::Observed];
-        for operation in self
-            .foundation
-            .review_ledger
-            .operations
-            .iter()
-            .filter(|operation| operation.category == category)
-        {
-            match &operation.action {
-                FoundationReviewAction::GapAcknowledged {
-                    gap_id: operation_gap,
-                } if operation_gap == gap_id => {
-                    history.push(KnownFeatureGapHistoryAction::Acknowledged {
-                        sequence: operation.sequence,
-                    });
-                }
-                FoundationReviewAction::GapReopened {
-                    gap_id: operation_gap,
-                } if operation_gap == gap_id => {
-                    history.push(KnownFeatureGapHistoryAction::Reopened {
-                        sequence: operation.sequence,
-                    });
-                }
-                FoundationReviewAction::GapResolved {
-                    gap_id: operation_gap,
-                    evidence_ids,
-                } if operation_gap == gap_id => {
-                    history.push(KnownFeatureGapHistoryAction::Resolved {
-                        sequence: operation.sequence,
-                        evidence_ids: evidence_ids.clone(),
-                    });
-                }
-                _ => {}
-            }
-        }
-        history
+        crate::foundation_review::known_gap_history(
+            category,
+            gap_id,
+            &self.foundation.review_ledger.operations,
+        )
+        .1
     }
 
     fn known_feature_gap_status(
@@ -1463,18 +1430,12 @@ impl Schema2Project {
                         )
                 });
         observed.then(|| {
-            self.known_feature_gap_history(category, gap_id)
-                .iter()
-                .fold(KnownFeatureGapStatus::Open, |_, action| match action {
-                    KnownFeatureGapHistoryAction::Acknowledged { .. } => {
-                        KnownFeatureGapStatus::Acknowledged
-                    }
-                    KnownFeatureGapHistoryAction::Resolved { .. } => {
-                        KnownFeatureGapStatus::Resolved
-                    }
-                    KnownFeatureGapHistoryAction::Observed
-                    | KnownFeatureGapHistoryAction::Reopened { .. } => KnownFeatureGapStatus::Open,
-                })
+            crate::foundation_review::known_gap_history(
+                category,
+                gap_id,
+                &self.foundation.review_ledger.operations,
+            )
+            .0
         })
     }
 
@@ -1771,13 +1732,19 @@ impl Schema2Project {
         &self.foundation.stale_exported
     }
 
-    pub fn withdrawn_refresh_evidence(&self, stable_identity: &str) -> Option<&SourceObservation> {
+    pub fn withdrawn_refresh_evidence(
+        &self,
+        upstream_source_record_identity: &str,
+    ) -> Option<&SourceObservation> {
         self.foundation
             .acquisition_refresh_history
             .iter()
             .rev()
             .flat_map(|record| record.retained_previous_observations.iter())
-            .find(|observation| crate::stable_observation_identity(observation) == stable_identity)
+            .find(|observation| {
+                crate::upstream_source_record_identity(observation)
+                    == upstream_source_record_identity
+            })
     }
 
     pub fn resume_point(&self) -> FoundationResumePoint {
@@ -2072,7 +2039,10 @@ impl Schema2Project {
                 previous_manifest: previous.manifest.clone(),
                 incoming_manifest,
                 added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
-                retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
+                withdrawn_observation_ids: previous_ids
+                    .difference(&incoming_ids)
+                    .cloned()
+                    .collect(),
                 composite_snapshot_identity,
                 difference: None,
                 retained_previous_observations: Vec::new(),
@@ -2149,19 +2119,19 @@ impl Schema2Project {
         {
             return Err("Refreshed Campus Boundary evidence is invalid".into());
         }
-        let duplicate_stable_identity = evidence
+        let upstream_source_record_identities = evidence
             .observations
             .iter()
-            .map(crate::stable_observation_identity)
+            .map(crate::upstream_source_record_identity)
             .collect::<Vec<_>>();
-        if duplicate_stable_identity
+        if upstream_source_record_identities
             .iter()
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            != duplicate_stable_identity.len()
+            != upstream_source_record_identities.len()
         {
             return Err(
-                "A refreshed Dataset Bundle contains duplicate stable observation identities"
+                "A refreshed Dataset Bundle contains duplicate upstream source-record identities"
                     .into(),
             );
         }
@@ -2177,16 +2147,16 @@ impl Schema2Project {
             .map(|observation| {
                 (
                     observation.id.clone(),
-                    crate::stable_observation_identity(observation),
+                    crate::upstream_source_record_identity(observation),
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let current_id_by_stable = evidence
+        let current_id_by_upstream_identity = evidence
             .observations
             .iter()
             .map(|observation| {
                 (
-                    crate::stable_observation_identity(observation),
+                    crate::upstream_source_record_identity(observation),
                     observation.id.clone(),
                 )
             })
@@ -2215,13 +2185,47 @@ impl Schema2Project {
         self.foundation.building_review = building_review;
         let new_basis = self.review_basis()?;
 
-        let rules_changed = previous.manifest.bundle.classification_rules
-            != incoming_manifest.bundle.classification_rules
-            || previous.manifest.bundle.assembly_rules != incoming_manifest.bundle.assembly_rules
-            || previous.manifest.bundle.conflation_rules
-                != incoming_manifest.bundle.conflation_rules
-            || previous.manifest.bundle.derivation_rules
-                != incoming_manifest.bundle.derivation_rules;
+        let rule_changes = ChangedBundleRules {
+            classification: previous.manifest.bundle.classification_rules
+                != incoming_manifest.bundle.classification_rules,
+            assembly: previous.manifest.bundle.assembly_rules
+                != incoming_manifest.bundle.assembly_rules,
+            conflation: previous.manifest.bundle.conflation_rules
+                != incoming_manifest.bundle.conflation_rules,
+            derivation: previous.manifest.bundle.derivation_rules
+                != incoming_manifest.bundle.derivation_rules,
+        };
+        let latest_gap_operations = old_operations
+            .iter()
+            .filter(|operation| operation.basis == old_basis)
+            .filter_map(|operation| match &operation.action {
+                FoundationReviewAction::GapAcknowledged { gap_id }
+                | FoundationReviewAction::GapReopened { gap_id }
+                | FoundationReviewAction::GapResolved { gap_id, .. } => {
+                    Some(((operation.category, gap_id.clone()), operation))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let invalidated_resolved_gaps = latest_gap_operations
+            .into_iter()
+            .filter_map(|((category, gap_id), operation)| {
+                let category_changes = difference.dependency_changes_for(category);
+                if matches!(operation.action, FoundationReviewAction::GapResolved { .. })
+                    && refresh_invalidates_operation(
+                        operation,
+                        &category_changes,
+                        &rule_changes,
+                        &previous_by_id,
+                        &difference,
+                    )
+                {
+                    Some((category, gap_id))
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let mut carried_sequence = BTreeMap::<u64, u64>::new();
         for category in FoundationCategory::ALL {
             let category_changes = difference.dependency_changes_for(category);
@@ -2232,14 +2236,18 @@ impl Schema2Project {
                 if refresh_invalidates_operation(
                     operation,
                     &category_changes,
-                    rules_changed,
+                    &rule_changes,
                     &previous_by_id,
                     &difference,
                 ) {
                     continue;
                 }
                 let mut carried = operation.clone();
-                remap_review_operation(&mut carried, &previous_by_id, &current_id_by_stable)?;
+                remap_review_operation(
+                    &mut carried,
+                    &previous_by_id,
+                    &current_id_by_upstream_identity,
+                )?;
                 let source_sequence = operation.sequence;
                 carried.sequence = self.foundation.review_ledger.current_sequence() + 1;
                 carried.basis = new_basis.clone();
@@ -2253,7 +2261,35 @@ impl Schema2Project {
                 carried_sequence.insert(source_sequence, carried.sequence);
                 self.foundation.review_ledger.operations.push(carried);
             }
-            let category_changed = category_changes.any() || rules_changed;
+            for (_, gap_id) in invalidated_resolved_gaps
+                .iter()
+                .filter(|(gap_category, _)| *gap_category == category)
+            {
+                let mut before = FoundationReviewState::default();
+                before.resolved_gap_ids.insert(gap_id.clone());
+                self.foundation
+                    .review_ledger
+                    .operations
+                    .push(FoundationReviewOperation {
+                        sequence: self.foundation.review_ledger.current_sequence() + 1,
+                        category,
+                        subjects: vec![gap_id.clone()],
+                        basis: new_basis.clone(),
+                        action: FoundationReviewAction::GapReopened {
+                            gap_id: gap_id.clone(),
+                        },
+                        before,
+                        after: FoundationReviewState::default(),
+                        explanation: Some(
+                            "Automatically reopened because refresh changed resolution evidence"
+                                .into(),
+                        ),
+                        carried_from_sequence: None,
+                        recorded_at_unix_ms: now_unix_ms(),
+                    });
+            }
+            let category_changed =
+                category_changes.any() || rule_changes.affects_category(category);
             if !category_changed {
                 if let Some(entry) = old_entries.iter().rev().find(|entry| {
                     entry.category == category
@@ -2271,16 +2307,47 @@ impl Schema2Project {
                         carried.sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
                         carried.basis = new_basis.clone();
                         carried.operation_sequence = operation_sequence;
-                        remap_review_entry(&mut carried, &previous_by_id, &current_id_by_stable)?;
+                        remap_review_entry(
+                            &mut carried,
+                            &previous_by_id,
+                            &current_id_by_upstream_identity,
+                        )?;
                         self.foundation.review_ledger.entries.push(carried);
                     }
                 }
             }
         }
 
-        let changed_categories = difference.changed_categories();
-        let output_dependencies_changed = !changed_categories.is_empty()
-            || rules_changed
+        let formal_output_basis = self
+            .foundation
+            .generated
+            .as_ref()
+            .map(|output| &output.dependency_basis)
+            .or_else(|| {
+                self.foundation
+                    .exported
+                    .as_ref()
+                    .map(|output| &output.dependency_basis)
+            });
+        let selected_input_changed = formal_output_basis.is_some_and(|basis| {
+            difference.observations.iter().any(|change| {
+                change.classification == crate::ObservationRefreshClassification::Added
+                    || (basis
+                        .subjects
+                        .contains_key(&change.upstream_source_record_identity)
+                        && !matches!(
+                            change.classification,
+                            crate::ObservationRefreshClassification::Unchanged
+                                | crate::ObservationRefreshClassification::CoverageChanged
+                        ))
+            })
+        });
+        let legacy_output_basis =
+            formal_output_basis.is_some_and(|basis| basis.subjects.is_empty());
+        let output_dependencies_changed = selected_input_changed
+            || (legacy_output_basis && !difference.changed_categories().is_empty())
+            || !difference.coverage.is_empty()
+            || rule_changes.any()
             || difference.boundary != crate::BoundaryRefreshClassification::Unchanged;
         if output_dependencies_changed {
             if let Some(generated) = self.foundation.generated.take() {
@@ -2297,7 +2364,10 @@ impl Schema2Project {
                 previous_manifest: previous.manifest,
                 incoming_manifest,
                 added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
-                retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
+                withdrawn_observation_ids: previous_ids
+                    .difference(&incoming_ids)
+                    .cloned()
+                    .collect(),
                 composite_snapshot_identity: self.foundation.acquisition_snapshot_identity.clone(),
                 difference: Some(difference.clone()),
                 retained_previous_observations: previous.observations,
@@ -2989,7 +3059,7 @@ impl Schema2Project {
             .iter()
             .map(|observation| {
                 let subject = observation_dependency_snapshot(observation).basis;
-                (subject.stable_identity.clone(), subject)
+                (subject.upstream_source_record_identity.clone(), subject)
             })
             .collect();
         let coverage_digest = FoundationCategory::ALL
@@ -3006,6 +3076,7 @@ impl Schema2Project {
             boundary_digest: geometry_digest(boundary_geometry),
             coverage_digest,
             classification_rules: acquisition.manifest.bundle.classification_rules.clone(),
+            assembly_rules: acquisition.manifest.bundle.assembly_rules.clone(),
             conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
             derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
             subjects,
@@ -3039,8 +3110,8 @@ impl Schema2Project {
         non_air_blocks: usize,
         actor: InstallationId,
     ) -> Result<(), String> {
-        self.reviewed_projection()?;
-        let dependency_basis = self.review_basis()?.dependencies;
+        let projection = self.reviewed_projection()?;
+        let dependency_basis = self.formal_output_dependency_basis(&projection)?;
         if width == 0 || height == 0 || length == 0 || non_air_blocks == 0 {
             return Err("Generated Foundation output must be non-empty".into());
         }
@@ -3066,11 +3137,11 @@ impl Schema2Project {
         schematic_bytes: u64,
         manifest_file_name: String,
     ) -> Result<(), String> {
-        let building_provenance = self
+        let projection = self
             .reviewed_projection()
-            .map_err(|error| format!("Generate from the current reviewed projection: {error}"))?
-            .building_entities;
-        let dependency_basis = self.review_basis()?.dependencies;
+            .map_err(|error| format!("Generate from the current reviewed projection: {error}"))?;
+        let dependency_basis = self.formal_output_dependency_basis(&projection)?;
+        let building_provenance = projection.building_entities;
         let generated = self
             .foundation
             .generated
@@ -3095,6 +3166,28 @@ impl Schema2Project {
         });
         self.workflow.export = DurableTaskState::Confirmed;
         Ok(())
+    }
+
+    fn formal_output_dependency_basis(
+        &self,
+        projection: &ReviewedFoundationProjection,
+    ) -> Result<ReviewDependencyBasis, String> {
+        let selected_observation_ids = projection
+            .selected_features
+            .iter()
+            .map(|observation| observation.id.as_str())
+            .chain(
+                projection
+                    .building_entities
+                    .iter()
+                    .flat_map(|entity| entity.evidence_ids.iter().map(String::as_str)),
+            )
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut dependency_basis = self.review_basis()?.dependencies;
+        dependency_basis.subjects.retain(|_, subject| {
+            selected_observation_ids.contains(subject.observation_id.as_str())
+        });
+        Ok(dependency_basis)
     }
 
     pub fn mark_updated(&mut self, actor: InstallationId) -> Result<(), String> {
@@ -3313,25 +3406,78 @@ fn apply_foundation_review_action_to_state(
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ChangedBundleRules {
+    classification: bool,
+    assembly: bool,
+    conflation: bool,
+    derivation: bool,
+}
+
+impl ChangedBundleRules {
+    fn any(self) -> bool {
+        self.classification || self.assembly || self.conflation || self.derivation
+    }
+
+    fn affects_category(self, category: FoundationCategory) -> bool {
+        self.classification
+            || self.derivation
+            || self.conflation
+            || (self.assembly && category == FoundationCategory::Building)
+    }
+
+    fn invalidates(self, category: FoundationCategory, action: &FoundationReviewAction) -> bool {
+        let assembly = self.assembly && category == FoundationCategory::Building;
+        match action {
+            FoundationReviewAction::ConflictResolved { resolution, .. } => match resolution {
+                ReviewConflictResolution::KeepSeparate
+                | ReviewConflictResolution::Grouping { .. } => assembly || self.conflation,
+                ReviewConflictResolution::Containment { .. } => assembly || self.conflation,
+                ReviewConflictResolution::Naming { .. } => self.classification,
+                ReviewConflictResolution::GeometryRepair { .. } => self.derivation,
+                ReviewConflictResolution::Attribute { .. } => {
+                    self.classification || self.derivation
+                }
+            },
+            FoundationReviewAction::ConflictDeclared { conflict } => match conflict.kind {
+                crate::FoundationReviewConflictKind::GeometryOverlap
+                | crate::FoundationReviewConflictKind::EntityMatch
+                | crate::FoundationReviewConflictKind::Containment => {
+                    assembly || self.conflation || self.derivation
+                }
+                crate::FoundationReviewConflictKind::Classification
+                | crate::FoundationReviewConflictKind::Attribute
+                | crate::FoundationReviewConflictKind::Naming => self.classification,
+            },
+            FoundationReviewAction::Candidate { .. } | FoundationReviewAction::Batch { .. } => {
+                self.classification || assembly || self.conflation || self.derivation
+            }
+            FoundationReviewAction::CategoryCompleted => true,
+            FoundationReviewAction::Revoke { .. }
+            | FoundationReviewAction::GapAcknowledged { .. }
+            | FoundationReviewAction::GapReopened { .. }
+            | FoundationReviewAction::GapResolved { .. } => false,
+        }
+    }
+}
+
 fn refresh_invalidates_operation(
     operation: &FoundationReviewOperation,
     category_changes: &crate::ChangedReviewDependencies,
-    rules_changed: bool,
+    rule_changes: &ChangedBundleRules,
     previous_by_id: &BTreeMap<String, String>,
     difference: &FoundationSourceRefreshDifference,
 ) -> bool {
     if matches!(operation.action, FoundationReviewAction::CategoryCompleted) {
-        return category_changes.any() || rules_changed;
+        return category_changes.any() || rule_changes.affects_category(operation.category);
     }
     if matches!(
         operation.action,
-        FoundationReviewAction::GapAcknowledged { .. }
-            | FoundationReviewAction::GapReopened { .. }
-            | FoundationReviewAction::GapResolved { .. }
+        FoundationReviewAction::GapAcknowledged { .. } | FoundationReviewAction::GapReopened { .. }
     ) {
         return category_changes.coverage;
     }
-    if rules_changed {
+    if rule_changes.invalidates(operation.category, &operation.action) {
         return true;
     }
     let mut evidence_ids = operation.subjects.clone();
@@ -3383,28 +3529,98 @@ fn refresh_invalidates_operation(
     evidence_ids
         .iter()
         .filter_map(|id| previous_by_id.get(id))
-        .any(|stable_identity| {
+        .any(|upstream_identity| {
             difference.observations.iter().any(|change| {
-                change.stable_identity == *stable_identity
-                    && matches!(
-                        change.classification,
-                        crate::ObservationRefreshClassification::Added
-                            | crate::ObservationRefreshClassification::Changed
-                            | crate::ObservationRefreshClassification::Withdrawn
-                    )
+                change.upstream_source_record_identity == *upstream_identity
+                    && match change.classification {
+                        crate::ObservationRefreshClassification::Withdrawn => true,
+                        crate::ObservationRefreshClassification::Changed => {
+                            operation_depends_on_change(
+                                &operation.action,
+                                &change.changed_dependencies,
+                            )
+                        }
+                        crate::ObservationRefreshClassification::Unchanged
+                        | crate::ObservationRefreshClassification::Added
+                        | crate::ObservationRefreshClassification::CoverageChanged => false,
+                    }
             })
         })
+}
+
+fn operation_depends_on_change(
+    action: &FoundationReviewAction,
+    changes: &crate::ChangedReviewDependencies,
+) -> bool {
+    match action {
+        FoundationReviewAction::ConflictResolved { resolution, .. } => match resolution {
+            ReviewConflictResolution::KeepSeparate | ReviewConflictResolution::Grouping { .. } => {
+                changes.geometry || changes.grouping || changes.rule_version
+            }
+            ReviewConflictResolution::Containment { .. } => {
+                changes.geometry
+                    || changes.grouping
+                    || changes.containment
+                    || changes.boundary
+                    || changes.rule_version
+            }
+            ReviewConflictResolution::Naming { .. } => {
+                changes.naming || changes.licence || changes.rule_version
+            }
+            ReviewConflictResolution::GeometryRepair { .. } => {
+                changes.geometry || changes.containment || changes.boundary || changes.rule_version
+            }
+            ReviewConflictResolution::Attribute { .. } => {
+                changes.attribute || changes.licence || changes.rule_version
+            }
+        },
+        FoundationReviewAction::ConflictDeclared { conflict } => match conflict.kind {
+            crate::FoundationReviewConflictKind::GeometryOverlap => {
+                changes.geometry || changes.grouping || changes.rule_version
+            }
+            crate::FoundationReviewConflictKind::EntityMatch => {
+                changes.geometry || changes.grouping || changes.containment || changes.rule_version
+            }
+            crate::FoundationReviewConflictKind::Classification => {
+                changes.attribute || changes.rule_version
+            }
+            crate::FoundationReviewConflictKind::Naming => {
+                changes.naming || changes.licence || changes.rule_version
+            }
+            crate::FoundationReviewConflictKind::Attribute => {
+                changes.attribute || changes.licence || changes.rule_version
+            }
+            crate::FoundationReviewConflictKind::Containment => {
+                changes.geometry || changes.containment || changes.boundary || changes.rule_version
+            }
+        },
+        FoundationReviewAction::GapAcknowledged { .. }
+        | FoundationReviewAction::GapReopened { .. } => changes.coverage,
+        FoundationReviewAction::CategoryCompleted
+        | FoundationReviewAction::Candidate { .. }
+        | FoundationReviewAction::Batch { .. }
+        | FoundationReviewAction::Revoke { .. }
+        | FoundationReviewAction::GapResolved { .. } => changes.any(),
+    }
 }
 
 fn remap_review_entry(
     entry: &mut FoundationReviewEntry,
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    remap_ids(&mut entry.subjects, previous_by_id, current_id_by_stable)?;
-    remap_disposition(&mut entry.after, previous_by_id, current_id_by_stable)?;
+    remap_ids(
+        &mut entry.subjects,
+        previous_by_id,
+        current_id_by_upstream_identity,
+    )?;
+    remap_disposition(
+        &mut entry.after,
+        previous_by_id,
+        current_id_by_upstream_identity,
+    )?;
     if let Some(before) = &mut entry.before {
-        remap_disposition(before, previous_by_id, current_id_by_stable)?;
+        remap_disposition(before, previous_by_id, current_id_by_upstream_identity)?;
     }
     Ok(())
 }
@@ -3412,32 +3628,36 @@ fn remap_review_entry(
 fn remap_review_operation(
     operation: &mut FoundationReviewOperation,
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     remap_ids(
         &mut operation.subjects,
         previous_by_id,
-        current_id_by_stable,
+        current_id_by_upstream_identity,
     )?;
     match &mut operation.action {
         FoundationReviewAction::Candidate {
             subject_id,
             decision,
         } => {
-            remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+            remap_id(subject_id, previous_by_id, current_id_by_upstream_identity)?;
             if let FoundationCandidateDecision::SupportingEvidence { primary_subject_id } = decision
             {
-                remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
+                remap_id(
+                    primary_subject_id,
+                    previous_by_id,
+                    current_id_by_upstream_identity,
+                )?;
             }
         }
         FoundationReviewAction::Revoke { subject_id } => {
-            remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+            remap_id(subject_id, previous_by_id, current_id_by_upstream_identity)?;
         }
         FoundationReviewAction::ConflictDeclared { conflict } => {
             remap_ids(
                 &mut conflict.subject_ids,
                 previous_by_id,
-                current_id_by_stable,
+                current_id_by_upstream_identity,
             )?;
         }
         FoundationReviewAction::ConflictResolved { resolution, .. } => match resolution {
@@ -3447,77 +3667,134 @@ fn remap_review_operation(
                 supporting_subject_ids,
                 ..
             } => {
-                remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
-                remap_ids(supporting_subject_ids, previous_by_id, current_id_by_stable)?;
+                remap_id(
+                    primary_subject_id,
+                    previous_by_id,
+                    current_id_by_upstream_identity,
+                )?;
+                remap_ids(
+                    supporting_subject_ids,
+                    previous_by_id,
+                    current_id_by_upstream_identity,
+                )?;
             }
             ReviewConflictResolution::Containment {
                 container_id,
                 member_id,
                 ..
             } => {
-                remap_id(container_id, previous_by_id, current_id_by_stable)?;
-                remap_id(member_id, previous_by_id, current_id_by_stable)?;
+                remap_id(
+                    container_id,
+                    previous_by_id,
+                    current_id_by_upstream_identity,
+                )?;
+                remap_id(member_id, previous_by_id, current_id_by_upstream_identity)?;
             }
             ReviewConflictResolution::Naming {
                 subject_id,
                 evidence_ids,
                 ..
             } => {
-                remap_id(subject_id, previous_by_id, current_id_by_stable)?;
-                remap_ids(evidence_ids, previous_by_id, current_id_by_stable)?;
+                remap_id(subject_id, previous_by_id, current_id_by_upstream_identity)?;
+                remap_ids(
+                    evidence_ids,
+                    previous_by_id,
+                    current_id_by_upstream_identity,
+                )?;
             }
             ReviewConflictResolution::GeometryRepair { subject_id, .. }
             | ReviewConflictResolution::Attribute { subject_id, .. } => {
-                remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+                remap_id(subject_id, previous_by_id, current_id_by_upstream_identity)?;
             }
         },
         FoundationReviewAction::GapResolved { evidence_ids, .. } => {
-            remap_ids(evidence_ids, previous_by_id, current_id_by_stable)?;
+            remap_ids(
+                evidence_ids,
+                previous_by_id,
+                current_id_by_upstream_identity,
+            )?;
         }
         _ => {}
     }
-    remap_review_state(&mut operation.before, previous_by_id, current_id_by_stable)?;
-    remap_review_state(&mut operation.after, previous_by_id, current_id_by_stable)?;
+    remap_review_state(
+        &mut operation.before,
+        previous_by_id,
+        current_id_by_upstream_identity,
+    );
+    remap_review_state(
+        &mut operation.after,
+        previous_by_id,
+        current_id_by_upstream_identity,
+    );
     Ok(())
 }
 
 fn remap_review_state(
     state: &mut FoundationReviewState,
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
-) -> Result<(), String> {
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
+) {
     let mut remapped = BTreeMap::new();
     for (mut subject_id, mut disposition) in std::mem::take(&mut state.candidate_dispositions) {
-        remap_id(&mut subject_id, previous_by_id, current_id_by_stable)?;
+        if remap_id(
+            &mut subject_id,
+            previous_by_id,
+            current_id_by_upstream_identity,
+        )
+        .is_err()
+        {
+            continue;
+        }
         if let CandidateReviewDisposition::SupportingEvidence { primary_subject_id } =
             &mut disposition
         {
-            remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
+            if remap_id(
+                primary_subject_id,
+                previous_by_id,
+                current_id_by_upstream_identity,
+            )
+            .is_err()
+            {
+                continue;
+            }
         }
         remapped.insert(subject_id, disposition);
     }
     state.candidate_dispositions = remapped;
-    Ok(())
 }
 
 fn remap_disposition(
     disposition: &mut FoundationReviewDisposition,
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match disposition {
-        FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
-            remap_ids(evidence_ids, previous_by_id, current_id_by_stable)
-        }
+        FoundationReviewDisposition::SelectedEvidence { evidence_ids } => remap_ids(
+            evidence_ids,
+            previous_by_id,
+            current_id_by_upstream_identity,
+        ),
         FoundationReviewDisposition::ReviewedQueue {
             accepted_evidence_ids,
             rejected_evidence_ids,
             deferred_evidence_ids,
             ..
         } => {
-            remap_ids(accepted_evidence_ids, previous_by_id, current_id_by_stable)?;
-            remap_ids(rejected_evidence_ids, previous_by_id, current_id_by_stable)?;
-            remap_ids(deferred_evidence_ids, previous_by_id, current_id_by_stable)
+            remap_ids(
+                accepted_evidence_ids,
+                previous_by_id,
+                current_id_by_upstream_identity,
+            )?;
+            remap_ids(
+                rejected_evidence_ids,
+                previous_by_id,
+                current_id_by_upstream_identity,
+            )?;
+            remap_ids(
+                deferred_evidence_ids,
+                previous_by_id,
+                current_id_by_upstream_identity,
+            )
         }
         _ => Ok(()),
     }
@@ -3526,10 +3803,10 @@ fn remap_disposition(
 fn remap_ids(
     ids: &mut [String],
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     for id in ids {
-        remap_id(id, previous_by_id, current_id_by_stable)?;
+        remap_id(id, previous_by_id, current_id_by_upstream_identity)?;
     }
     Ok(())
 }
@@ -3537,14 +3814,16 @@ fn remap_ids(
 fn remap_id(
     id: &mut String,
     previous_by_id: &BTreeMap<String, String>,
-    current_id_by_stable: &BTreeMap<String, String>,
+    current_id_by_upstream_identity: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let Some(stable_identity) = previous_by_id.get(id) else {
+    let Some(upstream_identity) = previous_by_id.get(id) else {
         return Ok(());
     };
-    let current_id = current_id_by_stable.get(stable_identity).ok_or_else(|| {
-        format!("Cannot carry a review decision for withdrawn evidence {stable_identity}")
-    })?;
+    let current_id = current_id_by_upstream_identity
+        .get(upstream_identity)
+        .ok_or_else(|| {
+            format!("Cannot carry a review decision for withdrawn evidence {upstream_identity}")
+        })?;
     *id = current_id.clone();
     Ok(())
 }
@@ -3611,57 +3890,11 @@ fn building_entity_name_gap_id(entity_id: &str) -> String {
 
 fn foundation_gap_acknowledged(
     category: FoundationCategory,
-    basis: &FoundationReviewBasis,
     gap_id: &str,
     operations: &[FoundationReviewOperation],
 ) -> bool {
-    foundation_gap_history(category, basis, gap_id, operations).0
+    crate::foundation_review::known_gap_history(category, gap_id, operations).0
         == KnownFeatureGapStatus::Acknowledged
-}
-
-fn foundation_gap_history(
-    category: FoundationCategory,
-    _basis: &FoundationReviewBasis,
-    gap_id: &str,
-    operations: &[FoundationReviewOperation],
-) -> (KnownFeatureGapStatus, Vec<KnownFeatureGapHistoryAction>) {
-    let mut status = KnownFeatureGapStatus::Open;
-    let mut history = vec![KnownFeatureGapHistoryAction::Observed];
-    for operation in operations
-        .iter()
-        .filter(|operation| operation.category == category)
-    {
-        match &operation.action {
-            FoundationReviewAction::GapAcknowledged {
-                gap_id: operation_gap_id,
-            } if operation_gap_id == gap_id => {
-                status = KnownFeatureGapStatus::Acknowledged;
-                history.push(KnownFeatureGapHistoryAction::Acknowledged {
-                    sequence: operation.sequence,
-                });
-            }
-            FoundationReviewAction::GapReopened {
-                gap_id: operation_gap_id,
-            } if operation_gap_id == gap_id => {
-                status = KnownFeatureGapStatus::Open;
-                history.push(KnownFeatureGapHistoryAction::Reopened {
-                    sequence: operation.sequence,
-                });
-            }
-            FoundationReviewAction::GapResolved {
-                gap_id: operation_gap_id,
-                evidence_ids,
-            } if operation_gap_id == gap_id => {
-                status = KnownFeatureGapStatus::Resolved;
-                history.push(KnownFeatureGapHistoryAction::Resolved {
-                    sequence: operation.sequence,
-                    evidence_ids: evidence_ids.clone(),
-                });
-            }
-            _ => {}
-        }
-    }
-    (status, history)
 }
 
 fn foundation_review_action_explanation(action: &FoundationReviewAction) -> Option<String> {

@@ -153,6 +153,13 @@ fn completed_project() -> campus_state::Schema2Project {
     boundary.manifest.bundle.id = "2026-06-controlled".into();
     boundary.manifest.bundle.osm_snapshot = "2026-06-controlled-osm".into();
     boundary.manifest.bundle.overture_release = "2026-06-controlled-overture".into();
+    boundary.confirmed_geometry = Some(SourceGeometry::Polygon(vec![vec![
+        [121.398, 31.208],
+        [121.410, 31.208],
+        [121.410, 31.220],
+        [121.398, 31.220],
+        [121.398, 31.208],
+    ]]));
     project.confirm_boundary(boundary, actor()).unwrap();
     project
         .pin_acquisition(
@@ -228,6 +235,12 @@ fn explicit_unchanged_refresh_carries_review_and_current_formal_output_forward()
         .dependency_basis
         .subjects
         .is_empty());
+    assert!(!project
+        .exported_output()
+        .unwrap()
+        .dependency_basis
+        .assembly_rules
+        .is_empty());
     assert!(project
         .foundation_review()
         .operations()
@@ -288,7 +301,11 @@ fn one_geometry_change_reopens_only_its_category_and_retains_stale_outputs() {
     let water_change = difference
         .observations
         .iter()
-        .find(|change| change.stable_identity.ends_with("stable/water"))
+        .find(|change| {
+            change
+                .upstream_source_record_identity
+                .ends_with("stable/water")
+        })
         .unwrap();
     assert_eq!(
         water_change.classification,
@@ -334,6 +351,77 @@ fn one_geometry_change_reopens_only_its_category_and_retains_stale_outputs() {
 }
 
 #[test]
+fn changing_rejected_evidence_reopens_review_without_staling_selected_output() {
+    let mut project = completed_project();
+    let mut observations = five_category_observations();
+    let mut rejected = observations
+        .iter()
+        .find(|observation| observation.category == FoundationCategory::Water)
+        .unwrap()
+        .clone();
+    rejected.id = "observation-water-rejected-v1".into();
+    rejected.lineage.source_record_id = "source/water-rejected".into();
+    rejected.geometry_sha256 = "7".repeat(64);
+    rejected.derivation.source_geometry_sha256 = rejected.geometry_sha256.clone();
+    observations.push(rejected.clone());
+    project
+        .apply_foundation_refresh(
+            acquisition_evidence(observations.clone(), "2026-07-controlled", '7'),
+            None,
+            actor(),
+        )
+        .unwrap();
+    project
+        .review_foundation_candidate(
+            FoundationCategory::Water,
+            &rejected.id,
+            FoundationCandidateDecision::Reject {
+                reason: "not part of the reviewed campus model".into(),
+            },
+            actor(),
+        )
+        .unwrap();
+    project
+        .complete_foundation_category(FoundationCategory::Water, actor())
+        .unwrap();
+    project.record_generation(32, 8, 32, 512, actor()).unwrap();
+    project
+        .record_export("9".repeat(64), 4096, "selected-only.foundation.json".into())
+        .unwrap();
+    let stale_generated_before = project.stale_generated_outputs().len();
+    let stale_exported_before = project.stale_exported_outputs().len();
+
+    observations
+        .iter_mut()
+        .find(|observation| observation.id == rejected.id)
+        .unwrap()
+        .original_properties
+        .insert("surface".into(), serde_json::json!("updated"));
+    project
+        .apply_foundation_refresh(
+            acquisition_evidence(observations, "2026-08-controlled", '8'),
+            None,
+            actor(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        project.resume_point(),
+        FoundationResumePoint::Review(FoundationCategory::Water)
+    );
+    assert!(project.generated_output().is_some());
+    assert!(project.exported_output().is_some());
+    assert_eq!(
+        project.stale_generated_outputs().len(),
+        stale_generated_before
+    );
+    assert_eq!(
+        project.stale_exported_outputs().len(),
+        stale_exported_before
+    );
+}
+
+#[test]
 fn withdrawn_confirmed_evidence_keeps_prior_lineage_for_review() {
     let mut project = completed_project();
     let observations = five_category_observations()
@@ -354,9 +442,11 @@ fn withdrawn_confirmed_evidence_keeps_prior_lineage_for_review() {
         .iter()
         .find(|change| change.classification == ObservationRefreshClassification::Withdrawn)
         .unwrap();
-    assert!(withdrawn.stable_identity.ends_with("stable/sports"));
+    assert!(withdrawn
+        .upstream_source_record_identity
+        .ends_with("stable/sports"));
     let retained = project
-        .withdrawn_refresh_evidence(&withdrawn.stable_identity)
+        .withdrawn_refresh_evidence(&withdrawn.upstream_source_record_identity)
         .unwrap();
     assert_eq!(retained.category, FoundationCategory::Sports);
     assert_eq!(retained.lineage.source_record_id, "stable/sports");
@@ -364,6 +454,70 @@ fn withdrawn_confirmed_evidence_keeps_prior_lineage_for_review() {
         project.resume_point(),
         FoundationResumePoint::Review(FoundationCategory::Sports)
     );
+}
+
+#[test]
+fn withdrawing_one_subject_does_not_block_carrying_a_later_subject_operation() {
+    let mut project = completed_project();
+    let mut observations = five_category_observations();
+    let mut second_water = observations
+        .iter()
+        .find(|observation| observation.category == FoundationCategory::Water)
+        .unwrap()
+        .clone();
+    second_water.id = "observation-water-second-v1".into();
+    second_water.lineage.source_record_id = "source/water-second".into();
+    second_water.geometry_sha256 = "b".repeat(64);
+    second_water.derivation.source_geometry_sha256 = second_water.geometry_sha256.clone();
+    observations.push(second_water.clone());
+    project
+        .apply_foundation_refresh(
+            acquisition_evidence(observations, "2026-07-controlled", 'b'),
+            None,
+            actor(),
+        )
+        .unwrap();
+    project
+        .review_foundation_candidate(
+            FoundationCategory::Water,
+            &second_water.id,
+            FoundationCandidateDecision::Accept,
+            actor(),
+        )
+        .unwrap();
+    project
+        .complete_foundation_category(FoundationCategory::Water, actor())
+        .unwrap();
+
+    let observations = five_category_observations()
+        .into_iter()
+        .filter(|observation| observation.category != FoundationCategory::Water)
+        .chain(std::iter::once(second_water.clone()))
+        .collect();
+    let difference = project
+        .apply_foundation_refresh(
+            acquisition_evidence(observations, "2026-08-controlled", 'c'),
+            None,
+            actor(),
+        )
+        .expect("a withdrawal must not make unrelated cumulative review state unremappable");
+
+    assert!(difference.observations.iter().any(|change| {
+        change.classification == ObservationRefreshClassification::Withdrawn
+            && change.category == FoundationCategory::Water
+    }));
+    let queue = project
+        .foundation_review_queue(FoundationCategory::Water)
+        .unwrap();
+    assert!(matches!(
+        queue
+            .items
+            .iter()
+            .find(|item| item.subject_id == second_water.id)
+            .unwrap()
+            .disposition,
+        campus_state::CandidateReviewDisposition::Accepted
+    ));
 }
 
 fn assert_water_dependency_change(
@@ -391,7 +545,11 @@ fn assert_water_dependency_change(
     let change = difference
         .observations
         .iter()
-        .find(|change| change.stable_identity.ends_with("stable/water"))
+        .find(|change| {
+            change
+                .upstream_source_record_identity
+                .ends_with("stable/water")
+        })
         .unwrap();
     assert_eq!(
         change.classification,
@@ -438,8 +596,8 @@ fn grouping_naming_attribute_containment_licence_and_rule_changes_are_local() {
     assert_water_dependency_change(
         |observation| {
             observation
-                .raw_spatial_measures
-                .insert("width_m".into(), 12.5);
+                .original_properties
+                .insert("surface".into(), serde_json::json!("reinforced-concrete"));
         },
         |changes| changes.attribute,
     );
@@ -509,6 +667,37 @@ fn coverage_change_reopens_only_the_affected_category() {
 }
 
 #[test]
+fn assembly_rule_change_reopens_building_without_reopening_other_categories() {
+    let mut project = completed_project();
+    let mut refresh = acquisition_evidence(five_category_observations(), "2026-07-controlled", '6');
+    refresh.manifest.bundle.assembly_rules = "building-assembly-v2".into();
+
+    project
+        .apply_foundation_refresh(refresh, None, actor())
+        .unwrap();
+
+    assert_eq!(
+        project.resume_point(),
+        FoundationResumePoint::Review(FoundationCategory::Building)
+    );
+    for category in [
+        FoundationCategory::Circulation,
+        FoundationCategory::Water,
+        FoundationCategory::Vegetation,
+        FoundationCategory::Sports,
+    ] {
+        assert!(
+            project
+                .foundation_review_queue(category)
+                .unwrap()
+                .progress
+                .complete,
+            "{category:?} must not depend on Building assembly rules"
+        );
+    }
+}
+
+#[test]
 fn boundary_expansion_reviews_only_added_area_and_shrink_reassesses_removed_evidence() {
     let mut expanded = completed_project();
     let mut observations = five_category_observations();
@@ -557,11 +746,11 @@ fn boundary_expansion_reviews_only_added_area_and_shrink_reassesses_removed_evid
         .collect();
     let mut shrunk_boundary = boundary_evidence();
     shrunk_boundary.confirmed_geometry = Some(SourceGeometry::Polygon(vec![vec![
-        [121.400, 31.208],
-        [121.404, 31.208],
-        [121.404, 31.212],
-        [121.400, 31.212],
-        [121.400, 31.208],
+        [121.399, 31.209],
+        [121.405, 31.209],
+        [121.405, 31.215],
+        [121.399, 31.215],
+        [121.399, 31.209],
     ]]));
     let shrink = shrunk
         .apply_foundation_refresh(
@@ -581,6 +770,65 @@ fn boundary_expansion_reviews_only_added_area_and_shrink_reassesses_removed_evid
             .unwrap()
             .progress
             .complete
+    );
+
+    let mut shifted = completed_project();
+    let mut shifted_boundary = boundary_evidence();
+    shifted_boundary.confirmed_geometry = Some(SourceGeometry::Polygon(vec![vec![
+        [121.3981, 31.208],
+        [121.4101, 31.208],
+        [121.4101, 31.220],
+        [121.3981, 31.220],
+        [121.3981, 31.208],
+    ]]));
+    let relationship_change = shifted
+        .apply_foundation_refresh(
+            acquisition_evidence(five_category_observations(), "2026-07-controlled", 'a'),
+            Some(shifted_boundary),
+            actor(),
+        )
+        .unwrap();
+    assert_eq!(
+        relationship_change.boundary,
+        BoundaryRefreshClassification::RelationshipChanged
+    );
+    assert_eq!(
+        shifted.resume_point(),
+        FoundationResumePoint::Generation,
+        "moving the boundary must preserve review while making boundary-dependent output stale"
+    );
+    assert!(FoundationCategory::ALL.into_iter().all(|category| shifted
+        .foundation_review_queue(category)
+        .unwrap()
+        .progress
+        .complete));
+    assert!(shifted.generated_output().is_none());
+    assert_eq!(shifted.stale_generated_outputs().len(), 1);
+
+    let mut concave = completed_project();
+    let mut concave_boundary = boundary_evidence();
+    concave_boundary.confirmed_geometry = Some(SourceGeometry::Polygon(vec![vec![
+        [121.397, 31.207],
+        [121.411, 31.207],
+        [121.411, 31.221],
+        [121.405, 31.221],
+        [121.405, 31.214],
+        [121.403, 31.214],
+        [121.403, 31.221],
+        [121.397, 31.221],
+        [121.397, 31.207],
+    ]]));
+    let concave_change = concave
+        .apply_foundation_refresh(
+            acquisition_evidence(five_category_observations(), "2026-07-controlled", 'd'),
+            Some(concave_boundary),
+            actor(),
+        )
+        .unwrap();
+    assert_eq!(
+        concave_change.boundary,
+        BoundaryRefreshClassification::RelationshipChanged,
+        "an outward envelope with an inward notch is not a pure expansion"
     );
 }
 
@@ -731,6 +979,47 @@ fn gap_resolution_and_reopening_append_evidence_linked_history_across_refreshes(
     assert_eq!(reopened_gap.status, KnownFeatureGapStatus::Open);
     assert!(matches!(
         reopened_gap.history.last().unwrap(),
+        KnownFeatureGapHistoryAction::Reopened { .. }
+    ));
+
+    project
+        .resolve_feature_gap(
+            FoundationCategory::Water,
+            &gap_id,
+            vec![resolving_evidence.id.clone()],
+            actor(),
+        )
+        .unwrap();
+    let mut second_refresh = project.pinned_evidence().unwrap().acquisition.clone();
+    second_refresh.manifest.bundle.id = "bundle-v1-gap-evidence-changed".into();
+    second_refresh.manifest.bundle.osm_snapshot = "osm-gap-evidence-changed".into();
+    second_refresh.manifest.result_sha256 = "f".repeat(64);
+    second_refresh
+        .observations
+        .iter_mut()
+        .find(|observation| observation.id == resolving_evidence.id)
+        .unwrap()
+        .original_properties
+        .insert("surface".into(), serde_json::json!("updated"));
+
+    project
+        .apply_foundation_refresh(second_refresh, None, actor())
+        .unwrap();
+
+    let automatically_reopened = project
+        .foundation_review_queue(FoundationCategory::Water)
+        .unwrap();
+    let automatically_reopened_gap = automatically_reopened
+        .known_gaps
+        .iter()
+        .find(|gap| gap.id == gap_id)
+        .unwrap();
+    assert_eq!(
+        automatically_reopened_gap.status,
+        KnownFeatureGapStatus::Open
+    );
+    assert!(matches!(
+        automatically_reopened_gap.history.last().unwrap(),
         KnownFeatureGapHistoryAction::Reopened { .. }
     ));
 }

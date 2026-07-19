@@ -206,6 +206,8 @@ pub struct ServiceLimits {
 pub struct AcquisitionCapabilities {
     pub contract_versions: Vec<String>,
     pub supported_bundles: Vec<DatasetBundle>,
+    #[serde(default)]
+    pub refresh_bundle_precedence: Vec<String>,
     pub limits: ServiceLimits,
     pub retention_days: u64,
     #[serde(default)]

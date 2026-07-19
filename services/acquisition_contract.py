@@ -216,6 +216,7 @@ class FixtureAcquisitionService:
                 {
                     "contract_versions": [CONTRACT_VERSION],
                     "supported_bundles": [self._acquisition["bundle"]],
+                    "refresh_bundle_precedence": [self._acquisition["bundle"]["id"]],
                     "limits": {
                         "area_square_metres": 100_000_000,
                         "boundary_vertices": 10_000,

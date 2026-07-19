@@ -19,15 +19,15 @@
 
 ## Implementation notes
 
-- Added an explicit controlled-service refresh request that negotiates a different immutable Dataset Bundle while keeping current evidence authoritative until the new manifest and all chunks validate.
-- Added stable source-record identity, deterministic dependency/content digests, observation and coverage difference records, and boundary expansion/shrink classification.
-- Review operations now retain granular Review Dependency Basis data. Unchanged operations and completions are carried to the new basis with remapped version-qualified observation IDs; only subject-, coverage-, boundary-, or rule-linked work reopens.
-- Withdrawn observations and prior manifests remain in refresh history. Known Feature Gap acknowledgement, evidence-linked resolution, and reopening replay across Dataset Bundles without replacing earlier ledger history.
-- Generated and exported Foundation results retain their dependency basis. Changed results move to durable stale history, remain inspectable, and cannot satisfy current formal export; semantically unchanged refreshes remain formally reusable.
+- Added an explicit review-desk refresh control and end-to-end controlled-service delivery path. The service publishes an authoritative refresh-bundle precedence, and current evidence remains authoritative until the selected manifest and every chunk validate.
+- Added upstream source-record identity, deterministic dependency/content digests, observation and coverage difference records, and containment-aware boundary expansion/shrink/relationship classification.
+- Review operations now retain granular Review Dependency Basis data. Unchanged operations and completions are carried to the new basis with remapped version-qualified observation IDs; withdrawn cumulative state is omitted without blocking unrelated carry-forward, and conflict decisions invalidate by dependency type.
+- Withdrawn observations and prior manifests remain in refresh history. Known Feature Gap acknowledgement, evidence-linked resolution, and reopening replay across Dataset Bundles without replacing earlier ledger history; changed resolution evidence automatically appends a reopen action.
+- Generated and exported Foundation results retain only the dependency basis of selected generation inputs. Changed selected results move to durable stale history, remain inspectable, and cannot satisfy current formal export; semantically unchanged or rejected-only refreshes remain reusable.
 
 ## Verification
 
-- `cargo +stable test --manifest-path native/Cargo.toml -p campus-state --test foundation_refresh` — 8 passed.
+- `cargo +stable test --manifest-path native/Cargo.toml -p campus-state --test foundation_refresh` — 11 passed.
 - `cargo +stable test --manifest-path native/Cargo.toml -p campus-services --test project_acquisition` — 2 passed.
 - `cargo +stable clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings` — passed with zero warnings.
 - `cargo +stable test --manifest-path native/Cargo.toml --workspace` — passed across the full workspace.

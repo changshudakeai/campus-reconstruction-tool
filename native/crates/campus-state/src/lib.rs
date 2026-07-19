@@ -18,7 +18,7 @@ pub use detailed_building_workspace::{
 };
 pub use detailed_rule_stack::{CompiledDetailedBuildingRules, DetailedBuildingRuleStack};
 pub use foundation_refresh::{
-    stable_observation_identity, BoundaryRefreshClassification, ChangedReviewDependencies,
+    upstream_source_record_identity, BoundaryRefreshClassification, ChangedReviewDependencies,
     CoverageRefreshDifference, FoundationSourceRefreshDifference, ObservationRefreshClassification,
     ObservationRefreshDifference, ReviewDependencyBasis, ReviewSubjectDependencyBasis,
 };

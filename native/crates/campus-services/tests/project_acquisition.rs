@@ -188,10 +188,15 @@ fn explicit_refresh_start_responses() -> Vec<TransportResponse> {
     next_bundle["id"] = serde_json::json!("bundle-v1-next");
     next_bundle["osm_snapshot"] = serde_json::json!("osm-2026-07-15");
     next_bundle["overture_release"] = serde_json::json!("2026-07-15.0");
+    let mut older_bundle = fixture["bundle"].clone();
+    older_bundle["id"] = serde_json::json!("bundle-v1-older");
+    older_bundle["osm_snapshot"] = serde_json::json!("osm-cn-2026-05-31");
+    older_bundle["overture_release"] = serde_json::json!("2026-05-20.0");
     let capabilities = || {
         json_response(serde_json::json!({
             "contract_versions": [CONTRACT_VERSION],
-            "supported_bundles": [next_bundle, fixture["bundle"]],
+            "supported_bundles": [older_bundle, fixture["bundle"], next_bundle],
+            "refresh_bundle_precedence": ["bundle-v1-next", fixture["bundle"]["id"], "bundle-v1-older"],
             "limits": {
                 "area_square_metres": 100000000,
                 "boundary_vertices": 10000,
@@ -239,7 +244,14 @@ fn explicit_refresh_start_responses() -> Vec<TransportResponse> {
             )
             .unwrap(),
     };
-    vec![capabilities(), capabilities(), status, manifest, chunk]
+    vec![
+        capabilities(),
+        capabilities(),
+        status,
+        manifest,
+        chunk,
+        capabilities(),
+    ]
 }
 
 #[test]
@@ -436,6 +448,13 @@ fn user_explicit_refresh_pins_a_new_bundle_without_replacing_current_evidence() 
             actor(),
         )
         .unwrap();
+    coordinator
+        .start_explicit_refresh(
+            &mut project,
+            "installation-42:project-7:explicit-refresh-2026-07",
+            actor(),
+        )
+        .expect("retrying the same user operation must reuse its persisted checkpoint");
 
     assert_eq!(
         project.acquisition_checkpoint_purpose(),
@@ -465,6 +484,14 @@ fn user_explicit_refresh_pins_a_new_bundle_without_replacing_current_evidence() 
         .map(|body| serde_json::from_slice::<serde_json::Value>(body).unwrap())
         .unwrap();
     assert_eq!(request["bundle_id"], "bundle-v1-next");
+    assert_eq!(
+        requests
+            .borrow()
+            .iter()
+            .filter(|request| request.path.ends_with("/acquisition-jobs"))
+            .count(),
+        1
+    );
     coordinator.pin_manifest(&mut project, actor()).unwrap();
     assert_eq!(
         coordinator
@@ -493,5 +520,13 @@ fn user_explicit_refresh_pins_a_new_bundle_without_replacing_current_evidence() 
         project.acquisition_checkpoint_purpose(),
         FoundationAcquisitionCheckpointPurpose::Initial
     );
+    assert!(coordinator
+        .start_explicit_refresh(
+            &mut project,
+            "installation-42:project-7:explicit-refresh-after-newest",
+            actor(),
+        )
+        .unwrap_err()
+        .contains("no newer Dataset Bundle"));
     std::fs::remove_dir_all(directory).unwrap();
 }

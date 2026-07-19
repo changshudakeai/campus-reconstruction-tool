@@ -947,7 +947,7 @@ fn acquisition_refresh_appends_changed_evidence_without_replacing_review_history
     ));
     let refresh_record = project.acquisition_refresh_history().last().unwrap();
     assert!(refresh_record
-        .retired_observation_ids
+        .withdrawn_observation_ids
         .contains(&"obs-tree-cluster".into()));
     assert!(refresh_record
         .composite_snapshot_identity

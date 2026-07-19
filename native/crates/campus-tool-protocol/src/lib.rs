@@ -417,6 +417,7 @@ pub enum ToolEvent {
     MapFoundationCategoryCompletionRequested {
         category: String,
     },
+    MapFoundationRefreshRequested,
     PreviewBlockSelected {
         x: i32,
         y: i32,
@@ -552,6 +553,9 @@ mod tests {
         assert_eq!(json["type"], "mapFoundationReviewDeferredRequested");
         assert_eq!(json["subjectId"], "water-centreline");
         assert_eq!(json["acknowledgedGapId"], "gap:water:overture:tile-7");
+
+        let refresh = serde_json::to_value(ToolEvent::MapFoundationRefreshRequested).unwrap();
+        assert_eq!(refresh["type"], "mapFoundationRefreshRequested");
     }
 
     #[tokio::test]

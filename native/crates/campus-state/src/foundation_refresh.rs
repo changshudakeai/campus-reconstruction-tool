@@ -58,7 +58,7 @@ impl ChangedReviewDependencies {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationRefreshDifference {
-    pub stable_identity: String,
+    pub upstream_source_record_identity: String,
     pub category: FoundationCategory,
     pub previous_observation_id: Option<String>,
     pub current_observation_id: Option<String>,
@@ -143,7 +143,7 @@ impl FoundationSourceRefreshDifference {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewSubjectDependencyBasis {
     pub observation_id: String,
-    pub stable_identity: String,
+    pub upstream_source_record_identity: String,
     pub geometry_digest: String,
     pub grouping_digest: String,
     pub naming_digest: String,
@@ -160,6 +160,8 @@ pub struct ReviewDependencyBasis {
     pub boundary_digest: String,
     pub coverage_digest: String,
     pub classification_rules: String,
+    #[serde(default)]
+    pub assembly_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
     pub subjects: BTreeMap<String, ReviewSubjectDependencyBasis>,
@@ -170,11 +172,12 @@ impl ReviewDependencyBasis {
         self.boundary_digest == other.boundary_digest
             && self.coverage_digest == other.coverage_digest
             && self.classification_rules == other.classification_rules
+            && self.assembly_rules == other.assembly_rules
             && self.conflation_rules == other.conflation_rules
             && self.derivation_rules == other.derivation_rules
             && self.subjects.len() == other.subjects.len()
-            && self.subjects.iter().all(|(stable_identity, subject)| {
-                other.subjects.get(stable_identity).is_some_and(|other| {
+            && self.subjects.iter().all(|(upstream_identity, subject)| {
+                other.subjects.get(upstream_identity).is_some_and(|other| {
                     subject.geometry_digest == other.geometry_digest
                         && subject.grouping_digest == other.grouping_digest
                         && subject.naming_digest == other.naming_digest
@@ -193,7 +196,7 @@ pub(crate) struct ObservationDependencySnapshot {
     pub basis: ReviewSubjectDependencyBasis,
 }
 
-pub fn stable_observation_identity(observation: &SourceObservation) -> String {
+pub fn upstream_source_record_identity(observation: &SourceObservation) -> String {
     format!(
         "{:?}:{}:{}",
         observation.category, observation.lineage.provider, observation.lineage.source_record_id
@@ -204,7 +207,7 @@ pub fn stable_observation_identity(observation: &SourceObservation) -> String {
 pub(crate) fn observation_dependency_snapshot(
     observation: &SourceObservation,
 ) -> ObservationDependencySnapshot {
-    let stable_identity = stable_observation_identity(observation);
+    let upstream_source_record_identity = upstream_source_record_identity(observation);
     let grouping = observation
         .suggestions
         .iter()
@@ -241,6 +244,11 @@ pub(crate) fn observation_dependency_snapshot(
         .iter()
         .filter(|(key, _)| key.to_ascii_lowercase().contains("name"))
         .collect::<BTreeMap<_, _>>();
+    let other_properties = observation
+        .original_properties
+        .iter()
+        .filter(|(key, _)| !key.to_ascii_lowercase().contains("name"))
+        .collect::<BTreeMap<_, _>>();
     let rule_versions = (
         &observation.derivation.rule_version,
         observation
@@ -263,7 +271,14 @@ pub(crate) fn observation_dependency_snapshot(
     ));
     let grouping_digest = stable_digest(&grouping);
     let naming_digest = stable_digest(&(naming_properties, naming_attributes));
-    let attribute_digest = stable_digest(&(other_attributes, &observation.raw_spatial_measures));
+    let attribute_digest = stable_digest(&(
+        other_properties,
+        other_attributes,
+        &observation.raw_spatial_measures,
+        &observation.coordinate_semantics,
+        &observation.unit_semantics,
+        &observation.time_semantics,
+    ));
     let containment_digest = stable_digest(&containment);
     let licence_digest = stable_digest(&observation.licence);
     let rule_version_digest = stable_digest(&rule_versions);
@@ -281,7 +296,7 @@ pub(crate) fn observation_dependency_snapshot(
     ObservationDependencySnapshot {
         basis: ReviewSubjectDependencyBasis {
             observation_id: observation.id.clone(),
-            stable_identity,
+            upstream_source_record_identity,
             geometry_digest,
             grouping_digest,
             naming_digest,
@@ -313,7 +328,7 @@ pub(crate) fn compare_foundation_evidence(
         .iter()
         .map(|observation| {
             (
-                stable_observation_identity(observation),
+                upstream_source_record_identity(observation),
                 (
                     observation,
                     observation_dependency_snapshot(observation).basis,
@@ -326,7 +341,7 @@ pub(crate) fn compare_foundation_evidence(
         .iter()
         .map(|observation| {
             (
-                stable_observation_identity(observation),
+                upstream_source_record_identity(observation),
                 (
                     observation,
                     observation_dependency_snapshot(observation).basis,
@@ -341,12 +356,24 @@ pub(crate) fn compare_foundation_evidence(
         .collect::<BTreeSet<_>>();
     let observations = identities
         .into_iter()
-        .map(|stable_identity| {
-            let previous = previous_by_identity.get(&stable_identity);
-            let current = current_by_identity.get(&stable_identity);
+        .map(|upstream_source_record_identity| {
+            let previous = previous_by_identity.get(&upstream_source_record_identity);
+            let current = current_by_identity.get(&upstream_source_record_identity);
             let (category, classification, changed_dependencies) = match (previous, current) {
-                (Some((observation, before)), Some((_, after))) => {
-                    let changes = dependency_changes(before, after);
+                (Some((observation, before)), Some((current_observation, after))) => {
+                    let mut changes = dependency_changes(before, after);
+                    if previous_boundary != current_boundary
+                        && geometry_boundary_relationship(
+                            &observation.review_geometry_proposal,
+                            previous_boundary,
+                        ) != geometry_boundary_relationship(
+                            &current_observation.review_geometry_proposal,
+                            current_boundary,
+                        )
+                    {
+                        changes.boundary = true;
+                        changes.containment = true;
+                    }
                     let coverage_changed =
                         coverage_changed_categories.contains(&observation.category);
                     (
@@ -377,7 +404,7 @@ pub(crate) fn compare_foundation_evidence(
                 (None, None) => unreachable!("identity came from one side"),
             };
             ObservationRefreshDifference {
-                stable_identity,
+                upstream_source_record_identity,
                 category,
                 previous_observation_id: previous.map(|(observation, _)| observation.id.clone()),
                 current_observation_id: current.map(|(observation, _)| observation.id.clone()),
@@ -494,39 +521,187 @@ fn compare_boundary(
     if previous == current {
         return BoundaryRefreshClassification::Unchanged;
     }
-    let previous_area = approximate_area(previous);
-    let current_area = approximate_area(current);
-    if current_area > previous_area {
+    let current_contains_previous = geometry_contains_geometry(current, previous);
+    let previous_contains_current = geometry_contains_geometry(previous, current);
+    if current_contains_previous && !previous_contains_current {
         BoundaryRefreshClassification::Expanded
-    } else if current_area < previous_area {
+    } else if previous_contains_current && !current_contains_previous {
         BoundaryRefreshClassification::Shrunk
     } else {
         BoundaryRefreshClassification::RelationshipChanged
     }
 }
 
-fn approximate_area(geometry: &SourceGeometry) -> f64 {
-    match geometry {
-        SourceGeometry::Polygon(rings) => rings.first().map_or(0.0, |ring| ring_area(ring)),
-        SourceGeometry::MultiPolygon(polygons) => polygons
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeometryBoundaryRelationship {
+    Inside,
+    Outside,
+    Straddling,
+}
+
+fn geometry_boundary_relationship(
+    geometry: &SourceGeometry,
+    boundary: &SourceGeometry,
+) -> GeometryBoundaryRelationship {
+    let points = geometry.all_points();
+    if points.is_empty() {
+        return GeometryBoundaryRelationship::Outside;
+    }
+    let crosses_boundary = geometry_segments(geometry).iter().any(|candidate| {
+        geometry_segments(boundary)
             .iter()
-            .filter_map(|polygon| polygon.first())
-            .map(|ring| ring_area(ring))
-            .sum(),
-        _ => 0.0,
+            .any(|boundary_segment| segments_intersect(*candidate, *boundary_segment))
+    });
+    let contains_boundary = boundary
+        .all_points()
+        .iter()
+        .any(|point| geometry_contains_point(geometry, *point));
+    if crosses_boundary || contains_boundary {
+        return GeometryBoundaryRelationship::Straddling;
+    }
+    let inside = points
+        .iter()
+        .filter(|point| geometry_contains_point(boundary, **point))
+        .count();
+    if inside == points.len() {
+        GeometryBoundaryRelationship::Inside
+    } else if inside == 0 {
+        GeometryBoundaryRelationship::Outside
+    } else {
+        GeometryBoundaryRelationship::Straddling
     }
 }
 
-fn ring_area(ring: &[[f64; 2]]) -> f64 {
-    if ring.len() < 3 {
-        return 0.0;
+fn geometry_segments(geometry: &SourceGeometry) -> Vec<([f64; 2], [f64; 2])> {
+    let line_segments = |line: &[[f64; 2]]| {
+        line.windows(2)
+            .map(|points| (points[0], points[1]))
+            .collect::<Vec<_>>()
+    };
+    match geometry {
+        SourceGeometry::Point(_) | SourceGeometry::MultiPoint(_) => Vec::new(),
+        SourceGeometry::LineString(line) => line_segments(line),
+        SourceGeometry::MultiLineString(lines) | SourceGeometry::Polygon(lines) => {
+            lines.iter().flat_map(|line| line_segments(line)).collect()
+        }
+        SourceGeometry::MultiPolygon(polygons) => polygons
+            .iter()
+            .flat_map(|polygon| polygon.iter())
+            .flat_map(|ring| line_segments(ring))
+            .collect(),
     }
-    ring.iter()
-        .zip(ring.iter().cycle().skip(1))
-        .map(|(left, right)| left[0] * right[1] - right[0] * left[1])
-        .sum::<f64>()
-        .abs()
-        / 2.0
+}
+
+fn segments_intersect(left: ([f64; 2], [f64; 2]), right: ([f64; 2], [f64; 2])) -> bool {
+    let orientation = |start: [f64; 2], end: [f64; 2], point: [f64; 2]| {
+        (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0])
+    };
+    let left_start = orientation(left.0, left.1, right.0);
+    let left_end = orientation(left.0, left.1, right.1);
+    let right_start = orientation(right.0, right.1, left.0);
+    let right_end = orientation(right.0, right.1, left.1);
+    (left_start.signum() != left_end.signum() && right_start.signum() != right_end.signum())
+        || point_on_segment(right.0, left.0, left.1)
+        || point_on_segment(right.1, left.0, left.1)
+        || point_on_segment(left.0, right.0, right.1)
+        || point_on_segment(left.1, right.0, right.1)
+}
+
+fn geometry_contains_geometry(container: &SourceGeometry, candidate: &SourceGeometry) -> bool {
+    let points = candidate.all_points();
+    !points.is_empty()
+        && points
+            .iter()
+            .all(|point| geometry_contains_point(container, *point))
+        && !geometry_segments(candidate)
+            .iter()
+            .any(|candidate_segment| {
+                geometry_segments(container)
+                    .iter()
+                    .any(|container_segment| {
+                        segments_properly_intersect(*candidate_segment, *container_segment)
+                    })
+            })
+        && !geometry_hole_points(container)
+            .iter()
+            .any(|hole_point| geometry_contains_point(candidate, *hole_point))
+}
+
+fn geometry_hole_points(geometry: &SourceGeometry) -> Vec<[f64; 2]> {
+    match geometry {
+        SourceGeometry::Polygon(rings) => rings
+            .iter()
+            .skip(1)
+            .filter_map(|ring| ring.first().copied())
+            .collect(),
+        SourceGeometry::MultiPolygon(polygons) => polygons
+            .iter()
+            .flat_map(|polygon| polygon.iter().skip(1))
+            .filter_map(|ring| ring.first().copied())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn segments_properly_intersect(left: ([f64; 2], [f64; 2]), right: ([f64; 2], [f64; 2])) -> bool {
+    const EPSILON: f64 = 1e-10;
+    let orientation = |start: [f64; 2], end: [f64; 2], point: [f64; 2]| {
+        (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0])
+    };
+    let left_start = orientation(left.0, left.1, right.0);
+    let left_end = orientation(left.0, left.1, right.1);
+    let right_start = orientation(right.0, right.1, left.0);
+    let right_end = orientation(right.0, right.1, left.1);
+    left_start * left_end < -EPSILON && right_start * right_end < -EPSILON
+}
+
+fn geometry_contains_point(geometry: &SourceGeometry, point: [f64; 2]) -> bool {
+    match geometry {
+        SourceGeometry::Polygon(rings) => polygon_contains_point(rings, point),
+        SourceGeometry::MultiPolygon(polygons) => polygons
+            .iter()
+            .any(|polygon| polygon_contains_point(polygon, point)),
+        _ => false,
+    }
+}
+
+fn polygon_contains_point(rings: &[Vec<[f64; 2]>], point: [f64; 2]) -> bool {
+    let Some(exterior) = rings.first() else {
+        return false;
+    };
+    point_in_ring(exterior, point) && rings.iter().skip(1).all(|hole| !point_in_ring(hole, point))
+}
+
+fn point_in_ring(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    for (left, right) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        if point_on_segment(point, *left, *right) {
+            return true;
+        }
+        let crosses = (left[1] > point[1]) != (right[1] > point[1])
+            && point[0]
+                < (right[0] - left[0]) * (point[1] - left[1]) / (right[1] - left[1]) + left[0];
+        if crosses {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+    const EPSILON: f64 = 1e-10;
+    let cross =
+        (point[1] - start[1]) * (end[0] - start[0]) - (point[0] - start[0]) * (end[1] - start[1]);
+    if cross.abs() > EPSILON {
+        return false;
+    }
+    point[0] >= start[0].min(end[0]) - EPSILON
+        && point[0] <= start[0].max(end[0]) + EPSILON
+        && point[1] >= start[1].min(end[1]) - EPSILON
+        && point[1] <= start[1].max(end[1]) + EPSILON
 }
 
 fn attribute_rule_version(attribute: &AttributeProvenance) -> &str {

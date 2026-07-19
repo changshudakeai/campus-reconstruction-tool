@@ -580,47 +580,9 @@ pub(crate) fn project_queue_item(
 
 pub(crate) fn known_gaps_for_category(
     category: FoundationCategory,
-    _basis: &FoundationReviewBasis,
     outcomes: &[ProviderOutcome],
     operations: &[FoundationReviewOperation],
 ) -> Vec<KnownFeatureGap> {
-    let gap_history = operations
-        .iter()
-        .filter(|operation| operation.category == category)
-        .fold(
-            BTreeMap::<String, Vec<KnownFeatureGapHistoryAction>>::new(),
-            |mut state, operation| {
-                match &operation.action {
-                    FoundationReviewAction::GapAcknowledged { gap_id } => {
-                        state.entry(gap_id.clone()).or_default().push(
-                            KnownFeatureGapHistoryAction::Acknowledged {
-                                sequence: operation.sequence,
-                            },
-                        );
-                    }
-                    FoundationReviewAction::GapReopened { gap_id } => {
-                        state.entry(gap_id.clone()).or_default().push(
-                            KnownFeatureGapHistoryAction::Reopened {
-                                sequence: operation.sequence,
-                            },
-                        );
-                    }
-                    FoundationReviewAction::GapResolved {
-                        gap_id,
-                        evidence_ids,
-                    } => {
-                        state.entry(gap_id.clone()).or_default().push(
-                            KnownFeatureGapHistoryAction::Resolved {
-                                sequence: operation.sequence,
-                                evidence_ids: evidence_ids.clone(),
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-                state
-            },
-        );
     outcomes
         .iter()
         .filter(|outcome| outcome.category == category)
@@ -641,23 +603,8 @@ pub(crate) fn known_gaps_for_category(
             };
             reasons.into_iter().enumerate().map(|(index, reason)| {
                 let id = gap_id(outcome, index);
-                let recorded_history = gap_history.get(&id).cloned().unwrap_or_default();
-                let status =
-                    recorded_history
-                        .iter()
-                        .fold(KnownFeatureGapStatus::Open, |_, action| match action {
-                            KnownFeatureGapHistoryAction::Acknowledged { .. } => {
-                                KnownFeatureGapStatus::Acknowledged
-                            }
-                            KnownFeatureGapHistoryAction::Reopened { .. }
-                            | KnownFeatureGapHistoryAction::Observed => KnownFeatureGapStatus::Open,
-                            KnownFeatureGapHistoryAction::Resolved { .. } => {
-                                KnownFeatureGapStatus::Resolved
-                            }
-                        });
+                let (status, history) = known_gap_history(category, &id, operations);
                 let acknowledged = status == KnownFeatureGapStatus::Acknowledged;
-                let mut history = vec![KnownFeatureGapHistoryAction::Observed];
-                history.extend(recorded_history);
                 KnownFeatureGap {
                     acknowledged,
                     id,
@@ -683,6 +630,50 @@ pub(crate) fn known_gaps_for_category(
             })
         })
         .collect()
+}
+
+pub(crate) fn known_gap_history(
+    category: FoundationCategory,
+    gap_id: &str,
+    operations: &[FoundationReviewOperation],
+) -> (KnownFeatureGapStatus, Vec<KnownFeatureGapHistoryAction>) {
+    let mut status = KnownFeatureGapStatus::Open;
+    let mut history = vec![KnownFeatureGapHistoryAction::Observed];
+    for operation in operations
+        .iter()
+        .filter(|operation| operation.category == category)
+    {
+        match &operation.action {
+            FoundationReviewAction::GapAcknowledged {
+                gap_id: operation_gap_id,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Acknowledged;
+                history.push(KnownFeatureGapHistoryAction::Acknowledged {
+                    sequence: operation.sequence,
+                });
+            }
+            FoundationReviewAction::GapReopened {
+                gap_id: operation_gap_id,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Open;
+                history.push(KnownFeatureGapHistoryAction::Reopened {
+                    sequence: operation.sequence,
+                });
+            }
+            FoundationReviewAction::GapResolved {
+                gap_id: operation_gap_id,
+                evidence_ids,
+            } if operation_gap_id == gap_id => {
+                status = KnownFeatureGapStatus::Resolved;
+                history.push(KnownFeatureGapHistoryAction::Resolved {
+                    sequence: operation.sequence,
+                    evidence_ids: evidence_ids.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+    (status, history)
 }
 
 pub(crate) fn gap_id(outcome: &ProviderOutcome, index: usize) -> String {

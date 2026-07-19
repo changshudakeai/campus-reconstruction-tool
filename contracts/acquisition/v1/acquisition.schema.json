@@ -38,6 +38,7 @@
       "properties": {
         "contract_versions": {"type": "array", "contains": {"$ref": "#/$defs/contractVersion"}},
         "supported_bundles": {"type": "array", "items": {"$ref": "#/$defs/datasetBundle"}},
+        "refresh_bundle_precedence": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "limits": {
           "type": "object",
           "required": ["area_square_metres", "boundary_vertices", "tiles", "observations", "result_bytes", "concurrent_jobs"],

@@ -110,6 +110,15 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
         if idempotency_key.trim().is_empty() {
             return Err("Explicit Foundation refresh requires a stable idempotency key".into());
         }
+        if let Some(existing) = project.acquisition_checkpoint() {
+            if project.acquisition_checkpoint_purpose()
+                == FoundationAcquisitionCheckpointPurpose::ExplicitRefresh
+                && existing.request_identity.idempotency_key == idempotency_key
+            {
+                return Ok(ProjectAcquisitionProgress::Started);
+            }
+            return Err("This project already has a different Foundation acquisition job".into());
+        }
         let boundary = project
             .boundary_evidence()
             .ok_or("Confirm a Campus Boundary before requesting a Foundation refresh")?;
@@ -129,10 +138,21 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
                     .into(),
             );
         }
-        let bundle = capabilities
-            .supported_bundles
+        let current_precedence = capabilities
+            .refresh_bundle_precedence
             .iter()
-            .find(|bundle| bundle.id != current.acquisition.manifest.bundle.id)
+            .position(|bundle_id| bundle_id == &current.acquisition.manifest.bundle.id)
+            .ok_or(
+                "The controlled service did not rank the currently pinned Dataset Bundle for refresh",
+            )?;
+        let bundle = capabilities.refresh_bundle_precedence[..current_precedence]
+            .iter()
+            .find_map(|bundle_id| {
+                capabilities
+                    .supported_bundles
+                    .iter()
+                    .find(|bundle| bundle.id == *bundle_id)
+            })
             .ok_or("The controlled service has no newer Dataset Bundle for an explicit refresh")?
             .clone();
         let request = FoundationAcquisitionRequest::new(
