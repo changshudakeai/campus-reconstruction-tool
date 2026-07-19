@@ -3,8 +3,9 @@ use crate::acquisition::{
     OutcomeScope, ResultManifest, SourceGeometry, VerifiedAcquisitionChunk,
 };
 use campus_state::{
-    AcquisitionRequestIdentity, FoundationAcquisitionCheckpoint, InstallationId,
-    PinnedAcquisitionEvidence, Schema2Project,
+    AcquisitionRequestIdentity, FoundationAcquisitionCheckpoint,
+    FoundationAcquisitionCheckpointPurpose, InstallationId, PinnedAcquisitionEvidence,
+    Schema2Project,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -98,6 +99,70 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
             .idempotency_key
             .clone();
         self.start_after_boundary_confirmation(project, &idempotency_key, actor)
+    }
+
+    pub fn start_explicit_refresh(
+        &self,
+        project: &mut Schema2Project,
+        idempotency_key: &str,
+        actor: InstallationId,
+    ) -> Result<ProjectAcquisitionProgress, String> {
+        if idempotency_key.trim().is_empty() {
+            return Err("Explicit Foundation refresh requires a stable idempotency key".into());
+        }
+        let boundary = project
+            .boundary_evidence()
+            .ok_or("Confirm a Campus Boundary before requesting a Foundation refresh")?;
+        let current = project
+            .pinned_evidence()
+            .ok_or("Pin the initial Foundation acquisition before requesting a refresh")?;
+        let confirmed_geometry = boundary
+            .confirmed_geometry()
+            .ok_or("The confirmed Campus Boundary geometry is unavailable")?;
+        let capabilities = self
+            .client
+            .capabilities()
+            .map_err(|error| error.to_string())?;
+        if capabilities.retention_days < 30 {
+            return Err(
+                "The controlled service cannot retain acquisition delivery for at least 30 days"
+                    .into(),
+            );
+        }
+        let bundle = capabilities
+            .supported_bundles
+            .iter()
+            .find(|bundle| bundle.id != current.acquisition.manifest.bundle.id)
+            .ok_or("The controlled service has no newer Dataset Bundle for an explicit refresh")?
+            .clone();
+        let request = FoundationAcquisitionRequest::new(
+            bundle,
+            boundary.manifest.result_sha256.clone(),
+            copy_typed::<_, SourceGeometry>(confirmed_geometry)?,
+            idempotency_key,
+        )?;
+        let status = self
+            .client
+            .start_foundation_acquisition(&request)
+            .map_err(|error| error.to_string())?;
+        let checkpoint = FoundationAcquisitionCheckpoint::new(
+            status.job_id.clone(),
+            status.contract_version.clone(),
+            copy_typed(request.bundle())?,
+            request.boundary_revision(),
+            AcquisitionRequestIdentity::new(
+                request.idempotency_key(),
+                request
+                    .content_sha256()
+                    .map_err(|error| error.to_string())?,
+            )?,
+            copy_typed(&status.state)?,
+            copy_typed(&status.outcomes)?,
+            copy_typed(&status.failure)?,
+            capabilities.retention_days,
+        )?;
+        project.record_explicit_refresh_checkpoint(checkpoint, actor)?;
+        Ok(ProjectAcquisitionProgress::Started)
     }
 
     pub fn reconnect(
@@ -237,13 +302,17 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
             .client
             .finalize_foundation_delivery(&service_status(&checkpoint)?, manifest, verified_chunks)
             .map_err(|error| error.to_string())?;
-        project.pin_acquisition(
-            PinnedAcquisitionEvidence {
-                manifest: copy_typed(&delivery.manifest)?,
-                observations: copy_typed(&delivery.observations)?,
-            },
-            actor,
-        )?;
+        let evidence = PinnedAcquisitionEvidence {
+            manifest: copy_typed(&delivery.manifest)?,
+            observations: copy_typed(&delivery.observations)?,
+        };
+        if project.acquisition_checkpoint_purpose()
+            == FoundationAcquisitionCheckpointPurpose::ExplicitRefresh
+        {
+            project.apply_foundation_refresh(evidence, None, actor)?;
+        } else {
+            project.pin_acquisition(evidence, actor)?;
+        }
         Ok(ProjectAcquisitionProgress::EvidencePinned)
     }
 }

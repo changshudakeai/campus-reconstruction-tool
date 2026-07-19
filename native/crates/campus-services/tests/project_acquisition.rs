@@ -11,8 +11,9 @@ use campus_services::acquisition::{
     CONTRACT_VERSION,
 };
 use campus_state::{
-    CampusProjectLibrary, CampusScope, InstallationId, PinnedBoundaryEvidence,
-    Schema2ProjectSession, SourceGeometry, V11ConstructionCapability,
+    CampusProjectLibrary, CampusScope, FoundationAcquisitionCheckpointPurpose, InstallationId,
+    PinnedAcquisitionEvidence, PinnedBoundaryEvidence, ResultManifest, Schema2ProjectSession,
+    SourceGeometry, SourceObservation, V11ConstructionCapability,
 };
 
 const ACQUISITION_FIXTURE: &str =
@@ -155,6 +156,90 @@ fn service_responses() -> Vec<TransportResponse> {
         chunk,
         status(),
     ]
+}
+
+fn pinned_acquisition_evidence() -> PinnedAcquisitionEvidence {
+    let fixture: serde_json::Value = serde_json::from_str(ACQUISITION_FIXTURE).unwrap();
+    PinnedAcquisitionEvidence {
+        manifest: serde_json::from_value::<ResultManifest>(serde_json::json!({
+            "contract_version": fixture["contract_version"],
+            "bundle": fixture["bundle"],
+            "coverage_report": fixture["coverage_report"],
+            "licences": fixture["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|observation| observation["licence"].clone())
+                .collect::<Vec<_>>(),
+            "chunks": fixture["manifest"]["chunks"],
+            "result_sha256": fixture["manifest"]["result_sha256"]
+        }))
+        .unwrap(),
+        observations: serde_json::from_value::<Vec<SourceObservation>>(
+            fixture["observations"].clone(),
+        )
+        .unwrap(),
+    }
+}
+
+fn explicit_refresh_start_responses() -> Vec<TransportResponse> {
+    let fixture: serde_json::Value = serde_json::from_str(ACQUISITION_FIXTURE).unwrap();
+    let mut next_bundle = fixture["bundle"].clone();
+    next_bundle["id"] = serde_json::json!("bundle-v1-next");
+    next_bundle["osm_snapshot"] = serde_json::json!("osm-2026-07-15");
+    next_bundle["overture_release"] = serde_json::json!("2026-07-15.0");
+    let capabilities = || {
+        json_response(serde_json::json!({
+            "contract_versions": [CONTRACT_VERSION],
+            "supported_bundles": [next_bundle, fixture["bundle"]],
+            "limits": {
+                "area_square_metres": 100000000,
+                "boundary_vertices": 10000,
+                "tiles": 10000,
+                "observations": 1000000,
+                "result_bytes": 1000000000,
+                "concurrent_jobs": 2
+            },
+            "retention_days": 30,
+            "quota_remaining": 100
+        }))
+    };
+    let status = json_response(serde_json::json!({
+        "job_id": "acquisition-refresh-job-10",
+        "contract_version": CONTRACT_VERSION,
+        "bundle_id": "bundle-v1-next",
+        "state": "partial",
+        "outcomes": fixture["coverage_report"]["outcomes"]
+    }));
+    let manifest = json_response(serde_json::json!({
+        "contract_version": fixture["contract_version"],
+        "bundle": next_bundle,
+        "coverage_report": fixture["coverage_report"],
+        "licences": fixture["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|observation| observation["licence"].clone())
+            .collect::<Vec<_>>(),
+        "chunks": fixture["manifest"]["chunks"],
+        "result_sha256": fixture["manifest"]["result_sha256"]
+    }));
+    let descriptor = &fixture["manifest"]["chunks"][0];
+    let chunk = TransportResponse {
+        status: 200,
+        headers: BTreeMap::from([(
+            "x-stable-cursor".into(),
+            descriptor["stable_cursor"].as_str().unwrap().into(),
+        )]),
+        body: base64::engine::general_purpose::STANDARD
+            .decode(
+                fixture["transport_chunks"][descriptor["id"].as_str().unwrap()]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+    };
+    vec![capabilities(), capabilities(), status, manifest, chunk]
 }
 
 #[test]
@@ -305,5 +390,108 @@ fn native_project_saves_closes_reopens_and_resumes_a_partially_delivered_live_jo
     );
     drop(reopened);
     drop(reopened_library);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn user_explicit_refresh_pins_a_new_bundle_without_replacing_current_evidence() {
+    let directory = std::env::temp_dir().join(format!(
+        "campus-explicit-refresh-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
+    let mut library =
+        CampusProjectLibrary::open_for_construction(&directory, "gaode:B00155J6JH", &capability)
+            .unwrap();
+    let mut project = library
+        .create_project(scope(), "explicit controlled refresh", actor())
+        .unwrap();
+    project
+        .confirm_boundary(boundary_evidence(), actor())
+        .unwrap();
+    project
+        .pin_acquisition(pinned_acquisition_evidence(), actor())
+        .unwrap();
+    let current_result = project
+        .pinned_evidence()
+        .unwrap()
+        .acquisition
+        .manifest
+        .result_sha256
+        .clone();
+    let transport = SequentialTransport::new(explicit_refresh_start_responses());
+    let requests = transport.requests.clone();
+    let client = AcquisitionClient::new(transport);
+    let coordinator = ProjectAcquisitionCoordinator::new(&client);
+
+    coordinator
+        .start_explicit_refresh(
+            &mut project,
+            "installation-42:project-7:explicit-refresh-2026-07",
+            actor(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        project.acquisition_checkpoint_purpose(),
+        FoundationAcquisitionCheckpointPurpose::ExplicitRefresh
+    );
+    assert_eq!(
+        project.acquisition_checkpoint().unwrap().bundle.id,
+        "bundle-v1-next"
+    );
+    assert_eq!(
+        project
+            .pinned_evidence()
+            .unwrap()
+            .acquisition
+            .manifest
+            .result_sha256,
+        current_result,
+        "starting a refresh must not replace current evidence before verified finalization"
+    );
+    let request = requests
+        .borrow()
+        .iter()
+        .find(|request| request.path.ends_with("/acquisition-jobs"))
+        .unwrap()
+        .body
+        .as_ref()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body).unwrap())
+        .unwrap();
+    assert_eq!(request["bundle_id"], "bundle-v1-next");
+    coordinator.pin_manifest(&mut project, actor()).unwrap();
+    assert_eq!(
+        coordinator
+            .download_next_chunk(&mut project, actor())
+            .unwrap(),
+        ProjectAcquisitionProgress::ChunkPersisted {
+            chunk_id: "observations-0001".into()
+        }
+    );
+    assert_eq!(
+        coordinator.finalize(&mut project, actor()).unwrap(),
+        ProjectAcquisitionProgress::EvidencePinned
+    );
+    assert_eq!(
+        project
+            .pinned_evidence()
+            .unwrap()
+            .acquisition
+            .manifest
+            .bundle
+            .id,
+        "bundle-v1-next"
+    );
+    assert_eq!(project.acquisition_refresh_history().len(), 1);
+    assert_eq!(
+        project.acquisition_checkpoint_purpose(),
+        FoundationAcquisitionCheckpointPurpose::Initial
+    );
     std::fs::remove_dir_all(directory).unwrap();
 }

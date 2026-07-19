@@ -1,6 +1,7 @@
 mod boundary_review;
 mod detailed_building_workspace;
 mod detailed_rule_stack;
+mod foundation_refresh;
 mod foundation_sources;
 mod foundation_workflow;
 mod project_session;
@@ -16,6 +17,11 @@ pub use detailed_building_workspace::{
     DetailedBuildingWorkspace, DetailedBuildingWorkspaceProjection, DetailedBuildingWorkspaceTask,
 };
 pub use detailed_rule_stack::{CompiledDetailedBuildingRules, DetailedBuildingRuleStack};
+pub use foundation_refresh::{
+    stable_observation_identity, BoundaryRefreshClassification, ChangedReviewDependencies,
+    CoverageRefreshDifference, FoundationSourceRefreshDifference, ObservationRefreshClassification,
+    ObservationRefreshDifference, ReviewDependencyBasis, ReviewSubjectDependencyBasis,
+};
 pub use foundation_sources::{
     normalize_candidate_confidence, FoundationReviewLedgerEntry, FoundationSourceProvider,
     FoundationSourceRegistry, FoundationSourceSnapshot, FoundationSourceStatus,

@@ -1,4 +1,8 @@
 use crate::{
+    foundation_refresh::{
+        compare_foundation_evidence, coverage_digest_for, geometry_digest,
+        observation_dependency_snapshot,
+    },
     validate_boundary_geometry, BoundaryCandidate, BoundaryCandidateAssessment,
     BoundaryCandidateValidity, BoundaryDiscoverySnapshot, BoundaryEvidenceDesk,
     BuildingBoundaryDecision, BuildingEntityDecision, BuildingEntityReviewLedger,
@@ -7,9 +11,10 @@ use crate::{
     FoundationBatchReview, FoundationCandidateDecision, FoundationCategory,
     FoundationCategoryProgress, FoundationReviewAction, FoundationReviewConflict,
     FoundationReviewOperation, FoundationReviewQueueProjection, FoundationReviewState,
-    KnownFeatureGap, KnownFeatureGapHistoryAction, KnownFeatureGapLocation, KnownFeatureGapStatus,
-    ProviderOutcomeStatus, ResultManifest, ReviewConflictResolution, ReviewedBuildingEntity,
-    SourceGeometry, SourceObservation,
+    FoundationSourceRefreshDifference, KnownFeatureGap, KnownFeatureGapHistoryAction,
+    KnownFeatureGapLocation, KnownFeatureGapStatus, ProviderOutcomeStatus, ResultManifest,
+    ReviewConflictResolution, ReviewDependencyBasis, ReviewedBuildingEntity, SourceGeometry,
+    SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -258,7 +263,7 @@ pub struct PinnedAcquisitionEvidence {
     pub observations: Vec<SourceObservation>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcquisitionRefreshRecord {
     pub previous_manifest: ResultManifest,
@@ -266,6 +271,10 @@ pub struct AcquisitionRefreshRecord {
     pub added_observation_ids: Vec<String>,
     pub retired_observation_ids: Vec<String>,
     pub composite_snapshot_identity: String,
+    #[serde(default)]
+    pub difference: Option<FoundationSourceRefreshDifference>,
+    #[serde(default)]
+    pub retained_previous_observations: Vec<SourceObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -317,6 +326,8 @@ pub struct FoundationReviewBasis {
     pub derivation_rules: String,
     #[serde(default)]
     pub building_review_sequence: u64,
+    #[serde(default)]
+    pub dependencies: ReviewDependencyBasis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -483,6 +494,8 @@ pub struct GeneratedFoundationOutput {
     pub height: usize,
     pub length: usize,
     pub non_air_blocks: usize,
+    #[serde(default)]
+    pub dependency_basis: ReviewDependencyBasis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -494,12 +507,22 @@ pub struct ExportedFoundationOutput {
     pub manifest_file_name: String,
     #[serde(default)]
     pub building_provenance: Vec<ReviewedBuildingEntity>,
+    #[serde(default)]
+    pub dependency_basis: ReviewDependencyBasis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingFoundationAcquisitionStart {
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FoundationAcquisitionCheckpointPurpose {
+    #[default]
+    Initial,
+    ExplicitRefresh,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -512,6 +535,8 @@ struct FoundationTracerState {
     pending_acquisition_start: Option<PendingFoundationAcquisitionStart>,
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
+    #[serde(default)]
+    acquisition_checkpoint_purpose: FoundationAcquisitionCheckpointPurpose,
     acquisition: Option<PinnedAcquisitionEvidence>,
     #[serde(default)]
     acquisition_snapshot_identity: String,
@@ -523,6 +548,10 @@ struct FoundationTracerState {
     generation_settings: FoundationGenerationSettings,
     generated: Option<GeneratedFoundationOutput>,
     exported: Option<ExportedFoundationOutput>,
+    #[serde(default)]
+    stale_generated: Vec<GeneratedFoundationOutput>,
+    #[serde(default)]
+    stale_exported: Vec<ExportedFoundationOutput>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -823,6 +852,10 @@ impl Schema2Project {
         self.foundation.acquisition_checkpoint.as_ref()
     }
 
+    pub fn acquisition_checkpoint_purpose(&self) -> FoundationAcquisitionCheckpointPurpose {
+        self.foundation.acquisition_checkpoint_purpose
+    }
+
     pub fn pending_acquisition_start(&self) -> Option<&PendingFoundationAcquisitionStart> {
         self.foundation.pending_acquisition_start.as_ref()
     }
@@ -947,6 +980,35 @@ impl Schema2Project {
             &provider_outcomes,
             &self.foundation.review_ledger.operations,
         );
+        for historical_outcomes in
+            self.foundation
+                .acquisition_refresh_history
+                .iter()
+                .map(|record| {
+                    record
+                        .previous_manifest
+                        .coverage_report
+                        .outcomes
+                        .iter()
+                        .filter(|outcome| outcome.category == category)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+        {
+            for historical_gap in crate::foundation_review::known_gaps_for_category(
+                category,
+                &basis,
+                &historical_outcomes,
+                &self.foundation.review_ledger.operations,
+            ) {
+                if !known_gaps
+                    .iter()
+                    .any(|existing| existing.id == historical_gap.id)
+                {
+                    known_gaps.push(historical_gap);
+                }
+            }
+        }
         if category == FoundationCategory::Building && !self.foundation.building_review.is_empty() {
             for entity in self
                 .foundation
@@ -1236,12 +1298,14 @@ impl Schema2Project {
         actor: InstallationId,
     ) -> Result<u64, String> {
         let queue = self.foundation_review_queue(category)?;
-        let gap = queue
+        let status = queue
             .known_gaps
             .iter()
             .find(|gap| gap.id == gap_id)
-            .ok_or("The Known Feature Gap is not linked to this pinned category evidence")?;
-        if gap.status == KnownFeatureGapStatus::Open {
+            .map(|gap| gap.status)
+            .or_else(|| self.known_feature_gap_status(category, gap_id))
+            .ok_or("The Known Feature Gap has no retained evidence-linked history")?;
+        if status == KnownFeatureGapStatus::Open {
             return Err("The Known Feature Gap is already open".into());
         }
         self.append_foundation_review_operation(
@@ -1253,6 +1317,165 @@ impl Schema2Project {
             },
             actor,
         )
+    }
+
+    pub fn resolve_feature_gap(
+        &mut self,
+        category: FoundationCategory,
+        gap_id: &str,
+        evidence_ids: Vec<String>,
+        actor: InstallationId,
+    ) -> Result<u64, String> {
+        if evidence_ids.is_empty()
+            || evidence_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != evidence_ids.len()
+        {
+            return Err(
+                "Known Feature Gap resolution requires a non-empty exact evidence set".into(),
+            );
+        }
+        let acquisition = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin refreshed evidence before resolving a Known Feature Gap")?;
+        if evidence_ids.iter().any(|evidence_id| {
+            !acquisition.observations.iter().any(|observation| {
+                observation.id == *evidence_id && observation.category == category
+            })
+        }) {
+            return Err(
+                "Known Feature Gap resolution evidence is not pinned in this category".into(),
+            );
+        }
+        let status = self
+            .known_feature_gap_status(category, gap_id)
+            .ok_or("The Known Feature Gap has no retained evidence-linked history")?;
+        if status == KnownFeatureGapStatus::Resolved {
+            return Err("The Known Feature Gap is already resolved".into());
+        }
+        let queue = self.foundation_review_queue(category)?;
+        self.append_foundation_review_operation(
+            category,
+            std::iter::once(gap_id.to_string())
+                .chain(evidence_ids.iter().cloned())
+                .collect(),
+            queue.basis,
+            FoundationReviewAction::GapResolved {
+                gap_id: gap_id.to_string(),
+                evidence_ids,
+            },
+            actor,
+        )
+    }
+
+    pub fn known_feature_gap_history(
+        &self,
+        category: FoundationCategory,
+        gap_id: &str,
+    ) -> Vec<KnownFeatureGapHistoryAction> {
+        let mut history = vec![KnownFeatureGapHistoryAction::Observed];
+        for operation in self
+            .foundation
+            .review_ledger
+            .operations
+            .iter()
+            .filter(|operation| operation.category == category)
+        {
+            match &operation.action {
+                FoundationReviewAction::GapAcknowledged {
+                    gap_id: operation_gap,
+                } if operation_gap == gap_id => {
+                    history.push(KnownFeatureGapHistoryAction::Acknowledged {
+                        sequence: operation.sequence,
+                    });
+                }
+                FoundationReviewAction::GapReopened {
+                    gap_id: operation_gap,
+                } if operation_gap == gap_id => {
+                    history.push(KnownFeatureGapHistoryAction::Reopened {
+                        sequence: operation.sequence,
+                    });
+                }
+                FoundationReviewAction::GapResolved {
+                    gap_id: operation_gap,
+                    evidence_ids,
+                } if operation_gap == gap_id => {
+                    history.push(KnownFeatureGapHistoryAction::Resolved {
+                        sequence: operation.sequence,
+                        evidence_ids: evidence_ids.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        history
+    }
+
+    fn known_feature_gap_status(
+        &self,
+        category: FoundationCategory,
+        gap_id: &str,
+    ) -> Option<KnownFeatureGapStatus> {
+        let observed = self
+            .foundation
+            .acquisition
+            .iter()
+            .flat_map(|acquisition| &acquisition.manifest.coverage_report.outcomes)
+            .chain(
+                self.foundation
+                    .acquisition_refresh_history
+                    .iter()
+                    .flat_map(|record| &record.previous_manifest.coverage_report.outcomes),
+            )
+            .filter(|outcome| outcome.category == category)
+            .any(|outcome| {
+                let reason_count = if outcome.gaps.is_empty()
+                    && !matches!(
+                        outcome.status,
+                        ProviderOutcomeStatus::Complete | ProviderOutcomeStatus::CompleteEmpty
+                    ) {
+                    1
+                } else {
+                    outcome.gaps.len()
+                };
+                (0..reason_count)
+                    .any(|index| crate::foundation_review::gap_id(outcome, index) == gap_id)
+            })
+            || self
+                .foundation
+                .review_ledger
+                .operations
+                .iter()
+                .any(|operation| {
+                    operation.category == category
+                        && matches!(
+                            &operation.action,
+                            FoundationReviewAction::GapAcknowledged { gap_id: operation_gap }
+                                | FoundationReviewAction::GapReopened { gap_id: operation_gap }
+                                | FoundationReviewAction::GapResolved {
+                                    gap_id: operation_gap,
+                                    ..
+                                } if operation_gap == gap_id
+                        )
+                });
+        observed.then(|| {
+            self.known_feature_gap_history(category, gap_id)
+                .iter()
+                .fold(KnownFeatureGapStatus::Open, |_, action| match action {
+                    KnownFeatureGapHistoryAction::Acknowledged { .. } => {
+                        KnownFeatureGapStatus::Acknowledged
+                    }
+                    KnownFeatureGapHistoryAction::Resolved { .. } => {
+                        KnownFeatureGapStatus::Resolved
+                    }
+                    KnownFeatureGapHistoryAction::Observed
+                    | KnownFeatureGapHistoryAction::Reopened { .. } => KnownFeatureGapStatus::Open,
+                })
+        })
     }
 
     pub fn declare_foundation_review_conflict(
@@ -1540,6 +1763,23 @@ impl Schema2Project {
         self.foundation.exported.as_ref()
     }
 
+    pub fn stale_generated_outputs(&self) -> &[GeneratedFoundationOutput] {
+        &self.foundation.stale_generated
+    }
+
+    pub fn stale_exported_outputs(&self) -> &[ExportedFoundationOutput] {
+        &self.foundation.stale_exported
+    }
+
+    pub fn withdrawn_refresh_evidence(&self, stable_identity: &str) -> Option<&SourceObservation> {
+        self.foundation
+            .acquisition_refresh_history
+            .iter()
+            .rev()
+            .flat_map(|record| record.retained_previous_observations.iter())
+            .find(|observation| crate::stable_observation_identity(observation) == stable_identity)
+    }
+
     pub fn resume_point(&self) -> FoundationResumePoint {
         if self.foundation.boundary.is_none() {
             return FoundationResumePoint::BoundaryReview;
@@ -1616,6 +1856,8 @@ impl Schema2Project {
         self.foundation.boundary = Some(evidence);
         self.foundation.pending_acquisition_start = None;
         self.foundation.acquisition_checkpoint = None;
+        self.foundation.acquisition_checkpoint_purpose =
+            FoundationAcquisitionCheckpointPurpose::Initial;
         self.foundation.acquisition = None;
         self.foundation.generated = None;
         self.foundation.exported = None;
@@ -1638,12 +1880,24 @@ impl Schema2Project {
             .as_ref()
             .ok_or("Confirm a Campus Boundary before starting Foundation acquisition")?;
         checkpoint.validate()?;
-        if checkpoint.bundle != boundary.manifest.bundle
-            || checkpoint.boundary_revision != boundary.manifest.result_sha256
+        let refresh = self.foundation.acquisition_checkpoint_purpose
+            == FoundationAcquisitionCheckpointPurpose::ExplicitRefresh;
+        if checkpoint.boundary_revision != boundary.manifest.result_sha256
+            || (!refresh && checkpoint.bundle != boundary.manifest.bundle)
+            || (refresh
+                && self
+                    .foundation
+                    .acquisition
+                    .as_ref()
+                    .is_some_and(|current| current.manifest.bundle == checkpoint.bundle))
         {
             return Err(
-                "Foundation acquisition must reuse the confirmed Boundary Discovery Snapshot"
-                    .into(),
+                if refresh {
+                    "Explicit Foundation refresh must keep the confirmed boundary and pin a new Dataset Bundle"
+                } else {
+                    "Foundation acquisition must reuse the confirmed Boundary Discovery Snapshot"
+                }
+                .into(),
             );
         }
         if let Some(previous) = &self.foundation.acquisition_checkpoint {
@@ -1699,6 +1953,38 @@ impl Schema2Project {
             self.workflow.generation = DurableTaskState::Pending;
             self.workflow.export = DurableTaskState::Pending;
         }
+        Ok(())
+    }
+
+    pub fn record_explicit_refresh_checkpoint(
+        &mut self,
+        checkpoint: FoundationAcquisitionCheckpoint,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .ok_or("Confirm a Campus Boundary before requesting a Foundation refresh")?;
+        let current = self
+            .foundation
+            .acquisition
+            .as_ref()
+            .ok_or("Pin the initial Foundation acquisition before requesting a refresh")?;
+        checkpoint.validate()?;
+        if checkpoint.boundary_revision != boundary.manifest.result_sha256
+            || checkpoint.bundle == current.manifest.bundle
+        {
+            return Err(
+                "Explicit Foundation refresh must keep the confirmed boundary and pin a new Dataset Bundle"
+                    .into(),
+            );
+        }
+        self.mark_updated(actor)?;
+        self.foundation.pending_acquisition_start = None;
+        self.foundation.acquisition_checkpoint = Some(checkpoint);
+        self.foundation.acquisition_checkpoint_purpose =
+            FoundationAcquisitionCheckpointPurpose::ExplicitRefresh;
         Ok(())
     }
 
@@ -1788,6 +2074,8 @@ impl Schema2Project {
                 added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
                 retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
                 composite_snapshot_identity,
+                difference: None,
+                retained_previous_observations: Vec::new(),
             });
             if !building_review.is_empty() {
                 building_review.refresh_from_observations_with_mappings(
@@ -1812,6 +2100,233 @@ impl Schema2Project {
         self.workflow.generation = DurableTaskState::Pending;
         self.workflow.export = DurableTaskState::Pending;
         Ok(())
+    }
+
+    pub fn apply_foundation_refresh(
+        &mut self,
+        evidence: PinnedAcquisitionEvidence,
+        refreshed_boundary: Option<PinnedBoundaryEvidence>,
+        actor: InstallationId,
+    ) -> Result<FoundationSourceRefreshDifference, String> {
+        let previous = self
+            .foundation
+            .acquisition
+            .clone()
+            .ok_or("Pin the initial Foundation acquisition before requesting a refresh")?;
+        let previous_boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .and_then(PinnedBoundaryEvidence::confirmed_geometry)
+            .cloned()
+            .ok_or("Confirmed Campus Boundary evidence is missing")?;
+        let next_boundary = refreshed_boundary
+            .as_ref()
+            .and_then(PinnedBoundaryEvidence::confirmed_geometry)
+            .cloned()
+            .unwrap_or_else(|| previous_boundary.clone());
+        if evidence.manifest.bundle.id.trim().is_empty()
+            || evidence.manifest.bundle.id == previous.manifest.bundle.id
+            || evidence.manifest.result_sha256.trim().is_empty()
+            || !FoundationCategory::ALL.into_iter().all(|category| {
+                evidence
+                    .manifest
+                    .coverage_report
+                    .outcomes
+                    .iter()
+                    .any(|outcome| outcome.category == category)
+            })
+        {
+            return Err(
+                "An explicit Foundation refresh requires a complete, newly pinned Dataset Bundle"
+                    .into(),
+            );
+        }
+        if !matches!(
+            next_boundary,
+            SourceGeometry::Polygon(_) | SourceGeometry::MultiPolygon(_)
+        ) || !validate_boundary_geometry(&next_boundary).valid
+        {
+            return Err("Refreshed Campus Boundary evidence is invalid".into());
+        }
+        let duplicate_stable_identity = evidence
+            .observations
+            .iter()
+            .map(crate::stable_observation_identity)
+            .collect::<Vec<_>>();
+        if duplicate_stable_identity
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != duplicate_stable_identity.len()
+        {
+            return Err(
+                "A refreshed Dataset Bundle contains duplicate stable observation identities"
+                    .into(),
+            );
+        }
+
+        let difference =
+            compare_foundation_evidence(&previous, &evidence, &previous_boundary, &next_boundary);
+        let old_basis = self.review_basis()?;
+        let old_operations = self.foundation.review_ledger.operations.clone();
+        let old_entries = self.foundation.review_ledger.entries.clone();
+        let previous_by_id = previous
+            .observations
+            .iter()
+            .map(|observation| {
+                (
+                    observation.id.clone(),
+                    crate::stable_observation_identity(observation),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let current_id_by_stable = evidence
+            .observations
+            .iter()
+            .map(|observation| {
+                (
+                    crate::stable_observation_identity(observation),
+                    observation.id.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let incoming_manifest = evidence.manifest.clone();
+        let incoming_ids = evidence
+            .observations
+            .iter()
+            .map(|observation| observation.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let previous_ids = previous
+            .observations
+            .iter()
+            .map(|observation| observation.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let mut building_review = self.foundation.building_review.clone();
+        if !building_review.is_empty() {
+            building_review.refresh_from_observations(&evidence.observations)?;
+        }
+        if let Some(boundary) = refreshed_boundary {
+            self.foundation.boundary = Some(boundary);
+        }
+        self.foundation.acquisition = Some(evidence);
+        self.foundation.acquisition_snapshot_identity = incoming_manifest.result_sha256.clone();
+        self.foundation.building_review = building_review;
+        let new_basis = self.review_basis()?;
+
+        let rules_changed = previous.manifest.bundle.classification_rules
+            != incoming_manifest.bundle.classification_rules
+            || previous.manifest.bundle.assembly_rules != incoming_manifest.bundle.assembly_rules
+            || previous.manifest.bundle.conflation_rules
+                != incoming_manifest.bundle.conflation_rules
+            || previous.manifest.bundle.derivation_rules
+                != incoming_manifest.bundle.derivation_rules;
+        let mut carried_sequence = BTreeMap::<u64, u64>::new();
+        for category in FoundationCategory::ALL {
+            let category_changes = difference.dependency_changes_for(category);
+            for operation in old_operations
+                .iter()
+                .filter(|operation| operation.category == category && operation.basis == old_basis)
+            {
+                if refresh_invalidates_operation(
+                    operation,
+                    &category_changes,
+                    rules_changed,
+                    &previous_by_id,
+                    &difference,
+                ) {
+                    continue;
+                }
+                let mut carried = operation.clone();
+                remap_review_operation(&mut carried, &previous_by_id, &current_id_by_stable)?;
+                let source_sequence = operation.sequence;
+                carried.sequence = self.foundation.review_ledger.current_sequence() + 1;
+                carried.basis = new_basis.clone();
+                carried.carried_from_sequence = Some(source_sequence);
+                carried.explanation = Some(match &operation.explanation {
+                    Some(explanation) => {
+                        format!("Carried forward after unchanged dependencies: {explanation}")
+                    }
+                    None => "Carried forward after unchanged dependencies".into(),
+                });
+                carried_sequence.insert(source_sequence, carried.sequence);
+                self.foundation.review_ledger.operations.push(carried);
+            }
+            let category_changed = category_changes.any() || rules_changed;
+            if !category_changed {
+                if let Some(entry) = old_entries.iter().rev().find(|entry| {
+                    entry.category == category
+                        && entry.basis == old_basis
+                        && self
+                            .foundation
+                            .review_ledger
+                            .disposition_for_basis(category, &old_basis)
+                            .is_some()
+                }) {
+                    if let Some(operation_sequence) =
+                        carried_sequence.get(&entry.operation_sequence).copied()
+                    {
+                        let mut carried = entry.clone();
+                        carried.sequence = self.foundation.review_ledger.entries.len() as u64 + 1;
+                        carried.basis = new_basis.clone();
+                        carried.operation_sequence = operation_sequence;
+                        remap_review_entry(&mut carried, &previous_by_id, &current_id_by_stable)?;
+                        self.foundation.review_ledger.entries.push(carried);
+                    }
+                }
+            }
+        }
+
+        let changed_categories = difference.changed_categories();
+        let output_dependencies_changed = !changed_categories.is_empty()
+            || rules_changed
+            || difference.boundary != crate::BoundaryRefreshClassification::Unchanged;
+        if output_dependencies_changed {
+            if let Some(generated) = self.foundation.generated.take() {
+                self.foundation.stale_generated.push(generated);
+            }
+            if let Some(exported) = self.foundation.exported.take() {
+                self.foundation.stale_exported.push(exported);
+            }
+        }
+        self.mark_updated(actor)?;
+        self.foundation
+            .acquisition_refresh_history
+            .push(AcquisitionRefreshRecord {
+                previous_manifest: previous.manifest,
+                incoming_manifest,
+                added_observation_ids: incoming_ids.difference(&previous_ids).cloned().collect(),
+                retired_observation_ids: previous_ids.difference(&incoming_ids).cloned().collect(),
+                composite_snapshot_identity: self.foundation.acquisition_snapshot_identity.clone(),
+                difference: Some(difference.clone()),
+                retained_previous_observations: previous.observations,
+            });
+        self.foundation.pending_acquisition_start = None;
+        self.foundation.acquisition_checkpoint = None;
+        self.foundation.acquisition_checkpoint_purpose =
+            FoundationAcquisitionCheckpointPurpose::Initial;
+        self.workflow.acquisition = DurableTaskState::Confirmed;
+        self.workflow.review = if self
+            .foundation
+            .review_ledger
+            .is_complete_for_basis(&new_basis)
+        {
+            DurableTaskState::Confirmed
+        } else {
+            DurableTaskState::Pending
+        };
+        self.workflow.generation = if self.foundation.generated.is_some() {
+            DurableTaskState::Confirmed
+        } else {
+            DurableTaskState::Pending
+        };
+        self.workflow.export = if self.foundation.exported.is_some() {
+            DurableTaskState::Confirmed
+        } else {
+            DurableTaskState::Pending
+        };
+        Ok(difference)
     }
 
     pub fn initialize_building_entity_review(
@@ -1968,6 +2483,7 @@ impl Schema2Project {
                     "Atomic exact-set Building Entity batch covering {} selected observation(s) and ending at entity ledger sequence {sequence}",
                     subject_ids.len()
                 )),
+                carried_from_sequence: None,
                 recorded_at_unix_ms: now_unix_ms(),
             });
         self.foundation.generated = None;
@@ -2085,6 +2601,7 @@ impl Schema2Project {
                 before: std::mem::take(&mut before),
                 after,
                 explanation,
+                carried_from_sequence: None,
                 recorded_at_unix_ms: now_unix_ms(),
             });
         Ok(sequence)
@@ -2464,6 +2981,35 @@ impl Schema2Project {
             .acquisition
             .as_ref()
             .ok_or("Pinned Foundation acquisition evidence is missing")?;
+        let boundary_geometry = boundary
+            .confirmed_geometry()
+            .ok_or("Confirmed Campus Boundary geometry is missing")?;
+        let subjects = acquisition
+            .observations
+            .iter()
+            .map(|observation| {
+                let subject = observation_dependency_snapshot(observation).basis;
+                (subject.stable_identity.clone(), subject)
+            })
+            .collect();
+        let coverage_digest = FoundationCategory::ALL
+            .into_iter()
+            .map(|category| {
+                format!(
+                    "{category:?}={}",
+                    coverage_digest_for(&acquisition.manifest.coverage_report.outcomes, category)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        let dependencies = ReviewDependencyBasis {
+            boundary_digest: geometry_digest(boundary_geometry),
+            coverage_digest,
+            classification_rules: acquisition.manifest.bundle.classification_rules.clone(),
+            conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
+            derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
+            subjects,
+        };
         Ok(FoundationReviewBasis {
             boundary_result_sha256: boundary.manifest.result_sha256.clone(),
             selected_boundary_id: boundary.selected_candidate_id.clone(),
@@ -2481,6 +3027,7 @@ impl Schema2Project {
             conflation_rules: acquisition.manifest.bundle.conflation_rules.clone(),
             derivation_rules: acquisition.manifest.bundle.derivation_rules.clone(),
             building_review_sequence: self.foundation.building_review.entries().len() as u64,
+            dependencies,
         })
     }
 
@@ -2493,6 +3040,7 @@ impl Schema2Project {
         actor: InstallationId,
     ) -> Result<(), String> {
         self.reviewed_projection()?;
+        let dependency_basis = self.review_basis()?.dependencies;
         if width == 0 || height == 0 || length == 0 || non_air_blocks == 0 {
             return Err("Generated Foundation output must be non-empty".into());
         }
@@ -2504,6 +3052,7 @@ impl Schema2Project {
             height,
             length,
             non_air_blocks,
+            dependency_basis,
         });
         self.foundation.exported = None;
         self.workflow.generation = DurableTaskState::Confirmed;
@@ -2517,13 +3066,19 @@ impl Schema2Project {
         schematic_bytes: u64,
         manifest_file_name: String,
     ) -> Result<(), String> {
-        let building_provenance = self.reviewed_projection()?.building_entities;
+        let building_provenance = self
+            .reviewed_projection()
+            .map_err(|error| format!("Generate from the current reviewed projection: {error}"))?
+            .building_entities;
+        let dependency_basis = self.review_basis()?.dependencies;
         let generated = self
             .foundation
             .generated
             .as_ref()
             .ok_or("Generate the current reviewed projection before export")?;
-        if generated.project_revision != self.workflow.project_revision
+        if !generated
+            .dependency_basis
+            .content_equivalent(&dependency_basis)
             || schematic_sha256.trim().is_empty()
             || schematic_bytes == 0
             || manifest_file_name.trim().is_empty()
@@ -2536,6 +3091,7 @@ impl Schema2Project {
             schematic_bytes,
             manifest_file_name,
             building_provenance,
+            dependency_basis,
         });
         self.workflow.export = DurableTaskState::Confirmed;
         Ok(())
@@ -2757,6 +3313,242 @@ fn apply_foundation_review_action_to_state(
     }
 }
 
+fn refresh_invalidates_operation(
+    operation: &FoundationReviewOperation,
+    category_changes: &crate::ChangedReviewDependencies,
+    rules_changed: bool,
+    previous_by_id: &BTreeMap<String, String>,
+    difference: &FoundationSourceRefreshDifference,
+) -> bool {
+    if matches!(operation.action, FoundationReviewAction::CategoryCompleted) {
+        return category_changes.any() || rules_changed;
+    }
+    if matches!(
+        operation.action,
+        FoundationReviewAction::GapAcknowledged { .. }
+            | FoundationReviewAction::GapReopened { .. }
+            | FoundationReviewAction::GapResolved { .. }
+    ) {
+        return category_changes.coverage;
+    }
+    if rules_changed {
+        return true;
+    }
+    let mut evidence_ids = operation.subjects.clone();
+    match &operation.action {
+        FoundationReviewAction::Candidate { subject_id, .. }
+        | FoundationReviewAction::Revoke { subject_id } => {
+            evidence_ids.push(subject_id.clone());
+        }
+        FoundationReviewAction::ConflictDeclared { conflict } => {
+            evidence_ids.extend(conflict.subject_ids.iter().cloned());
+        }
+        FoundationReviewAction::ConflictResolved { resolution, .. } => match resolution {
+            ReviewConflictResolution::KeepSeparate => {}
+            ReviewConflictResolution::Grouping {
+                primary_subject_id,
+                supporting_subject_ids,
+                ..
+            } => {
+                evidence_ids.push(primary_subject_id.clone());
+                evidence_ids.extend(supporting_subject_ids.iter().cloned());
+            }
+            ReviewConflictResolution::Containment {
+                container_id,
+                member_id,
+                ..
+            } => {
+                evidence_ids.push(container_id.clone());
+                evidence_ids.push(member_id.clone());
+            }
+            ReviewConflictResolution::Naming {
+                subject_id,
+                evidence_ids: name_evidence,
+                ..
+            } => {
+                evidence_ids.push(subject_id.clone());
+                evidence_ids.extend(name_evidence.iter().cloned());
+            }
+            ReviewConflictResolution::GeometryRepair { subject_id, .. }
+            | ReviewConflictResolution::Attribute { subject_id, .. } => {
+                evidence_ids.push(subject_id.clone());
+            }
+        },
+        FoundationReviewAction::GapResolved {
+            evidence_ids: resolution_evidence,
+            ..
+        } => evidence_ids.extend(resolution_evidence.iter().cloned()),
+        _ => {}
+    }
+    evidence_ids
+        .iter()
+        .filter_map(|id| previous_by_id.get(id))
+        .any(|stable_identity| {
+            difference.observations.iter().any(|change| {
+                change.stable_identity == *stable_identity
+                    && matches!(
+                        change.classification,
+                        crate::ObservationRefreshClassification::Added
+                            | crate::ObservationRefreshClassification::Changed
+                            | crate::ObservationRefreshClassification::Withdrawn
+                    )
+            })
+        })
+}
+
+fn remap_review_entry(
+    entry: &mut FoundationReviewEntry,
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    remap_ids(&mut entry.subjects, previous_by_id, current_id_by_stable)?;
+    remap_disposition(&mut entry.after, previous_by_id, current_id_by_stable)?;
+    if let Some(before) = &mut entry.before {
+        remap_disposition(before, previous_by_id, current_id_by_stable)?;
+    }
+    Ok(())
+}
+
+fn remap_review_operation(
+    operation: &mut FoundationReviewOperation,
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    remap_ids(
+        &mut operation.subjects,
+        previous_by_id,
+        current_id_by_stable,
+    )?;
+    match &mut operation.action {
+        FoundationReviewAction::Candidate {
+            subject_id,
+            decision,
+        } => {
+            remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+            if let FoundationCandidateDecision::SupportingEvidence { primary_subject_id } = decision
+            {
+                remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
+            }
+        }
+        FoundationReviewAction::Revoke { subject_id } => {
+            remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+        }
+        FoundationReviewAction::ConflictDeclared { conflict } => {
+            remap_ids(
+                &mut conflict.subject_ids,
+                previous_by_id,
+                current_id_by_stable,
+            )?;
+        }
+        FoundationReviewAction::ConflictResolved { resolution, .. } => match resolution {
+            ReviewConflictResolution::KeepSeparate => {}
+            ReviewConflictResolution::Grouping {
+                primary_subject_id,
+                supporting_subject_ids,
+                ..
+            } => {
+                remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
+                remap_ids(supporting_subject_ids, previous_by_id, current_id_by_stable)?;
+            }
+            ReviewConflictResolution::Containment {
+                container_id,
+                member_id,
+                ..
+            } => {
+                remap_id(container_id, previous_by_id, current_id_by_stable)?;
+                remap_id(member_id, previous_by_id, current_id_by_stable)?;
+            }
+            ReviewConflictResolution::Naming {
+                subject_id,
+                evidence_ids,
+                ..
+            } => {
+                remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+                remap_ids(evidence_ids, previous_by_id, current_id_by_stable)?;
+            }
+            ReviewConflictResolution::GeometryRepair { subject_id, .. }
+            | ReviewConflictResolution::Attribute { subject_id, .. } => {
+                remap_id(subject_id, previous_by_id, current_id_by_stable)?;
+            }
+        },
+        FoundationReviewAction::GapResolved { evidence_ids, .. } => {
+            remap_ids(evidence_ids, previous_by_id, current_id_by_stable)?;
+        }
+        _ => {}
+    }
+    remap_review_state(&mut operation.before, previous_by_id, current_id_by_stable)?;
+    remap_review_state(&mut operation.after, previous_by_id, current_id_by_stable)?;
+    Ok(())
+}
+
+fn remap_review_state(
+    state: &mut FoundationReviewState,
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut remapped = BTreeMap::new();
+    for (mut subject_id, mut disposition) in std::mem::take(&mut state.candidate_dispositions) {
+        remap_id(&mut subject_id, previous_by_id, current_id_by_stable)?;
+        if let CandidateReviewDisposition::SupportingEvidence { primary_subject_id } =
+            &mut disposition
+        {
+            remap_id(primary_subject_id, previous_by_id, current_id_by_stable)?;
+        }
+        remapped.insert(subject_id, disposition);
+    }
+    state.candidate_dispositions = remapped;
+    Ok(())
+}
+
+fn remap_disposition(
+    disposition: &mut FoundationReviewDisposition,
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    match disposition {
+        FoundationReviewDisposition::SelectedEvidence { evidence_ids } => {
+            remap_ids(evidence_ids, previous_by_id, current_id_by_stable)
+        }
+        FoundationReviewDisposition::ReviewedQueue {
+            accepted_evidence_ids,
+            rejected_evidence_ids,
+            deferred_evidence_ids,
+            ..
+        } => {
+            remap_ids(accepted_evidence_ids, previous_by_id, current_id_by_stable)?;
+            remap_ids(rejected_evidence_ids, previous_by_id, current_id_by_stable)?;
+            remap_ids(deferred_evidence_ids, previous_by_id, current_id_by_stable)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn remap_ids(
+    ids: &mut [String],
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    for id in ids {
+        remap_id(id, previous_by_id, current_id_by_stable)?;
+    }
+    Ok(())
+}
+
+fn remap_id(
+    id: &mut String,
+    previous_by_id: &BTreeMap<String, String>,
+    current_id_by_stable: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let Some(stable_identity) = previous_by_id.get(id) else {
+        return Ok(());
+    };
+    let current_id = current_id_by_stable.get(stable_identity).ok_or_else(|| {
+        format!("Cannot carry a review decision for withdrawn evidence {stable_identity}")
+    })?;
+    *id = current_id.clone();
+    Ok(())
+}
+
 fn apply_building_queue_decision(
     review: &mut BuildingEntityReviewLedger,
     observations: &[SourceObservation],
@@ -2829,7 +3621,7 @@ fn foundation_gap_acknowledged(
 
 fn foundation_gap_history(
     category: FoundationCategory,
-    basis: &FoundationReviewBasis,
+    _basis: &FoundationReviewBasis,
     gap_id: &str,
     operations: &[FoundationReviewOperation],
 ) -> (KnownFeatureGapStatus, Vec<KnownFeatureGapHistoryAction>) {
@@ -2837,7 +3629,7 @@ fn foundation_gap_history(
     let mut history = vec![KnownFeatureGapHistoryAction::Observed];
     for operation in operations
         .iter()
-        .filter(|operation| operation.category == category && operation.basis == *basis)
+        .filter(|operation| operation.category == category)
     {
         match &operation.action {
             FoundationReviewAction::GapAcknowledged {

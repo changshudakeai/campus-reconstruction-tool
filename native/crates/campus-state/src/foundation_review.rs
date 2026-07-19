@@ -173,6 +173,8 @@ pub struct FoundationReviewOperation {
     pub after: FoundationReviewState,
     #[serde(default)]
     pub explanation: Option<String>,
+    #[serde(default)]
+    pub carried_from_sequence: Option<u64>,
     pub recorded_at_unix_ms: u64,
 }
 
@@ -578,13 +580,13 @@ pub(crate) fn project_queue_item(
 
 pub(crate) fn known_gaps_for_category(
     category: FoundationCategory,
-    basis: &FoundationReviewBasis,
+    _basis: &FoundationReviewBasis,
     outcomes: &[ProviderOutcome],
     operations: &[FoundationReviewOperation],
 ) -> Vec<KnownFeatureGap> {
     let gap_history = operations
         .iter()
-        .filter(|operation| operation.category == category && operation.basis == *basis)
+        .filter(|operation| operation.category == category)
         .fold(
             BTreeMap::<String, Vec<KnownFeatureGapHistoryAction>>::new(),
             |mut state, operation| {
