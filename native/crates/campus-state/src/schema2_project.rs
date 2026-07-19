@@ -456,12 +456,20 @@ pub struct ExportedFoundationOutput {
     pub building_provenance: Vec<ReviewedBuildingEntity>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingFoundationAcquisitionStart {
+    pub idempotency_key: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct FoundationTracerState {
     #[serde(default)]
     boundary_review: Option<BoundaryEvidenceDesk>,
     boundary: Option<PinnedBoundaryEvidence>,
+    #[serde(default)]
+    pending_acquisition_start: Option<PendingFoundationAcquisitionStart>,
     #[serde(default)]
     acquisition_checkpoint: Option<FoundationAcquisitionCheckpoint>,
     acquisition: Option<PinnedAcquisitionEvidence>,
@@ -721,6 +729,30 @@ impl Schema2Project {
         Ok(())
     }
 
+    pub fn begin_unavailable_boundary_review(
+        &mut self,
+        explanation: impl Into<String>,
+        suggested_action: impl Into<String>,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let desk = BoundaryEvidenceDesk::unavailable(explanation, suggested_action);
+        self.mark_updated(actor)?;
+        self.foundation.boundary_review = Some(desk);
+        Ok(())
+    }
+
+    pub fn return_to_campus_target_from_boundary_review(
+        &mut self,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        if self.foundation.boundary_review.is_none() {
+            return Ok(());
+        }
+        self.mark_updated(actor)?;
+        self.foundation.boundary_review = None;
+        Ok(())
+    }
+
     pub fn edit_boundary_review<T>(
         &mut self,
         actor: InstallationId,
@@ -749,6 +781,26 @@ impl Schema2Project {
 
     pub fn acquisition_checkpoint(&self) -> Option<&FoundationAcquisitionCheckpoint> {
         self.foundation.acquisition_checkpoint.as_ref()
+    }
+
+    pub fn pending_acquisition_start(&self) -> Option<&PendingFoundationAcquisitionStart> {
+        self.foundation.pending_acquisition_start.as_ref()
+    }
+
+    pub fn confirm_boundary_and_queue_acquisition(
+        &mut self,
+        evidence: PinnedBoundaryEvidence,
+        idempotency_key: impl Into<String>,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let idempotency_key = idempotency_key.into();
+        if idempotency_key.trim().is_empty() {
+            return Err("Foundation acquisition requires a stable idempotency key".into());
+        }
+        self.confirm_boundary(evidence, actor)?;
+        self.foundation.pending_acquisition_start =
+            Some(PendingFoundationAcquisitionStart { idempotency_key });
+        Ok(())
     }
 
     pub fn foundation_review(&self) -> &FoundationReviewLedger {
@@ -853,6 +905,7 @@ impl Schema2Project {
         self.mark_updated(actor)?;
         self.foundation.boundary_review = None;
         self.foundation.boundary = Some(evidence);
+        self.foundation.pending_acquisition_start = None;
         self.foundation.acquisition_checkpoint = None;
         self.foundation.acquisition = None;
         self.foundation.generated = None;
@@ -927,6 +980,7 @@ impl Schema2Project {
             }
         }
         self.mark_updated(actor)?;
+        self.foundation.pending_acquisition_start = None;
         self.foundation.acquisition_checkpoint = Some(checkpoint);
         if self.foundation.acquisition.is_none() {
             self.foundation.generated = None;

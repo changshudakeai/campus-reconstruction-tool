@@ -4,7 +4,7 @@ use crate::acquisition::{
 };
 use campus_state::{
     AcquisitionRequestIdentity, FoundationAcquisitionCheckpoint, InstallationId,
-    PinnedAcquisitionEvidence, PinnedBoundaryEvidence, Schema2Project,
+    PinnedAcquisitionEvidence, Schema2Project,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -87,18 +87,17 @@ impl<'a, T: AcquisitionTransport> ProjectAcquisitionCoordinator<'a, T> {
         Ok(ProjectAcquisitionProgress::Started)
     }
 
-    pub fn confirm_boundary_and_start(
+    pub fn start_queued_boundary_acquisition(
         &self,
         project: &mut Schema2Project,
-        evidence: PinnedBoundaryEvidence,
-        idempotency_key: &str,
         actor: InstallationId,
     ) -> Result<ProjectAcquisitionProgress, String> {
-        let mut next = project.clone();
-        next.confirm_boundary(evidence, actor.clone())?;
-        let progress = self.start_after_boundary_confirmation(&mut next, idempotency_key, actor)?;
-        *project = next;
-        Ok(progress)
+        let idempotency_key = project
+            .pending_acquisition_start()
+            .ok_or("Persist a pending Foundation acquisition start before contacting the service")?
+            .idempotency_key
+            .clone();
+        self.start_after_boundary_confirmation(project, &idempotency_key, actor)
     }
 
     pub fn reconnect(

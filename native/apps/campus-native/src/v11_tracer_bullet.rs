@@ -4,6 +4,10 @@ use campus_export::{
     VoxelModel,
 };
 #[cfg(debug_assertions)]
+use campus_services::acquisition::project_acquisition::{
+    ProjectAcquisitionCoordinator, ProjectAcquisitionProgress,
+};
+#[cfg(debug_assertions)]
 use campus_services::acquisition::{
     AcquisitionClient, AcquisitionTransport, VerifiedBoundaryDiscoverySnapshot,
 };
@@ -17,12 +21,23 @@ use campus_state::{
     V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
+use campus_tool_protocol::{
+    read_message, write_message, MapBoundaryDesk, MapBoundaryDeskRequest,
+    MapBoundaryHandleSelection, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+};
+#[cfg(all(debug_assertions, target_os = "windows"))]
+use rand::Rng;
+#[cfg(debug_assertions)]
 use serde::de::DeserializeOwned;
 #[cfg(debug_assertions)]
 use serde::Serialize;
 #[cfg(debug_assertions)]
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+#[cfg(all(debug_assertions, target_os = "windows"))]
+use std::process::Command;
+#[cfg(all(debug_assertions, target_os = "windows"))]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 #[cfg(debug_assertions)]
 pub struct FixedDatasetTracer<'a, T> {
@@ -45,6 +60,51 @@ pub struct FixedDatasetTracerRequest {
     pub project_name: String,
     pub boundary_job_id: String,
     pub acquisition_job_id: String,
+}
+
+#[cfg(debug_assertions)]
+pub struct BoundaryDeskMapOptions {
+    pub js_api_key: String,
+    pub security_code: String,
+    pub zoom: f64,
+    pub pitch: f64,
+    pub rotation: f64,
+    pub english: bool,
+}
+
+#[cfg(debug_assertions)]
+trait BoundaryToolSessionTransport {
+    fn receive_event(&mut self) -> Result<ToolEvent, String>;
+    fn send_command(&mut self, command: ToolCommand) -> Result<(), String>;
+}
+
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct BoundaryToolInteraction {
+    candidate_id: Option<String>,
+    adjustment_enabled: bool,
+    selected_handle: Option<MapBoundaryHandleSelection>,
+}
+
+#[cfg(all(debug_assertions, target_os = "windows"))]
+struct BoundaryNamedPipeTransport {
+    runtime: tokio::runtime::Runtime,
+    server: NamedPipeServer,
+}
+
+#[cfg(all(debug_assertions, target_os = "windows"))]
+impl BoundaryToolSessionTransport for BoundaryNamedPipeTransport {
+    fn receive_event(&mut self) -> Result<ToolEvent, String> {
+        let runtime = &self.runtime;
+        let server = &mut self.server;
+        runtime.block_on(read_message(server))
+    }
+
+    fn send_command(&mut self, command: ToolCommand) -> Result<(), String> {
+        let runtime = &self.runtime;
+        let server = &mut self.server;
+        runtime.block_on(write_message(server, &command))
+    }
 }
 
 #[derive(Debug)]
@@ -90,23 +150,359 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             .map_err(|error| error.to_string())
     }
 
-    pub fn select_boundary(
+    pub fn open_boundary_review(&self) -> Result<MapBoundaryDesk, String> {
+        let project = self.open_library()?.open_project(&self.project_id)?;
+        if let Some(review) = project.boundary_review() {
+            return Ok(super::v11_boundary_evidence_desk::map_boundary_desk(review));
+        }
+        self.refresh_boundary_review()
+    }
+
+    fn refresh_boundary_review(&self) -> Result<MapBoundaryDesk, String> {
+        match self.boundary_candidates() {
+            Ok(snapshot) => self.begin_boundary_review(snapshot),
+            Err(error) => {
+                let mut library = self.open_library()?;
+                let mut session = campus_state::Schema2ProjectSession::default();
+                session.open_project(&library, &self.project_id)?;
+                session.apply_semantic_operation(
+                    &mut library,
+                    "record unavailable Campus Boundary evidence",
+                    |project| {
+                        project.begin_unavailable_boundary_review(
+                            error.clone(),
+                            "Retry the same boundary discovery job or return to Campus Target confirmation",
+                            self.actor.clone(),
+                        )
+                    },
+                )?;
+                Ok(super::v11_boundary_evidence_desk::map_boundary_desk(
+                    session
+                        .active()
+                        .and_then(campus_state::Schema2Project::boundary_review)
+                        .ok_or("Unavailable Boundary review was not persisted")?,
+                ))
+            }
+        }
+    }
+
+    pub fn open_boundary_review_command(
         &self,
-        snapshot: VerifiedBoundaryDiscoverySnapshot,
-        candidate_id: &str,
-    ) -> Result<(), String> {
-        let mut desk =
-            super::v11_boundary_evidence_desk::evidence_desk_from_verified_snapshot(&snapshot)?;
-        desk.select_candidate(candidate_id)?;
-        let _map_surface = super::v11_boundary_evidence_desk::map_boundary_desk(&desk)
-            .ok_or("The Boundary Discovery Snapshot cannot be presented on the evidence desk")?;
-        let evidence = desk.to_pinned_evidence()?;
+        options: BoundaryDeskMapOptions,
+    ) -> Result<ToolCommand, String> {
+        let desk = self.open_boundary_review()?;
+        let project = self.open_library()?.open_project(&self.project_id)?;
+        let scope = project.campus_scope();
+        let anchor = campus_services::wgs84_to_gcj02(campus_state::GeoPoint {
+            lng: scope.anchor_wgs84()[0],
+            lat: scope.anchor_wgs84()[1],
+        });
+        Ok(ToolCommand::OpenBoundaryDesk {
+            request: Box::new(MapBoundaryDeskRequest {
+                campus_name: scope.canonical_name().into(),
+                center_lng: anchor.lng,
+                center_lat: anchor.lat,
+                zoom: options.zoom,
+                pitch: options.pitch,
+                rotation: options.rotation,
+                js_api_key: options.js_api_key,
+                security_code: options.security_code,
+                desk,
+                english: options.english,
+            }),
+        })
+    }
+
+    pub fn handle_boundary_tool_event(
+        &self,
+        event: ToolEvent,
+    ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
+        if matches!(event, ToolEvent::MapBoundaryRetryRequested) {
+            self.refresh_boundary_review()?;
+            return Ok(super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReviewUpdated);
+        }
         let mut library = self.open_library()?;
         let mut session = campus_state::Schema2ProjectSession::default();
         session.open_project(&library, &self.project_id)?;
-        session.apply_semantic_operation(&mut library, "confirm Campus Boundary", |project| {
-            project.confirm_boundary(evidence, self.actor.clone())
-        })
+        if matches!(event, ToolEvent::MapBoundaryReturnToCampusRequested) {
+            session.apply_semantic_operation(
+                &mut library,
+                "return to Campus Target from Boundary review",
+                |project| project.return_to_campus_target_from_boundary_review(self.actor.clone()),
+            )?;
+            return Ok(
+                super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReturnToCampusTargetRequested,
+            );
+        }
+        if matches!(event, ToolEvent::MapBoundaryConfirmed { .. })
+            && session
+                .active()
+                .is_some_and(|project| project.pending_acquisition_start().is_some())
+        {
+            return self.start_persisted_boundary_acquisition(&mut library, &mut session);
+        }
+        let description = boundary_event_description(&event);
+        let outcome = session.apply_semantic_operation(&mut library, description, |project| {
+            super::v11_boundary_evidence_desk::apply_boundary_tool_event(
+                project,
+                &self.acquisition_job_id,
+                self.actor.clone(),
+                event,
+            )
+        })?;
+        if outcome == super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionQueued
+        {
+            self.start_persisted_boundary_acquisition(&mut library, &mut session)
+        } else {
+            Ok(outcome)
+        }
+    }
+
+    pub fn handle_boundary_tool_event_with_response(
+        &self,
+        event: ToolEvent,
+    ) -> Result<
+        (
+            super::v11_boundary_evidence_desk::BoundaryToolEventOutcome,
+            Option<ToolCommand>,
+        ),
+        String,
+    > {
+        let outcome = self.handle_boundary_tool_event(event)?;
+        let response = match outcome {
+            super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReviewUpdated => {
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                project.boundary_review().map(|review| {
+                    ToolCommand::UpdateBoundaryDesk {
+                        desk: super::v11_boundary_evidence_desk::map_boundary_desk(review),
+                    }
+                })
+            }
+            super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted
+            | super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReturnToCampusTargetRequested => {
+                Some(ToolCommand::Shutdown)
+            }
+            _ => None,
+        };
+        Ok((outcome, response))
+    }
+
+    fn drive_boundary_tool_session(
+        &self,
+        options: BoundaryDeskMapOptions,
+        transport: &mut impl BoundaryToolSessionTransport,
+    ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
+        let initial_command = self.open_boundary_review_command(options)?;
+        let mut interaction = BoundaryToolInteraction {
+            candidate_id: match &initial_command {
+                ToolCommand::OpenBoundaryDesk { request } => {
+                    request.desk.selected_candidate_id.clone()
+                }
+                _ => None,
+            },
+            ..BoundaryToolInteraction::default()
+        };
+        transport.send_command(initial_command)?;
+        loop {
+            let event = transport.receive_event()?;
+            match &event {
+                ToolEvent::MapBoundaryAdjustmentChanged {
+                    candidate_id,
+                    enabled,
+                } => {
+                    self.update_boundary_adjustment(&mut interaction, candidate_id, *enabled)?;
+                    continue;
+                }
+                ToolEvent::MapBoundaryHandleSelected {
+                    candidate_id,
+                    selection,
+                } => {
+                    require_boundary_adjustment(&interaction, candidate_id)?;
+                    interaction.selected_handle = Some(*selection);
+                    continue;
+                }
+                ToolEvent::MapBoundaryOperation {
+                    candidate_id,
+                    operation,
+                } => {
+                    validate_boundary_session_operation(&interaction, candidate_id, operation)?;
+                }
+                _ => {}
+            }
+            let candidate_selection = match &event {
+                ToolEvent::MapBoundaryCandidateSelected { candidate_id } => {
+                    Some(candidate_id.clone())
+                }
+                _ => None,
+            };
+            let clear_handle = matches!(event, ToolEvent::MapBoundaryOperation { .. });
+            let helper_closed = matches!(
+                event,
+                ToolEvent::Closed {
+                    tool: ToolKind::Map
+                }
+            );
+            let (outcome, response) = self.handle_boundary_tool_event_with_response(event)?;
+            if helper_closed {
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                let feedback = project
+                    .boundary_review()
+                    .and_then(|review| review.projection().actionable_feedback)
+                    .unwrap_or_else(|| {
+                        "Campus Boundary map helper closed; retry the same review or return to Campus Target confirmation".into()
+                    });
+                return Err(feedback);
+            }
+            if let Some(candidate_id) = candidate_selection {
+                interaction = BoundaryToolInteraction {
+                    candidate_id: Some(candidate_id),
+                    ..BoundaryToolInteraction::default()
+                };
+            } else if clear_handle {
+                interaction.selected_handle = None;
+            }
+            let Some(command) = response else {
+                continue;
+            };
+            let session_finished = matches!(command, ToolCommand::Shutdown);
+            transport.send_command(command)?;
+            if session_finished {
+                return Ok(outcome);
+            }
+        }
+    }
+
+    fn update_boundary_adjustment(
+        &self,
+        interaction: &mut BoundaryToolInteraction,
+        candidate_id: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if enabled {
+            let project = self.open_library()?.open_project(&self.project_id)?;
+            let desk = project
+                .boundary_review()
+                .ok_or("Load automatic Campus Boundary evidence before adjusting it")?;
+            if desk.selected_candidate_id() != Some(candidate_id) || !desk.projection().can_adjust {
+                return Err("Select a valid automatic Campus Boundary candidate first".into());
+            }
+        } else if interaction.candidate_id.as_deref() != Some(candidate_id) {
+            return Err("The adjustment event does not match the selected candidate".into());
+        }
+        interaction.candidate_id = Some(candidate_id.to_string());
+        interaction.adjustment_enabled = enabled;
+        interaction.selected_handle = None;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn run_installed_boundary_tool(
+        &self,
+        options: BoundaryDeskMapOptions,
+    ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| error.to_string())?
+            .parent()
+            .ok_or("native executable has no parent")?
+            .join("campus-map.exe");
+        if !executable.is_file() {
+            return Err("campus-map.exe is not installed beside the main application".into());
+        }
+        let pipe = format!(
+            r"\\.\pipe\campus-boundary-evidence-{:032x}",
+            rand::rng().random::<u128>()
+        );
+        let token = format!("{:032x}", rand::rng().random::<u128>());
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe)
+            .map_err(|error| error.to_string())?;
+        let mut child = Command::new(executable)
+            .arg(&pipe)
+            .arg(&token)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut transport = BoundaryNamedPipeTransport { runtime, server };
+        let result = (|| {
+            transport
+                .runtime
+                .block_on(transport.server.connect())
+                .map_err(|error| error.to_string())?;
+            let hello: ToolCommand = {
+                let runtime = &transport.runtime;
+                let server = &mut transport.server;
+                runtime.block_on(read_message(server))?
+            };
+            match hello {
+                ToolCommand::Hello {
+                    protocol_version,
+                    session_token,
+                    tool: ToolKind::Map,
+                } if protocol_version == PROTOCOL_VERSION && session_token == token => {}
+                _ => return Err("Boundary map helper handshake rejected".into()),
+            }
+            self.drive_boundary_tool_session(options, &mut transport)
+        })();
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        result
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn run_installed_boundary_tool(
+        &self,
+        _options: BoundaryDeskMapOptions,
+    ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
+        Err("Campus Boundary map review is supported only on Windows".into())
+    }
+
+    fn begin_boundary_review(
+        &self,
+        snapshot: VerifiedBoundaryDiscoverySnapshot,
+    ) -> Result<MapBoundaryDesk, String> {
+        let desk =
+            super::v11_boundary_evidence_desk::evidence_desk_from_verified_snapshot(&snapshot)?;
+        let durable_snapshot = desk
+            .snapshot()
+            .cloned()
+            .ok_or("The Boundary Discovery Snapshot cannot be persisted")?;
+        let mut library = self.open_library()?;
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            "open automatic Campus Boundary evidence desk",
+            |project| project.begin_boundary_review(durable_snapshot, self.actor.clone()),
+        )?;
+        Ok(super::v11_boundary_evidence_desk::map_boundary_desk(
+            session
+                .active()
+                .and_then(campus_state::Schema2Project::boundary_review)
+                .ok_or("Boundary review was not persisted")?,
+        ))
+    }
+
+    fn start_persisted_boundary_acquisition(
+        &self,
+        library: &mut CampusProjectLibrary,
+        session: &mut campus_state::Schema2ProjectSession,
+    ) -> Result<super::v11_boundary_evidence_desk::BoundaryToolEventOutcome, String> {
+        let coordinator = ProjectAcquisitionCoordinator::new(self.acquisition_client);
+        let progress = session.apply_semantic_operation(
+            library,
+            "start persisted five-category acquisition request",
+            |project| coordinator.start_queued_boundary_acquisition(project, self.actor.clone()),
+        )?;
+        if progress != ProjectAcquisitionProgress::Started {
+            return Err("Persisted Campus Boundary acquisition did not start".into());
+        }
+        Ok(super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted)
     }
 
     pub fn acquire_foundation_evidence(&self) -> Result<(), String> {
@@ -244,6 +640,79 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
 }
 
 #[cfg(debug_assertions)]
+fn boundary_event_description(event: &ToolEvent) -> &'static str {
+    match event {
+        ToolEvent::MapBoundaryCandidateSelected { .. } => "select Campus Boundary candidate",
+        ToolEvent::MapBoundaryOperation { .. } => "edit Campus Boundary",
+        ToolEvent::MapBoundaryConfirmed { .. } => {
+            "confirm Campus Boundary and start five-category acquisition"
+        }
+        ToolEvent::MapBoundaryRetryRequested => "retry Campus Boundary discovery",
+        ToolEvent::MapBoundaryReturnToCampusRequested => {
+            "return to Campus Target from Boundary review"
+        }
+        ToolEvent::Error { .. } => "record Campus Boundary map failure",
+        ToolEvent::Closed { .. } => "record Campus Boundary map cancellation",
+        _ => "ignore unrelated Boundary map event",
+    }
+}
+
+#[cfg(debug_assertions)]
+fn require_boundary_adjustment(
+    interaction: &BoundaryToolInteraction,
+    candidate_id: &str,
+) -> Result<(), String> {
+    if interaction.candidate_id.as_deref() != Some(candidate_id) {
+        return Err("The Boundary interaction does not match the selected candidate".into());
+    }
+    if !interaction.adjustment_enabled {
+        return Err("Enter Campus Boundary adjustment mode before selecting a handle".into());
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn validate_boundary_session_operation(
+    interaction: &BoundaryToolInteraction,
+    candidate_id: &str,
+    operation: &campus_tool_protocol::MapBoundaryEditOperation,
+) -> Result<(), String> {
+    use campus_tool_protocol::MapBoundaryEditOperation;
+
+    if interaction.candidate_id.as_deref() != Some(candidate_id) {
+        return Err("The Boundary operation does not match the selected candidate".into());
+    }
+    match operation {
+        MapBoundaryEditOperation::MoveVertex { vertex_index, .. }
+        | MapBoundaryEditOperation::DeleteVertex { vertex_index } => {
+            require_boundary_adjustment(interaction, candidate_id)?;
+            if interaction.selected_handle
+                != Some(MapBoundaryHandleSelection::Vertex {
+                    vertex_index: *vertex_index,
+                })
+            {
+                return Err("Select this Campus Boundary vertex before changing it".into());
+            }
+        }
+        MapBoundaryEditOperation::InsertVertex { edge_index } => {
+            require_boundary_adjustment(interaction, candidate_id)?;
+            if interaction.selected_handle
+                != Some(MapBoundaryHandleSelection::Edge {
+                    edge_index: *edge_index,
+                })
+            {
+                return Err("Select this Campus Boundary edge before inserting a vertex".into());
+            }
+        }
+        MapBoundaryEditOperation::RestoreCandidateOriginal => {
+            require_boundary_adjustment(interaction, candidate_id)?;
+        }
+        MapBoundaryEditOperation::Undo => {}
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
 pub fn bootstrap_if_enabled(
     application_data: &Path,
     enabled: Option<&str>,
@@ -276,8 +745,21 @@ pub fn bootstrap_if_enabled(
         &capability,
         &client,
     )?;
-    let boundary = tracer.boundary_candidates()?;
-    tracer.select_boundary(boundary, "boundary-osm-relation-100")?;
+    let outcome = tracer.run_installed_boundary_tool(BoundaryDeskMapOptions {
+        js_api_key: std::env::var("GAODE_JS_API_KEY")
+            .or_else(|_| std::env::var("VITE_GAODE_JS_API_KEY"))
+            .unwrap_or_default(),
+        security_code: std::env::var("GAODE_SECURITY_CODE")
+            .or_else(|_| std::env::var("VITE_GAODE_SECURITY_CODE"))
+            .unwrap_or_default(),
+        zoom: 17.0,
+        pitch: 45.0,
+        rotation: 0.0,
+        english: false,
+    })?;
+    if outcome != super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted {
+        return Ok(None);
+    }
     tracer.acquire_foundation_evidence()?;
     tracer.complete_review(
         FoundationCategory::Building,
@@ -334,6 +816,25 @@ mod tests {
         TransportRequest, TransportResponse,
     };
     use campus_state::FoundationResumePoint;
+    use std::collections::VecDeque;
+
+    struct MemoryBoundaryTransport {
+        events: VecDeque<ToolEvent>,
+        commands: Vec<ToolCommand>,
+    }
+
+    impl BoundaryToolSessionTransport for MemoryBoundaryTransport {
+        fn receive_event(&mut self) -> Result<ToolEvent, String> {
+            self.events
+                .pop_front()
+                .ok_or("test event queue exhausted".into())
+        }
+
+        fn send_command(&mut self, command: ToolCommand) -> Result<(), String> {
+            self.commands.push(command);
+            Ok(())
+        }
+    }
 
     struct UnavailableControlledService;
 
@@ -343,6 +844,39 @@ mod tests {
                 explanation: "controlled service unavailable".into(),
             })
         }
+    }
+
+    struct StartUnavailableTransport(FixtureTransport);
+
+    impl AcquisitionTransport for StartUnavailableTransport {
+        fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+            if request.path == "/v1/capabilities" {
+                Err(TransportError {
+                    explanation: "controlled service unavailable during acquisition start".into(),
+                })
+            } else {
+                self.0.execute(request)
+            }
+        }
+    }
+
+    #[test]
+    fn boundary_session_rejects_an_operation_without_the_explicit_handle_selection() {
+        let interaction = BoundaryToolInteraction {
+            candidate_id: Some("candidate-1".into()),
+            adjustment_enabled: true,
+            selected_handle: Some(MapBoundaryHandleSelection::Vertex { vertex_index: 1 }),
+        };
+        let error = validate_boundary_session_operation(
+            &interaction,
+            "candidate-1",
+            &campus_tool_protocol::MapBoundaryEditOperation::MoveVertex {
+                vertex_index: 2,
+                coordinate: campus_tool_protocol::MapCoordinate { lng: 1.0, lat: 2.0 },
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Select this Campus Boundary vertex"));
     }
 
     #[test]
@@ -370,11 +904,98 @@ mod tests {
         )
         .unwrap();
 
-        let boundary = tracer.boundary_candidates().unwrap();
-        assert_eq!(boundary.candidates.len(), 2);
-        tracer
-            .select_boundary(boundary, "boundary-osm-relation-100")
+        let mut transport = MemoryBoundaryTransport {
+            events: VecDeque::from([
+                ToolEvent::MapBoundaryCandidateSelected {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                },
+                ToolEvent::MapBoundaryAdjustmentChanged {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                    enabled: true,
+                },
+                ToolEvent::MapBoundaryHandleSelected {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                    selection: MapBoundaryHandleSelection::Edge { edge_index: 0 },
+                },
+                ToolEvent::MapBoundaryOperation {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                    operation: campus_tool_protocol::MapBoundaryEditOperation::InsertVertex {
+                        edge_index: 0,
+                    },
+                },
+                ToolEvent::MapBoundaryOperation {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                    operation: campus_tool_protocol::MapBoundaryEditOperation::Undo,
+                },
+                ToolEvent::MapBoundaryOperation {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                    operation:
+                        campus_tool_protocol::MapBoundaryEditOperation::RestoreCandidateOriginal,
+                },
+                ToolEvent::MapBoundaryConfirmed {
+                    candidate_id: "boundary-osm-relation-100".into(),
+                },
+            ]),
+            commands: Vec::new(),
+        };
+        let outcome = tracer
+            .drive_boundary_tool_session(
+                BoundaryDeskMapOptions {
+                    js_api_key: "test-key".into(),
+                    security_code: "test-security-code".into(),
+                    zoom: 17.0,
+                    pitch: 45.0,
+                    rotation: 0.0,
+                    english: true,
+                },
+                &mut transport,
+            )
             .unwrap();
+        let commands = transport.commands;
+        assert_eq!(
+            outcome,
+            crate::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted
+        );
+        assert!(matches!(
+            commands.first(),
+            Some(ToolCommand::OpenBoundaryDesk { .. })
+        ));
+        let Some(ToolCommand::OpenBoundaryDesk { request }) = commands.first() else {
+            unreachable!()
+        };
+        assert_eq!(
+            request.desk.working_points.len(),
+            4,
+            "closed polygon rings expose only unique editable vertices"
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, ToolCommand::UpdateBoundaryDesk { .. }))
+                .count(),
+            4
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter_map(|command| match command {
+                    ToolCommand::UpdateBoundaryDesk { desk } => Some(desk.working_points.len()),
+                    _ => None,
+                })
+                .next_back(),
+            Some(4)
+        );
+        assert!(matches!(commands.last(), Some(ToolCommand::Shutdown)));
+        let after_confirmation = tracer.project().unwrap();
+        assert!(after_confirmation.boundary_evidence().is_some());
+        assert_eq!(
+            after_confirmation
+                .acquisition_checkpoint()
+                .unwrap()
+                .request_identity
+                .idempotency_key,
+            "live-compatible-acquisition-job"
+        );
         tracer.acquire_foundation_evidence().unwrap();
         let unavailable_client = AcquisitionClient::new(UnavailableControlledService);
         let service_error = unavailable_client.capabilities().unwrap_err();
@@ -465,6 +1086,172 @@ mod tests {
         assert_eq!(
             reopened.exported_output().unwrap().project_revision,
             reopened.workflow().project_revision()
+        );
+    }
+
+    #[test]
+    fn unavailable_boundary_discovery_persists_a_recoverable_desk() {
+        let workspace = tempfile::tempdir().unwrap();
+        let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
+        let client = AcquisitionClient::new(UnavailableControlledService);
+        let tracer = FixedDatasetTracer::confirm_campus_target(
+            FixedDatasetTracerRequest {
+                library_root: workspace.path().join("library"),
+                output_root: workspace.path().join("output"),
+                campus_scope: CampusScope::new(
+                    "gaode:test",
+                    "Unavailable Campus",
+                    [121.395, 31.202],
+                )
+                .unwrap(),
+                project_name: "Unavailable boundary review".into(),
+                boundary_job_id: "unavailable-boundary".into(),
+                acquisition_job_id: "unavailable-acquisition".into(),
+            },
+            InstallationId::new("acceptance-test").unwrap(),
+            &capability,
+            &client,
+        )
+        .unwrap();
+
+        let command = tracer
+            .open_boundary_review_command(BoundaryDeskMapOptions {
+                js_api_key: "test-key".into(),
+                security_code: "test-security-code".into(),
+                zoom: 17.0,
+                pitch: 45.0,
+                rotation: 0.0,
+                english: true,
+            })
+            .unwrap();
+        let ToolCommand::OpenBoundaryDesk { request } = command else {
+            panic!("boundary review did not produce the map-helper command");
+        };
+        let surface = request.desk;
+        assert!(surface.candidates.is_empty());
+        assert!(surface
+            .recovery_message
+            .as_deref()
+            .unwrap()
+            .contains("unavailable"));
+        let mut cancelled_transport = MemoryBoundaryTransport {
+            events: VecDeque::from([ToolEvent::Closed {
+                tool: ToolKind::Map,
+            }]),
+            commands: Vec::new(),
+        };
+        let cancellation = tracer
+            .drive_boundary_tool_session(
+                BoundaryDeskMapOptions {
+                    js_api_key: "test-key".into(),
+                    security_code: "test-security-code".into(),
+                    zoom: 17.0,
+                    pitch: 45.0,
+                    rotation: 0.0,
+                    english: true,
+                },
+                &mut cancelled_transport,
+            )
+            .unwrap_err();
+        assert!(cancellation.contains("Retry the same boundary review"));
+        assert_eq!(
+            cancelled_transport.commands.len(),
+            1,
+            "a closed helper receives no impossible projection update"
+        );
+        tracer
+            .handle_boundary_tool_event(ToolEvent::Error {
+                message: "WebView2 process exited".into(),
+            })
+            .unwrap();
+        let persisted = tracer.project().unwrap();
+        let review = persisted.boundary_review().unwrap();
+        assert_eq!(
+            review.projection().recovery_actions,
+            vec![
+                campus_state::BoundaryRecoveryAction::Retry,
+                campus_state::BoundaryRecoveryAction::ReturnToCampusTarget,
+            ]
+        );
+        assert!(review
+            .projection()
+            .actionable_feedback
+            .as_deref()
+            .unwrap()
+            .contains("WebView2 process exited"));
+        assert!(persisted.boundary_evidence().is_none());
+
+        let reopened = tracer.open_boundary_review().unwrap();
+        assert!(reopened
+            .recovery_message
+            .as_deref()
+            .unwrap()
+            .contains("WebView2 process exited"));
+        assert_eq!(
+            tracer
+                .handle_boundary_tool_event(ToolEvent::MapBoundaryRetryRequested)
+                .unwrap(),
+            crate::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReviewUpdated
+        );
+        assert_eq!(
+            tracer
+                .handle_boundary_tool_event(ToolEvent::MapBoundaryReturnToCampusRequested)
+                .unwrap(),
+            crate::v11_boundary_evidence_desk::BoundaryToolEventOutcome::ReturnToCampusTargetRequested
+        );
+        assert!(tracer.project().unwrap().boundary_review().is_none());
+    }
+
+    #[test]
+    fn failed_service_start_keeps_the_durable_boundary_and_retry_identity() {
+        let workspace = tempfile::tempdir().unwrap();
+        let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
+        let client = AcquisitionClient::new(StartUnavailableTransport(
+            FixtureTransport::canonical().unwrap(),
+        ));
+        let tracer = FixedDatasetTracer::confirm_campus_target(
+            FixedDatasetTracerRequest {
+                library_root: workspace.path().join("library"),
+                output_root: workspace.path().join("output"),
+                campus_scope: CampusScope::new(
+                    "gaode:B00155J6JH",
+                    "East China Normal University Putuo Campus",
+                    [121.395, 31.202],
+                )
+                .unwrap(),
+                project_name: "Durable acquisition handoff".into(),
+                boundary_job_id: "live-compatible-boundary-job".into(),
+                acquisition_job_id: "stable-retry-identity".into(),
+            },
+            InstallationId::new("acceptance-test").unwrap(),
+            &capability,
+            &client,
+        )
+        .unwrap();
+
+        let snapshot = tracer.boundary_candidates().unwrap();
+        tracer.begin_boundary_review(snapshot).unwrap();
+        tracer
+            .handle_boundary_tool_event(ToolEvent::MapBoundaryCandidateSelected {
+                candidate_id: "boundary-osm-relation-100".into(),
+            })
+            .unwrap();
+        let error = tracer
+            .handle_boundary_tool_event(ToolEvent::MapBoundaryConfirmed {
+                candidate_id: "boundary-osm-relation-100".into(),
+            })
+            .unwrap_err();
+        assert!(error.contains("unavailable"));
+
+        let reopened = tracer.project().unwrap();
+        assert!(reopened.boundary_evidence().is_some());
+        assert!(reopened.acquisition_checkpoint().is_none());
+        assert_eq!(
+            reopened
+                .pending_acquisition_start()
+                .unwrap()
+                .idempotency_key,
+            "stable-retry-identity"
         );
     }
 }

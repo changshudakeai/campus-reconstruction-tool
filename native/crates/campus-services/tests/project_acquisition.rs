@@ -194,19 +194,38 @@ fn native_project_saves_closes_reopens_and_resumes_a_partially_delivered_live_jo
     session
         .apply_semantic_operation(
             &mut library,
-            "confirm boundary and start five-category acquisition",
+            "persist boundary and queue five-category acquisition",
+            |project| {
+                project.confirm_boundary_and_queue_acquisition(
+                    reviewed_boundary,
+                    "installation-42:project-7:foundation-baseline",
+                    actor(),
+                )
+            },
+        )
+        .unwrap();
+    assert!(requests.borrow().is_empty());
+    assert!(session
+        .active()
+        .unwrap()
+        .pending_acquisition_start()
+        .is_some());
+    session
+        .apply_semantic_operation(
+            &mut library,
+            "start persisted five-category acquisition",
             |project| {
                 coordinator
-                    .confirm_boundary_and_start(
-                        project,
-                        reviewed_boundary,
-                        "installation-42:project-7:foundation-baseline",
-                        actor(),
-                    )
+                    .start_queued_boundary_acquisition(project, actor())
                     .map(|_| ())
             },
         )
         .unwrap();
+    assert!(session
+        .active()
+        .unwrap()
+        .pending_acquisition_start()
+        .is_none());
     let acquisition_request = requests
         .borrow()
         .iter()

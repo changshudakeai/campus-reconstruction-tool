@@ -2379,20 +2379,26 @@ fn main() -> Result<(), slint::PlatformError> {
     ) {
         eprintln!("V1.1 development project kernel failed: {error}");
     }
-    match v11_tracer_bullet::bootstrap_if_enabled(
+    let v11_tracer_error = match v11_tracer_bullet::bootstrap_if_enabled(
         &app_data_dir(),
         std::env::var("CAMPUS_V11_FIXED_TRACER").ok().as_deref(),
     ) {
-        Ok(Some(report)) => eprintln!(
-            "V1.1 fixed-Dataset tracer {} exported {} bytes to {} with manifest {}",
-            report.project_id.as_str(),
-            report.schematic_bytes,
-            report.schematic_path.display(),
-            report.manifest_path.display()
-        ),
-        Ok(None) => {}
-        Err(error) => eprintln!("V1.1 fixed-Dataset tracer bullet failed: {error}"),
-    }
+        Ok(Some(report)) => {
+            eprintln!(
+                "V1.1 fixed-Dataset tracer {} exported {} bytes to {} with manifest {}",
+                report.project_id.as_str(),
+                report.schematic_bytes,
+                report.schematic_path.display(),
+                report.manifest_path.display()
+            );
+            None
+        }
+        Ok(None) => None,
+        Err(error) => {
+            eprintln!("V1.1 fixed-Dataset tracer bullet failed: {error}");
+            Some(error)
+        }
+    };
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.iter().any(|argument| argument == "--self-test") {
         let cycles = arguments
@@ -2513,6 +2519,9 @@ fn main() -> Result<(), slint::PlatformError> {
             .new_project("未命名项目", "华东师范大学普陀校区");
     }
     sync_ui(&ui, &state.borrow());
+    if let Some(error) = v11_tracer_error {
+        set_error(&ui, error);
+    }
 
     let tool_timer = Timer::default();
     {

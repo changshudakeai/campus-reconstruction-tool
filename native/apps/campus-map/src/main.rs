@@ -11,12 +11,13 @@ mod windows {
         forward_tool_events, read_message, write_message, MapBoundaryDesk, MapPurpose, ToolCommand,
         ToolEvent, ToolKind, PROTOCOL_VERSION,
     };
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
     use std::thread;
+    use std::time::{Duration, Instant};
     use tokio::net::windows::named_pipe::ClientOptions;
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
     use winit::window::{Window, WindowId};
     use wry::{
         dpi::{LogicalPosition, LogicalSize, PhysicalSize},
@@ -24,7 +25,12 @@ mod windows {
     };
 
     type PipeThread = thread::JoinHandle<Result<(), String>>;
-    type ToolConnection = (ToolCommand, Sender<ToolEvent>, PipeThread);
+    type ToolConnection = (
+        ToolCommand,
+        Sender<ToolEvent>,
+        Receiver<ToolCommand>,
+        Vec<PipeThread>,
+    );
 
     fn full_window_bounds(width: u32, height: u32, scale_factor: f64) -> Rect {
         let logical = PhysicalSize::new(width, height).to_logical::<f64>(scale_factor);
@@ -42,14 +48,15 @@ mod windows {
         if std::env::var_os("CAMPUS_MAP_HEADLESS").is_some() {
             return run_headless(pipe, token);
         }
-        let (config, event_tx, pipe_thread) = connect(pipe, token)?;
+        let (config, event_tx, command_rx, pipe_threads) = connect(pipe, token)?;
         let event_loop = EventLoop::new().map_err(|error| error.to_string())?;
         let mut app = MapApplication {
             window: None,
             webview: None,
             config,
             event_tx,
-            pipe_thread: Some(pipe_thread),
+            command_rx,
+            pipe_threads,
         };
         event_loop
             .run_app(&mut app)
@@ -85,9 +92,36 @@ mod windows {
             },
         ))?;
         let config: ToolCommand = runtime.block_on(read_message(&mut client))?;
-        let (tx, rx) = mpsc::channel::<ToolEvent>();
-        let pipe_thread = thread::spawn(move || runtime.block_on(forward_tool_events(client, rx)));
-        Ok((config, tx, pipe_thread))
+        let (event_tx, event_rx) = mpsc::channel::<ToolEvent>();
+        let (command_tx, command_rx) = mpsc::channel::<ToolCommand>();
+        let (mut reader, writer) = tokio::io::split(client);
+        let writer_thread = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())?;
+            runtime.block_on(forward_tool_events(writer, event_rx))
+        });
+        let reader_thread = thread::spawn(move || {
+            runtime.block_on(async move {
+                loop {
+                    let command: ToolCommand = read_message(&mut reader).await?;
+                    let shutdown = matches!(command, ToolCommand::Shutdown);
+                    command_tx
+                        .send(command)
+                        .map_err(|_| "map command channel closed".to_string())?;
+                    if shutdown {
+                        return Ok(());
+                    }
+                }
+            })
+        });
+        Ok((
+            config,
+            event_tx,
+            command_rx,
+            vec![writer_thread, reader_thread],
+        ))
     }
 
     fn run_headless(pipe: String, token: String) -> Result<(), String> {
@@ -146,7 +180,8 @@ mod windows {
         webview: Option<WebView>,
         config: ToolCommand,
         event_tx: Sender<ToolEvent>,
-        pipe_thread: Option<thread::JoinHandle<Result<(), String>>>,
+        command_rx: Receiver<ToolCommand>,
+        pipe_threads: Vec<PipeThread>,
     }
 
     impl MapApplication {
@@ -157,14 +192,55 @@ mod windows {
             let _ = self.event_tx.send(ToolEvent::Closed {
                 tool: ToolKind::Map,
             });
-            if let Some(pipe_thread) = self.pipe_thread.take() {
-                let _ = pipe_thread.join();
-            }
+            self.pipe_threads.clear();
             event_loop.exit();
         }
     }
 
     impl ApplicationHandler for MapApplication {
+        fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(50),
+            ));
+            loop {
+                match self.command_rx.try_recv() {
+                    Ok(ToolCommand::UpdateBoundaryDesk { desk }) => {
+                        if let Some(webview) = self.webview.as_ref() {
+                            match serde_json::to_string(&desk) {
+                                Ok(desk) => {
+                                    let _ = webview.evaluate_script(&format!(
+                                        "window.applyBoundaryDesk({desk})"
+                                    ));
+                                }
+                                Err(error) => {
+                                    self.finish(
+                                        event_loop,
+                                        Some(format!(
+                                            "encode Boundary desk update failed: {error}"
+                                        )),
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Ok(ToolCommand::Shutdown) => {
+                        self.finish(event_loop, None);
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(TryRecvError::Empty) => return,
+                    Err(TryRecvError::Disconnected) => {
+                        self.finish(
+                            event_loop,
+                            Some("Boundary desk command channel disconnected".into()),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.window.is_some() {
                 return;
@@ -342,26 +418,24 @@ document.getElementById('poi-confirm').onclick=()=>{const index=Number(document.
                 },
                 r#"
 const english=__ENGLISH__;
-const desk=__BOUNDARY_DESK__;
-const candidates=desk&&Array.isArray(desk.candidates)?desk.candidates:[];
+let desk=__BOUNDARY_DESK__;
+let candidates=desk&&Array.isArray(desk.candidates)?desk.candidates:[];
 let activeIndex=Math.max(0,candidates.findIndex(item=>item.id===(desk&&desk.selectedCandidateId)));
-let adjustment=false,selectedVertex=null,selectedEdge=null,history=[],markers=[],edgeHits=[];
+let adjustment=false,selectedVertex=null,selectedEdge=null,pending=false,markers=[],edgeHits=[];
 document.getElementById('bar').classList.add('boundary-mode');
 const tx=(zh,en)=>english?en:zh;
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const active=()=>candidates[activeIndex];
-const candidatePoints=item=>{const result=(item&&item.points||[]).map(p=>[p.lng,p.lat]);if(result.length>1&&result[0][0]===result[result.length-1][0]&&result[0][1]===result[result.length-1][1])result.pop();return result};
-const validGeometry=()=>!!active()&&active().valid&&points.length>=3&&points.every(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
-const blocked=()=>desk&&desk.confirmationBlockedReason?desk.confirmationBlockedReason:(!active()?tx('没有可用的自动边界候选','No automatic boundary candidate is available'):(!active().valid?(active().invalidReasons[0]||tx('候选无效','Candidate is invalid')):(!validGeometry()?tx('编辑后的边界几何无效','Edited boundary geometry is invalid'):'')));
-const emit=operation=>post({type:'mapBoundaryOperation',candidateId:active().id,operation,points:points.map(p=>({lng:p[0],lat:p[1]}))});
+const blocked=()=>pending?tx('正在等待项目验证','Waiting for project validation'):((desk&&desk.confirmationBlockedReason)||(!active()?'No automatic Campus Boundary candidate is available':(!active().valid?(active().invalidReasons[0]||'The automatic Campus Boundary candidate is invalid'):'')));
+const emit=operation=>{pending=true;post({type:'mapBoundaryOperation',candidateId:active().id,operation});renderDesk()};
 const clearHandles=()=>{if(markers.length)map.remove(markers);if(edgeHits.length)map.remove(edgeHits);markers=[];edgeHits=[]};
 const renderHandles=()=>{
   clearHandles();if(!adjustment||!active()||!active().valid)return;
-  edgeHits=points.map((point,index)=>{const line=new AMap.Polyline({path:[point,points[(index+1)%points.length]],strokeColor:selectedEdge===index?'#e1a23a':'#a54836',strokeOpacity:selectedEdge===index?.9:.03,strokeWeight:selectedEdge===index?6:18,zIndex:120});line.on('click',()=>{selectedEdge=index;selectedVertex=null;renderDesk()});return line});
-  markers=points.map((point,index)=>{const marker=new AMap.Marker({position:point,draggable:true,anchor:'center',content:`<div class="boundary-vertex ${selectedVertex===index?'selected':''}">${index+1}</div>`,zIndex:130});marker.on('click',()=>{selectedVertex=index;selectedEdge=null;renderDesk()});marker.on('dragstart',()=>history.push(points.map(p=>[...p])));marker.on('dragend',event=>{points[index]=[event.lnglat.lng,event.lnglat.lat];selectedVertex=index;redraw();emit('move_vertex');renderDesk()});return marker});
+  edgeHits=points.map((point,index)=>{const line=new AMap.Polyline({path:[point,points[(index+1)%points.length]],strokeColor:selectedEdge===index?'#e1a23a':'#a54836',strokeOpacity:selectedEdge===index?.9:.03,strokeWeight:selectedEdge===index?6:18,zIndex:120});line.on('click',()=>{selectedEdge=index;selectedVertex=null;post({type:'mapBoundaryHandleSelected',candidateId:active().id,selection:{type:'edge',edgeIndex:index}});renderDesk()});return line});
+  markers=points.map((point,index)=>{const marker=new AMap.Marker({position:point,draggable:!pending&&selectedVertex===index,anchor:'center',content:`<div class="boundary-vertex ${selectedVertex===index?'selected':''}">${index+1}</div>`,zIndex:130});marker.on('click',()=>{selectedVertex=index;selectedEdge=null;post({type:'mapBoundaryHandleSelected',candidateId:active().id,selection:{type:'vertex',vertexIndex:index}});renderDesk()});marker.on('dragend',event=>{if(selectedVertex!==index)return;emit({type:'move_vertex',vertexIndex:index,coordinate:{lng:event.lnglat.lng,lat:event.lnglat.lat}})});return marker});
   map.add(edgeHits);map.add(markers);
 };
-const selectCandidate=index=>{activeIndex=index;points=candidatePoints(active());adjustment=false;selectedVertex=null;selectedEdge=null;history=[];redraw();post({type:'mapBoundaryCandidateSelected',candidateId:active().id});if(polygon)map.setFitView([polygon],false,[90,360,120,360]);renderDesk()};
+const selectCandidate=index=>{activeIndex=index;adjustment=false;selectedVertex=null;selectedEdge=null;pending=true;post({type:'mapBoundaryCandidateSelected',candidateId:active().id});renderDesk()};
 const renderDesk=()=>{
   const item=active();
   document.getElementById('boundary-candidates').innerHTML=candidates.map((candidate,index)=>`<button class="boundary-candidate ${index===activeIndex?'selected':''} ${candidate.valid?'':'invalid'}" data-candidate="${index}"><strong>${candidate.valid?'#'+candidate.rank:tx('无效','Invalid')}</strong><span>${esc(candidate.label)}</span><small>${esc(candidate.sourceSummary)}</small><small>${esc(candidate.valid?candidate.rankingSummary:(candidate.invalidReasons[0]||''))}</small></button>`).join('');
@@ -373,21 +447,22 @@ const renderDesk=()=>{
   document.getElementById('boundary-return')?.addEventListener('click',()=>post({type:'mapBoundaryReturnToCampusRequested'}));
   document.getElementById('boundary-mode-label').textContent=adjustment?tx('调整模式 · 先选择点或边','Adjustment mode · select a vertex or edge'):tx('审核模式 · 地图浏览不会修改边界','Review mode · map browsing cannot edit');
   const adjust=document.getElementById('boundary-adjust');adjust.disabled=!item||!item.valid;adjust.textContent=adjustment?tx('退出调整','Leave adjustment'):tx('调整边界','Adjust boundary');
-  document.getElementById('boundary-insert').disabled=!adjustment||selectedEdge===null;
-  document.getElementById('boundary-delete').disabled=!adjustment||selectedVertex===null||points.length<=3;
-  document.getElementById('boundary-undo').disabled=!history.length;
-  document.getElementById('boundary-restore').disabled=!adjustment||!item;
+  document.getElementById('boundary-insert').disabled=pending||!adjustment||selectedEdge===null;
+  document.getElementById('boundary-delete').disabled=pending||!adjustment||selectedVertex===null||points.length<=3;
+  document.getElementById('boundary-undo').disabled=pending||!(desk&&desk.canUndo);
+  document.getElementById('boundary-restore').disabled=pending||!adjustment||!item;
   const reason=blocked(),confirm=document.getElementById('boundary-confirm');confirm.disabled=!!reason;confirm.title=reason;document.getElementById('boundary-validity').textContent=reason?tx('不可确认：','Blocked: ')+reason:tx('当前编辑几何有效','Edited geometry is valid');
   renderHandles();
 };
-points=candidates.length?candidatePoints(active()):[];redraw();
-document.getElementById('boundary-adjust').onclick=()=>{if(!active()||!active().valid)return;adjustment=!adjustment;selectedVertex=null;selectedEdge=null;renderDesk()};
-document.getElementById('boundary-insert').onclick=()=>{if(selectedEdge===null)return;history.push(points.map(p=>[...p]));const i=selectedEdge,p=points[i],q=points[(i+1)%points.length];points.splice(i+1,0,[(p[0]+q[0])/2,(p[1]+q[1])/2]);selectedVertex=i+1;selectedEdge=null;redraw();emit('insert_vertex');renderDesk()};
-document.getElementById('boundary-delete').onclick=()=>{if(selectedVertex===null||points.length<=3)return;history.push(points.map(p=>[...p]));points.splice(selectedVertex,1);selectedVertex=null;redraw();emit('delete_vertex');renderDesk()};
-document.getElementById('boundary-undo').onclick=()=>{if(!history.length)return;points=history.pop();selectedVertex=null;selectedEdge=null;redraw();emit('undo');renderDesk()};
-document.getElementById('boundary-restore').onclick=()=>{if(!active())return;history.push(points.map(p=>[...p]));points=candidatePoints(active());selectedVertex=null;selectedEdge=null;redraw();emit('restore_candidate_original');renderDesk()};
+window.applyBoundaryDesk=next=>{desk=next;candidates=desk&&Array.isArray(desk.candidates)?desk.candidates:[];activeIndex=Math.max(0,candidates.findIndex(item=>item.id===(desk&&desk.selectedCandidateId)));points=(desk&&Array.isArray(desk.workingPoints)?desk.workingPoints:[]).map(p=>[p.lng,p.lat]);pending=false;selectedVertex=null;selectedEdge=null;redraw();if(polygon)map.setFitView([polygon],false,[90,360,120,360]);renderDesk()};
+points=(desk&&Array.isArray(desk.workingPoints)?desk.workingPoints:[]).map(p=>[p.lng,p.lat]);redraw();
+document.getElementById('boundary-adjust').onclick=()=>{if(!active()||!active().valid)return;adjustment=!adjustment;selectedVertex=null;selectedEdge=null;post({type:'mapBoundaryAdjustmentChanged',candidateId:active().id,enabled:adjustment});renderDesk()};
+document.getElementById('boundary-insert').onclick=()=>{if(selectedEdge===null)return;emit({type:'insert_vertex',edgeIndex:selectedEdge})};
+document.getElementById('boundary-delete').onclick=()=>{if(selectedVertex===null||points.length<=3)return;emit({type:'delete_vertex',vertexIndex:selectedVertex})};
+document.getElementById('boundary-undo').onclick=()=>emit({type:'undo'});
+document.getElementById('boundary-restore').onclick=()=>{if(active())emit({type:'restore_candidate_original'})};
 document.getElementById('boundary-back').onclick=()=>post({type:'mapBoundaryReturnToCampusRequested'});
-document.getElementById('boundary-confirm').onclick=()=>{const reason=blocked();if(reason){post({type:'error',message:reason});return;}post({type:'mapBoundaryConfirmed',candidateId:active().id,points:points.map(p=>({lng:p[0],lat:p[1]}))})};
+document.getElementById('boundary-confirm').onclick=()=>{const reason=blocked();if(reason){post({type:'error',message:reason});return;}post({type:'mapBoundaryConfirmed',candidateId:active().id})};
 renderDesk();"#
                     .replace("__ENGLISH__", if *english { "true" } else { "false" })
                     .replace("__BOUNDARY_DESK__", &boundary_desk),
@@ -538,6 +613,12 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
                             },
                         ],
                         selected_candidate_id: Some("boundary-osm-1".into()),
+                        working_points: vec![
+                            MapCoordinate { lng: 1.0, lat: 1.0 },
+                            MapCoordinate { lng: 2.0, lat: 1.0 },
+                            MapCoordinate { lng: 2.0, lat: 2.0 },
+                        ],
+                        can_undo: false,
                         dataset_bundle_summary: "osm-2026-06 + overture-2026-06-17.0".into(),
                         coverage_summary: "complete 12/12 tiles".into(),
                         confirmation_blocked_reason: None,
@@ -595,6 +676,13 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             assert!(boundary.contains("Lineage &amp; coverage"));
             assert!(boundary.contains("Adjustment mode"));
             assert!(boundary.contains("mapBoundaryOperation"));
+            assert!(boundary.contains("move_vertex"));
+            assert!(boundary.contains("restore_candidate_original"));
+            assert!(boundary.contains("window.applyBoundaryDesk"));
+            assert!(boundary.contains("Waiting for project validation"));
+            assert!(!boundary.contains("geometryReason"));
+            assert!(!boundary.contains("history.push"));
+            assert!(!boundary.contains("operation,points:points.map"));
             assert!(boundary.contains("mapBoundaryRetryRequested"));
             assert!(boundary.contains("missing outer relation members"));
             assert!(!boundary.contains("Click the map to add boundary nodes"));

@@ -4,12 +4,25 @@ use campus_services::acquisition::{
 };
 use campus_state::{
     BoundaryCandidateAssessment, BoundaryCandidateDerivation, BoundaryCandidateValidity,
-    BoundaryDiscoverySnapshot, BoundaryEvidenceAvailability, BoundaryEvidenceDesk, SourceGeometry,
+    BoundaryDiscoverySnapshot, BoundaryEdgeRef, BoundaryEvidenceAvailability, BoundaryEvidenceDesk,
+    BoundaryVertexRef, InstallationId, Schema2Project, SourceGeometry,
 };
-use campus_tool_protocol::{MapBoundaryCandidate, MapBoundaryDesk, MapCoordinate};
+use campus_tool_protocol::{
+    MapBoundaryCandidate, MapBoundaryDesk, MapBoundaryEditOperation, MapCoordinate, ToolEvent,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoundaryToolEventOutcome {
+    ReviewUpdated,
+    AcquisitionQueued,
+    AcquisitionStarted,
+    RetryRequested,
+    ReturnToCampusTargetRequested,
+    Ignored,
+}
 
 pub(crate) fn evidence_desk_from_verified_snapshot(
     snapshot: &VerifiedBoundaryDiscoverySnapshot,
@@ -56,86 +69,108 @@ pub(crate) fn evidence_desk_from_verified_snapshot(
     })
 }
 
-pub(crate) fn map_boundary_desk(desk: &BoundaryEvidenceDesk) -> Option<MapBoundaryDesk> {
-    let snapshot = desk.snapshot()?;
+pub(crate) fn map_boundary_desk(desk: &BoundaryEvidenceDesk) -> MapBoundaryDesk {
     let projection = desk.projection();
-    let mut candidates = snapshot
-        .candidates
-        .iter()
-        .map(|candidate| {
-            let assessment = snapshot.assessments.get(&candidate.id);
-            let (valid, invalid_reasons) = match assessment.map(|value| &value.validity) {
-                Some(BoundaryCandidateValidity::Valid) => (true, Vec::new()),
-                Some(BoundaryCandidateValidity::Invalid { reasons }) => (false, reasons.clone()),
-                None => (
-                    false,
-                    vec!["Candidate validity evidence is unavailable".into()],
-                ),
-            };
-            let source_summary = format!(
-                "{} · {} · {}",
-                candidate.lineage.provider,
-                candidate.lineage.source_record_id,
-                candidate.lineage.dataset_release
-            );
-            let ranking = &candidate.ranking_evidence;
-            let ranking_summary = format!(
-                "name {:.0}% · distance {:.1} m · anchor {} · area {:.0} m²",
-                ranking.name_match * 100.0,
-                ranking.distance_m,
-                if ranking.contains_anchor {
-                    "contained"
-                } else {
-                    "outside"
-                },
-                ranking.area_m2
-            );
-            let lineage_summary = assessment
-                .map(|value| value.derivation.steps.join(" · "))
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| candidate.lineage.original_classification.clone());
-            MapBoundaryCandidate {
-                id: candidate.id.clone(),
-                rank: candidate.rank,
-                label: format!(
-                    "{} boundary {}",
-                    candidate.lineage.provider.to_ascii_uppercase(),
-                    candidate.rank
-                ),
-                valid,
-                invalid_reasons,
-                points: editable_outer_ring(&candidate.geometry),
-                source_summary,
-                ranking_summary,
-                lineage_summary,
-            }
+    let mut candidates = desk
+        .snapshot()
+        .map(|snapshot| {
+            snapshot
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    let assessment = snapshot.assessments.get(&candidate.id);
+                    let invalid_reasons = match desk.candidate_validity(&candidate.id) {
+                        BoundaryCandidateValidity::Valid => Vec::new(),
+                        BoundaryCandidateValidity::Invalid { reasons } => reasons,
+                    };
+                    let valid = invalid_reasons.is_empty();
+                    let source_summary = format!(
+                        "{} · {} · {}",
+                        candidate.lineage.provider,
+                        candidate.lineage.source_record_id,
+                        candidate.lineage.dataset_release
+                    );
+                    let ranking = &candidate.ranking_evidence;
+                    let ranking_summary = format!(
+                        "name {:.0}% · distance {:.1} m · anchor {} · area {:.0} m²",
+                        ranking.name_match * 100.0,
+                        ranking.distance_m,
+                        if ranking.contains_anchor {
+                            "contained"
+                        } else {
+                            "outside"
+                        },
+                        ranking.area_m2
+                    );
+                    let lineage_summary = assessment
+                        .map(|value| value.derivation.steps.join(" · "))
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| candidate.lineage.original_classification.clone());
+                    MapBoundaryCandidate {
+                        id: candidate.id.clone(),
+                        rank: candidate.rank,
+                        label: format!(
+                            "{} boundary {}",
+                            candidate.lineage.provider.to_ascii_uppercase(),
+                            candidate.rank
+                        ),
+                        valid,
+                        invalid_reasons,
+                        points: editable_outer_ring(&candidate.geometry),
+                        source_summary,
+                        ranking_summary,
+                        lineage_summary,
+                    }
+                })
+                .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
+        .unwrap_or_default();
     candidates.sort_by_key(|candidate| candidate.rank);
-    let complete = snapshot
-        .manifest
-        .coverage_report
-        .outcomes
-        .iter()
-        .filter(|outcome| {
-            matches!(
-                outcome.status,
-                campus_state::ProviderOutcomeStatus::Complete
-                    | campus_state::ProviderOutcomeStatus::CompleteEmpty
+    let (dataset_bundle_summary, coverage_summary) = desk
+        .snapshot()
+        .map(|snapshot| {
+            let complete = snapshot
+                .manifest
+                .coverage_report
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    matches!(
+                        outcome.status,
+                        campus_state::ProviderOutcomeStatus::Complete
+                            | campus_state::ProviderOutcomeStatus::CompleteEmpty
+                    )
+                })
+                .count();
+            (
+                format!(
+                    "{} · OSM {} · Overture {}",
+                    snapshot.manifest.bundle.id,
+                    snapshot.manifest.bundle.osm_snapshot,
+                    snapshot.manifest.bundle.overture_release
+                ),
+                format!(
+                    "{complete}/{} provider scopes complete",
+                    snapshot.manifest.coverage_report.outcomes.len()
+                ),
             )
         })
-        .count();
-    let total = snapshot.manifest.coverage_report.outcomes.len();
-    Some(MapBoundaryDesk {
+        .unwrap_or_else(|| {
+            (
+                "Dataset Bundle unavailable".into(),
+                "Boundary discovery did not return a coverage snapshot".into(),
+            )
+        });
+    MapBoundaryDesk {
         candidates,
         selected_candidate_id: desk.selected_candidate_id().map(str::to_string),
-        dataset_bundle_summary: format!(
-            "{} · OSM {} · Overture {}",
-            snapshot.manifest.bundle.id,
-            snapshot.manifest.bundle.osm_snapshot,
-            snapshot.manifest.bundle.overture_release
-        ),
-        coverage_summary: format!("{complete}/{total} provider scopes complete"),
+        working_points: desk
+            .working_geometry()
+            .map(editable_outer_ring)
+            .unwrap_or_default(),
+        can_undo: projection.can_undo,
+        dataset_bundle_summary,
+        coverage_summary,
         confirmation_blocked_reason: projection.confirmation_blocked_reason,
         recovery_message: (projection.availability != BoundaryEvidenceAvailability::Ready).then(
             || {
@@ -144,7 +179,133 @@ pub(crate) fn map_boundary_desk(desk: &BoundaryEvidenceDesk) -> Option<MapBounda
                 })
             },
         ),
-    })
+    }
+}
+
+pub(crate) fn apply_boundary_tool_event(
+    project: &mut Schema2Project,
+    acquisition_idempotency_key: &str,
+    actor: InstallationId,
+    event: ToolEvent,
+) -> Result<BoundaryToolEventOutcome, String> {
+    match event {
+        ToolEvent::MapBoundaryCandidateSelected { candidate_id } => {
+            project.edit_boundary_review(actor, |desk| desk.select_candidate(&candidate_id))?;
+            Ok(BoundaryToolEventOutcome::ReviewUpdated)
+        }
+        ToolEvent::MapBoundaryOperation {
+            candidate_id,
+            operation,
+        } => {
+            project.edit_boundary_review(actor, |desk| {
+                require_selected_candidate(desk, &candidate_id)?;
+                apply_boundary_operation(desk, operation)
+            })?;
+            Ok(BoundaryToolEventOutcome::ReviewUpdated)
+        }
+        ToolEvent::MapBoundaryConfirmed { candidate_id } => {
+            let evidence = {
+                let desk = project
+                    .boundary_review()
+                    .ok_or("Load automatic Campus Boundary evidence before confirming it")?;
+                require_selected_candidate(desk, &candidate_id)?;
+                desk.to_pinned_evidence()?
+            };
+            project.confirm_boundary_and_queue_acquisition(
+                evidence,
+                acquisition_idempotency_key,
+                actor,
+            )?;
+            Ok(BoundaryToolEventOutcome::AcquisitionQueued)
+        }
+        ToolEvent::MapBoundaryRetryRequested => Ok(BoundaryToolEventOutcome::RetryRequested),
+        ToolEvent::MapBoundaryReturnToCampusRequested => {
+            Ok(BoundaryToolEventOutcome::ReturnToCampusTargetRequested)
+        }
+        ToolEvent::Error { message } => {
+            if project.boundary_review().is_some() {
+                project.edit_boundary_review(actor, |desk| {
+                    desk.report_tool_failure(
+                        format!("Campus Boundary map helper failed: {message}"),
+                        "Retry the same boundary review or return to Campus Target confirmation",
+                    );
+                    Ok(())
+                })?;
+                Ok(BoundaryToolEventOutcome::ReviewUpdated)
+            } else {
+                Ok(BoundaryToolEventOutcome::Ignored)
+            }
+        }
+        ToolEvent::Closed { .. } => {
+            if project.boundary_review().is_some() {
+                project.edit_boundary_review(actor, |desk| {
+                    desk.report_tool_failure(
+                        "Campus Boundary map helper closed before confirmation",
+                        "Retry the same boundary review or return to Campus Target confirmation",
+                    );
+                    Ok(())
+                })?;
+                Ok(BoundaryToolEventOutcome::ReviewUpdated)
+            } else {
+                Ok(BoundaryToolEventOutcome::Ignored)
+            }
+        }
+        _ => Ok(BoundaryToolEventOutcome::Ignored),
+    }
+}
+
+fn require_selected_candidate(
+    desk: &BoundaryEvidenceDesk,
+    candidate_id: &str,
+) -> Result<(), String> {
+    if desk.selected_candidate_id() == Some(candidate_id) {
+        Ok(())
+    } else {
+        Err("The map event does not match the selected Campus Boundary candidate".into())
+    }
+}
+
+fn apply_boundary_operation(
+    desk: &mut BoundaryEvidenceDesk,
+    operation: MapBoundaryEditOperation,
+) -> Result<(), String> {
+    match operation {
+        MapBoundaryEditOperation::MoveVertex {
+            vertex_index,
+            coordinate,
+        } => {
+            let wgs84 = campus_services::gcj02_to_wgs84(campus_state::GeoPoint {
+                lng: coordinate.lng,
+                lat: coordinate.lat,
+            });
+            desk.enter_adjustment()?;
+            desk.select_vertex(BoundaryVertexRef::outer(0, vertex_index as usize))?;
+            desk.move_selected_vertex([wgs84.lng, wgs84.lat])?;
+            desk.leave_adjustment();
+            Ok(())
+        }
+        MapBoundaryEditOperation::InsertVertex { edge_index } => {
+            desk.enter_adjustment()?;
+            desk.select_edge(BoundaryEdgeRef::outer(0, edge_index as usize))?;
+            desk.insert_vertex_on_selected_edge()?;
+            desk.leave_adjustment();
+            Ok(())
+        }
+        MapBoundaryEditOperation::DeleteVertex { vertex_index } => {
+            desk.enter_adjustment()?;
+            desk.select_vertex(BoundaryVertexRef::outer(0, vertex_index as usize))?;
+            desk.delete_selected_vertex()?;
+            desk.leave_adjustment();
+            Ok(())
+        }
+        MapBoundaryEditOperation::Undo => desk.undo_adjustment(),
+        MapBoundaryEditOperation::RestoreCandidateOriginal => {
+            desk.enter_adjustment()?;
+            desk.restore_candidate_original()?;
+            desk.leave_adjustment();
+            Ok(())
+        }
+    }
 }
 
 fn editable_outer_ring(geometry: &SourceGeometry) -> Vec<MapCoordinate> {
@@ -155,8 +316,14 @@ fn editable_outer_ring(geometry: &SourceGeometry) -> Vec<MapCoordinate> {
         }
         _ => None,
     };
-    ring.into_iter()
-        .flatten()
+    let ring = ring.map(Vec::as_slice).unwrap_or_default();
+    let editable = if ring.len() > 1 && ring.first() == ring.last() {
+        &ring[..ring.len() - 1]
+    } else {
+        ring
+    };
+    editable
+        .iter()
         .copied()
         .map(|coordinate| {
             let gcj02 = campus_services::wgs84_to_gcj02(campus_state::GeoPoint {

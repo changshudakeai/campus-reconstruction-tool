@@ -1977,6 +1977,7 @@ pub mod fixture_transport {
         acquisition_chunk: Vec<u8>,
         boundary_manifest: Vec<u8>,
         boundary_chunk: Vec<u8>,
+        capabilities: Vec<u8>,
         acquisition_cursor: String,
         boundary_cursor: String,
     }
@@ -1995,11 +1996,27 @@ pub mod fixture_transport {
                 fixture_result_parts(&fixture, "observations")?;
             let (boundary_manifest, boundary_chunk) =
                 fixture_result_parts(&boundary, "candidates")?;
+            let capabilities = serde_json::to_vec(&serde_json::json!({
+                "contract_versions": [CONTRACT_VERSION],
+                "supported_bundles": [boundary["bundle"].clone()],
+                "limits": {
+                    "area_square_metres": 100_000_000_u64,
+                    "boundary_vertices": 10_000_u64,
+                    "tiles": 10_000_u64,
+                    "observations": 1_000_000_u64,
+                    "result_bytes": 1_000_000_000_u64,
+                    "concurrent_jobs": 2_u64
+                },
+                "retention_days": 30_u64,
+                "quota_remaining": 100_u64
+            }))
+            .map_err(|error| error.to_string())?;
             Ok(Self {
                 acquisition_manifest,
                 acquisition_chunk,
                 boundary_manifest,
                 boundary_chunk,
+                capabilities,
                 acquisition_cursor: fixture["manifest"]["chunks"][0]["stable_cursor"]
                     .as_str()
                     .unwrap_or_default()
@@ -2014,6 +2031,36 @@ pub mod fixture_transport {
 
     impl AcquisitionTransport for FixtureTransport {
         fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+            if request.path == "/v1/capabilities" {
+                return Ok(TransportResponse {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: self.capabilities.clone(),
+                });
+            }
+            if request.method == TransportMethod::Post && request.path == "/v1/acquisition-jobs" {
+                let body = request.body.as_deref().unwrap_or_default();
+                let request: serde_json::Value =
+                    serde_json::from_slice(body).map_err(|error| TransportError {
+                        explanation: format!(
+                            "fixture could not decode the acquisition request: {error}"
+                        ),
+                    })?;
+                return Ok(TransportResponse {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: serde_json::to_vec(&serde_json::json!({
+                        "job_id": request["request_identity"]["idempotency_key"],
+                        "contract_version": CONTRACT_VERSION,
+                        "bundle_id": request["bundle_id"],
+                        "state": "running",
+                        "outcomes": []
+                    }))
+                    .map_err(|error| TransportError {
+                        explanation: error.to_string(),
+                    })?,
+                });
+            }
             let boundary = request.path.contains("/boundary-jobs/");
             if request.path.ends_with("/manifest") {
                 Ok(TransportResponse {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -55,6 +55,10 @@ pub struct MapBoundaryDesk {
     pub candidates: Vec<MapBoundaryCandidate>,
     #[serde(default)]
     pub selected_candidate_id: Option<String>,
+    #[serde(default)]
+    pub working_points: Vec<MapCoordinate>,
+    #[serde(default)]
+    pub can_undo: bool,
     pub dataset_bundle_summary: String,
     pub coverage_summary: String,
     #[serde(default)]
@@ -77,6 +81,38 @@ pub struct MapBoundaryDeskRequest {
     pub desk: MapBoundaryDesk,
     #[serde(default)]
     pub english: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum MapBoundaryEditOperation {
+    MoveVertex {
+        vertex_index: u32,
+        coordinate: MapCoordinate,
+    },
+    InsertVertex {
+        edge_index: u32,
+    },
+    DeleteVertex {
+        vertex_index: u32,
+    },
+    Undo,
+    RestoreCandidateOriginal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum MapBoundaryHandleSelection {
+    Vertex { vertex_index: u32 },
+    Edge { edge_index: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -112,6 +148,9 @@ pub enum ToolCommand {
     },
     OpenBoundaryDesk {
         request: Box<MapBoundaryDeskRequest>,
+    },
+    UpdateBoundaryDesk {
+        desk: MapBoundaryDesk,
     },
     OpenPreview {
         model_path: String,
@@ -166,14 +205,20 @@ pub enum ToolEvent {
     MapBoundaryCandidateSelected {
         candidate_id: String,
     },
+    MapBoundaryAdjustmentChanged {
+        candidate_id: String,
+        enabled: bool,
+    },
+    MapBoundaryHandleSelected {
+        candidate_id: String,
+        selection: MapBoundaryHandleSelection,
+    },
     MapBoundaryOperation {
         candidate_id: String,
-        operation: String,
-        points: Vec<MapCoordinate>,
+        operation: MapBoundaryEditOperation,
     },
     MapBoundaryConfirmed {
         candidate_id: String,
-        points: Vec<MapCoordinate>,
     },
     MapBoundaryRetryRequested,
     MapBoundaryReturnToCampusRequested,
@@ -276,6 +321,29 @@ mod tests {
         write_message(&mut bytes, &command).await.unwrap();
         let restored: ToolCommand = read_message(&mut bytes.as_slice()).await.unwrap();
         assert_eq!(restored, command);
+    }
+
+    #[tokio::test]
+    async fn boundary_edit_round_trip_is_exhaustively_typed() {
+        let event = ToolEvent::MapBoundaryOperation {
+            candidate_id: "boundary-1".into(),
+            operation: MapBoundaryEditOperation::MoveVertex {
+                vertex_index: 2,
+                coordinate: MapCoordinate {
+                    lng: 121.4,
+                    lat: 31.2,
+                },
+            },
+        };
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &event).await.unwrap();
+        let restored: ToolEvent = read_message(&mut bytes.as_slice()).await.unwrap();
+        assert_eq!(restored, event);
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["operation"]["type"], "move_vertex");
+        assert_eq!(json["operation"]["vertexIndex"], 2);
+        assert!(json["operation"].get("points").is_none());
     }
 
     #[tokio::test]

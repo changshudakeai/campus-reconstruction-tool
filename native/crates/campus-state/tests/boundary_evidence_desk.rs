@@ -194,6 +194,25 @@ fn unavailable_and_all_invalid_results_only_offer_retry_or_campus_return() {
 }
 
 #[test]
+fn local_geometry_validation_is_authoritative_for_candidate_adjustment() {
+    let mut snapshot = fixture_snapshot();
+    snapshot.candidates[0].geometry =
+        SourceGeometry::LineString(vec![[121.395, 31.202], [121.405, 31.212]]);
+    let mut desk = BoundaryEvidenceDesk::new(snapshot).unwrap();
+
+    assert!(matches!(
+        desk.candidate_validity("boundary-osm-relation-100"),
+        BoundaryCandidateValidity::Invalid { .. }
+    ));
+    assert_eq!(
+        desk.projection().availability,
+        BoundaryEvidenceAvailability::AllInvalid
+    );
+    assert!(!desk.projection().can_adjust);
+    assert!(desk.enter_adjustment().is_err());
+}
+
+#[test]
 fn boundary_adjustments_and_restore_are_durable_semantic_project_operations() {
     let directory = tempfile::tempdir().unwrap();
     let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
@@ -217,11 +236,6 @@ fn boundary_adjustments_and_restore_are_durable_semantic_project_operations() {
             |project| project.begin_boundary_review(fixture_snapshot(), actor()),
         )
         .unwrap();
-    session
-        .apply_semantic_operation(&mut library, "enter boundary adjustment", |project| {
-            project.edit_boundary_review(actor(), |desk| desk.enter_adjustment())
-        })
-        .unwrap();
     let original = session
         .active()
         .unwrap()
@@ -233,8 +247,11 @@ fn boundary_adjustments_and_restore_are_durable_semantic_project_operations() {
     session
         .apply_semantic_operation(&mut library, "move boundary vertex 2", |project| {
             project.edit_boundary_review(actor(), |desk| {
+                desk.enter_adjustment()?;
                 desk.select_vertex(BoundaryVertexRef::outer(0, 1))?;
-                desk.move_selected_vertex([121.411, 31.218])
+                desk.move_selected_vertex([121.411, 31.218])?;
+                desk.leave_adjustment();
+                Ok(())
             })
         })
         .unwrap();
@@ -262,7 +279,12 @@ fn boundary_adjustments_and_restore_are_durable_semantic_project_operations() {
     session.redo(&mut library).unwrap();
     session
         .apply_semantic_operation(&mut library, "restore automatic boundary", |project| {
-            project.edit_boundary_review(actor(), |desk| desk.restore_candidate_original())
+            project.edit_boundary_review(actor(), |desk| {
+                desk.enter_adjustment()?;
+                desk.restore_candidate_original()?;
+                desk.leave_adjustment();
+                Ok(())
+            })
         })
         .unwrap();
     assert_eq!(
@@ -279,13 +301,30 @@ fn boundary_adjustments_and_restore_are_durable_semantic_project_operations() {
     session
         .apply_semantic_operation(
             &mut library,
-            "confirm edited boundary and discovery snapshot",
-            |project| project.confirm_boundary_review(actor()),
+            "persist edited boundary and queue five-category acquisition",
+            |project| {
+                let evidence = project
+                    .boundary_review()
+                    .ok_or("Boundary review disappeared")?
+                    .to_pinned_evidence()?;
+                project.confirm_boundary_and_queue_acquisition(
+                    evidence,
+                    "installation-42:boundary-baseline",
+                    actor(),
+                )
+            },
         )
         .unwrap();
     let reopened = library.open_project(&project_id).unwrap();
     let evidence = reopened.boundary_evidence().unwrap();
     assert_ne!(evidence.confirmed_geometry(), Some(&original));
     assert_eq!(evidence.manifest.bundle.id, "cn-campus-2026-06");
+    assert_eq!(
+        reopened
+            .pending_acquisition_start()
+            .unwrap()
+            .idempotency_key,
+        "installation-42:boundary-baseline"
+    );
     assert!(reopened.boundary_review().is_none());
 }

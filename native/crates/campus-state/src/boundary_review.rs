@@ -126,6 +126,7 @@ pub struct BoundaryEvidenceDeskProjection {
     pub availability: BoundaryEvidenceAvailability,
     pub can_adjust: bool,
     pub can_confirm: bool,
+    pub can_undo: bool,
     pub confirmation_label: &'static str,
     pub confirmation_blocked_reason: Option<String>,
     pub recovery_actions: Vec<BoundaryRecoveryAction>,
@@ -233,9 +234,47 @@ impl BoundaryEvidenceDesk {
         self.mode
     }
 
+    pub fn candidate_validity(&self, candidate_id: &str) -> BoundaryCandidateValidity {
+        let Some(candidate) = self.snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .candidates
+                .iter()
+                .find(|candidate| candidate.id == candidate_id)
+        }) else {
+            return BoundaryCandidateValidity::Invalid {
+                reasons: vec![
+                    "The automatic Campus Boundary candidate is not in this snapshot".into(),
+                ],
+            };
+        };
+        let mut reasons = match self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.assessments.get(candidate_id))
+            .map(|assessment| &assessment.validity)
+        {
+            Some(BoundaryCandidateValidity::Valid) => Vec::new(),
+            Some(BoundaryCandidateValidity::Invalid { reasons }) => reasons.clone(),
+            None => vec!["Candidate validity evidence is unavailable".into()],
+        };
+        for reason in validate_boundary_geometry(&candidate.geometry).reasons {
+            if !reasons.contains(&reason) {
+                reasons.push(reason);
+            }
+        }
+        if reasons.is_empty() {
+            BoundaryCandidateValidity::Valid
+        } else {
+            BoundaryCandidateValidity::Invalid { reasons }
+        }
+    }
+
     pub fn projection(&self) -> BoundaryEvidenceDeskProjection {
         let availability = self.availability();
-        let selected_validity = self.selected_assessment().map(|value| &value.validity);
+        let selected_validity = self
+            .selected_candidate_id
+            .as_deref()
+            .map(|candidate_id| self.candidate_validity(candidate_id));
         let geometry_validity = self
             .working_geometry
             .as_ref()
@@ -250,6 +289,7 @@ impl BoundaryEvidenceDesk {
             .map(|failure| failure.explanation.clone())
             .or_else(|| {
                 selected_validity
+                    .as_ref()
                     .and_then(BoundaryCandidateValidity::first_blocking_reason)
                     .map(str::to_string)
             })
@@ -272,6 +312,7 @@ impl BoundaryEvidenceDesk {
             can_confirm: availability == BoundaryEvidenceAvailability::Ready
                 && valid_candidate
                 && geometry_validity.valid,
+            can_undo: !self.adjustment_history.is_empty(),
             confirmation_label: CONFIRMATION_LABEL,
             confirmation_blocked_reason,
             recovery_actions: if availability == BoundaryEvidenceAvailability::Ready {
@@ -553,10 +594,12 @@ impl BoundaryEvidenceDesk {
             return BoundaryEvidenceAvailability::Unavailable;
         }
         if self.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot
-                .assessments
-                .values()
-                .any(|assessment| matches!(assessment.validity, BoundaryCandidateValidity::Valid))
+            snapshot.candidates.iter().any(|candidate| {
+                matches!(
+                    self.candidate_validity(&candidate.id),
+                    BoundaryCandidateValidity::Valid
+                )
+            })
         }) {
             BoundaryEvidenceAvailability::Ready
         } else {
@@ -571,13 +614,6 @@ impl BoundaryEvidenceDesk {
             .candidates
             .iter()
             .find(|candidate| candidate.id == selected)
-    }
-
-    fn selected_assessment(&self) -> Option<&BoundaryCandidateAssessment> {
-        self.snapshot
-            .as_ref()?
-            .assessments
-            .get(self.selected_candidate_id.as_deref()?)
     }
 
     fn require_adjustment(&self) -> Result<(), String> {
