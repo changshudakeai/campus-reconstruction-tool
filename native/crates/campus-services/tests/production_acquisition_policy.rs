@@ -37,11 +37,14 @@ fn production_desktop_contains_only_the_controlled_v1_acquisition_route() {
     let root = workspace_root();
     let desktop =
         without_debug_only_legacy_acquisition(&source(root.join("apps/campus-native/src/main.rs")));
+    let adapters = without_debug_only_legacy_acquisition(&source(
+        root.join("apps/campus-native/src/desktop_tool_adapters.rs"),
+    ));
     let services = without_debug_only_legacy_acquisition(&source(
         root.join("crates/campus-services/src/lib.rs"),
     ));
     let production_client = source(root.join("apps/campus-native/src/v11_acquisition_client.rs"));
-    let release_sources = format!("{desktop}\n{services}");
+    let release_sources = format!("{desktop}\n{adapters}\n{services}");
 
     for forbidden in [
         "overpass-api.de",
@@ -60,6 +63,11 @@ fn production_desktop_contains_only_the_controlled_v1_acquisition_route() {
     assert!(desktop.contains("CAMPUS_ACQUISITION_SERVICE_URL"));
     assert!(production_client.contains("HttpsTransport"));
     assert!(production_client.contains("AcquisitionClient"));
+    let controlled_release = source(root.join("apps/campus-native/src/v11_tracer_bullet.rs"));
+    assert!(desktop.contains("production_acquisition_client.as_ref()"));
+    assert!(controlled_release.contains("#[cfg(not(debug_assertions))]"));
+    assert!(controlled_release.contains("request_controlled_coarse_raster_supplement"));
+    assert!(controlled_release.contains("retry_coarse_raster_supplement"));
 }
 
 #[test]

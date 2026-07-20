@@ -1,13 +1,14 @@
 use campus_state::{
-    FoundationBatchDecision, FoundationBatchReview, FoundationCandidateDecision,
-    FoundationCategory, FoundationReviewBasis, InstallationId, ProviderOutcomeStatus,
-    ReviewConflictResolution, Schema2Project, SourceGeometry, WidthProvenanceKind,
+    CoarseRasterDecision, CoarseRasterRunOutcome, FoundationBatchDecision, FoundationBatchReview,
+    FoundationCandidateDecision, FoundationCategory, FoundationReviewBasis, InstallationId,
+    ProviderOutcomeStatus, ReviewConflictResolution, Schema2Project, SourceGeometry,
+    WidthProvenanceKind,
 };
 use campus_tool_protocol::{
-    MapCoordinate, MapEvidenceAssessment, MapFoundationBatchDecision,
-    MapFoundationCandidateDecision, MapFoundationConflictResolution, MapFoundationReviewCandidate,
-    MapFoundationReviewCategory, MapFoundationReviewDesk, MapKnownFeatureGap, MapProviderOutcome,
-    MapReviewConflict, ToolEvent,
+    MapAreaGeometry, MapCoarseRasterDecision, MapCoarseRasterEvidence, MapCoordinate,
+    MapEvidenceAssessment, MapFoundationBatchDecision, MapFoundationCandidateDecision,
+    MapFoundationConflictResolution, MapFoundationReviewCandidate, MapFoundationReviewCategory,
+    MapFoundationReviewDesk, MapKnownFeatureGap, MapProviderOutcome, MapReviewConflict, ToolEvent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,32 +115,77 @@ pub(crate) fn map_foundation_review_desk(
         .filter(|subject_id| candidates.iter().any(|item| item.id == *subject_id))
         .map(str::to_string)
         .or_else(|| candidates.first().map(|item| item.id.clone()));
+    let current_bundle_id = project
+        .pinned_evidence()
+        .map(|evidence| evidence.acquisition.manifest.bundle.id.as_str());
+    let current_gap_ids = active
+        .known_gaps
+        .iter()
+        .map(|gap| gap.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut provider_outcomes = active
+        .provider_outcomes
+        .iter()
+        .map(|outcome| MapProviderOutcome {
+            provider: outcome.provider.clone(),
+            tile_id: outcome.tile_id.clone(),
+            state: provider_state(outcome.status).into(),
+            summary: outcome
+                .failure
+                .as_ref()
+                .map(|failure| format!("{} · {}", failure.explanation, failure.suggested_action))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} raw · {} deduplicated",
+                        outcome.raw_count, outcome.deduplicated_count
+                    )
+                }),
+        })
+        .collect::<Vec<_>>();
+    provider_outcomes.extend(
+        project
+            .coarse_raster_runs()
+            .iter()
+            .filter(|run| {
+                run.category == active_category
+                    && Some(run.dataset_bundle_id.as_str()) == current_bundle_id
+                    && current_gap_ids.contains(run.linked_gap_id.as_str())
+            })
+            .filter_map(|run| {
+                let (kind, failure) = match &run.outcome {
+                    CoarseRasterRunOutcome::ProviderFailure { failure } => {
+                        ("provider-failure", failure)
+                    }
+                    CoarseRasterRunOutcome::UnusableCoverage { failure } => {
+                        ("unusable-coverage", failure)
+                    }
+                    CoarseRasterRunOutcome::Proposals { .. } => return None,
+                };
+                Some(MapProviderOutcome {
+                    provider: "coarse-raster".into(),
+                    tile_id: run.linked_gap_id.clone(),
+                    state: format!(
+                        "{}-{}",
+                        kind,
+                        if failure.retryable {
+                            "retryable"
+                        } else {
+                            "terminal"
+                        }
+                    ),
+                    summary: format!(
+                        "{} · {} · {}",
+                        failure.code, failure.explanation, failure.suggested_action
+                    ),
+                })
+            }),
+    );
     Ok(MapFoundationReviewDesk {
         categories,
         active_category: category_id(active_category).into(),
         candidates,
         selected_candidate_id,
-        provider_outcomes: active
-            .provider_outcomes
-            .iter()
-            .map(|outcome| MapProviderOutcome {
-                provider: outcome.provider.clone(),
-                tile_id: outcome.tile_id.clone(),
-                state: provider_state(outcome.status).into(),
-                summary: outcome
-                    .failure
-                    .as_ref()
-                    .map(|failure| {
-                        format!("{} · {}", failure.explanation, failure.suggested_action)
-                    })
-                    .unwrap_or_else(|| {
-                        format!(
-                            "{} raw · {} deduplicated",
-                            outcome.raw_count, outcome.deduplicated_count
-                        )
-                    }),
-            })
-            .collect(),
+        provider_outcomes,
         known_gaps: active
             .known_gaps
             .iter()
@@ -156,6 +202,97 @@ pub(crate) fn map_foundation_review_desk(
                     .collect::<Vec<_>>()
                     .join(" · "),
                 acknowledged: gap.acknowledged,
+            })
+            .collect(),
+        coarse_raster_evidence: project
+            .coarse_raster_evidence(active_category)
+            .into_iter()
+            .map(|observation| MapCoarseRasterEvidence {
+                id: observation.id.clone(),
+                linked_gap_id: observation.linked_gap_id.clone(),
+                label: format!("Coarse raster {:?} evidence", observation.subject),
+                decision: match project.coarse_raster_decision(
+                    active_category,
+                    &observation.id,
+                ) {
+                    CoarseRasterDecision::Unresolved => "unresolved",
+                    CoarseRasterDecision::Accepted => "accepted",
+                    CoarseRasterDecision::Rejected { .. } => "rejected",
+                }
+                .into(),
+                dataset_summary: format!(
+                    "{} · {} · {}",
+                    observation.source.provider,
+                    observation.source.dataset_version,
+                    observation.source.observed_at
+                ),
+                resolution_class_summary: format!(
+                    "{} m · {}",
+                    observation.source.native_resolution_metres, observation.source.class_label
+                ),
+                lineage_summary: format!(
+                    "algorithm={} · vectorization={} · thresholds={:?} · min-component={} px · simplify={} m · CRS={} · affine={:?} · cloud={} · nodata={} · source-chunk={} · source-sha256={} · derived-sha256={} · licence={} ({}) · assessment={:?}",
+                    observation.algorithm.algorithm_version,
+                    observation.algorithm.vectorization_version,
+                    observation.algorithm.thresholds,
+                    observation.algorithm.minimum_component_pixels,
+                    observation.algorithm.simplification_tolerance_metres,
+                    observation.grid.crs,
+                    observation.grid.affine_transform,
+                    observation.grid.cloud_handling,
+                    observation.grid.nodata_handling,
+                    observation.source.source_chunk_id,
+                    observation.source.source_sha256,
+                    observation.derived_sha256,
+                    observation.source.licence.identifier,
+                    observation.source.licence.url,
+                    observation.assessment
+                ),
+                exclusion_summary: if observation.exclusions.is_empty() {
+                    "No cells excluded after boundary/gap clipping".into()
+                } else {
+                    observation
+                        .exclusions
+                        .iter()
+                        .map(|exclusion| {
+                            format!(
+                                "{} cells · {:?} · {}",
+                                exclusion.excluded_cell_count,
+                                exclusion.reason,
+                                exclusion.explanation
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                },
+                assessment: MapEvidenceAssessment {
+                    geometry: format!(
+                        "{} · {}",
+                        observation.assessment.geometry.status,
+                        observation.assessment.geometry.reason
+                    ),
+                    semantics: format!(
+                        "{} · {}",
+                        observation.assessment.semantics.status,
+                        observation.assessment.semantics.reason
+                    ),
+                    entity_match: format!(
+                        "{} · {}",
+                        observation.assessment.entity_match.status,
+                        observation.assessment.entity_match.reason
+                    ),
+                    name_match: format!(
+                        "{} · {}",
+                        observation.assessment.name_match.status,
+                        observation.assessment.name_match.reason
+                    ),
+                },
+                approximate_geometry: area_geometry(&observation.approximate_geometry),
+                warnings: observation
+                    .warnings()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
             })
             .collect(),
         conflicts: active
@@ -289,6 +426,26 @@ pub(crate) fn apply_foundation_review_tool_event(
             } else {
                 project.reopen_feature_gap(category, &gap_id, actor)?;
             }
+            Ok(FoundationReviewToolEventOutcome::ReviewUpdated { category })
+        }
+        ToolEvent::MapCoarseRasterDecisionRequested {
+            category,
+            observation_id,
+            decision,
+        } => {
+            let category = parse_category(&category)?;
+            project.review_coarse_raster_observation(
+                category,
+                &observation_id,
+                match decision {
+                    MapCoarseRasterDecision::Accept => CoarseRasterDecision::Accepted,
+                    MapCoarseRasterDecision::Reject => CoarseRasterDecision::Rejected {
+                        reason: "explicit coarse evidence rejection".into(),
+                    },
+                    MapCoarseRasterDecision::LeaveUnresolved => CoarseRasterDecision::Unresolved,
+                },
+                actor,
+            )?;
             Ok(FoundationReviewToolEventOutcome::ReviewUpdated { category })
         }
         ToolEvent::MapFoundationConflictResolutionRequested {
@@ -435,6 +592,35 @@ fn provider_state(status: ProviderOutcomeStatus) -> &'static str {
     }
 }
 
+fn area_geometry(geometry: &SourceGeometry) -> MapAreaGeometry {
+    fn ring(points: &[[f64; 2]]) -> Vec<MapCoordinate> {
+        points
+            .iter()
+            .map(|point| {
+                let gcj02 = campus_services::wgs84_to_gcj02(campus_state::GeoPoint {
+                    lng: point[0],
+                    lat: point[1],
+                });
+                MapCoordinate {
+                    lng: gcj02.lng,
+                    lat: gcj02.lat,
+                }
+            })
+            .collect()
+    }
+    match geometry {
+        SourceGeometry::Polygon(rings) => MapAreaGeometry::Polygon {
+            rings: rings.iter().map(|points| ring(points)).collect(),
+        },
+        SourceGeometry::MultiPolygon(polygons) => MapAreaGeometry::MultiPolygon {
+            polygons: polygons
+                .iter()
+                .map(|polygon| polygon.iter().map(|points| ring(points)).collect())
+                .collect(),
+        },
+        _ => unreachable!("validated coarse raster geometry is always an area"),
+    }
+}
 fn geometry_paths(geometry: &SourceGeometry) -> Vec<Vec<MapCoordinate>> {
     fn path(points: &[[f64; 2]]) -> Vec<MapCoordinate> {
         points

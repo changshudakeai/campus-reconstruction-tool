@@ -145,6 +145,32 @@ pub struct MapKnownFeatureGap {
     pub acknowledged: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum MapAreaGeometry {
+    Polygon {
+        rings: Vec<Vec<MapCoordinate>>,
+    },
+    MultiPolygon {
+        polygons: Vec<Vec<Vec<MapCoordinate>>>,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapCoarseRasterEvidence {
+    pub id: String,
+    pub linked_gap_id: String,
+    pub label: String,
+    pub decision: String,
+    pub dataset_summary: String,
+    pub resolution_class_summary: String,
+    pub lineage_summary: String,
+    pub exclusion_summary: String,
+    pub assessment: MapEvidenceAssessment,
+    pub approximate_geometry: MapAreaGeometry,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MapReviewConflict {
@@ -165,6 +191,8 @@ pub struct MapFoundationReviewDesk {
     pub selected_candidate_id: Option<String>,
     pub provider_outcomes: Vec<MapProviderOutcome>,
     pub known_gaps: Vec<MapKnownFeatureGap>,
+    #[serde(default)]
+    pub coarse_raster_evidence: Vec<MapCoarseRasterEvidence>,
     pub conflicts: Vec<MapReviewConflict>,
     pub basis_token: String,
     pub ledger_sequence: u64,
@@ -195,6 +223,14 @@ pub enum MapFoundationCandidateDecision {
     Accept,
     Reject,
     Revoke,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MapCoarseRasterDecision {
+    Accept,
+    Reject,
+    LeaveUnresolved,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,6 +444,15 @@ pub enum ToolEvent {
         category: String,
         gap_id: String,
         acknowledged: bool,
+    },
+    MapCoarseRasterSupplementRequested {
+        category: String,
+        gap_id: String,
+    },
+    MapCoarseRasterDecisionRequested {
+        category: String,
+        observation_id: String,
+        decision: MapCoarseRasterDecision,
     },
     MapFoundationConflictResolutionRequested {
         category: String,

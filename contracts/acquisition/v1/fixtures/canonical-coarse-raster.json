@@ -1,0 +1,35 @@
+{
+  "contract_version": "1.0.0",
+  "bundle": {
+    "id": "cn-campus-2026-06",
+    "osm_snapshot": "osm-cn-2026-06-30",
+    "overture_release": "2026-06-17.0",
+    "output_schema": "source-observation-1.0.0",
+    "classification_rules": "classification-1.0.0",
+    "assembly_rules": "assembly-1.0.0",
+    "conflation_rules": "conflation-1.0.0",
+    "derivation_rules": "derivation-1.0.0",
+    "coarse_raster_profiles": {
+      "coarse-gap-water-v1.0.0": {"algorithmVersion":"coarse-gap-water-v1.0.0","vectorizationVersion":"gdal-polygonize-3.11+simplify-v1","thresholds":{"maximum_cloud_fraction":0.08,"minimum_probability":0.72},"minimumComponentPixels":24,"simplificationToleranceMetres":10.0},
+      "coarse-gap-vegetation-v1.0.0": {"algorithmVersion":"coarse-gap-vegetation-v1.0.0","vectorizationVersion":"gdal-polygonize-3.11+simplify-v1","thresholds":{"maximum_cloud_fraction":0.08,"minimum_ndvi":0.55},"minimumComponentPixels":24,"simplificationToleranceMetres":10.0}
+    }
+  },
+  "coverage_report": {
+    "outcomes": [
+      {"provider":"sentinel-2-l2a","category":"water","tile_id":"31/121/1","status":"complete","pagination_exhausted":true,"raw_count":40,"deduplicated_count":32,"relation_members_complete":true,"gaps":[]}
+    ]
+  },
+  "observations": [
+    {"id":"raster-water-east-v1","category":"water","subject":"water","linkedGapId":"gap:water:osm:31-121-1:0","datasetBundleId":"cn-campus-2026-06","source":{"provider":"sentinel-2-l2a","datasetVersion":"S2B_MSIL2A_20260701T022549","observedAt":"2026-07-01T02:25:49Z","nativeResolutionMetres":10.0,"classLabel":"surface-water","sourceChunkId":"raster-chunk-water-east","sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","licence":{"identifier":"copernicus-sentinel-data-terms","url":"https://dataspace.copernicus.eu/terms-and-conditions","attribution":"Contains modified Copernicus Sentinel data 2026","dataset_release":"sentinel-2-l2a-2026-07-01","acquired_at":"2026-07-02T08:00:00Z","upstream_obligations":["retain attribution"]}},"grid":{"crs":"EPSG:32651","affineTransform":[10.0,0.0,340000.0,0.0,-10.0,3455000.0],"cloudHandling":"SCL cloud/shadow classes excluded","nodataHandling":"nodata excluded before connected components"},"algorithm":{"algorithmVersion":"coarse-gap-water-v1.0.0","vectorizationVersion":"gdal-polygonize-3.11+simplify-v1","thresholds":{"maximum_cloud_fraction":0.08,"minimum_probability":0.72},"minimumComponentPixels":24,"simplificationToleranceMetres":10.0},"clip":{"boundaryResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","linkedGapId":"gap:water:osm:31-121-1:0","gapTileId":"31/121/1","gapGeometry":{"type":"Polygon","coordinates":[[[121.397,31.218],[121.410,31.218],[121.410,31.230],[121.397,31.230],[121.397,31.218]]]},"clippedToBoundaryAndGap":true},"preClipGeometry":{"type":"Polygon","coordinates":[[[121.400,31.220],[121.408,31.220],[121.408,31.226],[121.400,31.226],[121.400,31.220]]]},"approximateGeometry":{"type":"Polygon","coordinates":[[[121.404,31.222],[121.408,31.222],[121.408,31.226],[121.404,31.226],[121.404,31.222]]]},"inputCellCount":40,"retainedCellCount":32,"componentCellCounts":[32],"structuredConflictObservationIds":["obs-osm-relation-42","obs-water-88"],"exclusions":[{"reason":"structured_geometry_priority","excludedCellCount":8,"structuredObservationIds":["obs-osm-relation-42","obs-water-88"],"explanation":"Explicit structured geometry retains priority"}],"assessment":{"geometry":{"status":"approximate","reason":"32 connected 10 m cells survive clipping"},"semantics":{"status":"supported","reason":"surface-water threshold is bundle-pinned"},"entityMatch":{"status":"not_applicable","reason":"coarse coverage does not assert a precise entity"},"nameMatch":{"status":"not_applicable","reason":"raster coverage carries no naming claim"},"priority":"structured_geometry_first"},"derivedSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ],
+  "manifest": {
+    "contract_version": "1.0.0",
+    "chunks": [
+      {"id":"coarse-raster-chunk-0001","stable_cursor":"coarse-raster-cursor-v1","content_type":"application/x-ndjson","content_encoding":"gzip","sha256":"afe8f78593c445118cbdd3c1dbd6e2fa456d24cbef42ed28bb2e2027585d484c","uncompressed_bytes":2674}
+    ],
+    "result_sha256": "6427c56d16e9e3e20fe3e6fcc88dd7ee9f8e321e84b3996575a277821fe60c92"
+  },
+  "transport_chunks": {
+    "coarse-raster-chunk-0001": "H4sIAAAAAAACCqVWUW/bNhB+368Q9DrLkWQncfWWGEUXoMWKJdhDg8CgpLPNlSI1knKTBvnv+46yZaVN1mEVbBikjt99d/fd0Y+xUBtjpd82cfF4XPxJ1kmj4yKujLCOko1oky/Ck0122TSdpvEkbqSWTdcsTdMaTdp/lPekXFzk80nsZNMquZaV8IC5MYqs0BV9IG8JJhkQJrHfYrE1qnbsuxH3DLeqlOnq1dqKygcGMF0MzlatNaUopZL+gV+d50+TeEeVB+2vwdeR+aYWKmmNetgYLb9SMptm2a97Yg8II8ZR0QIQfhHZOzIN6D0wl8oYW0uNXVC7vb3N8mw6T+eTWTbN8/xust9YvLJxNmzMX9nI7+7ukICHlkD0Y88x8HGOnGuQTaaBH8T5Qfhqy0tLwo1qElVmh7RuKKoNuUgbH/Fxi5+otVRJmPQIKJbzwncIJobZClErlKZUxD43o8AHF7Mc8Fojs1RHWRo1UUVKuch1did38K1k20q9GUOPksm4WjT0PXcrHFR05F4Ja2WgH+EAEAEtZPPvlFsrWaegDCvbVb6zVK8OgazW0jrPCNQIJKByzxgghLWoqJdzNIgwki4qO10rShCYpnpMwXVtayxyET/BPVRNaBR2H0BgyflgL6UBhLAPf5DrlL/eivz0DGb1Tz57Dy3VN+Zy7+JC1+8EnCIBhCqK9kcKnr05D+rLFgc5Zi+uZ/vlwf7bNexfVi843EhFVzULKDvBmZMMzJXUn4m5hhcwKkLWCuOaYpYlMEuyImWA6jBLlhDbEnF6Zj9Dg8W18MKRvwwVCkCVTirRtJ1L8jQ/S9IzuKrJQp31kPfyJx9A0n2lOh4pTOWxX9ZUDwzjYsFGrRJa9BMrfnvPYpU+OoozOogzsuSF1C4aNDwZSfMFMY/sjq9/L9Hou+DvisfnbWxKlyChiSUVtpN5jhO824/txSK+e0IeN1bWYdSv11LTDcayWxuL6X8bhjJ/Z/MUz36RZP3W6WnYu2MhYkD/JlAH7v8ivl6+j8LeiduK2nzhBuYxFh1SxeK13EVvP16/K2b52SmrQhsu6Qin3xhORSWBGI3G0KAOx1rhMPbTZB8isuh5ruOdbjs/qtA8/c8q5OFCS/TaD++DfpJ/O/tfvQteXL7SSL1GnolslqP+prMVBUKc4veiJPXtQIuHVjnehNf55erD9dX7/GLFrZKep9lNmuen8zehOyvSPaqo/u4ki0/AYdx31XmS5jfpokhTfD7BXnhvZdntpb40updzY2rc96jS0rRktaw6F13z9aNJRaGwjHdkt4JQUTAO3O3NkjxRuUgGv6GSNb8EsA333gE6Gc4wXIK4GwfrrkWLkGhWplRyE/ogNEefz2hMHXnvLGdv633ripOTwKtFHqdHN1PqTgJ2ApkmUGIte8xwvXmMGsx5owLi8/82JjQo1RfPMslpL/LTYv7mUxCa2SE++10K4kOpl9tOf74aCb3ijZHcB8th4omffDi045xBedcQiP9/8wZIXfkXmne4KJ9++Qdg3j5scgoAAA=="
+  }
+}

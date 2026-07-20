@@ -146,6 +146,10 @@ pub enum FoundationReviewAction {
         gap_id: String,
         evidence_ids: Vec<String>,
     },
+    CoarseRasterDecision {
+        observation_id: String,
+        decision: crate::CoarseRasterDecision,
+    },
     CategoryCompleted,
 }
 
@@ -156,6 +160,8 @@ pub struct FoundationReviewState {
     pub acknowledged_gap_ids: BTreeSet<String>,
     pub resolved_gap_ids: BTreeSet<String>,
     pub unresolved_conflict_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub coarse_raster_decisions: BTreeMap<String, crate::CoarseRasterDecision>,
     pub category_complete: bool,
 }
 
@@ -611,7 +617,7 @@ pub(crate) fn known_gaps_for_category(
                     category,
                     location: KnownFeatureGapLocation {
                         tile_id: outcome.tile_id.clone(),
-                        geometry: None,
+                        geometry: outcome.gap_geometry.clone(),
                     },
                     attempted_evidence: vec![reason],
                     generation_impact: outcome

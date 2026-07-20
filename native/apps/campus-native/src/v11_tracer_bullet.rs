@@ -1,45 +1,41 @@
-#[cfg(debug_assertions)]
 use campus_export::{
     write_foundation_manifest, write_schematic, FoundationManifest, FoundationManifestSchematic,
     VoxelModel,
 };
-#[cfg(debug_assertions)]
 use campus_services::acquisition::project_acquisition::{
     ProjectAcquisitionCoordinator, ProjectAcquisitionProgress,
 };
-#[cfg(debug_assertions)]
 use campus_services::acquisition::{
-    AcquisitionClient, AcquisitionTransport, VerifiedBoundaryDiscoverySnapshot,
+    AcquisitionClient, AcquisitionJobState, AcquisitionTransport, CoarseRasterSupplementRequest,
+    VerifiedBoundaryDiscoverySnapshot,
 };
 use campus_state::ProjectId;
 #[cfg(test)]
 use campus_state::Schema2Project;
-#[cfg(debug_assertions)]
 use campus_state::{
     CampusProjectLibrary, CampusScope, FoundationCategory, InstallationId,
-    PinnedAcquisitionEvidence, ResultManifest, SourceObservation, V11ConstructionCapability,
+    V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
+use campus_state::{PinnedAcquisitionEvidence, ResultManifest, SourceObservation};
 use campus_tool_protocol::{
     read_message, write_message, MapBoundaryDesk, MapBoundaryDeskRequest,
     MapBoundaryHandleSelection, MapFoundationReviewDeskRequest, ToolCommand, ToolEvent, ToolKind,
     PROTOCOL_VERSION,
 };
-#[cfg(all(debug_assertions, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use rand::Rng;
 #[cfg(debug_assertions)]
 use serde::de::DeserializeOwned;
 #[cfg(debug_assertions)]
 use serde::Serialize;
-#[cfg(debug_assertions)]
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-#[cfg(all(debug_assertions, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use std::process::Command;
-#[cfg(all(debug_assertions, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
-#[cfg(debug_assertions)]
 pub struct FixedDatasetTracer<'a, T> {
     library_root: PathBuf,
     output_root: PathBuf,
@@ -52,7 +48,6 @@ pub struct FixedDatasetTracer<'a, T> {
     project_id: ProjectId,
 }
 
-#[cfg(debug_assertions)]
 pub struct FixedDatasetTracerRequest {
     pub library_root: PathBuf,
     pub output_root: PathBuf,
@@ -62,7 +57,6 @@ pub struct FixedDatasetTracerRequest {
     pub acquisition_job_id: String,
 }
 
-#[cfg(debug_assertions)]
 pub struct BoundaryDeskMapOptions {
     pub js_api_key: String,
     pub security_code: String,
@@ -72,7 +66,6 @@ pub struct BoundaryDeskMapOptions {
     pub english: bool,
 }
 
-#[cfg(debug_assertions)]
 pub struct FoundationReviewDeskMapOptions {
     pub js_api_key: String,
     pub security_code: String,
@@ -82,13 +75,11 @@ pub struct FoundationReviewDeskMapOptions {
     pub english: bool,
 }
 
-#[cfg(debug_assertions)]
 trait ToolSessionTransport {
     fn receive_event(&mut self) -> Result<ToolEvent, String>;
     fn send_command(&mut self, command: ToolCommand) -> Result<(), String>;
 }
 
-#[cfg(debug_assertions)]
 #[derive(Default)]
 struct BoundaryToolInteraction {
     candidate_id: Option<String>,
@@ -96,13 +87,13 @@ struct BoundaryToolInteraction {
     selected_handle: Option<MapBoundaryHandleSelection>,
 }
 
-#[cfg(all(debug_assertions, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 struct BoundaryNamedPipeTransport {
     runtime: tokio::runtime::Runtime,
     server: NamedPipeServer,
 }
 
-#[cfg(all(debug_assertions, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 impl ToolSessionTransport for BoundaryNamedPipeTransport {
     fn receive_event(&mut self) -> Result<ToolEvent, String> {
         let runtime = &self.runtime;
@@ -125,7 +116,6 @@ pub struct FixedDatasetTracerReport {
     pub manifest_path: PathBuf,
 }
 
-#[cfg(debug_assertions)]
 impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     pub fn confirm_campus_target(
         request: FixedDatasetTracerRequest,
@@ -558,6 +548,44 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         )
     }
 
+    #[cfg(not(debug_assertions))]
+    fn resume_persisted_foundation_acquisition(&self) -> Result<(), String> {
+        let coordinator = ProjectAcquisitionCoordinator::new(self.acquisition_client);
+        let mut library = self.open_library()?;
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            "refresh controlled Foundation acquisition status",
+            |project| coordinator.reconnect(project, self.actor.clone()),
+        )?;
+        session.apply_semantic_operation(
+            &mut library,
+            "pin controlled Foundation acquisition manifest",
+            |project| coordinator.pin_manifest(project, self.actor.clone()),
+        )?;
+        loop {
+            let progress = session.apply_semantic_operation(
+                &mut library,
+                "persist controlled Foundation acquisition chunk",
+                |project| coordinator.download_next_chunk(project, self.actor.clone()),
+            )?;
+            if progress == ProjectAcquisitionProgress::AllChunksVerified {
+                break;
+            }
+        }
+        let progress = session.apply_semantic_operation(
+            &mut library,
+            "finalize controlled Foundation acquisition",
+            |project| coordinator.finalize(project, self.actor.clone()),
+        )?;
+        if progress != ProjectAcquisitionProgress::EvidencePinned {
+            return Err("Controlled Foundation evidence was not pinned".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
     pub fn acquire_foundation_evidence(&self) -> Result<(), String> {
         let acquisition = self
             .acquisition_client
@@ -619,6 +647,154 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         })
     }
 
+    fn request_controlled_coarse_raster_supplement(
+        &self,
+        category: FoundationCategory,
+        gap_id: &str,
+    ) -> Result<(), String> {
+        let project = self.open_library()?.open_project(&self.project_id)?;
+        let evidence = project
+            .pinned_evidence()
+            .ok_or("Coarse raster supplementation requires pinned Foundation evidence")?;
+        let gap = project
+            .foundation_review_queue(category)?
+            .known_gaps
+            .into_iter()
+            .find(|gap| {
+                gap.id == gap_id && gap.status != campus_state::KnownFeatureGapStatus::Resolved
+            })
+            .ok_or("The selected Known Feature Gap is no longer current")?;
+        let gap_geometry = gap
+            .location
+            .geometry
+            .ok_or("The controlled Coverage Report did not preserve gap geometry")?;
+        let algorithm_version = match category {
+            FoundationCategory::Water => "coarse-gap-water-v1.0.0",
+            FoundationCategory::Vegetation => "coarse-gap-vegetation-v1.0.0",
+            _ => {
+                return Err(
+                    "Coarse raster supplementation supports only water or vegetation gaps".into(),
+                )
+            }
+        };
+        let bundle = serde_json::from_value(
+            serde_json::to_value(&evidence.acquisition.manifest.bundle)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let gap_geometry = serde_json::from_value(
+            serde_json::to_value(&gap_geometry).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let request = CoarseRasterSupplementRequest::new(
+            bundle,
+            evidence.boundary.manifest.result_sha256.clone(),
+            match category {
+                FoundationCategory::Water => {
+                    campus_services::acquisition::FoundationCategory::Water
+                }
+                FoundationCategory::Vegetation => {
+                    campus_services::acquisition::FoundationCategory::Vegetation
+                }
+                _ => unreachable!(),
+            },
+            gap.id.clone(),
+            gap.location.tile_id,
+            gap_geometry,
+            algorithm_version,
+            format!(
+                "{}/coarse-raster/{}/{}",
+                self.project_id.as_str(),
+                evidence.acquisition.manifest.bundle.id,
+                gap.id
+            ),
+        )?;
+        let started = self
+            .acquisition_client
+            .start_coarse_raster_supplement(&request)
+            .map_err(|error| error.to_string())?;
+        let has_previous_job_run = project
+            .coarse_raster_runs()
+            .iter()
+            .any(|run| run.job_id == started.job_id);
+        let retried = has_previous_job_run && coarse_raster_job_is_retryable(&started);
+        let started = if retried {
+            self.acquisition_client
+                .retry_coarse_raster_supplement(&started)
+                .map_err(|error| error.to_string())?
+        } else {
+            started
+        };
+        let terminal = if matches!(
+            started.state,
+            AcquisitionJobState::Complete
+                | AcquisitionJobState::Partial
+                | AcquisitionJobState::Failed
+                | AcquisitionJobState::Cancelled
+        ) {
+            started
+        } else {
+            self.acquisition_client
+                .coarse_raster_job(&started)
+                .map_err(|error| error.to_string())?
+        };
+        if matches!(
+            terminal.state,
+            AcquisitionJobState::Queued | AcquisitionJobState::Running
+        ) {
+            return Err(format!(
+                "Coarse raster job {} is still running; retry preserves the same idempotent job",
+                terminal.job_id
+            ));
+        }
+        let previous_job_runs = project
+            .coarse_raster_runs()
+            .iter()
+            .filter(|run| run.job_id == terminal.job_id)
+            .collect::<Vec<_>>();
+        if !retried
+            && previous_job_runs.iter().any(|run| {
+                matches!(
+                    run.outcome,
+                    campus_state::CoarseRasterRunOutcome::Proposals { .. }
+                        | campus_state::CoarseRasterRunOutcome::UnusableCoverage { .. }
+                )
+            })
+        {
+            return Ok(());
+        }
+        if !retried
+            && !coarse_raster_job_is_retryable(&terminal)
+            && previous_job_runs.iter().any(|run| {
+                matches!(
+                    run.outcome,
+                    campus_state::CoarseRasterRunOutcome::ProviderFailure { .. }
+                )
+            })
+        {
+            return Ok(());
+        }
+        let run = super::v11_acquisition_client::materialize_coarse_raster_supplement(
+            self.acquisition_client,
+            &request,
+            &terminal,
+            format!(
+                "coarse-raster-run:{}:{}",
+                terminal.job_id,
+                previous_job_runs.len() + 1
+            ),
+            format!("unix-ms:{}", now_unix_ms()),
+        )?;
+        let mut library = self.open_library()?;
+        let mut session = campus_state::Schema2ProjectSession::default();
+        session.open_project(&library, &self.project_id)?;
+        session.apply_semantic_operation(
+            &mut library,
+            "record controlled coarse raster gap evidence",
+            |project| project.record_coarse_raster_supplement(run, self.actor.clone()),
+        )?;
+        Ok(())
+    }
     fn drive_foundation_review_tool_session(
         &self,
         options: FoundationReviewDeskMapOptions,
@@ -656,6 +832,19 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 {
                     return Err("Explicit Foundation refresh did not pin verified evidence".into());
                 }
+                let project = self.open_library()?.open_project(&self.project_id)?;
+                transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
+                    desk: super::v11_foundation_review_desk::map_foundation_review_desk(
+                        &project,
+                        active_category,
+                        selected_subject_id.as_deref(),
+                    )?,
+                })?;
+                continue;
+            }
+            if let ToolEvent::MapCoarseRasterSupplementRequested { category, gap_id } = &event {
+                active_category = super::v11_foundation_review_desk::parse_category(category)?;
+                self.request_controlled_coarse_raster_supplement(active_category, gap_id)?;
                 let project = self.open_library()?.open_project(&self.project_id)?;
                 transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
                     desk: super::v11_foundation_review_desk::map_foundation_review_desk(
@@ -892,7 +1081,26 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
     }
 }
 
-#[cfg(debug_assertions)]
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn coarse_raster_job_is_retryable(
+    job: &campus_services::acquisition::AcquisitionJobStatus,
+) -> bool {
+    job.failure
+        .as_ref()
+        .is_some_and(|failure| failure.retryable)
+        || job
+            .outcomes
+            .iter()
+            .filter_map(|outcome| outcome.failure.as_ref())
+            .any(|failure| failure.retryable)
+}
+
 fn boundary_event_description(event: &ToolEvent) -> &'static str {
     match event {
         ToolEvent::MapBoundaryCandidateSelected { .. } => "select Campus Boundary candidate",
@@ -910,11 +1118,16 @@ fn boundary_event_description(event: &ToolEvent) -> &'static str {
     }
 }
 
-#[cfg(debug_assertions)]
 fn foundation_review_event_description(event: &ToolEvent) -> &'static str {
     match event {
         ToolEvent::MapFoundationReviewDecisionRequested { .. } => {
             "record Foundation candidate review decision"
+        }
+        ToolEvent::MapCoarseRasterSupplementRequested { .. } => {
+            "request controlled coarse raster gap evidence"
+        }
+        ToolEvent::MapCoarseRasterDecisionRequested { .. } => {
+            "record coarse raster evidence review decision"
         }
         ToolEvent::MapFoundationBatchReviewRequested { .. } => {
             "record atomic Foundation batch review"
@@ -939,8 +1152,6 @@ fn foundation_review_event_description(event: &ToolEvent) -> &'static str {
     }
 }
 
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
 fn require_boundary_adjustment(
     interaction: &BoundaryToolInteraction,
     candidate_id: &str,
@@ -954,7 +1165,6 @@ fn require_boundary_adjustment(
     Ok(())
 }
 
-#[cfg(debug_assertions)]
 fn validate_boundary_session_operation(
     interaction: &BoundaryToolInteraction,
     candidate_id: &str,
@@ -999,6 +1209,7 @@ fn validate_boundary_session_operation(
 pub fn bootstrap_if_enabled(
     application_data: &Path,
     enabled: Option<&str>,
+    _production_client: Option<&super::v11_acquisition_client::ProductionAcquisitionClient>,
 ) -> Result<Option<FixedDatasetTracerReport>, String> {
     use campus_services::acquisition::fixture_transport::FixtureTransport;
 
@@ -1061,10 +1272,62 @@ pub fn bootstrap_if_enabled(
 
 #[cfg(not(debug_assertions))]
 pub fn bootstrap_if_enabled(
-    _application_data: &Path,
-    _enabled: Option<&str>,
+    application_data: &Path,
+    enabled: Option<&str>,
+    production_client: Option<&super::v11_acquisition_client::ProductionAcquisitionClient>,
 ) -> Result<Option<FixedDatasetTracerReport>, String> {
-    Ok(None)
+    if enabled != Some("1") {
+        return Ok(None);
+    }
+    let client = production_client.ok_or(
+        "CAMPUS_V11_FIXED_TRACER=1 requires CAMPUS_ACQUISITION_SERVICE_URL and a stored installation credential",
+    )?;
+    let boundary_job_id = std::env::var("CAMPUS_V11_BOUNDARY_JOB_ID")
+        .map_err(|_| "Controlled release startup requires CAMPUS_V11_BOUNDARY_JOB_ID")?;
+    let capability = V11ConstructionCapability::request_controlled_release(enabled)?;
+    let run_id = now_unix_ms();
+    let tracer = FixedDatasetTracer::confirm_campus_target(
+        FixedDatasetTracerRequest {
+            library_root: application_data
+                .join("v1.1-controlled-release")
+                .join("library"),
+            output_root: application_data
+                .join("v1.1-controlled-release")
+                .join("output"),
+            campus_scope: CampusScope::new(
+                "gaode:B00155J6JH",
+                "East China Normal University Putuo Campus",
+                [121.395, 31.202],
+            )?,
+            project_name: format!("V1.1 controlled release {run_id}"),
+            boundary_job_id,
+            acquisition_job_id: String::new(),
+        },
+        InstallationId::new("campus-native-controlled-release")?,
+        &capability,
+        client,
+    )?;
+    let outcome = tracer.run_installed_boundary_tool(BoundaryDeskMapOptions {
+        js_api_key: std::env::var("GAODE_JS_API_KEY").unwrap_or_default(),
+        security_code: std::env::var("GAODE_SECURITY_CODE").unwrap_or_default(),
+        zoom: 17.0,
+        pitch: 45.0,
+        rotation: 0.0,
+        english: false,
+    })?;
+    if outcome != super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted {
+        return Ok(None);
+    }
+    tracer.resume_persisted_foundation_acquisition()?;
+    tracer.run_installed_foundation_review_tool(FoundationReviewDeskMapOptions {
+        js_api_key: std::env::var("GAODE_JS_API_KEY").unwrap_or_default(),
+        security_code: std::env::var("GAODE_SECURITY_CODE").unwrap_or_default(),
+        zoom: 17.0,
+        pitch: 45.0,
+        rotation: 0.0,
+        english: false,
+    })?;
+    tracer.generate_and_export().map(Some)
 }
 
 #[cfg(debug_assertions)]
@@ -1073,7 +1336,6 @@ fn copy_typed<T: Serialize, U: DeserializeOwned>(value: &T) -> Result<U, String>
         .map_err(|error| error.to_string())
 }
 
-#[cfg(debug_assertions)]
 fn file_name(path: &Path) -> Result<String, String> {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -1089,7 +1351,8 @@ mod tests {
         TransportRequest, TransportResponse,
     };
     use campus_state::FoundationResumePoint;
-    use std::collections::VecDeque;
+    use std::cell::Cell;
+    use std::collections::{BTreeMap, VecDeque};
 
     struct MemoryBoundaryTransport {
         events: VecDeque<ToolEvent>,
@@ -1133,6 +1396,172 @@ mod tests {
         }
     }
 
+    fn gzip_stored(bytes: &[u8]) -> Vec<u8> {
+        assert!(bytes.len() <= u16::MAX as usize);
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
+            }
+        }
+        crc = !crc;
+        let length = bytes.len() as u16;
+        let mut gzip = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0xff, 0x01];
+        gzip.extend_from_slice(&length.to_le_bytes());
+        gzip.extend_from_slice(&(!length).to_le_bytes());
+        gzip.extend_from_slice(bytes);
+        gzip.extend_from_slice(&crc.to_le_bytes());
+        gzip.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        gzip
+    }
+
+    struct RetryThenProposalTransport {
+        fixture: FixtureTransport,
+        retried: Cell<bool>,
+        empty_manifest: Vec<u8>,
+        empty_chunk: Vec<u8>,
+        empty_cursor: String,
+        proposal_manifest: Vec<u8>,
+        proposal_chunk: Vec<u8>,
+        proposal_cursor: String,
+    }
+
+    impl RetryThenProposalTransport {
+        fn canonical(boundary_result_sha256: &str) -> Self {
+            let fixture_value: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../../contracts/acquisition/v1/fixtures/canonical-coarse-raster.json"
+            ))
+            .unwrap();
+            let empty_chunk = vec![
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0a, 0xe3, 0x02, 0x00, 0x93,
+                0x06, 0xd7, 0x32, 0x01, 0x00, 0x00, 0x00,
+            ];
+            let empty_cursor = "coarse-raster-empty-cursor-v1".to_string();
+            let empty_manifest = serde_json::to_vec(&serde_json::json!({
+                "contract_version": fixture_value["contract_version"],
+                "bundle": fixture_value["bundle"],
+                "coverage_report": { "outcomes": [] },
+                "licences": [],
+                "chunks": [{
+                    "id": "coarse-raster-empty-chunk-0001",
+                    "stable_cursor": empty_cursor,
+                    "content_type": "application/x-ndjson",
+                    "content_encoding": "gzip",
+                    "sha256": format!("{:x}", Sha256::digest(&empty_chunk)),
+                    "uncompressed_bytes": 1
+                }],
+                "result_sha256": format!("{:x}", Sha256::digest(b"\n"))
+            }))
+            .unwrap();
+
+            let mut observation = fixture_value["observations"][0].clone();
+            observation["clip"]["boundaryResultSha256"] = serde_json::json!(boundary_result_sha256);
+            observation["structuredConflictObservationIds"] =
+                serde_json::json!(["obs-osm-relation-42"]);
+            observation["exclusions"][0]["structuredObservationIds"] =
+                serde_json::json!(["obs-osm-relation-42"]);
+            let mut proposal_records = serde_json::to_vec(&observation).unwrap();
+            proposal_records.push(b'\n');
+            let proposal_chunk = gzip_stored(&proposal_records);
+            let proposal_cursor = "coarse-raster-proposal-cursor-v1".to_string();
+            let proposal_manifest = serde_json::to_vec(&serde_json::json!({
+                "contract_version": fixture_value["contract_version"],
+                "bundle": fixture_value["bundle"],
+                "coverage_report": fixture_value["coverage_report"],
+                "licences": [observation["source"]["licence"].clone()],
+                "chunks": [{
+                    "id": "coarse-raster-proposal-chunk-0001",
+                    "stable_cursor": proposal_cursor,
+                    "content_type": "application/x-ndjson",
+                    "content_encoding": "gzip",
+                    "sha256": format!("{:x}", Sha256::digest(&proposal_chunk)),
+                    "uncompressed_bytes": proposal_records.len()
+                }],
+                "result_sha256": format!("{:x}", Sha256::digest(&proposal_records))
+            }))
+            .unwrap();
+            Self {
+                fixture: FixtureTransport::canonical().unwrap(),
+                retried: Cell::new(false),
+                empty_manifest,
+                empty_chunk,
+                empty_cursor,
+                proposal_manifest,
+                proposal_chunk,
+                proposal_cursor,
+            }
+        }
+
+        fn job_response(&self, failure: bool) -> Result<TransportResponse, TransportError> {
+            let fixture_value: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../../contracts/acquisition/v1/fixtures/canonical-coarse-raster.json"
+            ))
+            .map_err(|error| TransportError {
+                explanation: error.to_string(),
+            })?;
+            let failure = failure.then(|| {
+                serde_json::json!({
+                    "code": "coarse_raster_temporarily_empty",
+                    "scope": "sentinel-2-l2a/water/31-121-1",
+                    "retryable": true,
+                    "explanation": "The first verified result contained no usable component.",
+                    "suggested_action": "Retry the same pinned coarse raster job."
+                })
+            });
+            Ok(TransportResponse {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: serde_json::to_vec(&serde_json::json!({
+                    "job_id": "coarse-raster-retry-same-job",
+                    "contract_version": campus_services::acquisition::CONTRACT_VERSION,
+                    "bundle_id": fixture_value["bundle"]["id"],
+                    "state": "complete",
+                    "outcomes": [],
+                    "failure": failure
+                }))
+                .map_err(|error| TransportError {
+                    explanation: error.to_string(),
+                })?,
+            })
+        }
+    }
+
+    impl AcquisitionTransport for RetryThenProposalTransport {
+        fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+            if request.path == "/v1/coarse-raster-jobs" {
+                return self.job_response(true);
+            }
+            if request.path.ends_with("/retry") {
+                self.retried.set(true);
+                return self.job_response(false);
+            }
+            if request.path.contains("/coarse-raster-jobs/") {
+                let (manifest, chunk, cursor) = if self.retried.get() {
+                    (
+                        &self.proposal_manifest,
+                        &self.proposal_chunk,
+                        &self.proposal_cursor,
+                    )
+                } else {
+                    (&self.empty_manifest, &self.empty_chunk, &self.empty_cursor)
+                };
+                if request.path.ends_with("/manifest") {
+                    return Ok(TransportResponse {
+                        status: 200,
+                        headers: BTreeMap::new(),
+                        body: manifest.clone(),
+                    });
+                }
+                return Ok(TransportResponse {
+                    status: 200,
+                    headers: BTreeMap::from([("x-stable-cursor".into(), cursor.clone())]),
+                    body: chunk.clone(),
+                });
+            }
+            self.fixture.execute(request)
+        }
+    }
     #[test]
     fn boundary_session_rejects_an_operation_without_the_explicit_handle_selection() {
         let interaction = BoundaryToolInteraction {
@@ -1404,6 +1833,95 @@ mod tests {
             reopened.exported_output().unwrap().project_revision,
             reopened.workflow().project_revision()
         );
+    }
+
+    #[test]
+    fn retrying_same_empty_coarse_raster_job_persists_new_proposals() {
+        let workspace = tempfile::tempdir().unwrap();
+        let capability = V11ConstructionCapability::request(true, Some("1")).unwrap();
+        let fixture_client = AcquisitionClient::new(FixtureTransport::canonical().unwrap());
+        let tracer = FixedDatasetTracer::confirm_campus_target(
+            FixedDatasetTracerRequest {
+                library_root: workspace.path().join("library"),
+                output_root: workspace.path().join("output"),
+                campus_scope: CampusScope::new(
+                    "gaode:B00155J6JH",
+                    "East China Normal University Putuo Campus",
+                    [121.395, 31.202],
+                )
+                .unwrap(),
+                project_name: "Coarse raster retry regression".into(),
+                boundary_job_id: "live-compatible-boundary-job".into(),
+                acquisition_job_id: "live-compatible-acquisition-job".into(),
+            },
+            InstallationId::new("acceptance-test").unwrap(),
+            &capability,
+            &fixture_client,
+        )
+        .unwrap();
+        let snapshot = tracer.boundary_candidates().unwrap();
+        tracer.begin_boundary_review(snapshot).unwrap();
+        tracer
+            .handle_boundary_tool_event(ToolEvent::MapBoundaryCandidateSelected {
+                candidate_id: "boundary-osm-relation-100".into(),
+            })
+            .unwrap();
+        tracer
+            .handle_boundary_tool_event(ToolEvent::MapBoundaryConfirmed {
+                candidate_id: "boundary-osm-relation-100".into(),
+            })
+            .unwrap();
+        tracer.acquire_foundation_evidence().unwrap();
+
+        let boundary_result_sha256 = tracer
+            .project()
+            .unwrap()
+            .pinned_evidence()
+            .unwrap()
+            .boundary
+            .manifest
+            .result_sha256
+            .clone();
+        let retry_client = AcquisitionClient::new(RetryThenProposalTransport::canonical(
+            &boundary_result_sha256,
+        ));
+        let retry_tracer = FixedDatasetTracer {
+            library_root: tracer.library_root.clone(),
+            output_root: tracer.output_root.clone(),
+            campus_target_id: tracer.campus_target_id.clone(),
+            actor: tracer.actor.clone(),
+            capability: tracer.capability,
+            acquisition_client: &retry_client,
+            boundary_job_id: tracer.boundary_job_id.clone(),
+            acquisition_job_id: tracer.acquisition_job_id.clone(),
+            project_id: tracer.project_id.clone(),
+        };
+
+        retry_tracer
+            .request_controlled_coarse_raster_supplement(
+                FoundationCategory::Water,
+                "gap:water:osm:31-121-1:0",
+            )
+            .unwrap();
+        let first = retry_tracer.project().unwrap();
+        assert_eq!(first.coarse_raster_runs().len(), 1);
+        assert!(matches!(
+            first.coarse_raster_runs()[0].outcome,
+            campus_state::CoarseRasterRunOutcome::UnusableCoverage { .. }
+        ));
+
+        retry_tracer
+            .request_controlled_coarse_raster_supplement(
+                FoundationCategory::Water,
+                "gap:water:osm:31-121-1:0",
+            )
+            .unwrap();
+        let retried = retry_tracer.project().unwrap();
+        assert_eq!(retried.coarse_raster_runs().len(), 2);
+        assert!(matches!(
+            retried.coarse_raster_runs()[1].outcome,
+            campus_state::CoarseRasterRunOutcome::Proposals { .. }
+        ));
     }
 
     #[test]

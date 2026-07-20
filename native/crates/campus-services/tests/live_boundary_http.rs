@@ -76,6 +76,7 @@ fn installed_style_client_crosses_a_live_http_contract_boundary() {
                 .unwrap(),
         )
         .unwrap();
+    let supported_bundle = fixture["bundle"].clone();
     let manifest = serde_json::json!({
         "contract_version": CONTRACT_VERSION,
         "bundle": fixture["bundle"],
@@ -89,16 +90,7 @@ fn installed_style_client_crosses_a_live_http_contract_boundary() {
         let responses = [
             serde_json::json!({
                 "contract_versions": [CONTRACT_VERSION],
-                "supported_bundles": [{
-                    "id": "cn-campus-2026-06",
-                    "osm_snapshot": "osm-cn-2026-06-30",
-                    "overture_release": "2026-06-17.0",
-                    "output_schema": "source-observation-1.0.0",
-                    "classification_rules": "classification-1.0.0",
-                    "assembly_rules": "assembly-1.0.0",
-                    "conflation_rules": "conflation-1.0.0",
-                    "derivation_rules": "derivation-1.0.0"
-                }],
+                "supported_bundles": [supported_bundle],
                 "limits": {
                     "area_square_metres": 100000000,
                     "boundary_vertices": 10000,

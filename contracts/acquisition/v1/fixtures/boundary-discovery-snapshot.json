@@ -8,7 +8,11 @@
     "classification_rules": "classification-1.0.0",
     "assembly_rules": "assembly-1.0.0",
     "conflation_rules": "conflation-1.0.0",
-    "derivation_rules": "derivation-1.0.0"
+    "derivation_rules": "derivation-1.0.0",
+    "coarse_raster_profiles": {
+      "coarse-gap-water-v1.0.0": {"algorithmVersion":"coarse-gap-water-v1.0.0","vectorizationVersion":"gdal-polygonize-3.11+simplify-v1","thresholds":{"maximum_cloud_fraction":0.08,"minimum_probability":0.72},"minimumComponentPixels":24,"simplificationToleranceMetres":10.0},
+      "coarse-gap-vegetation-v1.0.0": {"algorithmVersion":"coarse-gap-vegetation-v1.0.0","vectorizationVersion":"gdal-polygonize-3.11+simplify-v1","thresholds":{"maximum_cloud_fraction":0.08,"minimum_ndvi":0.55},"minimumComponentPixels":24,"simplificationToleranceMetres":10.0}
+    }
   },
   "candidates": [
     {

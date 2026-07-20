@@ -180,6 +180,18 @@ fn redact_secret(body: &[u8], secret: &[u8]) -> Vec<u8> {
     redacted
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoarseRasterAlgorithmProfile {
+    pub algorithm_version: String,
+    pub vectorization_version: String,
+    pub thresholds: BTreeMap<String, f64>,
+    pub minimum_component_pixels: u64,
+    pub simplification_tolerance_metres: f64,
+}
+
+impl Eq for CoarseRasterAlgorithmProfile {}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DatasetBundle {
     pub id: String,
@@ -190,6 +202,8 @@ pub struct DatasetBundle {
     pub assembly_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
+    #[serde(default)]
+    pub coarse_raster_profiles: BTreeMap<String, CoarseRasterAlgorithmProfile>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -416,6 +430,119 @@ struct AcquisitionRequest<'a> {
     categories: [FoundationCategory; 5],
 }
 
+#[derive(Debug, Clone)]
+pub struct CoarseRasterSupplementRequest {
+    bundle: DatasetBundle,
+    boundary_revision: String,
+    category: FoundationCategory,
+    linked_gap_id: String,
+    gap_tile_id: String,
+    gap_geometry: SourceGeometry,
+    algorithm_version: String,
+    idempotency_key: String,
+}
+
+impl CoarseRasterSupplementRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        bundle: DatasetBundle,
+        boundary_revision: impl Into<String>,
+        category: FoundationCategory,
+        linked_gap_id: impl Into<String>,
+        gap_tile_id: impl Into<String>,
+        gap_geometry: SourceGeometry,
+        algorithm_version: impl Into<String>,
+        idempotency_key: impl Into<String>,
+    ) -> Result<Self, String> {
+        let request = Self {
+            bundle,
+            boundary_revision: boundary_revision.into(),
+            category,
+            linked_gap_id: linked_gap_id.into(),
+            gap_tile_id: gap_tile_id.into(),
+            gap_geometry,
+            algorithm_version: algorithm_version.into(),
+            idempotency_key: idempotency_key.into(),
+        };
+        if !matches!(
+            request.category,
+            FoundationCategory::Water | FoundationCategory::Vegetation
+        ) || request.boundary_revision.trim().is_empty()
+            || request.linked_gap_id.trim().is_empty()
+            || request.gap_tile_id.trim().is_empty()
+            || request.idempotency_key.trim().is_empty()
+            || !valid_area_geometry(&request.gap_geometry)
+            || !request
+                .bundle
+                .coarse_raster_profiles
+                .contains_key(&request.algorithm_version)
+        {
+            return Err("Coarse raster supplementation requires a current water/vegetation gap, valid gap geometry, pinned algorithm profile, and replay identity.".into());
+        }
+        Ok(request)
+    }
+
+    pub fn bundle(&self) -> &DatasetBundle {
+        &self.bundle
+    }
+
+    pub fn category(&self) -> FoundationCategory {
+        self.category
+    }
+
+    pub fn linked_gap_id(&self) -> &str {
+        &self.linked_gap_id
+    }
+
+    pub fn idempotency_key(&self) -> &str {
+        &self.idempotency_key
+    }
+
+    pub fn content_sha256(&self) -> Result<String, AcquisitionClientError> {
+        let content = CoarseRasterRequestContent {
+            contract_version: CONTRACT_VERSION,
+            bundle_id: &self.bundle.id,
+            boundary_revision: &self.boundary_revision,
+            category: self.category,
+            linked_gap_id: &self.linked_gap_id,
+            gap_tile_id: &self.gap_tile_id,
+            gap_geometry: &self.gap_geometry,
+            algorithm_version: &self.algorithm_version,
+        };
+        serde_json::to_vec(&content)
+            .map(|bytes| sha256_hex(&bytes))
+            .map_err(|error| {
+                invalid_request_error(format!(
+                    "Could not canonicalize the coarse raster request identity: {error}"
+                ))
+            })
+    }
+}
+
+#[derive(Serialize)]
+struct CoarseRasterRequestContent<'a> {
+    contract_version: &'static str,
+    bundle_id: &'a str,
+    boundary_revision: &'a str,
+    category: FoundationCategory,
+    linked_gap_id: &'a str,
+    gap_tile_id: &'a str,
+    gap_geometry: &'a SourceGeometry,
+    algorithm_version: &'a str,
+}
+
+#[derive(Serialize)]
+struct CoarseRasterRequest<'a> {
+    contract_version: &'static str,
+    request_identity: RequestIdentity<'a>,
+    bundle_id: &'a str,
+    boundary_revision: &'a str,
+    category: FoundationCategory,
+    linked_gap_id: &'a str,
+    gap_tile_id: &'a str,
+    gap_geometry: &'a SourceGeometry,
+    algorithm_version: &'a str,
+}
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderOutcomeStatus {
@@ -437,6 +564,8 @@ pub struct ProviderOutcome {
     pub deduplicated_count: u64,
     pub relation_members_complete: bool,
     pub gaps: Vec<String>,
+    #[serde(default)]
+    pub gap_geometry: Option<SourceGeometry>,
     #[serde(default)]
     pub failure: Option<ServiceFailure>,
 }
@@ -854,6 +983,7 @@ pub struct AcquisitionClient<T> {
 enum JobKind {
     Boundary,
     Acquisition,
+    CoarseRaster,
 }
 
 impl JobKind {
@@ -861,6 +991,7 @@ impl JobKind {
         match self {
             Self::Boundary => "boundary-jobs",
             Self::Acquisition => "acquisition-jobs",
+            Self::CoarseRaster => "coarse-raster-jobs",
         }
     }
 }
@@ -1028,6 +1159,100 @@ impl<T: AcquisitionTransport> AcquisitionClient<T> {
         Ok(job)
     }
 
+    pub fn start_coarse_raster_supplement(
+        &self,
+        request: &CoarseRasterSupplementRequest,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        let capabilities = self.capabilities()?;
+        if !capabilities
+            .supported_bundles
+            .iter()
+            .any(|bundle| bundle == &request.bundle)
+        {
+            return Err(AcquisitionClientError {
+                kind: AcquisitionClientErrorKind::IncompatibleContract,
+                explanation:
+                    "The controlled service cannot replay the pinned coarse raster Dataset Bundle."
+                        .into(),
+                action: "Reconnect to the controlled service that published this Dataset Bundle."
+                    .into(),
+            });
+        }
+        let body = serde_json::to_vec(&CoarseRasterRequest {
+            contract_version: CONTRACT_VERSION,
+            request_identity: RequestIdentity {
+                idempotency_key: &request.idempotency_key,
+                content_sha256: request.content_sha256()?,
+            },
+            bundle_id: &request.bundle.id,
+            boundary_revision: &request.boundary_revision,
+            category: request.category,
+            linked_gap_id: &request.linked_gap_id,
+            gap_tile_id: &request.gap_tile_id,
+            gap_geometry: &request.gap_geometry,
+            algorithm_version: &request.algorithm_version,
+        })
+        .map_err(|error| {
+            invalid_request_error(format!(
+                "Could not encode the coarse raster request: {error}"
+            ))
+        })?;
+        let response =
+            self.execute(TransportRequest::post("/v1/coarse-raster-jobs", Some(body)))?;
+        let mut job = decode_job_status(&response.body)?;
+        if job.contract_version != CONTRACT_VERSION || job.bundle_id != request.bundle.id {
+            return Err(integrity_error(
+                "The coarse raster job changed its negotiated contract or Dataset Bundle.",
+            ));
+        }
+        job.negotiated_bundle = Some(request.bundle.clone());
+        Ok(job)
+    }
+
+    pub fn coarse_raster_job(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_job(JobKind::CoarseRaster, pinned, TransportMethod::Get, None)
+    }
+
+    pub fn retry_coarse_raster_supplement(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_job(
+            JobKind::CoarseRaster,
+            pinned,
+            TransportMethod::Post,
+            Some(br#"{"scopes":[]}"#.to_vec()),
+        )
+    }
+
+    pub fn cancel_coarse_raster_supplement(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<AcquisitionJobStatus, AcquisitionClientError> {
+        self.control_job(JobKind::CoarseRaster, pinned, TransportMethod::Post, None)
+    }
+
+    pub fn load_coarse_raster_result<Record: DeserializeOwned>(
+        &self,
+        pinned: &AcquisitionJobStatus,
+    ) -> Result<(ResultManifest, Vec<Record>), AcquisitionClientError> {
+        let (manifest, records) = self.load_result(JobKind::CoarseRaster, &pinned.job_id)?;
+        if manifest.contract_version != pinned.contract_version
+            || manifest.bundle.id != pinned.bundle_id
+            || pinned
+                .negotiated_bundle
+                .as_ref()
+                .is_some_and(|bundle| bundle != &manifest.bundle)
+        {
+            return Err(integrity_error(
+                "The coarse raster result does not match the pinned job identity or Dataset Bundle.",
+            ));
+        }
+        Ok((manifest, records))
+    }
     pub fn acquisition_job(
         &self,
         pinned: &AcquisitionJobStatus,
@@ -1554,6 +1779,16 @@ fn validate_provider_outcomes(outcomes: &[ProviderOutcome]) -> Result<(), Acquis
                 "Coverage cannot contain more deduplicated observations than raw observations.",
             ));
         }
+        if !outcome.gaps.is_empty() {
+            let geometry = outcome.gap_geometry.as_ref().ok_or_else(|| {
+                integrity_error("A Known Feature Gap requires controlled spatial geometry.")
+            })?;
+            if !valid_area_geometry(geometry) {
+                return Err(integrity_error(
+                    "Known Feature Gap geometry must be a valid Polygon or MultiPolygon.",
+                ));
+            }
+        }
         if matches!(
             outcome.status,
             ProviderOutcomeStatus::Partial
@@ -1593,6 +1828,31 @@ fn validate_pinned_dataset_bundle(bundle: &DatasetBundle) -> Result<(), Acquisit
             action:
                 "Pause acquisition and reconnect only to a contract-compatible /v1 deployment."
                     .into(),
+        });
+    }
+    if bundle.coarse_raster_profiles.is_empty()
+        || bundle
+            .coarse_raster_profiles
+            .iter()
+            .any(|(version, profile)| {
+                profile.algorithm_version != *version
+                    || profile.vectorization_version.trim().is_empty()
+                    || profile.thresholds.is_empty()
+                    || profile
+                        .thresholds
+                        .iter()
+                        .any(|(name, value)| name.trim().is_empty() || !value.is_finite())
+                    || profile.minimum_component_pixels == 0
+                    || !profile.simplification_tolerance_metres.is_finite()
+                    || profile.simplification_tolerance_metres < 0.0
+            })
+    {
+        return Err(AcquisitionClientError {
+            kind: AcquisitionClientErrorKind::IncompatibleContract,
+            explanation: "The Dataset Bundle has no valid exact coarse raster algorithm profiles."
+                .into(),
+            action: "Use a contract fixture and service that publish pinned raster thresholds."
+                .into(),
         });
     }
     Ok(())
@@ -1947,7 +2207,12 @@ fn fixture_result_parts(
     }
     let licences = records
         .iter()
-        .filter_map(|record| record.get("licence").cloned())
+        .filter_map(|record| {
+            record
+                .get("licence")
+                .or_else(|| record.pointer("/source/licence"))
+                .cloned()
+        })
         .collect::<Vec<_>>();
     let manifest = serde_json::json!({
         "contract_version": CONTRACT_VERSION,
@@ -1979,9 +2244,12 @@ pub mod fixture_transport {
         acquisition_chunk: Vec<u8>,
         boundary_manifest: Vec<u8>,
         boundary_chunk: Vec<u8>,
+        coarse_raster_manifest: Vec<u8>,
+        coarse_raster_chunk: Vec<u8>,
         capabilities: Vec<u8>,
         acquisition_cursor: String,
         boundary_cursor: String,
+        coarse_raster_cursor: String,
     }
 
     impl FixtureTransport {
@@ -1998,6 +2266,12 @@ pub mod fixture_transport {
                 fixture_result_parts(&fixture, "observations")?;
             let (boundary_manifest, boundary_chunk) =
                 fixture_result_parts(&boundary, "candidates")?;
+            let coarse_raster: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../../contracts/acquisition/v1/fixtures/canonical-coarse-raster.json"
+            ))
+            .map_err(|error| error.to_string())?;
+            let (coarse_raster_manifest, coarse_raster_chunk) =
+                fixture_result_parts(&coarse_raster, "observations")?;
             let capabilities = serde_json::to_vec(&serde_json::json!({
                 "contract_versions": [CONTRACT_VERSION],
                 "supported_bundles": [boundary["bundle"].clone()],
@@ -2018,12 +2292,18 @@ pub mod fixture_transport {
                 acquisition_chunk,
                 boundary_manifest,
                 boundary_chunk,
+                coarse_raster_manifest,
+                coarse_raster_chunk,
                 capabilities,
                 acquisition_cursor: fixture["manifest"]["chunks"][0]["stable_cursor"]
                     .as_str()
                     .unwrap_or_default()
                     .to_string(),
                 boundary_cursor: boundary["manifest"]["chunks"][0]["stable_cursor"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                coarse_raster_cursor: coarse_raster["manifest"]["chunks"][0]["stable_cursor"]
                     .as_str()
                     .unwrap_or_default()
                     .to_string(),
@@ -2040,7 +2320,13 @@ pub mod fixture_transport {
                     body: self.capabilities.clone(),
                 });
             }
-            if request.method == TransportMethod::Post && request.path == "/v1/acquisition-jobs" {
+            if request.method == TransportMethod::Post
+                && matches!(
+                    request.path.as_str(),
+                    "/v1/acquisition-jobs" | "/v1/coarse-raster-jobs"
+                )
+            {
+                let coarse_raster = request.path == "/v1/coarse-raster-jobs";
                 let body = request.body.as_deref().unwrap_or_default();
                 let request: serde_json::Value =
                     serde_json::from_slice(body).map_err(|error| TransportError {
@@ -2055,7 +2341,7 @@ pub mod fixture_transport {
                         "job_id": request["request_identity"]["idempotency_key"],
                         "contract_version": CONTRACT_VERSION,
                         "bundle_id": request["bundle_id"],
-                        "state": "running",
+                        "state": if coarse_raster { "complete" } else { "running" },
                         "outcomes": []
                     }))
                     .map_err(|error| TransportError {
@@ -2063,33 +2349,33 @@ pub mod fixture_transport {
                     })?,
                 });
             }
-            let boundary = request.path.contains("/boundary-jobs/");
+            let result_kind = if request.path.contains("/boundary-jobs/") {
+                "boundary"
+            } else if request.path.contains("/coarse-raster-jobs/") {
+                "coarse-raster"
+            } else {
+                "acquisition"
+            };
             if request.path.ends_with("/manifest") {
                 Ok(TransportResponse {
                     status: 200,
                     headers: BTreeMap::new(),
-                    body: if boundary {
-                        self.boundary_manifest.clone()
-                    } else {
-                        self.acquisition_manifest.clone()
+                    body: match result_kind {
+                        "boundary" => self.boundary_manifest.clone(),
+                        "coarse-raster" => self.coarse_raster_manifest.clone(),
+                        _ => self.acquisition_manifest.clone(),
                     },
                 })
             } else {
+                let (cursor, body) = match result_kind {
+                    "boundary" => (&self.boundary_cursor, &self.boundary_chunk),
+                    "coarse-raster" => (&self.coarse_raster_cursor, &self.coarse_raster_chunk),
+                    _ => (&self.acquisition_cursor, &self.acquisition_chunk),
+                };
                 Ok(TransportResponse {
                     status: 200,
-                    headers: BTreeMap::from([(
-                        "x-stable-cursor".into(),
-                        if boundary {
-                            self.boundary_cursor.clone()
-                        } else {
-                            self.acquisition_cursor.clone()
-                        },
-                    )]),
-                    body: if boundary {
-                        self.boundary_chunk.clone()
-                    } else {
-                        self.acquisition_chunk.clone()
-                    },
+                    headers: BTreeMap::from([("x-stable-cursor".into(), cursor.clone())]),
+                    body: body.clone(),
                 })
             }
         }
@@ -2139,18 +2425,13 @@ mod tests {
     }
 
     fn capabilities_response() -> TransportResponse {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/acquisition/v1/fixtures/canonical-acquisition.json"
+        ))
+        .unwrap();
         json_response(serde_json::json!({
             "contract_versions": [CONTRACT_VERSION],
-            "supported_bundles": [{
-                "id": "cn-campus-2026-06",
-                "osm_snapshot": "2026-06-01",
-                "overture_release": "2026-06-18.0",
-                "output_schema": "source-observation-v1",
-                "classification_rules": "classification-v1",
-                "assembly_rules": "assembly-v1",
-                "conflation_rules": "conflation-v1",
-                "derivation_rules": "derivation-v1"
-            }],
+            "supported_bundles": [fixture["bundle"].clone()],
             "limits": {
                 "area_square_metres": 100000000,
                 "boundary_vertices": 10000,

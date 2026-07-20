@@ -160,7 +160,7 @@ class FixtureAcquisitionService:
     """Executable service-side v1 contract used only by tests and development."""
 
     _JOB_PATH = re.compile(
-        r"^/v1/(?P<kind>boundary-jobs|acquisition-jobs)/(?P<job>[^/]+)"
+        r"^/v1/(?P<kind>boundary-jobs|acquisition-jobs|coarse-raster-jobs)/(?P<job>[^/]+)"
         r"(?:/(?P<action>retry|cancel|manifest|chunks)(?:/(?P<chunk>[^/]+))?)?$"
     )
 
@@ -172,6 +172,9 @@ class FixtureAcquisitionService:
             (fixture_dir / "boundary-discovery-snapshot.json").read_text(
                 encoding="utf-8"
             )
+        )
+        self._coarse_raster = json.loads(
+            (fixture_dir / "canonical-coarse-raster.json").read_text(encoding="utf-8")
         )
         schema = json.loads(
             (fixture_dir.parent / "acquisition.schema.json").read_text(encoding="utf-8")
@@ -187,6 +190,7 @@ class FixtureAcquisitionService:
             for kind, definition in (
                 ("boundary-jobs", "boundaryRequest"),
                 ("acquisition-jobs", "acquisitionRequest"),
+                ("coarse-raster-jobs", "coarseRasterRequest"),
             )
         }
         self._retry_validator = Draft202012Validator(
@@ -232,6 +236,7 @@ class FixtureAcquisitionService:
         if method == "POST" and path in (
             "/v1/boundary-jobs",
             "/v1/acquisition-jobs",
+            "/v1/coarse-raster-jobs",
         ):
             try:
                 request = json.loads(body or b"")
@@ -377,7 +382,11 @@ class FixtureAcquisitionService:
         return self._failure(405, "method_not_allowed", path, False)
 
     def _fixture(self, kind: str) -> Mapping[str, Any]:
-        return self._boundary if kind == "boundary-jobs" else self._acquisition
+        if kind == "boundary-jobs":
+            return self._boundary
+        if kind == "coarse-raster-jobs":
+            return self._coarse_raster
+        return self._acquisition
 
     def _valid_create_request(self, kind: str, value: Any) -> bool:
         validator = self._request_validators.get(kind)
@@ -406,7 +415,10 @@ class FixtureAcquisitionService:
             "contract_version": CONTRACT_VERSION,
             "bundle": fixture["bundle"],
             "coverage_report": fixture["coverage_report"],
-            "licences": [record["licence"] for record in records],
+            "licences": [
+                record.get("licence") or record["source"]["licence"]
+                for record in records
+            ],
             "chunks": fixture["manifest"]["chunks"],
             "result_sha256": fixture["manifest"]["result_sha256"],
         }

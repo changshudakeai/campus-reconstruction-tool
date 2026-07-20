@@ -13,8 +13,8 @@ use crate::{
     FoundationReviewOperation, FoundationReviewQueueProjection, FoundationReviewState,
     FoundationSourceRefreshDifference, KnownFeatureGap, KnownFeatureGapHistoryAction,
     KnownFeatureGapLocation, KnownFeatureGapStatus, ProviderOutcomeStatus, ResultManifest,
-    ReviewConflictResolution, ReviewDependencyBasis, ReviewedBuildingEntity, SourceGeometry,
-    SourceObservation,
+    ReviewConflictResolution, ReviewDependencyBasis, ReviewSubjectDependencyBasis,
+    ReviewedBuildingEntity, SourceGeometry, SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,14 @@ impl V11ConstructionCapability {
             Ok(Self(()))
         } else {
             Err("Schema-2 project construction is not enabled for this build".into())
+        }
+    }
+
+    pub fn request_controlled_release(environment_value: Option<&str>) -> Result<Self, String> {
+        if environment_value == Some("1") {
+            Ok(Self(()))
+        } else {
+            Err("Schema-2 controlled release construction requires an explicit runtime gate".into())
         }
     }
 }
@@ -543,6 +551,8 @@ struct FoundationTracerState {
     acquisition_snapshot_identity: String,
     #[serde(default)]
     acquisition_refresh_history: Vec<AcquisitionRefreshRecord>,
+    #[serde(default)]
+    coarse_raster_runs: Vec<crate::CoarseRasterSupplementRun>,
     #[serde(default)]
     building_review: BuildingEntityReviewLedger,
     review_ledger: FoundationReviewLedger,
@@ -1708,6 +1718,238 @@ impl Schema2Project {
         &self.foundation.acquisition_refresh_history
     }
 
+    pub fn coarse_raster_runs(&self) -> &[crate::CoarseRasterSupplementRun] {
+        &self.foundation.coarse_raster_runs
+    }
+
+    pub fn coarse_raster_evidence(
+        &self,
+        category: FoundationCategory,
+    ) -> Vec<&crate::CoarseRasterObservation> {
+        let Some(acquisition) = self.foundation.acquisition.as_ref() else {
+            return Vec::new();
+        };
+        let Some(boundary) = self.foundation.boundary.as_ref() else {
+            return Vec::new();
+        };
+        let current_outcomes = acquisition
+            .manifest
+            .coverage_report
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.category == category)
+            .cloned()
+            .collect::<Vec<_>>();
+        let current_gap_ids = crate::foundation_review::known_gaps_for_category(
+            category,
+            &current_outcomes,
+            &self.foundation.review_ledger.operations,
+        )
+        .into_iter()
+        .filter(|gap| gap.status != KnownFeatureGapStatus::Resolved)
+        .map(|gap| gap.id)
+        .collect::<std::collections::BTreeSet<_>>();
+        self.foundation
+            .coarse_raster_runs
+            .iter()
+            .flat_map(crate::CoarseRasterSupplementRun::observations)
+            .filter(|observation| {
+                observation.category == category
+                    && observation.dataset_bundle_id == acquisition.manifest.bundle.id
+                    && observation.clip.boundary_result_sha256 == boundary.manifest.result_sha256
+                    && current_gap_ids.contains(&observation.linked_gap_id)
+            })
+            .collect()
+    }
+
+    pub fn record_coarse_raster_supplement(
+        &mut self,
+        run: crate::CoarseRasterSupplementRun,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let acquisition = self.foundation.acquisition.as_ref().ok_or(
+            "Pin structured Foundation acquisition evidence before raster supplementation",
+        )?;
+        let boundary = self
+            .foundation
+            .boundary
+            .as_ref()
+            .ok_or("Confirm the Campus Boundary before raster supplementation")?;
+        let current_outcomes = acquisition
+            .manifest
+            .coverage_report
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.category == run.category)
+            .cloned()
+            .collect::<Vec<_>>();
+        let gaps = crate::foundation_review::known_gaps_for_category(
+            run.category,
+            &current_outcomes,
+            &self.foundation.review_ledger.operations,
+        )
+        .into_iter()
+        .filter(|gap| gap.status != KnownFeatureGapStatus::Resolved)
+        .map(|gap| (gap.id, (gap.location.tile_id, gap.location.geometry)))
+        .collect::<BTreeMap<_, _>>();
+        let boundary_geometry = boundary
+            .confirmed_geometry()
+            .ok_or("The confirmed Campus Boundary has no reviewable geometry")?;
+        crate::validate_new_coarse_raster_run(
+            &run,
+            &self.foundation.coarse_raster_runs,
+            crate::CoarseRasterValidationContext {
+                dataset_bundle: &acquisition.manifest.bundle,
+                contract_version: &acquisition.manifest.contract_version,
+                boundary_result_sha256: &boundary.manifest.result_sha256,
+                gaps: &gaps,
+                boundary_geometry,
+                structured_observations: &acquisition.observations,
+            },
+        )?;
+        self.mark_updated(actor)?;
+        self.foundation.coarse_raster_runs.push(run);
+        Ok(())
+    }
+
+    pub fn coarse_raster_decision(
+        &self,
+        category: FoundationCategory,
+        observation_id: &str,
+    ) -> crate::CoarseRasterDecision {
+        let Ok(basis) = self.coarse_raster_review_basis(category, observation_id) else {
+            return crate::CoarseRasterDecision::Unresolved;
+        };
+        self.foundation
+            .review_ledger
+            .operations
+            .iter()
+            .rev()
+            .find_map(|operation| match &operation.action {
+                FoundationReviewAction::CoarseRasterDecision {
+                    observation_id: operation_id,
+                    decision,
+                } if operation.category == category
+                    && operation_id == observation_id
+                    && operation.basis == basis =>
+                {
+                    Some(decision.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or(crate::CoarseRasterDecision::Unresolved)
+    }
+
+    fn coarse_raster_review_basis(
+        &self,
+        category: FoundationCategory,
+        observation_id: &str,
+    ) -> Result<FoundationReviewBasis, String> {
+        let (run, observation) = self
+            .foundation
+            .coarse_raster_runs
+            .iter()
+            .find_map(|run| {
+                run.observations()
+                    .find(|observation| {
+                        observation.category == category && observation.id == observation_id
+                    })
+                    .map(|observation| (run, observation))
+            })
+            .ok_or("The coarse raster observation is not persisted in this category")?;
+        if !self
+            .coarse_raster_evidence(category)
+            .iter()
+            .any(|current| current.id == observation_id)
+        {
+            return Err(
+                "The coarse raster observation is stale or outside the current review basis".into(),
+            );
+        }
+        let manifest = run
+            .manifest
+            .as_ref()
+            .ok_or("The coarse raster observation has no verified result manifest")?;
+        let mut basis = self.review_basis()?;
+        let identity = format!("coarse-raster:{}:{}", run.id, observation.id);
+        basis.dependencies.subjects.insert(
+            identity.clone(),
+            ReviewSubjectDependencyBasis {
+                observation_id: observation.id.clone(),
+                upstream_source_record_identity: identity,
+                geometry_digest: geometry_digest(&observation.approximate_geometry),
+                grouping_digest: manifest.result_sha256.clone(),
+                naming_digest: "not-applicable".into(),
+                attribute_digest: observation.source.source_sha256.clone(),
+                containment_digest: format!(
+                    "{}:{}:{}",
+                    observation.clip.boundary_result_sha256,
+                    observation.clip.linked_gap_id,
+                    geometry_digest(&observation.clip.gap_geometry)
+                ),
+                licence_digest: format!(
+                    "{}:{}",
+                    observation.source.licence.identifier,
+                    observation.source.licence.dataset_release
+                ),
+                rule_version_digest: format!(
+                    "{}:{}:{}",
+                    observation.dataset_bundle_id,
+                    observation.algorithm.algorithm_version,
+                    observation.algorithm.vectorization_version
+                ),
+                content_digest: observation.derived_sha256.clone(),
+            },
+        );
+        Ok(basis)
+    }
+
+    pub fn review_coarse_raster_observation(
+        &mut self,
+        category: FoundationCategory,
+        observation_id: &str,
+        decision: crate::CoarseRasterDecision,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        if matches!(
+            &decision,
+            crate::CoarseRasterDecision::Rejected { reason } if reason.trim().is_empty()
+        ) {
+            return Err("Rejected coarse raster evidence requires a reason".into());
+        }
+        let basis = self.coarse_raster_review_basis(category, observation_id)?;
+        let mut before = self.foundation_review_operation_state(category)?;
+        before.coarse_raster_decisions.insert(
+            observation_id.to_string(),
+            self.coarse_raster_decision(category, observation_id),
+        );
+        let mut after = before.clone();
+        after
+            .coarse_raster_decisions
+            .insert(observation_id.to_string(), decision.clone());
+        self.mark_updated(actor)?;
+        let sequence = self.foundation.review_ledger.current_sequence() + 1;
+        self.foundation
+            .review_ledger
+            .operations
+            .push(FoundationReviewOperation {
+                sequence,
+                category,
+                subjects: vec![observation_id.to_string()],
+                basis,
+                action: FoundationReviewAction::CoarseRasterDecision {
+                    observation_id: observation_id.to_string(),
+                    decision,
+                },
+                before,
+                after,
+                explanation: Some("Coarse raster Map Candidate review decision".into()),
+                carried_from_sequence: None,
+                recorded_at_unix_ms: now_unix_ms(),
+            });
+        Ok(())
+    }
+
     pub fn acquisition_snapshot_identity(&self) -> &str {
         &self.foundation.acquisition_snapshot_identity
     }
@@ -2682,7 +2924,25 @@ impl Schema2Project {
         category: FoundationCategory,
     ) -> Result<FoundationReviewState, String> {
         let queue = self.foundation_review_queue(category)?;
-        Ok(foundation_review_state_from_queue(&queue))
+        let mut state = foundation_review_state_from_queue(&queue);
+        for operation in self
+            .foundation
+            .review_ledger
+            .operations
+            .iter()
+            .filter(|operation| operation.category == category && operation.basis == queue.basis)
+        {
+            if let FoundationReviewAction::CoarseRasterDecision {
+                observation_id,
+                decision,
+            } = &operation.action
+            {
+                state
+                    .coarse_raster_decisions
+                    .insert(observation_id.clone(), decision.clone());
+            }
+        }
+        Ok(state)
     }
 
     fn update_review_workflow_after_operation(&mut self, basis: &FoundationReviewBasis) {
@@ -3308,6 +3568,7 @@ fn foundation_review_state_from_queue(
             .filter(|conflict| !queue.resolved_conflict_ids.contains(&conflict.id))
             .map(|conflict| conflict.id.clone())
             .collect(),
+        coarse_raster_decisions: BTreeMap::new(),
         category_complete: queue.progress.complete,
     }
 }
@@ -3400,6 +3661,14 @@ fn apply_foundation_review_action_to_state(
             state.acknowledged_gap_ids.remove(gap_id);
             state.resolved_gap_ids.insert(gap_id.clone());
         }
+        FoundationReviewAction::CoarseRasterDecision {
+            observation_id,
+            decision,
+        } => {
+            state
+                .coarse_raster_decisions
+                .insert(observation_id.clone(), decision.clone());
+        }
         FoundationReviewAction::CategoryCompleted => {
             state.category_complete = true;
         }
@@ -3452,7 +3721,8 @@ impl ChangedBundleRules {
             FoundationReviewAction::Candidate { .. } | FoundationReviewAction::Batch { .. } => {
                 self.classification || assembly || self.conflation || self.derivation
             }
-            FoundationReviewAction::CategoryCompleted => true,
+            FoundationReviewAction::CategoryCompleted
+            | FoundationReviewAction::CoarseRasterDecision { .. } => true,
             FoundationReviewAction::Revoke { .. }
             | FoundationReviewAction::GapAcknowledged { .. }
             | FoundationReviewAction::GapReopened { .. }
@@ -3600,7 +3870,8 @@ fn operation_depends_on_change(
         | FoundationReviewAction::Candidate { .. }
         | FoundationReviewAction::Batch { .. }
         | FoundationReviewAction::Revoke { .. }
-        | FoundationReviewAction::GapResolved { .. } => changes.any(),
+        | FoundationReviewAction::GapResolved { .. }
+        | FoundationReviewAction::CoarseRasterDecision { .. } => changes.any(),
     }
 }
 
@@ -4779,6 +5050,7 @@ fn validate_schema2_project(project: &Schema2Project) -> Result<(), String> {
     } else if !project.foundation.building_review.is_empty() {
         return Err("Building Entity review requires pinned acquisition evidence".into());
     }
+    crate::validate_persisted_coarse_raster_runs(&project.foundation.coarse_raster_runs)?;
     validate_project_history(project)?;
     Ok(())
 }

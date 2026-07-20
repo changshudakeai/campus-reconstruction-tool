@@ -45,6 +45,12 @@ class AcquisitionContractTests(unittest.TestCase):
             ("post", "/v1/acquisition-jobs/{job_id}/cancel"),
             ("get", "/v1/acquisition-jobs/{job_id}/manifest"),
             ("get", "/v1/acquisition-jobs/{job_id}/chunks/{chunk_id}"),
+            ("post", "/v1/coarse-raster-jobs"),
+            ("get", "/v1/coarse-raster-jobs/{job_id}"),
+            ("post", "/v1/coarse-raster-jobs/{job_id}/retry"),
+            ("post", "/v1/coarse-raster-jobs/{job_id}/cancel"),
+            ("get", "/v1/coarse-raster-jobs/{job_id}/manifest"),
+            ("get", "/v1/coarse-raster-jobs/{job_id}/chunks/{chunk_id}"),
         }
         actual_operations = {
             (method, path)
@@ -139,6 +145,33 @@ class AcquisitionContractTests(unittest.TestCase):
         self.assertTrue(
             all(len(chunk["sha256"]) == 64 for chunk in manifest["chunks"])
         )
+
+        coarse_fixture = json.loads(
+            (FIXTURE_DIR / "canonical-coarse-raster.json").read_text(encoding="utf-8")
+        )
+        self.assertFalse(list(validator.iter_errors(coarse_fixture)))
+        coarse_record = coarse_fixture["observations"][0]
+        canonical_coarse_record = (
+            json.dumps(
+                coarse_record,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        coarse_chunk = coarse_fixture["manifest"]["chunks"][0]
+        compressed_coarse = base64.b64decode(
+            coarse_fixture["transport_chunks"][coarse_chunk["id"]], validate=True
+        )
+        self.assertEqual(
+            hashlib.sha256(canonical_coarse_record).hexdigest(),
+            coarse_fixture["manifest"]["result_sha256"],
+        )
+        self.assertEqual(
+            hashlib.sha256(compressed_coarse).hexdigest(), coarse_chunk["sha256"]
+        )
+        self.assertEqual(gzip.decompress(compressed_coarse), canonical_coarse_record)
 
         decoded = decode_contract_fixture(fixture)
         self.assertEqual(decoded.bundle_id, "cn-campus-2026-06")
@@ -258,7 +291,7 @@ class AcquisitionContractTests(unittest.TestCase):
         service = FixtureAcquisitionService(FIXTURE_DIR)
         self.assertEqual(service.handle("GET", "/v1/capabilities").status, 200)
 
-        for kind in ("boundary-jobs", "acquisition-jobs"):
+        for kind in ("boundary-jobs", "acquisition-jobs", "coarse-raster-jobs"):
             request = {
                 "contract_version": "1.0.0",
                 "request_identity": {
@@ -274,7 +307,7 @@ class AcquisitionContractTests(unittest.TestCase):
                     "anchor_wgs84": [121.4, 31.2],
                     "search_radius_m": 2000,
                 }
-            else:
+            elif kind == "acquisition-jobs":
                 request.update(
                     {
                         "boundary_revision": "boundary-1",
@@ -295,6 +328,24 @@ class AcquisitionContractTests(unittest.TestCase):
                             "vegetation",
                             "sports",
                         ],
+                    }
+                )
+            else:
+                request.update(
+                    {
+                        "boundary_revision": "d" * 64,
+                        "category": "water",
+                        "linked_gap_id": "gap:water:osm:31-121-1:0",
+                        "gap_tile_id": "31/121/1",
+                        "gap_geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [121.397, 31.218], [121.410, 31.218],
+                                [121.410, 31.230], [121.397, 31.230],
+                                [121.397, 31.218],
+                            ]],
+                        },
+                        "algorithm_version": "coarse-gap-water-v1.0.0",
                     }
                 )
             request["request_identity"]["content_sha256"] = request_content_sha256(request)

@@ -11,6 +11,8 @@ pub struct DatasetBundle {
     pub assembly_rules: String,
     pub conflation_rules: String,
     pub derivation_rules: String,
+    #[serde(default)]
+    pub coarse_raster_profiles: BTreeMap<String, crate::CoarseRasterAlgorithmProfile>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,6 +65,8 @@ pub struct ProviderOutcome {
     pub deduplicated_count: u64,
     pub relation_members_complete: bool,
     pub gaps: Vec<String>,
+    #[serde(default)]
+    pub gap_geometry: Option<SourceGeometry>,
     #[serde(default)]
     pub failure: Option<ServiceFailure>,
 }
@@ -366,6 +370,17 @@ fn validate_coverage_outcomes(outcomes: &[ProviderOutcome]) -> Result<(), String
         if outcome.deduplicated_count > outcome.raw_count {
             return Err("Coverage deduplicated count exceeds its raw count".into());
         }
+        if !outcome.gaps.is_empty() {
+            let geometry = outcome
+                .gap_geometry
+                .as_ref()
+                .ok_or("A Known Feature Gap requires its controlled spatial geometry")?;
+            if !crate::validate_boundary_geometry(geometry).valid {
+                return Err(
+                    "Known Feature Gap geometry must be a valid Polygon or MultiPolygon".into(),
+                );
+            }
+        }
         if matches!(
             outcome.status,
             ProviderOutcomeStatus::Partial
@@ -391,6 +406,8 @@ pub enum SourceGeometry {
     Polygon(Vec<Vec<[f64; 2]>>),
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
 }
+
+impl Eq for SourceGeometry {}
 
 impl SourceGeometry {
     pub fn type_name(&self) -> &'static str {

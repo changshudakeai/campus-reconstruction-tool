@@ -61,17 +61,8 @@ fn json_response(value: serde_json::Value) -> TransportResponse {
 }
 
 fn canonical_bundle() -> DatasetBundle {
-    serde_json::from_value(serde_json::json!({
-        "id": "cn-campus-2026-06",
-        "osm_snapshot": "osm-cn-2026-06-30",
-        "overture_release": "2026-06-17.0",
-        "output_schema": "source-observation-1.0.0",
-        "classification_rules": "classification-1.0.0",
-        "assembly_rules": "assembly-1.0.0",
-        "conflation_rules": "conflation-1.0.0",
-        "derivation_rules": "derivation-1.0.0"
-    }))
-    .unwrap()
+    let fixture: serde_json::Value = serde_json::from_str(SHARED_FIXTURE).unwrap();
+    serde_json::from_value(fixture["bundle"].clone()).unwrap()
 }
 
 fn capabilities_response() -> TransportResponse {
@@ -276,6 +267,7 @@ fn reconnect_scoped_retry_and_cancel_preserve_the_acquisition_job_and_outcomes()
             "deduplicated_count": 0,
             "relation_members_complete": true,
             "gaps": ["provider page unavailable"],
+            "gap_geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]]},
             "failure": {
                 "code": "provider_unavailable",
                 "scope": "overture/vegetation/tile-2",
@@ -374,7 +366,8 @@ fn complete_coverage_requires_page_exhaustion_and_complete_relation_membership()
             "raw_count": 1,
             "deduplicated_count": 1,
             "relation_members_complete": false,
-            "gaps": ["relation way/88 missing"]
+            "gaps": ["relation way/88 missing"],
+            "gap_geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]]},
         }]
     }))]);
     let client = AcquisitionClient::new(transport);
@@ -411,7 +404,8 @@ fn failed_coverage_without_a_structured_failure_is_rejected() {
             "raw_count": 0,
             "deduplicated_count": 0,
             "relation_members_complete": true,
-            "gaps": ["provider page unavailable"]
+            "gaps": ["provider page unavailable"],
+            "gap_geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,0.0]]]},
         }]
     }))]);
     let client = AcquisitionClient::new(transport);

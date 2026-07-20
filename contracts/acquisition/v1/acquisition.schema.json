@@ -6,10 +6,12 @@
     {"$ref": "#/$defs/capabilities"},
     {"$ref": "#/$defs/boundaryRequest"},
     {"$ref": "#/$defs/acquisitionRequest"},
+    {"$ref": "#/$defs/coarseRasterRequest"},
     {"$ref": "#/$defs/jobStatus"},
     {"$ref": "#/$defs/resultManifest"},
     {"$ref": "#/$defs/boundaryDiscoverySnapshot"},
     {"$ref": "#/$defs/acquisitionFixture"},
+    {"$ref": "#/$defs/coarseRasterFixture"},
     {"$ref": "#/$defs/failure"}
   ],
   "$defs": {
@@ -17,9 +19,21 @@
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "category": {"enum": ["building", "circulation", "water", "vegetation", "sports"]},
     "outcomeStatus": {"enum": ["complete", "complete-empty", "partial", "failed", "cancelled"]},
+    "coarseRasterAlgorithmProfile": {
+      "type": "object",
+      "required": ["algorithmVersion", "vectorizationVersion", "thresholds", "minimumComponentPixels", "simplificationToleranceMetres"],
+      "properties": {
+        "algorithmVersion": {"type": "string", "minLength": 1},
+        "vectorizationVersion": {"type": "string", "minLength": 1},
+        "thresholds": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "number"}},
+        "minimumComponentPixels": {"type": "integer", "minimum": 1},
+        "simplificationToleranceMetres": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
     "datasetBundle": {
       "type": "object",
-      "required": ["id", "osm_snapshot", "overture_release", "output_schema", "classification_rules", "assembly_rules", "conflation_rules", "derivation_rules"],
+      "required": ["id", "osm_snapshot", "overture_release", "output_schema", "classification_rules", "assembly_rules", "conflation_rules", "derivation_rules", "coarse_raster_profiles"],
       "properties": {
         "id": {"type": "string"},
         "osm_snapshot": {"type": "string"},
@@ -28,7 +42,8 @@
         "classification_rules": {"type": "string"},
         "assembly_rules": {"type": "string"},
         "conflation_rules": {"type": "string"},
-        "derivation_rules": {"type": "string"}
+        "derivation_rules": {"type": "string"},
+        "coarse_raster_profiles": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/coarseRasterAlgorithmProfile"}}
       },
       "additionalProperties": false
     },
@@ -89,6 +104,22 @@
       },
       "additionalProperties": false
     },
+    "coarseRasterRequest": {
+      "type": "object",
+      "required": ["contract_version", "request_identity", "bundle_id", "boundary_revision", "category", "linked_gap_id", "gap_tile_id", "gap_geometry", "algorithm_version"],
+      "properties": {
+        "contract_version": {"$ref": "#/$defs/contractVersion"},
+        "request_identity": {"$ref": "#/$defs/requestIdentity"},
+        "bundle_id": {"type": "string"},
+        "boundary_revision": {"type": "string"},
+        "category": {"enum": ["water", "vegetation"]},
+        "linked_gap_id": {"type": "string"},
+        "gap_tile_id": {"type": "string"},
+        "gap_geometry": {"$ref": "#/$defs/geometry"},
+        "algorithm_version": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "retryRequest": {
       "type": "object",
       "required": ["scopes"],
@@ -127,8 +158,13 @@
         "deduplicated_count": {"type": "integer", "minimum": 0},
         "relation_members_complete": {"type": "boolean"},
         "gaps": {"type": "array", "items": {"type": "string"}},
+        "gap_geometry": {"$ref": "#/$defs/geometry"},
         "failure": {"$ref": "#/$defs/failure"}
       },
+      "allOf": [{
+        "if": {"properties": {"gaps": {"minItems": 1}}},
+        "then": {"required": ["gap_geometry"]}
+      }],
       "additionalProperties": false
     },
     "coverageReport": {
@@ -233,6 +269,52 @@
         {"type": "object", "required": ["attribute", "value", "source_observation_id", "original_value", "unit", "derivation", "rule_version"], "properties": {"attribute": {"enum": ["subtype", "name"]}, "value": {"type": "string"}, "source_observation_id": {"type": "string"}, "original_value": {}, "unit": {"const": "none"}, "derivation": {"enum": ["direct", "derived"]}, "rule_version": {"type": "string"}}, "additionalProperties": false}
       ]
     },
+    "assessmentDimension": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "properties": {"status": {"type": "string"}, "reason": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "coarseRasterObservation": {
+      "type": "object",
+      "required": ["id", "category", "subject", "linkedGapId", "datasetBundleId", "source", "grid", "algorithm", "clip", "preClipGeometry", "approximateGeometry", "inputCellCount", "retainedCellCount", "componentCellCounts", "structuredConflictObservationIds", "exclusions", "assessment", "derivedSha256"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "category": {"enum": ["water", "vegetation"]},
+        "subject": {"enum": ["water", "vegetation", "land_cover"]},
+        "linkedGapId": {"type": "string", "minLength": 1},
+        "datasetBundleId": {"type": "string", "minLength": 1},
+        "source": {
+          "type": "object",
+          "required": ["provider", "datasetVersion", "observedAt", "nativeResolutionMetres", "classLabel", "sourceChunkId", "sourceSha256", "licence"],
+          "properties": {"provider": {"enum": ["sentinel-2-l2a", "worldcover"]}, "datasetVersion": {"type": "string"}, "observedAt": {"type": "string", "format": "date-time"}, "nativeResolutionMetres": {"type": "number", "minimum": 5}, "classLabel": {"type": "string"}, "sourceChunkId": {"type": "string"}, "sourceSha256": {"$ref": "#/$defs/sha256"}, "licence": {"$ref": "#/$defs/licence"}},
+          "additionalProperties": false
+        },
+        "grid": {
+          "type": "object",
+          "required": ["crs", "affineTransform", "cloudHandling", "nodataHandling"],
+          "properties": {"crs": {"type": "string"}, "affineTransform": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "number"}}, "cloudHandling": {"type": "string"}, "nodataHandling": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "algorithm": {"$ref": "#/$defs/coarseRasterAlgorithmProfile"},
+        "clip": {
+          "type": "object",
+          "required": ["boundaryResultSha256", "linkedGapId", "gapTileId", "gapGeometry", "clippedToBoundaryAndGap"],
+          "properties": {"boundaryResultSha256": {"$ref": "#/$defs/sha256"}, "linkedGapId": {"type": "string"}, "gapTileId": {"type": "string"}, "gapGeometry": {"$ref": "#/$defs/geometry"}, "clippedToBoundaryAndGap": {"const": true}},
+          "additionalProperties": false
+        },
+        "preClipGeometry": {"$ref": "#/$defs/geometry"},
+        "approximateGeometry": {"$ref": "#/$defs/geometry"},
+        "inputCellCount": {"type": "integer", "minimum": 1},
+        "retainedCellCount": {"type": "integer", "minimum": 1},
+        "componentCellCounts": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
+        "structuredConflictObservationIds": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "exclusions": {"type": "array", "items": {"type": "object", "required": ["reason", "excludedCellCount", "structuredObservationIds", "explanation"], "properties": {"reason": {"enum": ["structured_geometry_priority", "outside_boundary_or_gap", "cloud", "no_data", "below_threshold", "below_minimum_component"]}, "excludedCellCount": {"type": "integer", "minimum": 1}, "structuredObservationIds": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "explanation": {"type": "string"}}, "additionalProperties": false}},
+        "assessment": {"type": "object", "required": ["geometry", "semantics", "entityMatch", "nameMatch", "priority"], "properties": {"geometry": {"$ref": "#/$defs/assessmentDimension"}, "semantics": {"$ref": "#/$defs/assessmentDimension"}, "entityMatch": {"$ref": "#/$defs/assessmentDimension"}, "nameMatch": {"$ref": "#/$defs/assessmentDimension"}, "priority": {"type": "string"}}, "additionalProperties": false},
+        "derivedSha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
     "transportChunks": {
       "type": "object",
       "minProperties": 1,
@@ -307,6 +389,19 @@
         "contract_version": {"$ref": "#/$defs/contractVersion"},
         "chunks": {"type": "array", "items": {"$ref": "#/$defs/chunk"}},
         "result_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "coarseRasterFixture": {
+      "type": "object",
+      "required": ["contract_version", "bundle", "coverage_report", "observations", "transport_chunks", "manifest"],
+      "properties": {
+        "contract_version": {"$ref": "#/$defs/contractVersion"},
+        "bundle": {"$ref": "#/$defs/datasetBundle"},
+        "coverage_report": {"$ref": "#/$defs/coverageReport"},
+        "observations": {"type": "array", "items": {"$ref": "#/$defs/coarseRasterObservation"}},
+        "transport_chunks": {"$ref": "#/$defs/transportChunks"},
+        "manifest": {"$ref": "#/$defs/fixtureManifest"}
       },
       "additionalProperties": false
     },

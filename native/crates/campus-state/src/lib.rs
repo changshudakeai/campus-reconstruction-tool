@@ -1,4 +1,5 @@
 mod boundary_review;
+mod coarse_raster;
 mod detailed_building_workspace;
 mod detailed_rule_stack;
 mod foundation_refresh;
@@ -13,6 +14,7 @@ pub use boundary_review::{
     BoundaryEvidenceAvailability, BoundaryEvidenceDesk, BoundaryEvidenceDeskProjection,
     BoundaryGeometryValidity, BoundaryInteractionMode, BoundaryRecoveryAction, BoundaryVertexRef,
 };
+pub use coarse_raster::*;
 pub use detailed_building_workspace::{
     DetailedBuildingWorkspace, DetailedBuildingWorkspaceProjection, DetailedBuildingWorkspaceTask,
 };

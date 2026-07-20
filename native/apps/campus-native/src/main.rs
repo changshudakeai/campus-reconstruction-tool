@@ -4,7 +4,6 @@ mod desktop_tool_adapters;
 mod desktop_tool_process;
 mod diagnostics;
 mod v11_acquisition_client;
-#[cfg(debug_assertions)]
 mod v11_boundary_evidence_desk;
 mod v11_foundation_review_desk;
 mod v11_project_kernel;
@@ -2169,6 +2168,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let v11_tracer_error = match v11_tracer_bullet::bootstrap_if_enabled(
         &app_data_dir(),
         std::env::var("CAMPUS_V11_FIXED_TRACER").ok().as_deref(),
+        production_acquisition_client.as_ref(),
     ) {
         Ok(Some(report)) => {
             eprintln!(
