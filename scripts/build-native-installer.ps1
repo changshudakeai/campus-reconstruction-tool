@@ -98,6 +98,7 @@ $distribution = [ordered]@{
     payloadSha256BeforePackaging = $hashesBefore
     payloadSha256AfterPackaging = $hashesBefore
     packagingRebuiltBinaries = $false
+    installedAcceptanceStatus = $manifest.installedAcceptance.status
     smartScreenGuidance = "Verify this SHA-256, then choose More info and Run anyway only when it matches."
 }
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -119,10 +120,15 @@ $statement = @"
 - Platform: Windows 11 x64
 - Network: required for campus search and new/refresh Foundation acquisition
 - Signature: unsigned
+- Installed acceptance: $($manifest.installedAcceptance.status)
 
 Source statement: built from the exact clean commit above. NSIS consumed the
 already-tested binaries from tested-binaries and their SHA-256 values were
 unchanged before and after packaging.
+
+$(if ($manifest.installedAcceptance.status -eq "not-run-user-waived") {
+    "This candidate is not installed-acceptance tested. Clean-Windows fresh install, interactive install, upgrade, first launch, shutdown, payload inspection, and uninstall were explicitly waived by the user and must not be treated as passed."
+})
 
 SmartScreen: compare the installer SHA-256 with the exact value above. When it
 matches the trusted release record, choose More info and Run anyway.

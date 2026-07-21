@@ -2,7 +2,8 @@ param(
     [string]$CandidateId,
     [string]$CleanWindowsImageId,
     [string]$CleanWindowsImageManifest,
-    [string]$UpgradeFromInstaller
+    [string]$UpgradeFromInstaller,
+    [switch]$SkipInstalledAcceptance
 )
 
 Set-StrictMode -Version Latest
@@ -11,32 +12,36 @@ $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 if (-not [Environment]::Is64BitOperatingSystem -or $env:OS -ne "Windows_NT") {
     throw "V1.1.0 candidates must be produced on 64-bit Windows"
 }
-if (-not $CleanWindowsImageId) {
-    throw "CleanWindowsImageId is required to identify the clean Windows 11 x64 acceptance image"
+$cleanImage = $null
+$cleanImageManifestSha256 = $null
+if (-not $SkipInstalledAcceptance) {
+    if (-not $CleanWindowsImageId) {
+        throw "CleanWindowsImageId is required to identify the clean Windows 11 x64 acceptance image"
+    }
+    if (-not $CleanWindowsImageManifest) {
+        throw "CleanWindowsImageManifest is required to bind the candidate to an immutable image attestation"
+    }
+    $cleanImageManifestPath = (Resolve-Path -LiteralPath $CleanWindowsImageManifest).Path
+    $cleanImage = Get-Content -Raw -Encoding UTF8 -LiteralPath $cleanImageManifestPath | ConvertFrom-Json
+    if (
+        $cleanImage.imageId -ne $CleanWindowsImageId -or
+        $cleanImage.cleanBaseline -ne $true -or
+        $cleanImage.architecture -ne "x64" -or
+        $cleanImage.snapshotSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        -not $cleanImage.source
+    ) {
+        throw "Clean Windows image manifest must identify a clean x64 baseline, source, and immutable snapshot SHA-256"
+    }
+    $cleanImageManifestSha256 = (
+        Get-FileHash -Algorithm SHA256 -LiteralPath $cleanImageManifestPath
+    ).Hash.ToLowerInvariant()
 }
-if (-not $CleanWindowsImageManifest) {
-    throw "CleanWindowsImageManifest is required to bind the candidate to an immutable image attestation"
-}
-$cleanImageManifestPath = (Resolve-Path -LiteralPath $CleanWindowsImageManifest).Path
-$cleanImage = Get-Content -Raw -Encoding UTF8 -LiteralPath $cleanImageManifestPath | ConvertFrom-Json
-if (
-    $cleanImage.imageId -ne $CleanWindowsImageId -or
-    $cleanImage.cleanBaseline -ne $true -or
-    $cleanImage.architecture -ne "x64" -or
-    $cleanImage.snapshotSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-    -not $cleanImage.source
-) {
-    throw "Clean Windows image manifest must identify a clean x64 baseline, source, and immutable snapshot SHA-256"
-}
-$cleanImageManifestSha256 = (
-    Get-FileHash -Algorithm SHA256 -LiteralPath $cleanImageManifestPath
-).Hash.ToLowerInvariant()
 $windowsRelease = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
 $windowsBuild = [int]$windowsRelease.CurrentBuildNumber
 if ($windowsBuild -lt 22000) {
     throw "V1.1.0 installed acceptance requires Windows 11 (build 22000 or newer)"
 }
-if ([int]$cleanImage.windowsBuild -ne $windowsBuild) {
+if (-not $SkipInstalledAcceptance -and [int]$cleanImage.windowsBuild -ne $windowsBuild) {
     throw "Clean image manifest build does not match the running Windows image"
 }
 $UpgradeFromInstaller = if ($UpgradeFromInstaller) { $UpgradeFromInstaller } else {
@@ -183,6 +188,17 @@ foreach ($match in $serviceMatch.Matches) {
 }
 
 $windowsImage = "$($windowsRelease.ProductName) $($windowsRelease.DisplayVersion) build $windowsBuild"
+$installedAcceptance = if ($SkipInstalledAcceptance) {
+    [ordered]@{
+        status = "not-run-user-waived"
+        reason = "The user explicitly waived clean-Windows installed acceptance for this candidate."
+    }
+} else {
+    [ordered]@{
+        status = "required-pending"
+        reason = $null
+    }
+}
 $toolchains = [ordered]@{
     rustc = (& rustc +stable --version).Trim()
     cargo = (& cargo +stable --version).Trim()
@@ -197,14 +213,15 @@ $manifest = [ordered]@{
     sourceStatusBefore = @()
     sourceStatusAfter = @()
     windowsImage = $windowsImage
-    cleanWindowsImageId = $CleanWindowsImageId
-    cleanWindowsImage = [ordered]@{
+    cleanWindowsImageId = if ($SkipInstalledAcceptance) { $null } else { $CleanWindowsImageId }
+    cleanWindowsImage = if ($SkipInstalledAcceptance) { $null } else { [ordered]@{
         imageId = $CleanWindowsImageId
         manifestSha256 = $cleanImageManifestSha256
         snapshotSha256 = $cleanImage.snapshotSha256.ToLowerInvariant()
         source = $cleanImage.source
         cleanBaseline = $true
-    }
+    } }
+    installedAcceptance = $installedAcceptance
     windowsBuild = $windowsBuild
     architecture = "x64"
     onlineRequired = $true
@@ -238,19 +255,21 @@ Invoke-EvidenceCommand "package" "powershell" @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packageScript,
     "-CandidateDirectory", $candidate
 )
-Invoke-EvidenceCommand "install-silent-fresh" "powershell" @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
-    "-CandidateDirectory", $candidate, "-Scenario", "Fresh", "-InstallMode", "Silent"
-)
-Invoke-EvidenceCommand "install-interactive-fresh" "powershell" @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
-    "-CandidateDirectory", $candidate, "-Scenario", "Fresh", "-InstallMode", "Interactive"
-)
-Invoke-EvidenceCommand "install-silent-upgrade" "powershell" @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
-    "-CandidateDirectory", $candidate, "-Scenario", "Upgrade", "-InstallMode", "Silent",
-    "-UpgradeFromInstaller", $UpgradeFromInstaller
-)
+if (-not $SkipInstalledAcceptance) {
+    Invoke-EvidenceCommand "install-silent-fresh" "powershell" @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
+        "-CandidateDirectory", $candidate, "-Scenario", "Fresh", "-InstallMode", "Silent"
+    )
+    Invoke-EvidenceCommand "install-interactive-fresh" "powershell" @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
+        "-CandidateDirectory", $candidate, "-Scenario", "Fresh", "-InstallMode", "Interactive"
+    )
+    Invoke-EvidenceCommand "install-silent-upgrade" "powershell" @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $verifyInstallerScript,
+        "-CandidateDirectory", $candidate, "-Scenario", "Upgrade", "-InstallMode", "Silent",
+        "-UpgradeFromInstaller", $UpgradeFromInstaller
+    )
+}
 
 $sourceStateFinal = @(& git -C $root status --porcelain=v1)
 if ($sourceStateFinal.Count -ne 0) {
@@ -261,28 +280,59 @@ $acceptanceFiles = @(
         Sort-Object Name |
         ForEach-Object { $_.Name }
 )
-if ($acceptanceFiles.Count -ne 3) {
+if (-not $SkipInstalledAcceptance -and $acceptanceFiles.Count -ne 3) {
     throw "Expected three distinct installed-acceptance records"
 }
+if ($SkipInstalledAcceptance -and $acceptanceFiles.Count -ne 0) {
+    throw "A user-waived candidate must not claim installed-acceptance records"
+}
+$finalInstalledAcceptance = if ($SkipInstalledAcceptance) {
+    $installedAcceptance
+} else {
+    [ordered]@{
+        status = "passed"
+        reason = $null
+    }
+}
+$distributionPath = Join-Path $candidate "distribution.json"
+$distribution = Get-Content -Raw -Encoding UTF8 -LiteralPath $distributionPath | ConvertFrom-Json
+$distribution.installedAcceptanceStatus = $finalInstalledAcceptance.status
+[IO.File]::WriteAllText(
+    $distributionPath,
+    ($distribution | ConvertTo-Json -Depth 8),
+    $utf8
+)
+$distributionStatementPath = Join-Path $candidate "DISTRIBUTION.md"
+$distributionStatement = [IO.File]::ReadAllText($distributionStatementPath)
+$distributionStatement = [regex]::Replace(
+    $distributionStatement,
+    '(?m)^- Installed acceptance: .+$',
+    "- Installed acceptance: $($finalInstalledAcceptance.status)"
+)
+[IO.File]::WriteAllText($distributionStatementPath, $distributionStatement, $utf8)
 $finalEvidence = [ordered]@{
     candidateId = $CandidateId
     version = "1.1.0"
     commit = $commit
     sourceClean = $true
-    cleanWindowsImageId = $CleanWindowsImageId
+    cleanWindowsImageId = if ($SkipInstalledAcceptance) { $null } else { $CleanWindowsImageId }
     windowsImage = $windowsImage
-    cleanWindowsImage = [ordered]@{
+    cleanWindowsImage = if ($SkipInstalledAcceptance) { $null } else { [ordered]@{
         imageId = $CleanWindowsImageId
         manifestSha256 = $cleanImageManifestSha256
         snapshotSha256 = $cleanImage.snapshotSha256.ToLowerInvariant()
         source = $cleanImage.source
-    }
+    } }
     commands = @($commandRecords)
     testCounts = $manifest.testCounts
     binaryDigests = $binaryDigests
     releaseCandidateManifest = "release-candidate.json"
     distributionRecord = "distribution.json"
-    installedAcceptance = $acceptanceFiles
+    installedAcceptance = [ordered]@{
+        status = $finalInstalledAcceptance.status
+        reason = $finalInstalledAcceptance.reason
+        records = $acceptanceFiles
+    }
     sealedUtc = (Get-Date).ToUniversalTime().ToString("o")
 }
 [IO.File]::WriteAllText(

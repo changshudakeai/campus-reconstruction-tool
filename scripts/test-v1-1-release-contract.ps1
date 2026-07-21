@@ -68,6 +68,14 @@ if (
 Assert-Contains $candidateVerifier '"install-silent-fresh"' "Silent fresh install evidence is mandatory"
 Assert-Contains $candidateVerifier '"install-interactive-fresh"' "Interactive fresh install evidence is mandatory"
 Assert-Contains $candidateVerifier '"install-silent-upgrade"' "Predecessor upgrade evidence is mandatory"
+Assert-Contains $candidateVerifier '[switch]$SkipInstalledAcceptance' "Installed acceptance may be skipped only through an explicit CLI waiver"
+Assert-Contains $candidateVerifier 'status = "not-run-user-waived"' "A skipped installed acceptance must be recorded as user-waived, never passed"
+Assert-Contains $candidateVerifier 'status = "passed"' "Successful default installed acceptance must transition from pending to passed"
+if ($candidateVerifier -notmatch '(?s)if \(-not \$SkipInstalledAcceptance\) \{\s*Invoke-EvidenceCommand "install-silent-fresh"[^}]*Invoke-EvidenceCommand "install-interactive-fresh"[^}]*Invoke-EvidenceCommand "install-silent-upgrade"[^}]*\}') {
+    throw "The default candidate path must guard all three installed-acceptance scenarios"
+}
+Assert-Contains $packager 'installedAcceptanceStatus' "Distribution evidence must publish the installed-acceptance status"
+Assert-Contains $releaseNotes 'not installed-acceptance tested' "Unsigned guidance must disclose an installed-acceptance waiver"
 Assert-Contains $candidateVerifier '"candidate-evidence.json"' "Final evidence must be sealed after installed acceptance"
 Assert-Contains $installerVerifier '$predecessorSetup' "Upgrade must install a real predecessor"
 Assert-NotContains $installerVerifier "Supported same-line upgrade" "Reinstalling the candidate is not upgrade evidence"
