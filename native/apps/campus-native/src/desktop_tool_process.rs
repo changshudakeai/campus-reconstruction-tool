@@ -42,7 +42,6 @@ impl DesktopToolProcessSupervisor {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn inject_next_failure(&self, point: HelperFaultPoint) {
         if let Ok(mut fault) = self.inner.next_fault.lock() {
             *fault = Some(point);

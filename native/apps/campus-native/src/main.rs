@@ -3,6 +3,7 @@
 mod desktop_tool_adapters;
 mod desktop_tool_process;
 mod diagnostics;
+mod installed_acceptance;
 mod v11_acquisition_client;
 mod v11_boundary_evidence_desk;
 mod v11_foundation_review_desk;
@@ -2839,6 +2840,21 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 fn main() -> Result<(), slint::PlatformError> {
     install_diagnostics();
     let arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(report_path) = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--installed-durability-report")
+        .map(|pair| PathBuf::from(&pair[1]))
+    {
+        let soak_seconds = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--soak-seconds")
+            .and_then(|pair| pair[1].parse::<u64>().ok())
+            .unwrap_or(7_200);
+        let exit_code = installed_acceptance::write_report(&report_path, soak_seconds)
+            .map(|report| if report.status == "pass" { 0 } else { 1 })
+            .unwrap_or(2);
+        std::process::exit(exit_code);
+    }
     if let Some(report_path) = arguments
         .windows(2)
         .find(|pair| pair[0] == "--candidate-smoke-report")
