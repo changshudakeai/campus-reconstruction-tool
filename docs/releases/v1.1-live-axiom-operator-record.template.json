@@ -1,0 +1,76 @@
+{
+  "candidateId": "replace-with-release-candidate-id",
+  "commit": "replace-with-release-candidate-commit",
+  "controlledService": {
+    "deploymentId": "replace-with-pinned-production-like-deployment",
+    "version": "replace-with-service-version",
+    "healthStatus": "pass",
+    "datasetBundlePolicy": "replace-with-pinned-policy-version"
+  },
+  "minecraft": { "version": "26.1.2" },
+  "axiom": {
+    "version": "replace-with-axiom-version",
+    "instanceDigestSha256": "replace-with-64-lowercase-hex-digest"
+  },
+  "releaseBlockerObservations": [],
+  "campuses": [
+    {
+      "campusId": "putuo",
+      "campusName": "华东师范大学普陀校区",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": {
+        "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex",
+        "providerSnapshots": ["osm", "overture"],
+        "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} },
+        "acquisitionLicenceManifest": "putuo/acquisition-licence-manifest.json",
+        "ruleVersions": {}, "limits": {}, "contentDigests": {}
+      },
+      "riskExercises": [],
+      "workflow": { "boundaryConfirmed": true, "fiveCategoryReviewComplete": true, "saveReopenPassed": true, "currentRevisionGenerated": true },
+      "outputs": [
+        { "kind": "foundation", "schematic": "putuo/foundation.schem", "determinismRepeat": "putuo/foundation-repeat.schem", "foundationManifest": "putuo/foundation-manifest.json", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0, 0, 0, 1, 1, 1], "blockCount": 1, "screenshots": ["putuo/foundation-orientation.png", "putuo/foundation-features.png"] } },
+        { "kind": "detailed", "schematic": "putuo/detailed.schem", "determinismRepeat": "putuo/detailed-repeat.schem", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0, 0, 0, 1, 1, 1], "blockCount": 1, "screenshots": ["putuo/detailed-placement.png", "putuo/detailed-features.png"] } }
+      ]
+    },
+    {
+      "campusId": "sjtu-minhang", "campusName": "上海交通大学闵行校区",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": { "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex", "providerSnapshots": [], "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} }, "acquisitionLicenceManifest": "sjtu-minhang/acquisition-licence-manifest.json", "ruleVersions": {}, "limits": {}, "contentDigests": {} },
+      "riskExercises": ["large-request-preflight", "continuation-cancellation-replay", "overlapping-buildings", "whole-part-buildings", "sports-containment"],
+      "workflow": { "boundaryConfirmed": true, "fiveCategoryReviewComplete": true, "saveReopenPassed": true, "currentRevisionGenerated": true },
+      "outputs": [{ "kind": "foundation", "schematic": "sjtu-minhang/foundation.schem", "determinismRepeat": "sjtu-minhang/foundation-repeat.schem", "foundationManifest": "sjtu-minhang/foundation-manifest.json", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0,0,0,1,1,1], "blockCount": 1, "screenshots": ["sjtu-minhang/orientation.png", "sjtu-minhang/features.png"] } }]
+    },
+    {
+      "campusId": "wuhan-university", "campusName": "武汉大学",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": { "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex", "providerSnapshots": [], "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} }, "acquisitionLicenceManifest": "wuhan-university/acquisition-licence-manifest.json", "ruleVersions": {}, "limits": {}, "contentDigests": {} },
+      "riskExercises": ["complex-relations"],
+      "workflow": { "boundaryConfirmed": true, "fiveCategoryReviewComplete": true, "saveReopenPassed": true, "currentRevisionGenerated": true },
+      "outputs": [{ "kind": "foundation", "schematic": "wuhan-university/foundation.schem", "determinismRepeat": "wuhan-university/foundation-repeat.schem", "foundationManifest": "wuhan-university/foundation-manifest.json", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0,0,0,1,1,1], "blockCount": 1, "screenshots": ["wuhan-university/orientation.png", "wuhan-university/features.png"] } }]
+    },
+    {
+      "campusId": "xiamen-siming", "campusName": "厦门大学思明校区",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": { "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex", "providerSnapshots": [], "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} }, "acquisitionLicenceManifest": "xiamen-siming/acquisition-licence-manifest.json", "ruleVersions": {}, "limits": {}, "contentDigests": {} },
+      "riskExercises": ["alias-disambiguation"],
+      "workflow": { "boundaryConfirmed": true, "fiveCategoryReviewComplete": true, "saveReopenPassed": true, "currentRevisionGenerated": true },
+      "outputs": [{ "kind": "foundation", "schematic": "xiamen-siming/foundation.schem", "determinismRepeat": "xiamen-siming/foundation-repeat.schem", "foundationManifest": "xiamen-siming/foundation-manifest.json", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0,0,0,1,1,1], "blockCount": 1, "screenshots": ["xiamen-siming/orientation.png", "xiamen-siming/features.png"] } }]
+    },
+    {
+      "campusId": "xian-jiaotong-xingqing", "campusName": "西安交通大学兴庆校区",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": { "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex", "providerSnapshots": [], "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} }, "acquisitionLicenceManifest": "xian-jiaotong-xingqing/acquisition-licence-manifest.json", "ruleVersions": {}, "limits": {}, "contentDigests": {} },
+      "riskExercises": ["multipolygons"],
+      "workflow": { "boundaryConfirmed": true, "fiveCategoryReviewComplete": true, "saveReopenPassed": true, "currentRevisionGenerated": true },
+      "outputs": [{ "kind": "foundation", "schematic": "xian-jiaotong-xingqing/foundation.schem", "determinismRepeat": "xian-jiaotong-xingqing/foundation-repeat.schem", "foundationManifest": "xian-jiaotong-xingqing/foundation-manifest.json", "axiomImport": { "status": "pass", "fileSha256": "replace-with-64-hex", "durationMs": 1, "bounds": [0,0,0,1,1,1], "blockCount": 1, "screenshots": ["xian-jiaotong-xingqing/orientation.png", "xian-jiaotong-xingqing/features.png"] } }]
+    },
+    {
+      "campusId": "nyu-shanghai-qiantan", "campusName": "上海纽约大学前滩校园",
+      "gaode": { "poiId": "replace", "address": "replace", "coordinates": [0.0, 0.0], "providerDiagnostics": "redacted diagnostics only" },
+      "evidence": { "datasetBundleId": "replace", "datasetBundleDigestSha256": "replace-with-64-hex", "providerSnapshots": [], "coverageReports": { "building": {}, "circulation": {}, "water": {}, "vegetation": {}, "sports": {} }, "acquisitionLicenceManifest": "nyu-shanghai-qiantan/acquisition-licence-manifest.json", "ruleVersions": {}, "limits": {}, "contentDigests": {} },
+      "riskExercises": ["honest-unavailability"],
+      "workflow": { "boundaryStatus": "boundary-unavailable", "recoveryActions": { "retry": true, "back": true, "refresh": true }, "diagnosticLineage": ["replace-with-event-id"], "fabricatedGeometry": false, "fiveCategoryReviewEntered": false, "exportAttempted": false },
+      "outputs": []
+    }
+  ]
+}

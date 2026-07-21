@@ -10,6 +10,7 @@ use foundation_generators::{
     FoundationFeatureGeneratorRegistry, FoundationFeatureRender, FoundationRenderTarget,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
@@ -303,6 +304,142 @@ pub enum ExportFaultPoint {
 
 pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), String> {
     write_schematic_with_fault(path, name, model, None)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchematicInspection {
+    pub sponge_version: i32,
+    pub data_version: i32,
+    pub dimensions: [usize; 3],
+    pub offset: [i32; 3],
+    pub palette_entries: usize,
+    pub total_voxels: usize,
+    pub non_air_voxels: usize,
+    pub content_sha256: String,
+}
+
+pub fn inspect_schematic(path: &Path) -> Result<SchematicInspection, String> {
+    use fastnbt::Value;
+    use std::io::Read;
+
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(file)
+        .read_to_end(&mut decoded)
+        .map_err(|error| format!("schematic is not valid gzip: {error}"))?;
+    let Value::Compound(mut root) = fastnbt::from_bytes::<Value>(&decoded)
+        .map_err(|error| format!("invalid Sponge NBT: {error}"))?
+    else {
+        return Err("schematic root must be an NBT compound".into());
+    };
+    let Value::Compound(mut schematic) = root
+        .remove("Schematic")
+        .ok_or("schematic is missing the Sponge Schematic compound")?
+    else {
+        return Err("Schematic tag must be a compound".into());
+    };
+    let integer =
+        |map: &mut std::collections::HashMap<String, Value>, name: &str| match map.remove(name) {
+            Some(Value::Int(value)) => Ok(value),
+            Some(Value::Short(value)) => Ok(i32::from(value)),
+            _ => Err(format!("schematic is missing integer {name}")),
+        };
+    let sponge_version = integer(&mut schematic, "Version")?;
+    let data_version = integer(&mut schematic, "DataVersion")?;
+    let width = integer(&mut schematic, "Width")?;
+    let height = integer(&mut schematic, "Height")?;
+    let length = integer(&mut schematic, "Length")?;
+    if width <= 0 || height <= 0 || length <= 0 {
+        return Err("schematic dimensions must be positive".into());
+    }
+    let Value::IntArray(offset) = schematic
+        .remove("Offset")
+        .ok_or("schematic is missing Offset")?
+    else {
+        return Err("schematic Offset must be an int array".into());
+    };
+    let offset = offset.into_inner();
+    if offset.len() != 3 {
+        return Err("schematic Offset must contain three coordinates".into());
+    }
+    let Value::Compound(mut blocks) = schematic
+        .remove("Blocks")
+        .ok_or("schematic is missing Blocks")?
+    else {
+        return Err("schematic Blocks must be a compound".into());
+    };
+    let Value::Compound(palette) = blocks
+        .remove("Palette")
+        .ok_or("schematic is missing Blocks.Palette")?
+    else {
+        return Err("schematic Palette must be a compound".into());
+    };
+    if palette.is_empty() || palette.keys().any(|name| !name.starts_with("minecraft:")) {
+        return Err("schematic palette contains an unknown block namespace".into());
+    }
+    let air_index = match palette.get("minecraft:air") {
+        Some(Value::Int(value)) => Some(*value as u32),
+        _ => None,
+    };
+    let Value::ByteArray(data) = blocks
+        .remove("Data")
+        .ok_or("schematic is missing Blocks.Data")?
+    else {
+        return Err("schematic block data must be a byte array".into());
+    };
+    let data = data.into_inner();
+    let mut values = Vec::new();
+    let mut current = 0u32;
+    let mut shift = 0;
+    for byte in data.iter().map(|byte| *byte as u8) {
+        current |= u32::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            values.push(current);
+            current = 0;
+            shift = 0;
+        } else {
+            shift += 7;
+            if shift >= 35 {
+                return Err("schematic block data contains an invalid VarInt".into());
+            }
+        }
+    }
+    if shift != 0 {
+        return Err("schematic block data ends inside a VarInt".into());
+    }
+    let total_voxels = width as usize * height as usize * length as usize;
+    if values.len() != total_voxels {
+        return Err("schematic block count does not match its dimensions".into());
+    }
+    let non_air_voxels = air_index
+        .map(|air| values.iter().filter(|value| **value != air).count())
+        .unwrap_or(values.len());
+    if non_air_voxels == 0 {
+        return Err("schematic contains no non-air voxels".into());
+    }
+    let stable_palette = palette.iter().collect::<BTreeMap<_, _>>();
+    let stable = serde_json::to_vec(&(
+        sponge_version,
+        data_version,
+        width,
+        height,
+        length,
+        &offset,
+        stable_palette,
+        &values,
+    ))
+    .map_err(|error| error.to_string())?;
+    Ok(SchematicInspection {
+        sponge_version,
+        data_version,
+        dimensions: [width as usize, height as usize, length as usize],
+        offset: [offset[0], offset[1], offset[2]],
+        palette_entries: palette.len(),
+        total_voxels,
+        non_air_voxels,
+        content_sha256: format!("{:x}", Sha256::digest(stable)),
+    })
 }
 
 pub fn write_schematic_with_fault(
@@ -712,6 +849,31 @@ mod tests {
         assert!(root.contains_key("Schematic"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(preview_path);
+    }
+
+    #[test]
+    fn inspects_the_public_sponge_schematic_contract() {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("inspection.schem");
+        let model = VoxelModel {
+            width: 2,
+            height: 1,
+            length: 2,
+            palette: vec!["minecraft:air".into(), "minecraft:stone".into()],
+            blocks: vec![0, 1, 1, 0],
+        };
+        write_schematic(&path, "inspection", &model).unwrap();
+
+        let inspection = inspect_schematic(&path).unwrap();
+
+        assert_eq!(inspection.sponge_version, 3);
+        assert_eq!(inspection.data_version, 3955);
+        assert_eq!(inspection.dimensions, [2, 1, 2]);
+        assert_eq!(inspection.offset, [0, 0, 0]);
+        assert_eq!(inspection.palette_entries, 2);
+        assert_eq!(inspection.non_air_voxels, 2);
+        assert_eq!(inspection.total_voxels, 4);
+        assert_eq!(inspection.content_sha256.len(), 64);
     }
 
     #[test]

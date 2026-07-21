@@ -27,6 +27,8 @@ $packager = Read-RepoFile "scripts\build-native-installer.ps1"
 $sizeReport = Read-RepoFile "scripts\report-release-size.ps1"
 $releaseNotes = Read-RepoFile "docs\releases\v1.1.0-unsigned.md"
 $durabilityEvidence = Read-RepoFile "scripts\collect-v1-1-installed-durability-evidence.ps1"
+$liveAxiomEvidence = Read-RepoFile "scripts\collect-v1-1-live-axiom-evidence.ps1"
+$liveAxiomTemplate = Read-RepoFile "docs\releases\v1.1-live-axiom-operator-record.template.json"
 
 Assert-Contains $cargo 'version = "1.1.0"' "Cargo workspace version must be 1.1.0"
 $candidateVerifier = Read-RepoFile "scripts\verify-v1-1-candidate.ps1"
@@ -87,6 +89,14 @@ Assert-Contains $durabilityEvidence 'SoakSeconds = 7200' "Installed reliability 
 Assert-Contains $durabilityEvidence 'Formal installed reliability evidence requires' "Short development runs must not become formal evidence"
 Assert-Contains $durabilityEvidence 'releaseBlockers' "Mandatory failures must remain Release Blockers"
 Assert-Contains $durabilityEvidence 'binaryDigests' "Installed evidence must bind all candidate binary digests"
+Assert-Contains $liveAxiomEvidence '--live-axiom-operator-record' "Live/Axiom evidence must be validated by the installed release binary"
+Assert-Contains $liveAxiomEvidence 'releaseBlockers' "Live/Axiom mandatory failures must remain Release Blockers"
+Assert-Contains $liveAxiomEvidence 'binaryDigests' "Live/Axiom evidence must bind all installed candidate binary digests"
+foreach ($campusId in @('putuo', 'sjtu-minhang', 'wuhan-university', 'xiamen-siming', 'xian-jiaotong-xingqing', 'nyu-shanghai-qiantan')) {
+    Assert-Contains $liveAxiomTemplate $campusId "Live/Axiom operator template is missing $campusId"
+}
+Assert-Contains $liveAxiomTemplate 'honest-unavailability' "Six-campus template must retain the accepted negative risk"
+Assert-Contains $liveAxiomTemplate 'determinismRepeat' "Every schematic must have an independently generated determinism repeat"
 Assert-Contains $installerVerifier '$predecessorSetup' "Upgrade must install a real predecessor"
 Assert-NotContains $installerVerifier "Supported same-line upgrade" "Reinstalling the candidate is not upgrade evidence"
 Assert-Contains $releaseWorkflow "workflow_dispatch:" "The source gate must run before tagging"

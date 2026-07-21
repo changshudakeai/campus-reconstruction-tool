@@ -4,6 +4,7 @@ mod desktop_tool_adapters;
 mod desktop_tool_process;
 mod diagnostics;
 mod installed_acceptance;
+mod live_axiom_acceptance;
 mod v11_acquisition_client;
 mod v11_boundary_evidence_desk;
 mod v11_foundation_review_desk;
@@ -2840,6 +2841,24 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 fn main() -> Result<(), slint::PlatformError> {
     install_diagnostics();
     let arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(operator_record) = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--live-axiom-operator-record")
+        .map(|pair| PathBuf::from(&pair[1]))
+    {
+        let Some(report_path) = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--live-axiom-report")
+            .map(|pair| PathBuf::from(&pair[1]))
+        else {
+            eprintln!("--live-axiom-report is required");
+            std::process::exit(2);
+        };
+        let exit_code = live_axiom_acceptance::write_report(&operator_record, &report_path)
+            .map(|report| if report["status"] == "pass" { 0 } else { 1 })
+            .unwrap_or(2);
+        std::process::exit(exit_code);
+    }
     if let Some(report_path) = arguments
         .windows(2)
         .find(|pair| pair[0] == "--installed-durability-report")
