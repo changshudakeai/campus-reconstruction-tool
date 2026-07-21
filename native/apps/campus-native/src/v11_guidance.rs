@@ -18,6 +18,9 @@ pub enum ShortcutAction {
     CloseQuickStart,
     CloseUtilities,
     DismissError,
+    CloseAbout,
+    CloseEvidence,
+    CloseCandidateDetails,
     NewProject,
     OpenProject,
     SaveProject,
@@ -75,6 +78,9 @@ pub enum ModalState {
     QuickStart,
     Utilities,
     Error,
+    About,
+    Evidence,
+    CandidateDetails,
 }
 
 impl ModalState {
@@ -86,6 +92,9 @@ impl ModalState {
             Self::QuickStart => Some(ShortcutAction::CloseQuickStart),
             Self::Utilities => Some(ShortcutAction::CloseUtilities),
             Self::Error => Some(ShortcutAction::DismissError),
+            Self::About => Some(ShortcutAction::CloseAbout),
+            Self::Evidence => Some(ShortcutAction::CloseEvidence),
+            Self::CandidateDetails => Some(ShortcutAction::CloseCandidateDetails),
         }
     }
 }
@@ -483,6 +492,24 @@ mod tests {
             resolve_shortcut(Shortcut::Escape, context, Locale::En).action(),
             Some(ShortcutAction::CloseSettings)
         );
+        for (modal, expected) in [
+            (ModalState::About, ShortcutAction::CloseAbout),
+            (ModalState::Evidence, ShortcutAction::CloseEvidence),
+            (
+                ModalState::CandidateDetails,
+                ShortcutAction::CloseCandidateDetails,
+            ),
+        ] {
+            assert_eq!(
+                resolve_shortcut(
+                    Shortcut::Escape,
+                    ShortcutContext { modal, ..context },
+                    Locale::En,
+                )
+                .action(),
+                Some(expected)
+            );
+        }
 
         let context = ShortcutContext {
             modal: ModalState::None,

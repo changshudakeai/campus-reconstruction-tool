@@ -65,8 +65,10 @@ component CandidateItem inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Minecraft 校园复刻工具";
-    width: 1280px;
-    height: 720px;
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    min-width: 900px;
+    min-height: 560px;
     background: #f4f0e5;
     default-font-family: "Microsoft YaHei UI";
     forward-focus: shortcut-scope;
@@ -184,8 +186,11 @@ export component AppWindow inherits Window {
     in-out property <string> replace-target: "";
     in-out property <bool> english: false;
     in-out property <int> map-tool-state: 0;
-    out property <int> shortcut-modal: root.quick-start-visible ? 3
+    out property <int> shortcut-modal: root.candidate-details-visible ? 8
+        : root.evidence-visible ? 7
+        : root.quick-start-visible ? 3
         : root.guidance-visible ? 1
+        : root.about-visible ? 6
         : root.settings-visible ? 2
         : root.utilities-visible ? 4
         : root.error-visible ? 5 : 0;
@@ -1206,36 +1211,46 @@ export component AppWindow inherits Window {
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button { text: root.english ? "Close" : "关闭"; clicked => { root.quick-start-visible = false; } }
             }
-            HorizontalLayout {
-                spacing: 12px;
-                for shot[index] in [
-                    root.english ? "1 · CAMPUS TARGET" : "1 · 校区目标",
-                    root.english ? "2 · FOUNDATION / DETAILED" : "2 · FOUNDATION／DETAILED",
-                    root.english ? "3 · MINECRAFT 26.1.2 / AXIOM" : "3 · MINECRAFT 26.1.2／AXIOM",
-                ] : Rectangle {
-                    background: #e7dfcf;
-                    border-color: #9f927d;
-                    border-width: 1px;
-                    VerticalLayout {
-                        padding: 12px;
-                        spacing: 9px;
-                        Image {
-                            height: 250px;
-                            source: index == 0 ? @image-url("quick-start/01-campus-target.jpg")
-                                : index == 1 ? @image-url("quick-start/02-foundation-detailed.jpg")
-                                : @image-url("quick-start/03-minecraft-axiom.jpg");
-                            image-fit: contain;
-                        }
-                        Text { text: shot; font-weight: 700; color: #17251f; wrap: word-wrap; }
-                        Text {
-                            text: index == 0
-                                ? (root.english ? "Confirm the Campus Target, then enter its Campus Project Library." : "确认校区目标，再进入该校园的校区项目库。")
-                                : index == 1
-                                ? (root.english ? "Review Foundation evidence and Known Feature Gaps, then refine a reviewed building." : "审核 Foundation 证据和已知地物缺口，再精修已审核建筑。")
-                                : (root.english ? "Generate for Minecraft 26.1.2, verify in Axiom, and export .schem." : "生成 Minecraft 26.1.2 结果，在 Axiom 检查并导出 .schem。");
-                            color: #506058;
-                            font-size: 12px;
-                            wrap: word-wrap;
+            quick-start-scroll := ScrollView {
+                preferred-height: 0px;
+                VerticalLayout {
+                    spacing: 12px;
+                    for shot[index] in [
+                        root.english ? "1 · CAMPUS TARGET" : "1 · 校区目标",
+                        root.english ? "2 · FOUNDATION / DETAILED" : "2 · FOUNDATION／DETAILED",
+                        root.english ? "3 · MINECRAFT 26.1.2 / AXIOM" : "3 · MINECRAFT 26.1.2／AXIOM",
+                    ] : Rectangle {
+                        height: 280px;
+                        background: #e7dfcf;
+                        border-color: #9f927d;
+                        border-width: 1px;
+                        HorizontalLayout {
+                            padding: 12px;
+                            spacing: 14px;
+                            Image {
+                                width: 62%;
+                                source: index == 0 ? @image-url("quick-start/01-campus-target.jpg")
+                                    : index == 1 ? @image-url("quick-start/02-foundation-detailed.jpg")
+                                    : @image-url("quick-start/03-minecraft-axiom.jpg");
+                                image-fit: contain;
+                            }
+                            VerticalLayout {
+                                padding-top: 14px;
+                                padding-bottom: 14px;
+                                spacing: 12px;
+                                Text { text: shot; font-weight: 700; color: #17251f; wrap: word-wrap; }
+                                Text {
+                                    text: index == 0
+                                        ? (root.english ? "Confirm the Campus Target, then enter its Campus Project Library." : "确认校区目标，再进入该校园的校区项目库。")
+                                        : index == 1
+                                        ? (root.english ? "Review Foundation evidence and Known Feature Gaps, then refine a reviewed building." : "审核 Foundation 证据和已知地物缺口，再精修已审核建筑。")
+                                        : (root.english ? "Generate for Minecraft 26.1.2, verify in Axiom, and export .schem." : "生成 Minecraft 26.1.2 结果，在 Axiom 检查并导出 .schem。");
+                                    color: #506058;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                            }
                         }
                     }
                 }

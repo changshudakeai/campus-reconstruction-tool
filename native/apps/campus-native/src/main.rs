@@ -416,6 +416,9 @@ fn modal_state_from_code(value: i32) -> v11_guidance::ModalState {
         3 => v11_guidance::ModalState::QuickStart,
         4 => v11_guidance::ModalState::Utilities,
         5 => v11_guidance::ModalState::Error,
+        6 => v11_guidance::ModalState::About,
+        7 => v11_guidance::ModalState::Evidence,
+        8 => v11_guidance::ModalState::CandidateDetails,
         _ => v11_guidance::ModalState::None,
     }
 }
@@ -3397,6 +3400,11 @@ fn main() -> Result<(), slint::PlatformError> {
                 v11_guidance::ShortcutAction::CloseSettings => ui.set_settings_visible(false),
                 v11_guidance::ShortcutAction::CloseQuickStart => ui.set_quick_start_visible(false),
                 v11_guidance::ShortcutAction::CloseUtilities => ui.set_utilities_visible(false),
+                v11_guidance::ShortcutAction::CloseAbout => ui.set_about_visible(false),
+                v11_guidance::ShortcutAction::CloseEvidence => ui.set_evidence_visible(false),
+                v11_guidance::ShortcutAction::CloseCandidateDetails => {
+                    ui.set_candidate_details_visible(false)
+                }
                 v11_guidance::ShortcutAction::DismissError => ui.invoke_dismiss_error(),
                 v11_guidance::ShortcutAction::NewProject => {
                     ui.invoke_show_project_library();
@@ -5011,8 +5019,10 @@ mod tests {
             "the scroll viewport must yield space to the fixed footer action"
         );
         assert!(
-            ui.contains("width: 1280px;") && ui.contains("height: 720px;"),
-            "the default window must fit a common 1366x768 desktop work area"
+            ui.contains("preferred-width: 1280px;")
+                && ui.contains("min-width: 900px;")
+                && ui.contains("min-height: 560px;"),
+            "the resizable window must remain usable in reduced logical work areas"
         );
     }
 
@@ -5251,17 +5261,21 @@ mod tests {
             );
         }
         assert!(
-            source.matches("preferred-height: 0px;").count() >= 2
+            source.matches("preferred-height: 0px;").count() >= 3
                 && source.contains("width: min(1000px, root.width - 48px)")
                 && source.contains("width: min(780px, root.width - 48px)")
-                && source.contains("width: min(1100px, root.width - 48px)"),
+                && source.contains("width: min(1100px, root.width - 48px)")
+                && source.contains("quick-start-scroll := ScrollView"),
             "core surfaces must scroll and adapt at 100%, 125%, and 150% Windows scale"
         );
         assert!(
             source.contains("callback shortcut-requested(int, bool, int, int)")
                 && source.contains("changed has-focus")
                 && source.contains("root.shortcut-modal")
-                && source.contains("root.map-tool-state"),
+                && source.contains("root.map-tool-state")
+                && source.contains("root.candidate-details-visible ? 8")
+                && source.contains("root.evidence-visible ? 7")
+                && source.contains("root.about-visible ? 6"),
             "shortcut routing must receive live text, modal, and map-tool context"
         );
         assert!(
