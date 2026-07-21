@@ -5021,7 +5021,7 @@ mod tests {
         assert!(
             ui.contains("preferred-width: 1280px;")
                 && ui.contains("min-width: 900px;")
-                && ui.contains("min-height: 560px;"),
+                && ui.contains("min-height: 440px;"),
             "the resizable window must remain usable in reduced logical work areas"
         );
     }
@@ -5277,6 +5277,12 @@ mod tests {
                 && source.contains("root.evidence-visible ? 7")
                 && source.contains("root.about-visible ? 6"),
             "shortcut routing must receive live text, modal, and map-tool context"
+        );
+        let utilities_modal = source.find("root.utilities-visible ? 4").unwrap();
+        let settings_modal = source.find("root.settings-visible ? 2").unwrap();
+        assert!(
+            utilities_modal < settings_modal,
+            "modal priority must follow the visual stacking order"
         );
         assert!(
             source.contains("APPLICATION MENU") && !source.contains("Save as"),

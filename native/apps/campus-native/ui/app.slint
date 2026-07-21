@@ -68,7 +68,7 @@ export component AppWindow inherits Window {
     preferred-width: 1280px;
     preferred-height: 720px;
     min-width: 900px;
-    min-height: 560px;
+    min-height: 440px;
     background: #f4f0e5;
     default-font-family: "Microsoft YaHei UI";
     forward-focus: shortcut-scope;
@@ -191,8 +191,8 @@ export component AppWindow inherits Window {
         : root.quick-start-visible ? 3
         : root.guidance-visible ? 1
         : root.about-visible ? 6
-        : root.settings-visible ? 2
         : root.utilities-visible ? 4
+        : root.settings-visible ? 2
         : root.error-visible ? 5 : 0;
 
     in-out property <bool> text-input-focused: false;
