@@ -80,6 +80,7 @@ export component AppWindow inherits Window {
     in-out property <int> route-stage: 0;
     in-out property <string> launcher-campus-name: "";
     in-out property <string> launcher-new-project-name: "";
+    in-out property <string> launcher-active-project-id: "";
     in-out property <[LauncherProjectRow]> launcher-projects: [];
     in-out property <string> launcher-progress: "0 / 9";
     in-out property <string> launcher-save-state: "";
@@ -237,7 +238,7 @@ export component AppWindow inherits Window {
                 Rectangle { width: 1px; height: 30px; background: #b7ad9a; }
                 Text { text: root.project-name; color: #4c5b53; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.save-status; color: root.error-visible ? #a54836 : #4c665b; vertical-alignment: center; }
+                Text { text: root.campus-launcher-visible ? root.launcher-save-state : root.save-status; color: root.error-visible ? #a54836 : #4c665b; vertical-alignment: center; }
                 if root.tool-status != "" : Text {
                     text: root.tool-status;
                     color: #617068;
@@ -246,8 +247,8 @@ export component AppWindow inherits Window {
                 Button { text: root.english ? "中文" : "EN"; clicked => { root.set-locale(!root.english); } }
                 Button { text: root.english ? "Undo" : "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
                 Button { text: root.english ? "Redo" : "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
-                Button { text: root.english ? "More" : "更多"; clicked => { root.utilities-visible = true; } }
-                Button { text: root.english ? "Save" : "保存"; clicked => { root.save-project(); } }
+                if !root.campus-launcher-visible : Button { text: root.english ? "More" : "更多"; clicked => { root.utilities-visible = true; } }
+                Button { text: root.english ? "Save" : "保存"; enabled: !root.campus-launcher-visible || root.launcher-active-project-id != ""; clicked => { root.save-project(); } }
             }
         }
         Rectangle { height: 2px; background: #23362e; }
@@ -286,7 +287,7 @@ export component AppWindow inherits Window {
             }
         }
 
-        if !root.campus-launcher-visible || root.launcher-step == 2 : HorizontalLayout {
+        VerticalLayout {
             spacing: 0px;
         if root.campus-launcher-visible : Rectangle {
             height: 64px;
@@ -317,6 +318,8 @@ export component AppWindow inherits Window {
             }
         }
 
+        HorizontalLayout {
+            spacing: 0px;
         if root.campus-launcher-visible && root.launcher-step < 2 : HorizontalLayout {
             spacing: 0px;
             Rectangle {
@@ -442,6 +445,89 @@ export component AppWindow inherits Window {
             }
         }
 
+        if root.campus-launcher-visible && root.launcher-step == 2 : HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                background: #faf8f1;
+                VerticalLayout {
+                    padding: 32px;
+                    spacing: 16px;
+                    SectionLabel { text: "CURRENT TASK"; }
+                    Text {
+                        text: root.launcher-next-task == "Completion and export"
+                            ? "Completion and Portable Export"
+                            : "Resume Point";
+                        font-size: 28px;
+                        font-weight: 700;
+                        color: #17251f;
+                    }
+                    Text {
+                        text: root.project-name;
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: #33463d;
+                    }
+                    Rectangle {
+                        height: 150px;
+                        background: #f0eadc;
+                        border-color: #b7ad9a;
+                        border-width: 1px;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 10px;
+                            SectionLabel { text: "NEXT ACTION"; }
+                            Text {
+                                text: root.launcher-next-task;
+                                font-size: 22px;
+                                font-weight: 700;
+                                color: #17251f;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: "This workspace is backed only by the active schema-2 project session.";
+                                color: #5b665f;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Button {
+                            text: "Back to project library";
+                            clicked => { root.show-project-library(); }
+                        }
+                        Button {
+                            text: "Portable export";
+                            enabled: root.launcher-active-project-id != "";
+                            clicked => { root.export-library-project(root.launcher-active-project-id); }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+            Rectangle { width: 1px; background: #d0c7b6; }
+            Rectangle {
+                width: 280px;
+                background: #f2eee4;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    SectionLabel { text: "PROJECT CONTEXT"; }
+                    Text { text: root.launcher-campus-name; font-size: 18px; font-weight: 700; color: #17251f; wrap: word-wrap; }
+                    Text { text: root.project-name; color: #33463d; wrap: word-wrap; }
+                    Rule {}
+                    SectionLabel { text: "PROGRESS"; }
+                    Text { text: root.launcher-progress; color: #33463d; }
+                    SectionLabel { text: "SAVE / RECOVERY"; }
+                    Text { text: root.launcher-save-state; color: #4c665b; wrap: word-wrap; }
+                    SectionLabel { text: "NEXT TASK"; }
+                    Text { text: root.launcher-next-task; color: #33463d; wrap: word-wrap; }
+                    SectionLabel { text: "MINECRAFT COMPATIBILITY"; }
+                    Text { text: root.launcher-compatibility; color: #506058; wrap: word-wrap; }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+        }
             if !root.campus-launcher-visible : Rectangle {
                 width: 260px;
                 background: #ece4d3;
@@ -496,7 +582,7 @@ export component AppWindow inherits Window {
             }
             if !root.campus-launcher-visible : Rectangle { width: 1px; background: #948a78; }
 
-            Rectangle {
+            if !root.campus-launcher-visible : Rectangle {
                 background: #faf8f1;
                 VerticalLayout {
                     padding: 28px;
@@ -763,8 +849,8 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            Rectangle { width: 1px; background: #d0c7b6; }
-            Rectangle {
+            if !root.campus-launcher-visible : Rectangle { width: 1px; background: #d0c7b6; }
+            if !root.campus-launcher-visible : Rectangle {
                 width: 270px;
                 background: #f2eee4;
                 VerticalLayout {
@@ -795,10 +881,12 @@ export component AppWindow inherits Window {
                 }
             }
         }
+        }
       }
       KeyBinding { keys: @keys(Control + S); activated => { root.save-project(); } }
       KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }
       KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }
+      KeyBinding { keys: @keys(Control + Shift + Z); activated => { root.redo(); } }
     }
 
     if root.settings-visible : Rectangle {

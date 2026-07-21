@@ -135,14 +135,7 @@ impl CampusProjectLibrary {
 
     pub fn portable_project_scope(source: impl AsRef<Path>) -> Result<CampusScope, String> {
         let bytes = fs::read(source.as_ref()).map_err(|error| error.to_string())?;
-        match decode_portable_envelope(&bytes) {
-            Ok(envelope) => Ok(envelope.project.campus_scope().clone()),
-            Err(portable_error) => portable_schema1_scope(&bytes).map_err(|migration_error| {
-                format!(
-                    "Unsupported Portable Project; schema-2 validation: {portable_error}; schema-1 validation: {migration_error}"
-                )
-            }),
-        }
+        decode_portable_scope(&bytes)
     }
 
     pub fn inspect_portable_project(
@@ -150,14 +143,7 @@ impl CampusProjectLibrary {
         selected_scope: &CampusScope,
     ) -> Result<CampusTargetMatchRequirement, String> {
         let bytes = fs::read(source.as_ref()).map_err(|error| error.to_string())?;
-        let embedded_scope = match decode_portable_envelope(&bytes) {
-            Ok(envelope) => envelope.project.campus_scope().clone(),
-            Err(portable_error) => portable_schema1_scope(&bytes).map_err(|migration_error| {
-                format!(
-                    "Unsupported Portable Project; schema-2 validation: {portable_error}; schema-1 validation: {migration_error}"
-                )
-            })?,
-        };
+        let embedded_scope = decode_portable_scope(&bytes)?;
         Ok(campus_target_match_requirement(
             &embedded_scope,
             selected_scope,
@@ -576,6 +562,16 @@ fn is_non_portable_key(key: &str) -> bool {
         )
 }
 
+fn decode_portable_scope(bytes: &[u8]) -> Result<CampusScope, String> {
+    match decode_portable_envelope(bytes) {
+        Ok(envelope) => Ok(envelope.project.campus_scope().clone()),
+        Err(portable_error) => portable_schema1_scope(bytes).map_err(|migration_error| {
+            format!(
+                "Unsupported Portable Project; schema-2 validation: {portable_error}; schema-1 validation: {migration_error}"
+            )
+        }),
+    }
+}
 fn decode_portable_envelope(bytes: &[u8]) -> Result<PortableProjectEnvelope, String> {
     let mut raw: Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("Invalid Portable Project: {error}"))?;

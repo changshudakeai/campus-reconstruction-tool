@@ -159,7 +159,39 @@ impl CampusProjectLauncher {
         Ok(project_id)
     }
 
-    pub fn apply_active_operation<T>(
+    pub fn request_save(&mut self) -> Result<(), String> {
+        let library = self
+            .library
+            .as_mut()
+            .ok_or("Confirm a Campus Target before saving a project")?;
+        self.session.request_save(library)
+    }
+
+    pub fn undo(&mut self) -> Result<(), String> {
+        let library = self
+            .library
+            .as_mut()
+            .ok_or("Confirm a Campus Target before undoing a project operation")?;
+        self.session.undo(library)
+    }
+
+    pub fn redo(&mut self) -> Result<(), String> {
+        let library = self
+            .library
+            .as_mut()
+            .ok_or("Confirm a Campus Target before redoing a project operation")?;
+        self.session.redo(library)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.session.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.session.can_redo()
+    }
+    #[cfg(test)]
+    fn apply_active_operation<T>(
         &mut self,
         description: impl Into<String>,
         mutation: impl FnOnce(&mut Schema2Project) -> Result<T, String>,
@@ -222,54 +254,66 @@ impl CampusProjectLauncher {
             .confirmed_campus
             .as_ref()
             .is_some_and(|current| current.target_id() == scope.target_id());
-        let imported = if same_campus {
+        if same_campus {
             let library = self
                 .library
                 .as_mut()
                 .ok_or("Confirmed Campus Target has no project library")?;
-            self.session.import_portable_into_current_campus(
+            let imported = self.session.import_portable_into_current_campus(
                 library,
+                source,
+                scope,
+                CampusTargetMatchApproval::HumanConfirmed,
+                self.actor.clone(),
+            )?;
+            self.step = LauncherStep::Workspace;
+            return Ok(open_destination(imported.resume_point()));
+        }
+
+        if let Some(current) = self.library.as_mut() {
+            self.session.prepare_context_change(current)?;
+        }
+        let mut destination = CampusProjectLibrary::open_for_construction(
+            self.library_root(scope.target_id()),
+            scope.target_id(),
+            &self.capability,
+        )?;
+        let previous_preferences = read_launcher_preferences_bytes(&self.application_data)?;
+        persist_last_used_campus(&self.application_data, &scope)?;
+        let destination_commit = (|| {
+            let imported = destination.import_portable_project(
                 source,
                 scope.clone(),
                 CampusTargetMatchApproval::HumanConfirmed,
                 self.actor.clone(),
-            )?
-        } else {
-            let mut destination = CampusProjectLibrary::open_for_construction(
-                self.library_root(scope.target_id()),
-                scope.target_id(),
-                &self.capability,
             )?;
-            let imported = if let Some(current) = self.library.as_mut() {
-                self.session.import_portable_across_campus(
-                    current,
-                    &mut destination,
-                    source,
-                    scope.clone(),
-                    CampusTargetMatchApproval::HumanConfirmed,
-                    self.actor.clone(),
-                )?
-            } else {
-                let imported = destination.import_portable_project(
-                    source,
-                    scope.clone(),
-                    CampusTargetMatchApproval::HumanConfirmed,
-                    self.actor.clone(),
-                )?;
-                self.session.open_project(&destination, imported.id())?;
-                imported
-            };
-            self.library = Some(destination);
-            imported
+            let destination_result = open_destination(imported.resume_point());
+            let mut next_session = Schema2ProjectSession::default();
+            next_session.open_project(&destination, imported.id())?;
+            Ok::<_, String>((destination_result, next_session))
+        })();
+        let (destination_result, next_session) = match destination_commit {
+            Ok(committed) => committed,
+            Err(error) => {
+                restore_launcher_preferences(
+                    &self.application_data,
+                    previous_preferences.as_deref(),
+                )
+                .map_err(|rollback_error| {
+                    format!("{error}; failed to restore launcher preferences: {rollback_error}")
+                })?;
+                return Err(error);
+            }
         };
 
-        persist_last_used_campus(&self.application_data, &scope)?;
+        // Publish the new campus context only after preference, import, and open succeed.
+        self.session = next_session;
+        self.library = Some(destination);
         self.selected_campus = Some(scope.clone());
         self.confirmed_campus = Some(scope);
         self.step = LauncherStep::Workspace;
-        Ok(open_destination(imported.resume_point()))
+        Ok(destination_result)
     }
-
     pub fn open_project(
         &mut self,
         project_id: &ProjectId,
@@ -359,6 +403,28 @@ fn read_last_used_campus(application_data: &Path) -> Result<Option<CampusScope>,
     Ok(Some(preferences.last_used_campus))
 }
 
+fn read_launcher_preferences_bytes(application_data: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(preferences_path(application_data)) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn restore_launcher_preferences(
+    application_data: &Path,
+    previous: Option<&[u8]>,
+) -> Result<(), String> {
+    let path = preferences_path(application_data);
+    match previous {
+        Some(bytes) => fs::write(path, bytes).map_err(|error| error.to_string()),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        },
+    }
+}
 fn persist_last_used_campus(application_data: &Path, scope: &CampusScope) -> Result<(), String> {
     fs::create_dir_all(application_data).map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(&LauncherPreferences {
@@ -414,6 +480,19 @@ mod tests {
     }
 
     #[test]
+    fn selected_campus_candidate_waits_for_explicit_confirmation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut launcher = launcher(directory.path());
+        let candidate = scope("gaode:putuo", "ECNU Putuo", 121.395);
+
+        launcher.select_campus_candidate(candidate.clone());
+
+        assert_eq!(launcher.step(), LauncherStep::CampusTarget);
+        assert_eq!(launcher.offered_campus(), Some(&candidate));
+        assert_eq!(launcher.confirmed_campus(), None);
+        assert!(launcher.rows().is_err());
+    }
+    #[test]
     fn confirmed_campus_shows_only_its_projects_and_names_are_campus_scoped() {
         let directory = tempfile::tempdir().unwrap();
         let mut launcher = launcher(directory.path());
@@ -464,6 +543,30 @@ mod tests {
             ProjectOpenDestination::Resume(FoundationResumePoint::BoundaryReview)
         );
         assert!(!format!("{row:?}").contains("project.campus.json"));
+    }
+
+    #[test]
+    fn save_undo_and_redo_use_the_active_schema2_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut launcher = launcher(directory.path());
+        launcher.select_campus_candidate(scope("gaode:putuo", "ECNU Putuo", 121.395));
+        launcher.confirm_selected_campus().unwrap();
+        launcher.create_project("History rebuild").unwrap();
+
+        launcher
+            .apply_active_operation("Record a semantic edit", |project| {
+                project.mark_updated(InstallationId::new("editor").unwrap())
+            })
+            .unwrap();
+        assert!(launcher.can_undo());
+        launcher.undo().unwrap();
+        assert!(launcher.can_redo());
+        launcher.redo().unwrap();
+        launcher.request_save().unwrap();
+        assert_eq!(
+            launcher.rows().unwrap()[0].save_state,
+            ProjectRowSaveState::Saved
+        );
     }
 
     #[test]
@@ -530,6 +633,50 @@ mod tests {
         assert_eq!(reopened.step(), LauncherStep::ProjectLibrary);
         assert_eq!(reopened.confirmed_campus(), Some(&putuo));
         assert_eq!(reopened.rows().unwrap()[0].project_name, "Resume later");
+    }
+
+    #[test]
+    fn preference_write_failure_preserves_cross_campus_context() {
+        let source_root = tempfile::tempdir().unwrap();
+        let transfer_root = tempfile::tempdir().unwrap();
+        let portable_path = transfer_root.path().join("putuo-portable.json");
+        let putuo = scope("gaode:putuo", "ECNU Putuo", 121.395);
+        let minhang = scope("gaode:minhang", "ECNU Minhang", 121.45);
+
+        let mut source = launcher(source_root.path());
+        source.select_campus_candidate(putuo.clone());
+        source.confirm_selected_campus().unwrap();
+        let source_id = source.create_project("Portable rebuild").unwrap();
+        source
+            .export_project(&source_id, &portable_path, false)
+            .unwrap();
+
+        let target_root = tempfile::tempdir().unwrap();
+        let mut target = launcher(target_root.path());
+        target.select_campus_candidate(minhang.clone());
+        target.confirm_selected_campus().unwrap();
+        let current_id = target.create_project("Keep current").unwrap();
+
+        let preference = preferences_path(target_root.path());
+        fs::remove_file(&preference).unwrap();
+        fs::create_dir(&preference).unwrap();
+
+        assert!(target
+            .import_portable_project(&portable_path, true)
+            .is_err());
+        assert_eq!(target.confirmed_campus(), Some(&minhang));
+        assert_eq!(target.active_project_id(), Some(&current_id));
+        let rows = target.rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project_name, "Keep current");
+
+        fs::remove_dir(&preference).unwrap();
+        target.select_campus_candidate(putuo);
+        target.confirm_selected_campus().unwrap();
+        assert!(
+            target.rows().unwrap().is_empty(),
+            "failed import must not leave a committed project in the destination campus"
+        );
     }
 
     #[test]

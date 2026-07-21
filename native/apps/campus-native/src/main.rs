@@ -30,6 +30,8 @@ use campus_tool_protocol::{MapCoordinate, MapOverlay, MapPurpose};
 #[cfg(test)]
 use campus_tool_protocol::{ToolEvent, ToolKind, PROTOCOL_VERSION};
 use rand::Rng;
+#[cfg(test)]
+use slint::Model;
 use slint::{ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -321,6 +323,42 @@ fn strings(values: &[&str]) -> ModelRc<SharedString> {
     ))
 }
 
+fn format_latest_save_time(unix_ms: u64) -> String {
+    let seconds = (unix_ms / 1_000) as i64;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_date_from_unix_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+}
+
+fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
+    let adjusted = days + 719_468;
+    let era = if adjusted >= 0 {
+        adjusted
+    } else {
+        adjusted - 146_096
+    }
+    .div_euclid(146_097);
+    let day_of_era = adjusted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
+}
+fn project_row_save_state_label(state: &ProjectRowSaveState) -> SharedString {
+    match state {
+        ProjectRowSaveState::Saved => "Saved".into(),
+        ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
+        ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
+    }
+}
 fn sync_project_launcher_ui(
     ui: &AppWindow,
     launcher: &CampusProjectLauncher,
@@ -348,6 +386,13 @@ fn sync_project_launcher_ui(
         Vec::new()
     };
     let active_id = launcher.active_project_id().cloned();
+    ui.set_launcher_active_project_id(
+        active_id
+            .as_ref()
+            .map(|project_id| project_id.as_str())
+            .unwrap_or_default()
+            .into(),
+    );
     let active = active_id
         .as_ref()
         .and_then(|project_id| rows.iter().find(|row| &row.project_id == project_id));
@@ -356,12 +401,9 @@ fn sync_project_launcher_ui(
         .map(|row| LauncherProjectRow {
             project_id: row.project_id.as_str().into(),
             project_name: row.project_name.clone().into(),
-            latest_save: format!("{}", row.latest_successful_save_unix_ms).into(),
-            save_state: match &row.save_state {
-                ProjectRowSaveState::Saved => "Saved".into(),
-                ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
-                ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
-            },
+            latest_save: format_latest_save_time(row.latest_successful_save_unix_ms).into(),
+            save_state: project_row_save_state_label(&row.save_state),
+
             progress: format!("{} / {}", row.completed_tasks, row.total_tasks).into(),
             next_task: row.next_incomplete_task.clone().into(),
             action_label: if row.completed_tasks == row.total_tasks {
@@ -372,15 +414,14 @@ fn sync_project_launcher_ui(
         })
         .collect::<Vec<_>>();
     ui.set_launcher_projects(ModelRc::new(VecModel::from(models)));
+    ui.set_can_undo(launcher.can_undo());
+    ui.set_can_redo(launcher.can_redo());
 
     if let Some(row) = active {
         ui.set_project_name(row.project_name.clone().into());
         ui.set_launcher_progress(format!("{} / {}", row.completed_tasks, row.total_tasks).into());
-        ui.set_launcher_save_state(match &row.save_state {
-            ProjectRowSaveState::Saved => "Saved".into(),
-            ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
-            ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
-        });
+        ui.set_launcher_save_state(project_row_save_state_label(&row.save_state));
+
         ui.set_launcher_next_task(row.next_incomplete_task.clone().into());
         ui.set_launcher_compatibility(row.minecraft_compatibility.clone().into());
         ui.set_route_stage(if row.completed_tasks == row.total_tasks {
@@ -389,6 +430,14 @@ fn sync_project_launcher_ui(
             2
         });
     } else {
+        ui.set_project_name(
+            if step == 0 {
+                "Campus Target"
+            } else {
+                "Campus Project Library"
+            }
+            .into(),
+        );
         ui.set_launcher_progress(format!("{} project(s)", rows.len()).into());
         ui.set_launcher_save_state("No active project".into());
         ui.set_launcher_next_task(if step == 0 {
@@ -2416,12 +2465,12 @@ fn main() -> Result<(), slint::PlatformError> {
         updates: tool_update_tx,
     };
     let tool_update_rx = Rc::new(RefCell::new(tool_update_rx));
-    let startup_open_error = if default_project_path().exists() {
+    let startup_open_error = if v11_launcher.is_none() && default_project_path().exists() {
         state.borrow_mut().open(default_project_path()).err()
     } else {
         None
     };
-    if state.borrow().project.is_none() {
+    if v11_launcher.is_none() && state.borrow().project.is_none() {
         state
             .borrow_mut()
             .new_project("未命名项目", "华东师范大学普陀校区");
@@ -2561,16 +2610,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 let borrowed = launcher.borrow();
                 launcher_project_id(&borrowed, value.as_str())
             };
-            let replace = if destination.exists() {
-                rfd::MessageDialog::new()
+            let replace = destination.exists();
+            if replace
+                && rfd::MessageDialog::new()
                     .set_title("Replace Portable Project?")
                     .set_description("The selected Portable Project already exists. Replace it?")
                     .set_buttons(rfd::MessageButtons::YesNo)
                     .show()
-                    == rfd::MessageDialogResult::Yes
-            } else {
-                false
-            };
+                    != rfd::MessageDialogResult::Yes
+            {
+                return;
+            }
             let result = project_id.and_then(|project_id| {
                 launcher
                     .borrow_mut()
@@ -2591,18 +2641,28 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(source) = project_file_dialog(false) else {
                 return;
             };
-            let approval = CampusProjectLibrary::portable_project_scope(&source)
-                .ok()
-                .zip(launcher.borrow().confirmed_campus().cloned())
-                .is_none_or(|(portable, current)| {
-                    portable.target_id() == current.target_id()
-                        || rfd::MessageDialog::new()
-                            .set_title("Switch campus for import?")
-                            .set_description("This Portable Project belongs to another campus. Save the current project and switch campuses?")
-                            .set_buttons(rfd::MessageButtons::YesNo)
-                            .show()
-                            == rfd::MessageDialogResult::Yes
-                });
+            let portable_scope = match CampusProjectLibrary::portable_project_scope(&source) {
+                Ok(scope) => scope,
+                Err(error) => {
+                    set_error_for(&ui, "project-library.import", error);
+                    return;
+                }
+            };
+            let crosses_campus = launcher
+                .borrow()
+                .confirmed_campus()
+                .is_some_and(|current| current.target_id() != portable_scope.target_id());
+            if crosses_campus
+                && rfd::MessageDialog::new()
+                    .set_title("Switch campus for import?")
+                    .set_description("This Portable Project belongs to another campus. Save the current project and switch campuses?")
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show()
+                    != rfd::MessageDialogResult::Yes
+            {
+                return;
+            }
+            let approval = !crosses_campus || launcher.borrow().confirmed_campus().is_some();
             match launcher.borrow_mut().import_portable_project(source, approval) {
                 Ok(_) => {
                     if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
@@ -3057,15 +3117,29 @@ fn main() -> Result<(), slint::PlatformError> {
             move || {
                 let mut changed = false;
                 while let Ok(update) = receiver.borrow_mut().try_recv() {
+                    if launcher.is_some()
+                        && !matches!(
+                            &update,
+                            ToolUpdate::Status(_)
+                                | ToolUpdate::Error { .. }
+                                | ToolUpdate::MapCampusTarget(_)
+                        )
+                    {
+                        continue;
+                    }
                     match update {
                         ToolUpdate::Status(message) => {
-                            state.borrow_mut().tool_status = Some(message.clone());
+                            if launcher.is_none() {
+                                state.borrow_mut().tool_status = Some(message.clone());
+                            }
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_tool_status(message.into());
                             }
                         }
                         ToolUpdate::Error { event, message } => {
-                            state.borrow_mut().tool_status = Some(message.clone());
+                            if launcher.is_none() {
+                                state.borrow_mut().tool_status = Some(message.clone());
+                            }
                             if let Some(ui) = weak.upgrade() {
                                 set_error_for(&ui, &event, message);
                             }
@@ -3106,32 +3180,24 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         ToolUpdate::MapCampusTarget(target) => {
                             let name = target.name.clone();
-                            let launcher_result = if let Some(launcher) = &launcher {
-                                CampusScope::new(
+                            if let Some(launcher) = &launcher {
+                                let result = CampusScope::new(
                                     format!("gaode:{}", target.poi_id),
-                                    target.name.clone(),
+                                    target.name,
                                     [target.wgs84.lng, target.wgs84.lat],
                                 )
-                                .and_then(|scope| scope.with_gaode_poi_id(target.poi_id.clone()))
-                                .and_then(|scope| {
+                                .and_then(|scope| scope.with_gaode_poi_id(target.poi_id))
+                                .map(|scope| {
                                     launcher.borrow_mut().select_campus_candidate(scope);
-                                    launcher.borrow_mut().confirm_selected_campus()
-                                })
-                            } else {
-                                Ok(())
-                            };
-                            let result = state.borrow_mut().apply_foundation_intent(
-                                FoundationWorkflowIntent::SelectCampusTarget(target),
-                            );
-                            if let Some(ui) = weak.upgrade() {
-                                match (&result, &launcher_result) {
-                                    (Ok(()), Ok(())) => {
-                                        set_status(
-                                            &ui,
-                                            format!("高德校园目标已确认：{name}"),
-                                            format!("Gaode campus target confirmed: {name}"),
-                                        );
-                                        if let Some(launcher) = &launcher {
+                                });
+                                if let Some(ui) = weak.upgrade() {
+                                    match result {
+                                        Ok(()) => {
+                                            set_status(
+                                                &ui,
+                                                format!("Campus candidate selected: {name}"),
+                                                format!("Campus candidate selected: {name}"),
+                                            );
                                             if let Err(error) =
                                                 sync_project_launcher_ui(&ui, &launcher.borrow())
                                             {
@@ -3142,11 +3208,26 @@ fn main() -> Result<(), slint::PlatformError> {
                                                 );
                                             }
                                         }
+                                        Err(error) => set_error(&ui, error),
                                     }
-                                    (Err(error), _) | (_, Err(error)) => set_error(&ui, error),
                                 }
+                                changed = false;
+                            } else {
+                                let result = state.borrow_mut().apply_foundation_intent(
+                                    FoundationWorkflowIntent::SelectCampusTarget(target),
+                                );
+                                if let Some(ui) = weak.upgrade() {
+                                    match &result {
+                                        Ok(()) => set_status(
+                                            &ui,
+                                            format!("Gaode campus target confirmed: {name}"),
+                                            format!("Gaode campus target confirmed: {name}"),
+                                        ),
+                                        Err(error) => set_error(&ui, error),
+                                    }
+                                }
+                                changed = result.is_ok();
                             }
-                            changed = result.is_ok() && launcher_result.is_ok();
                         }
                         ToolUpdate::MapBoundary(points) => {
                             let result = state.borrow_mut().apply_foundation_intent(
@@ -3172,9 +3253,22 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_undo(move || {
-            if state.borrow_mut().undo() {
+            if let Some(launcher) = &launcher {
+                let result = launcher.borrow_mut().undo();
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                                set_error(&ui, error);
+                            }
+                        }
+                        Err(error) => set_error(&ui, error),
+                    }
+                }
+            } else if state.borrow_mut().undo() {
                 if let Some(ui) = weak.upgrade() {
                     if let Err(error) = save_and_sync(&ui, &state) {
                         set_error(&ui, error);
@@ -3238,9 +3332,22 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_redo(move || {
-            if state.borrow_mut().redo() {
+            if let Some(launcher) = &launcher {
+                let result = launcher.borrow_mut().redo();
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                                set_error(&ui, error);
+                            }
+                        }
+                        Err(error) => set_error(&ui, error),
+                    }
+                }
+            } else if state.borrow_mut().redo() {
                 if let Some(ui) = weak.upgrade() {
                     if let Err(error) = save_and_sync(&ui, &state) {
                         set_error(&ui, error);
@@ -3373,13 +3480,28 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_save_project(move || {
-            let result = autosave(&state);
-            if let Some(ui) = weak.upgrade() {
-                match result {
-                    Ok(()) => sync_ui(&ui, &state.borrow()),
-                    Err(error) => set_error(&ui, error),
+            if let Some(launcher) = &launcher {
+                let result = launcher.borrow_mut().request_save();
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                                set_error(&ui, error);
+                            }
+                        }
+                        Err(error) => set_error(&ui, error),
+                    }
+                }
+            } else {
+                let result = autosave(&state);
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => sync_ui(&ui, &state.borrow()),
+                        Err(error) => set_error(&ui, error),
+                    }
                 }
             }
         });
@@ -3695,17 +3817,40 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let tools = tools.clone();
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
         ui.on_open_map(move || {
-            let snapshot = state.borrow().project.as_ref().map(|project| {
-                (
-                    project.campus_name.clone(),
-                    project.map_view.clone(),
-                    project.boundary.clone(),
-                    FoundationWorkflow::projection(project).map_task,
-                )
-            });
+            let snapshot = if let Some(launcher) = &launcher {
+                let borrowed = launcher.borrow();
+                borrowed
+                    .confirmed_campus()
+                    .or_else(|| borrowed.offered_campus())
+                    .map(|scope| {
+                        let anchor = scope.anchor_wgs84();
+                        (
+                            scope.canonical_name().to_string(),
+                            MapViewState {
+                                center: GeoPoint {
+                                    lng: anchor[0],
+                                    lat: anchor[1],
+                                },
+                                ..MapViewState::default()
+                            },
+                            Vec::new(),
+                            Some(FoundationMapTask::CampusSelection),
+                        )
+                    })
+            } else {
+                state.borrow().project.as_ref().map(|project| {
+                    (
+                        project.campus_name.clone(),
+                        project.map_view.clone(),
+                        project.boundary.clone(),
+                        FoundationWorkflow::projection(project).map_task,
+                    )
+                })
+            };
             let Some((campus_name, view, boundary, map_task)) = snapshot else {
                 if let Some(ui) = weak.upgrade() {
                     set_error(&ui, "请先创建 Campus Reconstruction Project");
@@ -4524,39 +4669,114 @@ mod tests {
     }
 
     #[test]
-    fn route_first_shell_exposes_the_two_step_campus_project_flow() {
-        let ui = include_str!("../ui/app.slint");
+    fn native_launcher_orchestration_drives_real_window_and_schema2_library() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut launcher = CampusProjectLauncher::open(
+            directory.path(),
+            campus_state::V11ConstructionCapability::request(true, Some("1")).unwrap(),
+            campus_state::InstallationId::new("native-orchestration-test").unwrap(),
+        )
+        .unwrap();
+        let window = AppWindow::new().expect("native launcher shell should instantiate");
+
+        launcher.select_campus_candidate(
+            CampusScope::new("gaode:native-test", "Native Test Campus", [121.395, 31.202]).unwrap(),
+        );
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+        assert_eq!(window.get_launcher_step(), 0);
+        assert_eq!(window.get_launcher_projects().row_count(), 0);
+
+        launcher.confirm_selected_campus().unwrap();
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+        assert_eq!(window.get_launcher_step(), 1);
+
+        let project_id = launcher.create_project("Native Project").unwrap();
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+        assert_eq!(window.get_launcher_step(), 2);
+        assert_eq!(
+            window.get_launcher_active_project_id().as_str(),
+            project_id.as_str()
+        );
+        assert_eq!(window.get_launcher_next_task(), "Confirm Campus Boundary");
+        launcher.request_save().unwrap();
+
+        launcher.show_project_library();
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+        assert_eq!(window.get_launcher_step(), 1);
+        let projects = window.get_launcher_projects();
+        assert_eq!(projects.row_count(), 1);
         assert!(
-            ui.contains("CAMPUS TARGET")
-                && ui.contains("PROJECT")
-                && ui.contains("FOUNDATION")
-                && ui.contains("DETAILED")
-                && ui.contains("AXIOM"),
+            projects
+                .row_data(0)
+                .expect("project row")
+                .latest_save
+                .ends_with(" UTC"),
+            "latest successful save must be user-readable"
+        );
+    }
+
+    #[test]
+    fn latest_save_time_is_a_readable_utc_timestamp() {
+        assert_eq!(format_latest_save_time(0), "1970-01-01 00:00 UTC");
+        assert_eq!(
+            format_latest_save_time(1_783_353_720_000),
+            "2026-07-06 16:02 UTC"
+        );
+    }
+
+    #[test]
+    fn route_first_shell_exposes_the_two_step_campus_project_flow() {
+        let source = include_str!("../ui/app.slint");
+
+        assert!(
+            !source.contains("if !root.campus-launcher-visible || root.launcher-step == 2"),
+            "campus-first steps must not be hidden by their parent layout"
+        );
+        assert!(
+            source.contains("root.campus-launcher-visible && root.launcher-step == 2")
+                && source.contains(
+                    "This workspace is backed only by the active schema-2 project session."
+                ),
+            "the active schema-2 project must open a dedicated workspace"
+        );
+        assert!(
+            source.contains("CAMPUS TARGET")
+                && source.contains("PROJECT")
+                && source.contains("FOUNDATION")
+                && source.contains("DETAILED")
+                && source.contains("AXIOM"),
             "Variant A must expose the horizontal five-stage product route"
         );
         assert!(
-            ui.contains("root.launcher-step == 0")
-                && ui.contains("root.launcher-step == 1")
-                && ui.contains("for project in root.launcher-projects"),
+            source.contains("root.launcher-step == 0")
+                && source.contains("root.launcher-step == 1")
+                && source.contains("for project in root.launcher-projects"),
             "Campus Target confirmation must precede the campus-scoped project table"
         );
         assert!(
-            ui.contains("LATEST SAVE")
-                && ui.contains("SAVE / RECOVERY")
-                && ui.contains("PROGRESS")
-                && ui.contains("NEXT TASK")
-                && ui.contains("MINECRAFT COMPATIBILITY"),
+            source.contains("LATEST SAVE")
+                && source.contains("SAVE / RECOVERY")
+                && source.contains("PROGRESS")
+                && source.contains("NEXT TASK")
+                && source.contains("MINECRAFT COMPATIBILITY"),
             "project rows and compact context must expose durable resume information"
         );
         assert!(
-            ui.contains("CURRENT TASK") && ui.contains("PROJECT CONTEXT"),
+            source.contains("CURRENT TASK") && source.contains("PROJECT CONTEXT"),
             "one dominant current-task workspace must sit beside a compact project summary"
         );
         assert!(
-            !ui.contains("PERSISTENT CAMPUS SIDEBAR")
-                && !ui.contains("RESUME HERO")
-                && !ui.contains("GLOBAL RECENT FILES")
-                && !ui.contains("PROJECT WORKBENCH")
+            source.contains("@keys(Control + S)")
+                && source.contains("@keys(Control + Z)")
+                && source.contains("@keys(Control + Y)")
+                && source.contains("@keys(Control + Shift + Z)"),
+            "fixed save and history shortcuts must remain available in schema-2 mode"
+        );
+        assert!(
+            !source.contains("PERSISTENT CAMPUS SIDEBAR")
+                && !source.contains("RESUME HERO")
+                && !source.contains("GLOBAL RECENT FILES")
+                && !source.contains("PROJECT WORKBENCH")
         );
     }
 }
