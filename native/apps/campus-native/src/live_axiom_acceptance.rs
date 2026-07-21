@@ -326,7 +326,16 @@ fn validate_campus_common(root: &Path, id: &str, campus: &Value, blockers: &mut 
                 manifest
                     .get("sources")
                     .and_then(Value::as_array)
-                    .is_some_and(|sources| !sources.is_empty())
+                    .is_some_and(|sources| {
+                        !sources.is_empty()
+                            && sources.iter().all(|source| {
+                                non_empty_string(source.get("provider"))
+                                    && non_empty_string(source.get("licence"))
+                                    && non_empty_string(source.get("attribution"))
+                                    && non_empty_string(source.get("lineage"))
+                                    && is_sha256(source.get("integrityDigestSha256"))
+                            })
+                    })
             });
         if !manifest_ok {
             blocker(
@@ -723,7 +732,7 @@ fn validate_axiom_import(
         || import
             .get("bounds")
             .and_then(Value::as_array)
-            .is_none_or(|value| value.len() != 6)
+            .is_none_or(|value| value.len() != 6 || !value.iter().all(Value::is_number))
     {
         blocker(
             blockers,
@@ -846,7 +855,7 @@ mod tests {
             std::fs::create_dir_all(&campus_root).unwrap();
             std::fs::write(
                 campus_root.join("licence.json"),
-                br#"{"sources":[{"provider":"osm","licence":"ODbL"}]}"#,
+                format!(r#"{{"sources":[{{"provider":"osm","licence":"ODbL","attribution":"OpenStreetMap contributors","lineage":"snapshot osm-1","integrityDigestSha256":"{}"}}]}}"#, "a".repeat(64)),
             )
             .unwrap();
             let risk_ids: &[&str] = match id {
