@@ -76,6 +76,9 @@ if ($candidateVerifier -notmatch '(?s)if \(-not \$SkipInstalledAcceptance\) \{\s
     throw "The default candidate path must guard all three installed-acceptance scenarios"
 }
 Assert-Contains $packager 'installedAcceptanceStatus' "Distribution evidence must publish the installed-acceptance status"
+if ($packager -notmatch '(?s)\$sourceStatus = @\(& git -C \$root status --porcelain=v1\)\s*if \(\$LASTEXITCODE -ne 0\) \{[^}]*\}\s*if \(\$sourceStatus\.Count -ne 0\)') {
+    throw "Packaging must fail closed on git-status errors before it evaluates clean-worktree output"
+}
 Assert-Contains $releaseNotes 'not installed-acceptance tested' "Unsigned guidance must disclose an installed-acceptance waiver"
 Assert-Contains $candidateVerifier '"candidate-evidence.json"' "Final evidence must be sealed after installed acceptance"
 Assert-Contains $installerVerifier '$predecessorSetup' "Upgrade must install a real predecessor"

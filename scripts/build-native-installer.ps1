@@ -26,7 +26,11 @@ $headCommit = (& git -C $root rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $manifest.commit -ne $headCommit) {
     throw "Candidate commit does not match the checked-out commit"
 }
-if ((& git -C $root status --porcelain=v1).Count -ne 0) {
+$sourceStatus = @(& git -C $root status --porcelain=v1)
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect the candidate worktree"
+}
+if ($sourceStatus.Count -ne 0) {
     throw "Packaging requires the exact clean candidate commit"
 }
 
