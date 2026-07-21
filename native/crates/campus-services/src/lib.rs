@@ -1,5 +1,8 @@
 use base64::Engine;
-use campus_state::{FeatureKind, GeoPoint, MapCandidate, ReviewDecision};
+use campus_state::{
+    CandidateConfidence, FeatureKind, FoundationSourceProvider, GeoPoint, MapCandidate,
+    ReviewDecision,
+};
 #[cfg(debug_assertions)]
 use serde::Deserialize;
 #[cfg(debug_assertions)]
@@ -14,6 +17,13 @@ pub struct GeoBounds {
     pub south: f64,
     pub east: f64,
     pub north: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FoundationProviderAcquisition {
+    pub provider: FoundationSourceProvider,
+    pub provider_version: String,
+    pub candidates: Result<Vec<MapCandidate>, String>,
 }
 
 const EARTH_SEMI_MAJOR_AXIS: f64 = 6_378_245.0;
@@ -188,9 +198,9 @@ pub fn extract_visual_features(
                 || region.max_x + 1 == width
                 || region.max_y + 1 == height;
             let confidence = if area_share >= 0.012 && !touches_edge {
-                "中"
+                CandidateConfidence::Medium
             } else {
-                "低"
+                CandidateConfidence::Low
             };
             let kind_slug = feature_slug(kind);
             let signature = format!(
@@ -207,7 +217,8 @@ pub fn extract_visual_features(
                 name: format!("视觉识别 {} {}", feature_label(kind), index + 1),
                 kind,
                 source: "截图规则分割（确定性 v2）".into(),
-                confidence: confidence.into(),
+                confidence,
+                source_snapshot_id: None,
                 points,
                 height_m: None,
                 floors: None,
@@ -591,24 +602,21 @@ out tags geom;"#,
     pub async fn query_campus_data(
         bounds: GeoBounds,
         overture_endpoint: Option<&str>,
-    ) -> Result<Vec<MapCandidate>, String> {
+    ) -> Vec<FoundationProviderAcquisition> {
         let osm = query_open_map_data(bounds).await;
-        let overture = match overture_endpoint.filter(|value| !value.trim().is_empty()) {
-            Some(endpoint) => query_overture_buildings(bounds, endpoint).await,
-            None => Ok(Vec::new()),
-        };
-        match (osm, overture) {
-            (Ok(mut osm), Ok(mut overture)) => {
-                overture.append(&mut osm);
-                Ok(overture)
-            }
-            (Ok(osm), Err(_)) => Ok(osm),
-            (Err(_), Ok(overture)) if !overture.is_empty() => Ok(overture),
-            (Err(osm_error), Err(overture_error)) => {
-                Err(format!("{osm_error} | Overture: {overture_error}"))
-            }
-            (Err(osm_error), Ok(_)) => Err(osm_error),
+        let mut acquisitions = vec![FoundationProviderAcquisition {
+            provider: FoundationSourceProvider::OpenStreetMap,
+            provider_version: "overpass/v1".into(),
+            candidates: osm,
+        }];
+        if let Some(endpoint) = overture_endpoint.filter(|value| !value.trim().is_empty()) {
+            acquisitions.push(FoundationProviderAcquisition {
+                provider: FoundationSourceProvider::Overture,
+                provider_version: "overture-geojson/v1".into(),
+                candidates: query_overture_buildings(bounds, endpoint).await,
+            });
         }
+        acquisitions
     }
 
     async fn query_overture_buildings(
@@ -670,7 +678,8 @@ out tags geom;"#,
                 name,
                 kind: FeatureKind::Building,
                 source: "Overture Maps（云端查询）".into(),
-                confidence: "较高".into(),
+                confidence: CandidateConfidence::High,
+                source_snapshot_id: None,
                 points,
                 height_m: properties.get("height").and_then(json_number),
                 floors: properties
@@ -771,11 +780,11 @@ out tags geom;"#,
                 kind,
                 source: "OpenStreetMap / Overpass".into(),
                 confidence: if element.tags.contains_key("name") {
-                    "较高"
+                    CandidateConfidence::High
                 } else {
-                    "中等"
-                }
-                .into(),
+                    CandidateConfidence::Medium
+                },
+                source_snapshot_id: None,
                 points: geometry
                     .into_iter()
                     .map(|point| GeoPoint {

@@ -1,6 +1,7 @@
 # V1 acceptance record
 
 Date: 2026-06-30
+Last regression: 2026-07-04
 Platform: Windows 11 x64 (Windows 10/11 x64 target)
 
 ## Functional parity and runtime
@@ -27,17 +28,19 @@ Platform: Windows 11 x64 (Windows 10/11 x64 target)
 
 ## Automated verification
 
-- Native workspace: 19 tests pass, including map/preview IPC, recovery,
+- Native workspace: 37 tests pass, including map/preview IPC, recovery,
   portable-project migration, deterministic screenshot analysis, both
-  schematic exporters, and Detailed generation.
+  schematic exporters, Detailed generation, structured diagnostics, tool-close
+  flushing, map bounds/error reporting, and low-resolution workflow reachability.
+- Python deployment contracts pass for the Overture container environment and
+  installer/application version consistency.
 - Native clippy: `--workspace --all-targets -- -D warnings` passes.
 - Arnis core: 12 tests pass; one documentation example is intentionally
   ignored. Arnis clippy passes with `-D warnings`.
-- Web-reference production build passes.
-- Legacy/cloud-reference offline contract suite: all 50 pass.
-- GitHub `native-v1` and `web-reference` checks pass on the cutover branch
-  before final release evidence; final commit must pass the same required
-  checks before merge.
+- The pre-cutover web-reference build and its 50 offline contracts passed
+  during migration. That retired implementation was removed after native
+  parity and release acceptance.
+- GitHub `native-v1` is the maintained verification gate.
 
 ## Installed extended workflow
 
@@ -62,8 +65,9 @@ No blocking crash occurred during this multi-cycle workflow.
 The optimized release binary was launched and captured through Windows
 Graphics Capture:
 
-- the 1280×820 Slint workbench rendered cleanly without clipping at the tested
-  window size;
+- the 1200×680 Slint workbench fits a 1366×768-class desktop work area;
+- long Foundation/Detailed bodies scroll independently while the primary
+  Detailed export action stays visible;
 - Chinese → English switched the toolbar, Foundation workflow, Detailed
   controls, models, summaries, and actions without changing project state;
 - Foundation Campus and Export surfaces were reachable;
@@ -80,12 +84,12 @@ credential gate are covered by automated tests and the interactive gate check.
 
 ## Packaging and size
 
-- Release executable payload: 16.99 MB.
-- NSIS installer: 6.17 MB.
-- V1 installer budget: 50 MB — pass (12.3% of budget).
+- Release executable payload: 21.92 MB.
+- NSIS installer: 7.10 MB.
+- V1 installer budget: 50 MB — pass (14.2% of budget).
 - Installer:
   `artifacts/installer/Campus-Reconstruction-Tool-V1-Setup.exe`.
 - SHA-256:
-  `5B3D9F4B051553D648A450BBC7486C662BC28590335DBE091C58B80C23B6C6D6`.
+  `E59C1D1E523501DB373DB51AE0F2167C4D4FD368125DD6D71889AB08AC77E202`.
 - Rust caches, toolchains, Node.js, Python, Overture cache, datasets, and model
   weights are excluded.

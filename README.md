@@ -1,21 +1,21 @@
-# Campus Reconstruction Tool V1
+# Campus Reconstruction Tool V1.1.0
 
-面向 Minecraft 校园复刻的 Windows 原生工作台。V1 主程序使用 Slint/Rust，不是网页外壳；只有必须使用高德 Web JS API 的地图工具运行在独立 WebView2 子进程中，方块模型预览是独立 Rust/wgpu 子进程。
+面向 Minecraft 校园复刻的 Windows 11 x64 原生工作台。V1.1.0 需要联网完成高德校区搜索以及新增/刷新 Foundation 采集；项目、审核、生成和导出保留在本机。
 
-## V1 功能
+## V1.1.0 功能
 
-- 九步地基流程：校区、边界、朝向、建筑、道路、水域、植被、体育、导出。
-- 高德 3D 半自动取景：隐藏地图标签，开放数据查询与无标签视觉截图补缺是两个独立动作；GCJ-02/WGS-84 转换由 Rust 统一处理。
-- 地图视角、取景范围和手绘边界随项目自动保存，下次打开继续上次状态。
-- 通过受控 `/v1` 服务获取固定 Dataset Bundle 的 OSM/Overture 边界与五类地基证据。
+- 校区优先的 schema 2 项目库、自动边界候选、五类 Foundation 证据审核、生成与导出。
+- 高德只负责校区目标确认；Foundation 证据仅通过认证、版本化的受控服务取得。
+- V1.1 不提供五类空白画布绘制、截图恢复、公共 Overpass 回退或直接提供方采集。
+- V1.0.1 解码器仅用于显式、事务化迁移；所有生产写入均使用 schema 2。
 - 候选接受/拒绝是主流程，不再放在补缺或高级折叠区；没有右侧地基清单卡片。
 - 精细建筑使用 Arnis 2.9.0 的 19 类固定外观规则。实测轮廓、高度和楼层不被模板修改；模板只改变方块、窗户、墙面层次、屋顶线和装饰。
 - 原生 wgpu 方块预览；Foundation 与精细建筑均可导出 gzip 压缩的 Sponge V3 `.schem`。
 - 原子自动保存、恢复副本、撤销/重做、Ctrl+S/Ctrl+Z/Ctrl+Y。
 - 中英文界面同步覆盖 Slint 主程序、高德工具和原生预览；偏好不写入便携工程。
-- 可导入旧 React/Tauri V1 便携项目 JSON。
+- 可将受支持的 V1.0.1 本地或便携项目迁移为 schema 2；旧格式不会再被写入。
 
-照片匹配、中国高校风格模型训练与模板在线推荐属于 V2，不在 V1 中虚构实现。
+照片匹配、中国高校风格模型训练与模板在线推荐属于后续版本，不在 V1.1.0 中虚构实现。
 
 ## 本地与服务端边界
 
@@ -28,7 +28,7 @@
 
 适合放在云端：
 
-- Overture GeoParquet 查询与共享缓存；
+- 受控 Foundation 数据采集、版本化 Dataset Bundle 与共享缓存；
 - 模板/应用版本清单；
 - 可选的共享校园标注；
 - 未来独立网页伴侣。
@@ -37,7 +37,7 @@
 
 ## 开发
 
-要求 Windows 10/11 x64 和 Rust stable：
+要求 Windows 11 x64 和 Rust stable：
 
 ```powershell
 npm run dev
@@ -45,23 +45,28 @@ npm test
 npm run build
 ```
 
-网页兼容实现不再是桌面入口，仅供未来云端伴侣迁移参考：
+小范围修改优先使用局部反馈命令，避免每次都编译和测试完整工作区：
 
 ```powershell
-npm run web:dev
-npm run web:build
+npm run check:ui
+npm run test:ui
+npm run test:state
+npm run test:services
 ```
 
-高德密钥在应用内“地图设置”保存。生产地基采集只使用 `CAMPUS_ACQUISITION_SERVICE_URL` 指向的兼容受控 `/v1` 服务；服务不可用时暂停新采集，不回退公共 Overpass 或未固定版本的 provider。
+`npm run dev` 会先增量检查地图与预览工具，再在当前终端运行主程序。应用内“日志”按钮可打开
+`%LOCALAPPDATA%\CampusReconstructionTool\logs`；普通操作错误、工具进程错误和崩溃都会写入带事件编号的 JSONL 会话日志。
+
+高德密钥在应用内“地图设置”保存。Foundation 采集服务通过 `CAMPUS_ACQUISITION_SERVICE_URL` 配置，并且必须提供兼容、版本化的 `/v1` 合同；服务不可用时暂停新采集，不切换数据提供方。
 
 ## 打包
 
 ```powershell
-npm run bundle:v1
-npm run verify:installer
+npm run candidate:v1.1 -- -CleanWindowsImageId "<clean-image-id>" -CleanWindowsImageManifest "<image-manifest.json>"
+npm run size:release
 ```
 
-安装包输出到 `artifacts/installer/`。安装包只包含三个 release 可执行文件与第三方声明，不包含 `target/`、Rust 工具链、Node.js、Python、模型权重或构建缓存。
+候选目录输出到 `artifacts/candidates/<candidate-id>/`，其中包含提交、环境、命令、测试计数、日志、退出状态、二进制与安装包 SHA-256。打包只消费已经验证的三个 release 可执行文件，不会重新构建；安装包大小仅记录，不设 50 MB 门槛。
 
 ## 代码布局
 
@@ -69,8 +74,7 @@ npm run verify:installer
 - `native/apps/campus-map`：独立 WebView2 高德工具。
 - `native/apps/campus-preview`：独立 wgpu 原生预览。
 - `native/crates/campus-state`：项目、自动保存、兼容导入、撤销/重做。
-- `native/crates/campus-services`：受控 `/v1` 采集客户端、契约校验与可恢复交付。
+- `native/crates/campus-services`：受控 `/v1` 采集客户端、版本化 Dataset Bundle 与覆盖率验证。
 - `native/crates/campus-export`：Sponge V3 `.schem`。
-- `src-tauri/crates/arnis-core`：固定上游版本的 Arnis 建筑规则移植。
-- `services/`：开发/云端 Overture 查询服务。
-- `src/`：旧网页兼容实现，非 V1 桌面运行时依赖。
+- `native/crates/arnis-core`：固定上游版本的 Arnis 建筑规则移植。
+- `services/`：受控 Foundation 采集服务与开发工具。

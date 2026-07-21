@@ -178,6 +178,18 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
         12.0
     );
     assert_eq!(outcome.project.generation_settings().blocks_per_meter, 1.0);
+    assert_eq!(
+        outcome
+            .project
+            .retained_detailed_state()
+            .selected_slot_id
+            .as_deref(),
+        Some("demo-library")
+    );
+    assert_eq!(
+        outcome.project.retained_detailed_state().facade_drafts[0].id,
+        "facade-1"
+    );
     assert!(outcome.project.generated_output().is_none());
     assert!(outcome.project.exported_output().is_none());
 
@@ -264,6 +276,11 @@ fn populated_managed_schema1_project_migrates_from_backup_without_losing_support
         reopened.legacy_migration().unwrap().unwrap(),
         migration,
         "migration lineage and report must persist in schema 2"
+    );
+    assert_eq!(
+        reopened.retained_detailed_state(),
+        outcome.project.retained_detailed_state(),
+        "supported Detailed work must remain active schema-2 state after reopen"
     );
 }
 

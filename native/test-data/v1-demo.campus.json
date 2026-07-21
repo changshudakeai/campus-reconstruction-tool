@@ -1,99 +1,93 @@
 {
   "schemaVersion": 1,
-  "name": "V1 验收项目",
-  "campusName": "华东师范大学普陀校区",
+  "name": "V1.0.1 baseline project",
+  "campusName": "ECNU Putuo Campus",
+  "campusTarget": {
+    "poiId": "fixture-poi-putuo",
+    "name": "ECNU Putuo Campus",
+    "gcj02": { "lng": 121.406582, "lat": 31.228318 },
+    "wgs84": { "lng": 121.402037, "lat": 31.230305 },
+    "acquisition": "v1.0.1-baseline-fixture"
+  },
   "mode": "detailed",
   "foundationStep": "export",
-  "completedSteps": [
-    "campus",
-    "boundary",
-    "orientation",
-    "building",
-    "road",
-    "water",
-    "vegetation",
-    "sports"
-  ],
+  "completedSteps": ["campus", "boundary", "orientation", "building", "road", "water", "vegetation", "sports"],
   "boundary": [
-    {
-      "lng": 121.4059,
-      "lat": 31.2288
-    },
-    {
-      "lng": 121.4072,
-      "lat": 31.2288
-    },
-    {
-      "lng": 121.4072,
-      "lat": 31.2277
-    },
-    {
-      "lng": 121.4059,
-      "lat": 31.2277
-    }
+    { "lng": 121.4059, "lat": 31.2288 },
+    { "lng": 121.4072, "lat": 31.2288 },
+    { "lng": 121.4072, "lat": 31.2277 },
+    { "lng": 121.4059, "lat": 31.2277 }
   ],
   "orientationDegrees": 12.0,
   "blocksPerMeter": 1.0,
   "mapView": {
-    "center": {
-      "lng": 121.406582,
-      "lat": 31.228318
-    },
+    "center": { "lng": 121.406582, "lat": 31.228318 },
     "zoom": 17.0,
     "pitch": 45.0,
-    "rotation": 0.0,
-    "captureBounds": null
+    "rotation": 3.0,
+    "captureBounds": [
+      { "lng": 121.4059, "lat": 31.2277 },
+      { "lng": 121.4072, "lat": 31.2288 }
+    ]
   },
   "candidates": [
     {
       "id": "demo-library",
-      "name": "验收图书馆",
+      "name": "Fixture Library",
       "kind": "building",
       "source": "V1 fixture",
       "confidence": "high",
+      "sourceSnapshotId": "osm:v1-baseline",
       "points": [
-        {
-          "lng": 121.4061,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.22818
-        },
-        {
-          "lng": 121.4061,
-          "lat": 31.22818
-        }
+        { "lng": 121.4061, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.22818 },
+        { "lng": 121.4061, "lat": 31.22818 }
       ],
+      "heightM": 22.0,
+      "floors": 5,
+      "roofShape": "flat",
+      "tags": { "building": "school", "source": "fixture" },
       "review": "accepted"
     }
+  ],
+  "foundationSourceSnapshots": [
+    {
+      "id": "osm:v1-baseline",
+      "provider": "open_street_map",
+      "providerVersion": "fixture/2026-07-18",
+      "status": "complete",
+      "southWest": { "lng": 121.4059, "lat": 31.2277 },
+      "northEast": { "lng": 121.4072, "lat": 31.2288 },
+      "acquiredAtUnixMs": 1710000000000,
+      "candidates": [],
+      "error": null
+    },
+    {
+      "id": "overture:v1-failure",
+      "provider": "overture",
+      "providerVersion": "fixture/2026-07-18",
+      "status": "failed",
+      "southWest": { "lng": 121.4059, "lat": 31.2277 },
+      "northEast": { "lng": 121.4072, "lat": 31.2288 },
+      "acquiredAtUnixMs": 1710000000100,
+      "candidates": [],
+      "error": "fixture-injected provider timeout"
+    }
+  ],
+  "foundationReviewLedger": [
+    { "candidateId": "demo-library", "sourceSnapshotId": "osm:v1-baseline", "decision": "accepted", "decidedAtUnixMs": 1710000000200 }
   ],
   "features": [
     {
       "id": "accepted-demo-library",
-      "name": "验收图书馆",
+      "name": "Fixture Library",
       "kind": "building",
       "points": [
-        {
-          "lng": 121.4061,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.22818
-        },
-        {
-          "lng": 121.4061,
-          "lat": 31.22818
-        }
+        { "lng": 121.4061, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.22818 },
+        { "lng": 121.4061, "lat": 31.22818 }
       ],
       "block": "minecraft:stone_bricks",
       "sourceId": "demo-library"
@@ -102,36 +96,74 @@
   "buildingSlots": [
     {
       "id": "demo-library",
-      "name": "验收图书馆",
+      "name": "Fixture Library",
       "footprint": [
-        {
-          "lng": 121.4061,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.2285
-        },
-        {
-          "lng": 121.40655,
-          "lat": 31.22818
-        },
-        {
-          "lng": 121.4061,
-          "lat": 31.22818
-        }
+        { "lng": 121.4061, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.2285 },
+        { "lng": 121.40655, "lat": 31.22818 },
+        { "lng": 121.4061, "lat": 31.22818 }
       ],
       "heightM": 22.0,
       "floors": 5,
+      "roofShape": "flat",
       "refined": true
     }
   ],
+  "buildingDirectory": [
+    { "sourceId": "demo-library", "name": "Fixture Library", "updatedAtUnixMs": 1710000000300 }
+  ],
+  "buildingSuppressions": [
+    { "sourceId": "fixture-rejected-shed", "reason": "outside campus", "suppressedAtUnixMs": 1710000000400 }
+  ],
+  "foundationStylePreset": "arnis_classic",
+  "foundationStylePack": {
+    "schemaVersion": "1.0",
+    "id": "arnis:classic/v1",
+    "name": "Arnis Classic",
+    "features": {
+      "campus": { "generator": "core:solid-fill/v1", "blocks": ["minecraft:grass_block"], "width": null, "density": null, "seed": 104729 },
+      "building": { "generator": "core:solid-fill/v1", "blocks": ["minecraft:quartz_block"], "width": null, "density": null, "seed": 104729 },
+      "road": { "generator": "arnis:road/v1", "blocks": ["minecraft:gray_concrete", "minecraft:stone_bricks"], "width": 4, "density": null, "seed": 104729 },
+      "vegetation": { "generator": "arnis:vegetation/v1", "blocks": ["minecraft:moss_block", "minecraft:oak_log", "minecraft:oak_leaves"], "width": null, "density": 0.035, "seed": 104729 },
+      "water": { "generator": "arnis:water/v1", "blocks": ["minecraft:water", "minecraft:sand"], "width": null, "density": null, "seed": 104729 },
+      "sports": { "generator": "arnis:sports/v1", "blocks": ["minecraft:green_concrete", "minecraft:white_concrete"], "width": null, "density": null, "seed": 104729 }
+    }
+  },
+  "foundationPreviewPath": null,
+  "visualCapturePath": null,
   "detailed": {
     "selectedSlotId": "demo-library",
     "stylePreset": "school",
-    "wallBlock": null,
+    "wallBlock": "minecraft:stone_bricks",
     "windowDensity": 55,
     "wallDepth": 45,
-    "generatedPath": "C:\\Users\\chang\\AppData\\Local\\CampusReconstructionTool\\generated\\demo-library.arnis.json"
+    "generatedPath": null,
+    "refinements": [
+      { "id": "demo-library:v1", "slotId": "demo-library", "version": 1, "status": "confirmed", "stylePreset": "school", "wallBlock": "minecraft:stone_bricks", "windowDensity": 55, "wallDepth": 45, "createdAtUnixMs": 1710000000500 }
+    ],
+    "semanticFeatures": [
+      { "id": "semantic-entrance", "slotId": "demo-library", "refinementId": "demo-library:v1", "kind": "entrance_emphasis", "label": "main entrance", "side": "south", "heightBand": "lower", "strength": "visible", "reason": "fixture evidence", "affectedBlocks": 12, "block": "minecraft:polished_andesite", "appliedAtUnixMs": 1710000000600 }
+    ],
+    "externalModels": [
+      { "id": "model-1", "slotId": "demo-library", "title": "Open fixture model", "source": "fixture catalog", "sourceUrl": "https://example.invalid/model-1", "author": "Fixture Author", "licenseName": "CC0-1.0", "eligibility": "eligible", "decision": "supporting_evidence", "decisionReason": "geometry cross-check", "reviewedAtUnixMs": 1710000000700, "widthM": 40.0, "heightM": 22.0, "lengthM": 28.0 }
+    ],
+    "sourceConflicts": [
+      { "id": "conflict-1", "slotId": "demo-library", "externalModelId": "model-1", "kind": "footprint", "severity": "minor", "summary": "fixture offset", "decision": "supporting_only", "decisionReason": "OSM retained", "decidedAtUnixMs": 1710000000800 }
+    ],
+    "evidenceAssets": [
+      { "id": "evidence-1", "slotId": "demo-library", "relativePath": "evidence/library-front.jpg", "sourceName": "library-front.jpg", "addedAtUnixMs": 1710000000900 }
+    ],
+    "functionClassifications": [
+      { "slotId": "demo-library", "function": "library", "confidence": 99, "reasons": ["reviewed name"], "inferredAtUnixMs": 1710000001000 }
+    ],
+    "templateProposals": [
+      { "slotId": "demo-library", "template": { "id": "school-v1", "version": "1.0.1", "label": "School", "buildingFunction": "library", "arnisStyle": "school", "projectLocal": false }, "confidence": 88, "rationale": "fixture match" }
+    ],
+    "selectedTemplates": [
+      { "slotId": "demo-library", "template": { "id": "school-v1", "version": "1.0.1", "label": "School", "buildingFunction": "library", "arnisStyle": "school", "projectLocal": false }, "selectedAtUnixMs": 1710000001100 }
+    ],
+    "facadeDrafts": [
+      { "id": "facade-1", "slotId": "demo-library", "modelVersion": "fixture-v1", "confidence": 90, "rules": [{ "id": "facade-1:windows", "slotId": "demo-library", "kind": "window_pattern", "value": "density:55", "source": "manual_override", "status": "accepted", "confidence": 100, "evidenceIds": ["evidence-1"] }], "evidenceIds": ["evidence-1"] }
+    ]
   }
 }

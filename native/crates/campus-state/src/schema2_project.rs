@@ -3,22 +3,26 @@ use crate::{
         compare_foundation_evidence, coverage_digest_for, geometry_digest,
         observation_dependency_snapshot,
     },
-    validate_boundary_geometry, BoundaryCandidate, BoundaryCandidateAssessment,
-    BoundaryCandidateValidity, BoundaryDiscoverySnapshot, BoundaryEvidenceDesk,
-    BuildingBoundaryDecision, BuildingEntityDecision, BuildingEntityReviewLedger,
-    BuildingGenerationBasis, BuildingNameEvidence, BuildingNameResolution,
-    CandidateReviewDisposition, FoundationAcquisitionCheckpoint, FoundationBatchDecision,
-    FoundationBatchReview, FoundationCandidateDecision, FoundationCategory,
-    FoundationCategoryProgress, FoundationReviewAction, FoundationReviewConflict,
-    FoundationReviewOperation, FoundationReviewQueueProjection, FoundationReviewState,
-    FoundationSourceRefreshDifference, KnownFeatureGap, KnownFeatureGapHistoryAction,
-    KnownFeatureGapLocation, KnownFeatureGapStatus, ProviderOutcomeStatus, ResultManifest,
-    ReviewConflictResolution, ReviewDependencyBasis, ReviewSubjectDependencyBasis,
-    ReviewedBuildingEntity, SourceGeometry, SourceObservation,
+    validate_boundary_geometry, AttributeProvenance, BoundaryCandidate,
+    BoundaryCandidateAssessment, BoundaryCandidateValidity, BoundaryDiscoverySnapshot,
+    BoundaryEvidenceDesk, BuildingBoundaryDecision, BuildingEntityDecision,
+    BuildingEntityReviewLedger, BuildingFootprintComponent, BuildingGenerationBasis,
+    BuildingNameEvidence, BuildingNameResolution, BuildingSlot, CampusProject, CandidateConfidence,
+    CandidateReviewDisposition, DesktopMode, DetailedBuildingState, FeatureKind,
+    FoundationAcquisitionCheckpoint, FoundationBatchDecision, FoundationBatchReview,
+    FoundationCandidateDecision, FoundationCategory, FoundationCategoryProgress,
+    FoundationReviewAction, FoundationReviewConflict, FoundationReviewOperation,
+    FoundationReviewQueueProjection, FoundationReviewState, FoundationSourceRefreshDifference,
+    FoundationStep, GeoPoint, KnownFeatureGap, KnownFeatureGapHistoryAction,
+    KnownFeatureGapLocation, KnownFeatureGapStatus, MapCandidate, MapViewState,
+    ProviderOutcomeStatus, RefinementStatus, ResultManifest, ReviewConflictResolution,
+    ReviewDecision, ReviewDependencyBasis, ReviewSubjectDependencyBasis, ReviewedBuildingEntity,
+    SourceGeometry, SourceObservation,
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -38,11 +42,20 @@ const SAVE_STAGE_FILE_NAME: &str = "project.save-stage.json";
 const SAVE_ROLLBACK_FILE_NAME: &str = "project.save-rollback.json";
 const DEVELOPMENT_CANONICAL_ROLE: &str = "developmentCanonical";
 const PROJECT_HISTORY_LIMIT: usize = 50;
+pub const RETAINED_DETAILED_HISTORY_DESCRIPTION: &str = "Update Detailed Building workspace";
 
 #[derive(Debug)]
 pub struct V11ConstructionCapability(());
 
 impl V11ConstructionCapability {
+    /// Production V1.1 has one project model. The capability remains an
+    /// unforgeable type so schema-2 mutation cannot be reached accidentally
+    /// through the read-only schema-1 decoder, but controlled releases no
+    /// longer depend on a runtime feature gate.
+    pub fn for_controlled_release() -> Self {
+        Self(())
+    }
+
     pub fn request(
         development_build: bool,
         environment_value: Option<&str>,
@@ -51,14 +64,6 @@ impl V11ConstructionCapability {
             Ok(Self(()))
         } else {
             Err("Schema-2 project construction is not enabled for this build".into())
-        }
-    }
-
-    pub fn request_controlled_release(environment_value: Option<&str>) -> Result<Self, String> {
-        if environment_value == Some("1") {
-            Ok(Self(()))
-        } else {
-            Err("Schema-2 controlled release construction requires an explicit runtime gate".into())
         }
     }
 }
@@ -658,6 +663,14 @@ impl SaveFaultPoint {
     ];
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryFaultPoint {
+    BeforeWrite,
+    AfterWrite,
+    BeforeRead,
+    BeforeDiscard,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectRecoveryEnvelope {
@@ -713,6 +726,14 @@ impl DurableWorkflowState {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailedBuildingMeasurements {
+    pub height_m: Option<f64>,
+    pub floors: Option<u32>,
+    pub roof_shape: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Schema2Project {
@@ -725,6 +746,10 @@ pub struct Schema2Project {
     workflow: DurableWorkflowState,
     #[serde(default)]
     foundation: FoundationTracerState,
+    #[serde(default)]
+    retained_detailed: DetailedBuildingState,
+    #[serde(default)]
+    retained_detailed_measurements: BTreeMap<String, DetailedBuildingMeasurements>,
     #[serde(default)]
     durability: ProjectDurabilityState,
     #[serde(default, flatten)]
@@ -750,6 +775,8 @@ impl Schema2Project {
             compatibility_profile: V11CompatibilityProfile::minecraft_java_26_1_2(),
             workflow: DurableWorkflowState::new(),
             foundation: FoundationTracerState::default(),
+            retained_detailed: DetailedBuildingState::default(),
+            retained_detailed_measurements: BTreeMap::new(),
             durability: ProjectDurabilityState::default(),
             optional_state: Map::new(),
         })
@@ -781,6 +808,116 @@ impl Schema2Project {
 
     pub fn workflow(&self) -> &DurableWorkflowState {
         &self.workflow
+    }
+
+    pub fn retained_detailed_state(&self) -> &DetailedBuildingState {
+        &self.retained_detailed
+    }
+
+    pub fn retained_detailed_measurements(
+        &self,
+    ) -> &BTreeMap<String, DetailedBuildingMeasurements> {
+        &self.retained_detailed_measurements
+    }
+
+    pub fn last_confirmed_save_unix_ms(&self) -> Option<u64> {
+        self.durability.last_confirmed_save_unix_ms
+    }
+
+    pub fn replace_retained_detailed_state(
+        &mut self,
+        detailed: DetailedBuildingState,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        if self.retained_detailed == detailed {
+            return Ok(());
+        }
+        self.mark_updated(actor)?;
+        self.retained_detailed = detailed;
+        Ok(())
+    }
+
+    pub fn replace_retained_detailed_workspace(
+        &mut self,
+        detailed: DetailedBuildingState,
+        measurements: BTreeMap<String, DetailedBuildingMeasurements>,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let mut retained_measurements = self.retained_detailed_measurements.clone();
+        retained_measurements.extend(measurements);
+        if self.retained_detailed == detailed
+            && self.retained_detailed_measurements == retained_measurements
+        {
+            return Ok(());
+        }
+        self.mark_updated(actor)?;
+        self.retained_detailed = detailed;
+        self.retained_detailed_measurements = retained_measurements;
+        Ok(())
+    }
+
+    pub fn detailed_workspace_available(&self) -> bool {
+        self.resume_point() == FoundationResumePoint::Complete
+            && self
+                .reviewed_projection()
+                .is_ok_and(|projection| !projection.building_entities.is_empty())
+    }
+
+    pub fn detailed_workspace_project(&self) -> Result<CampusProject, String> {
+        if self.resume_point() != FoundationResumePoint::Complete {
+            return Err("Complete Foundation before entering Detailed Building".into());
+        }
+        let projection = self.reviewed_projection()?;
+        if projection.building_entities.is_empty() {
+            return Err("Detailed Building requires at least one reviewed Building Entity".into());
+        }
+
+        let mut project = CampusProject::new(self.name.clone(), self.campus_scope.canonical_name());
+        project.mode = DesktopMode::Detailed;
+        project.foundation_step = FoundationStep::Export;
+        project.completed_steps = FoundationStep::ALL.to_vec();
+        project.boundary = primary_geometry_points(&projection.boundary);
+        project.orientation_degrees = projection.generation_settings.orientation_degrees;
+        project.blocks_per_meter = projection.generation_settings.blocks_per_meter;
+        let anchor = self.campus_scope.anchor_wgs84();
+        project.map_view = MapViewState {
+            center: GeoPoint {
+                lng: anchor[0],
+                lat: anchor[1],
+            },
+            ..MapViewState::default()
+        };
+        project.building_slots = projection
+            .building_entities
+            .iter()
+            .map(|entity| {
+                detailed_building_slot(
+                    entity,
+                    &self.retained_detailed,
+                    &self.retained_detailed_measurements,
+                )
+            })
+            .collect();
+        project.detailed_building_components = projection
+            .building_entities
+            .iter()
+            .map(|entity| (entity.id.clone(), detailed_building_components(entity)))
+            .collect();
+        project.candidates = projection
+            .building_entities
+            .iter()
+            .map(detailed_building_candidate)
+            .collect();
+        project.detailed = self.retained_detailed.clone();
+        if !project
+            .building_slots
+            .iter()
+            .any(|slot| project.detailed.selected_slot_id.as_deref() == Some(slot.id.as_str()))
+        {
+            project.detailed.selected_slot_id =
+                project.building_slots.first().map(|slot| slot.id.clone());
+        }
+        Ok(project)
     }
 
     pub fn pinned_evidence(&self) -> Option<PinnedFoundationEvidence<'_>> {
@@ -3468,6 +3605,164 @@ impl Schema2Project {
     }
 }
 
+fn detailed_building_slot(
+    entity: &ReviewedBuildingEntity,
+    detailed: &DetailedBuildingState,
+    measurements: &BTreeMap<String, DetailedBuildingMeasurements>,
+) -> BuildingSlot {
+    let sourced = entity_measurements(entity);
+    let retained = measurements.get(&entity.id).unwrap_or(&sourced);
+    let refinement_measurement = detailed
+        .refinements
+        .iter()
+        .filter(|refinement| refinement.slot_id == entity.id && refinement.measurements_recorded)
+        .max_by_key(|refinement| refinement.version)
+        .map(|refinement| DetailedBuildingMeasurements {
+            height_m: refinement.height_m,
+            floors: refinement.floors,
+            roof_shape: refinement.roof_shape.clone(),
+        });
+    let measurement = refinement_measurement.as_ref().unwrap_or(retained);
+    BuildingSlot {
+        id: entity.id.clone(),
+        name: entity
+            .display_name
+            .clone()
+            .unwrap_or_else(|| format!("Reviewed Building {}", entity.id)),
+        footprint: detailed_building_components(entity)
+            .first()
+            .map(|component| component.exterior.clone())
+            .unwrap_or_default(),
+        height_m: measurement.height_m,
+        floors: measurement.floors,
+        roof_shape: measurement.roof_shape.clone(),
+        refined: detailed.refinements.iter().any(|refinement| {
+            refinement.slot_id == entity.id && refinement.status == RefinementStatus::Confirmed
+        }),
+    }
+}
+
+fn detailed_building_candidate(entity: &ReviewedBuildingEntity) -> MapCandidate {
+    let measurement = entity_measurements(entity);
+    let primary = entity
+        .source_observations
+        .iter()
+        .find(|observation| observation.id == entity.primary_observation_id)
+        .or_else(|| entity.source_observations.first());
+    MapCandidate {
+        id: entity.id.clone(),
+        name: entity
+            .display_name
+            .clone()
+            .unwrap_or_else(|| format!("Reviewed Building {}", entity.id)),
+        kind: FeatureKind::Building,
+        source: primary
+            .map(|observation| observation.lineage.provider.clone())
+            .unwrap_or_else(|| "Schema 2 reviewed Building Entity".into()),
+        confidence: CandidateConfidence::Unassessed,
+        source_snapshot_id: primary.map(|observation| observation.id.clone()),
+        points: primary_geometry_points(&entity.review_geometry),
+        height_m: measurement.height_m,
+        floors: measurement.floors,
+        roof_shape: measurement.roof_shape,
+        tags: primary
+            .map(|observation| {
+                observation
+                    .original_properties
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|value| (key.clone(), value.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        review: ReviewDecision::Accepted,
+    }
+}
+
+fn entity_measurements(entity: &ReviewedBuildingEntity) -> DetailedBuildingMeasurements {
+    let mut measurements = DetailedBuildingMeasurements::default();
+    for observation in &entity.source_observations {
+        for attribute in &observation.attribute_provenance {
+            match attribute {
+                AttributeProvenance::HeightMetres { value, .. }
+                    if measurements.height_m.is_none() =>
+                {
+                    measurements.height_m = Some(*value);
+                }
+                AttributeProvenance::Levels { value, .. } if measurements.floors.is_none() => {
+                    measurements.floors = Some(*value);
+                }
+                _ => {}
+            }
+        }
+        if measurements.roof_shape.is_none() {
+            measurements.roof_shape = ["roof:shape", "roof_shape", "roofShape"]
+                .iter()
+                .find_map(|key| observation.original_properties.get(*key))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+    measurements
+}
+
+fn primary_geometry_points(geometry: &SourceGeometry) -> Vec<GeoPoint> {
+    let points: Vec<[f64; 2]> = match geometry {
+        SourceGeometry::Polygon(rings) => rings.first().cloned().unwrap_or_default(),
+        SourceGeometry::MultiPolygon(polygons) => polygons
+            .first()
+            .and_then(|polygon| polygon.first())
+            .cloned()
+            .unwrap_or_default(),
+        _ => geometry.all_points(),
+    };
+    points
+        .into_iter()
+        .map(|point| GeoPoint {
+            lng: point[0],
+            lat: point[1],
+        })
+        .collect()
+}
+
+fn detailed_building_components(
+    entity: &ReviewedBuildingEntity,
+) -> Vec<BuildingFootprintComponent> {
+    std::iter::once(entity.generation_geometry.wgs84_generator_geometry())
+        .chain(entity.generation_geometry.wgs84_part_generator_geometries())
+        .flat_map(|geometry| geometry_components(&geometry))
+        .collect()
+}
+
+fn geometry_components(geometry: &SourceGeometry) -> Vec<BuildingFootprintComponent> {
+    let polygons = match geometry {
+        SourceGeometry::Polygon(rings) => vec![rings.clone()],
+        SourceGeometry::MultiPolygon(polygons) => polygons.clone(),
+        _ => return Vec::new(),
+    };
+    polygons
+        .into_iter()
+        .filter_map(|rings| {
+            let mut rings = rings.into_iter();
+            let exterior = rings.next()?;
+            Some(BuildingFootprintComponent {
+                exterior: exterior.into_iter().map(geo_point).collect(),
+                interior_rings: rings
+                    .map(|ring| ring.into_iter().map(geo_point).collect())
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+fn geo_point(point: [f64; 2]) -> GeoPoint {
+    GeoPoint {
+        lng: point[0],
+        lat: point[1],
+    }
+}
+
 fn validate_conflict_resolution(
     conflict: &FoundationReviewConflict,
     resolution: &ReviewConflictResolution,
@@ -4252,6 +4547,7 @@ pub struct CampusProjectLibrary {
     construction_enabled: bool,
     next_save_fault: Option<SaveFaultPoint>,
     next_save_interruption: Option<SaveFaultPoint>,
+    next_recovery_fault: Cell<Option<RecoveryFaultPoint>>,
     next_migration_fault: Option<MigrationFaultPoint>,
     next_portable_fault: Option<PortableTransferFaultPoint>,
 }
@@ -4283,6 +4579,7 @@ impl CampusProjectLibrary {
             construction_enabled: false,
             next_save_fault: None,
             next_save_interruption: None,
+            next_recovery_fault: Cell::new(None),
             next_migration_fault: None,
             next_portable_fault: None,
         };
@@ -4537,6 +4834,10 @@ impl CampusProjectLibrary {
         self.next_save_interruption = Some(point);
     }
 
+    pub fn inject_next_recovery_failure(&self, point: RecoveryFaultPoint) {
+        self.next_recovery_fault.set(Some(point));
+    }
+
     pub fn previous_confirmed_project(
         &self,
         project_id: &ProjectId,
@@ -4592,6 +4893,7 @@ impl CampusProjectLibrary {
     }
 
     pub fn discard_recovery_candidate(&self, project_id: &ProjectId) -> Result<(), String> {
+        self.fail_recovery_at(RecoveryFaultPoint::BeforeDiscard)?;
         let path = self.recovery_path(project_id)?;
         if path.exists() {
             fs::remove_file(path).map_err(|error| error.to_string())?;
@@ -4648,6 +4950,7 @@ impl CampusProjectLibrary {
     }
 
     fn write_recovery(&self, project: &Schema2Project) -> Result<(), String> {
+        self.fail_recovery_at(RecoveryFaultPoint::BeforeWrite)?;
         validate_schema2_project(project)?;
         if project.campus_scope().target_id() != self.campus_target_id {
             return Err("Recovery project does not match this Campus Target".into());
@@ -4663,13 +4966,15 @@ impl CampusProjectLibrary {
                     }),
                 project: project.clone(),
             },
-        )
+        )?;
+        self.fail_recovery_at(RecoveryFaultPoint::AfterWrite)
     }
 
     fn read_recovery(
         &self,
         project_id: &ProjectId,
     ) -> Result<Option<ProjectRecoveryEnvelope>, String> {
+        self.fail_recovery_at(RecoveryFaultPoint::BeforeRead)?;
         let path = self.recovery_path(project_id)?;
         if !path.exists() {
             return Ok(None);
@@ -4696,6 +5001,15 @@ impl CampusProjectLibrary {
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| "Managed project path has no parent".into())
+    }
+
+    fn fail_recovery_at(&self, point: RecoveryFaultPoint) -> Result<(), String> {
+        if self.next_recovery_fault.get() == Some(point) {
+            self.next_recovery_fault.set(None);
+            Err(format!("injected recovery failure at {point:?}"))
+        } else {
+            Ok(())
+        }
     }
 
     fn fail_save_at(&mut self, point: SaveFaultPoint) -> Result<(), String> {
@@ -4807,6 +5121,22 @@ impl Schema2ProjectSession {
             .is_some_and(|project| !project.durability.redo.is_empty())
     }
 
+    pub fn can_undo_retained_detailed(&self) -> bool {
+        self.active.as_ref().is_some_and(|project| {
+            project.durability.undo.last().is_some_and(|operation| {
+                operation.description == RETAINED_DETAILED_HISTORY_DESCRIPTION
+            })
+        })
+    }
+
+    pub fn can_redo_retained_detailed(&self) -> bool {
+        self.active.as_ref().is_some_and(|project| {
+            project.durability.redo.last().is_some_and(|operation| {
+                operation.description == RETAINED_DETAILED_HISTORY_DESCRIPTION
+            })
+        })
+    }
+
     pub fn apply_semantic_operation<T>(
         &mut self,
         library: &mut CampusProjectLibrary,
@@ -4897,6 +5227,16 @@ impl Schema2ProjectSession {
         self.request_save(library)
     }
 
+    pub fn undo_retained_detailed(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+    ) -> Result<(), String> {
+        if !self.can_undo_retained_detailed() {
+            return Err("No Detailed Building operation is available to undo".into());
+        }
+        self.undo(library)
+    }
+
     pub fn redo(&mut self, library: &mut CampusProjectLibrary) -> Result<(), String> {
         let current = self.active.clone().ok_or("No schema-2 project is open")?;
         let mut durability = current.durability.clone();
@@ -4910,6 +5250,16 @@ impl Schema2ProjectSession {
         self.active = Some(next);
         self.dirty = true;
         self.request_save(library)
+    }
+
+    pub fn redo_retained_detailed(
+        &mut self,
+        library: &mut CampusProjectLibrary,
+    ) -> Result<(), String> {
+        if !self.can_redo_retained_detailed() {
+            return Err("No Detailed Building operation is available to redo".into());
+        }
+        self.redo(library)
     }
 
     pub fn prepare_context_change(

@@ -1,0 +1,11 @@
+{
+  "baseline": "1.0.1",
+  "foundation": { "projectFixture": "../v1-demo.campus.json", "minimumFeatureCount": 1 },
+  "detailed": { "selectedSlotId": "demo-library", "minimumNonAirBlocks": 1000 },
+  "provider": { "failedSnapshotStatus": "failed", "injectedError": "fixture-injected provider timeout" },
+  "coordinate": { "gcj02": [121.406582, 31.228318], "wgs84": [121.402037, 31.230305] },
+  "generator": { "seed": 42, "requiredPaletteFragment": "glass" },
+  "schematic": { "format": "Sponge", "version": 3, "minimumBytes": 64 },
+  "helperProcess": { "protocolVersion": 5, "requiredHandshake": "ready" },
+  "deploymentContract": { "healthPath": "/health", "queryPath": "/overture/buildings" }
+}

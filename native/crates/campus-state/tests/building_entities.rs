@@ -1,13 +1,15 @@
 use campus_state::{
-    decode_schema2_project, BuildingBoundaryDecision, BuildingEntityDecision,
+    decode_schema2_project, ArnisStylePreset, BuildingBoundaryDecision, BuildingEntityDecision,
     BuildingEntityReviewLedger, BuildingEvidenceDescriptor, BuildingGenerationBasis,
     BuildingNameAssignmentMode, BuildingNameEvidence, CampusProjectLibrary, CampusScope,
-    FoundationCategory, FoundationReviewDisposition, InstallationId, KnownBuildingEntityGap,
-    PinnedAcquisitionEvidence, PinnedBoundaryEvidence, ResultManifest, SourceGeometry,
-    SourceObservation, V11ConstructionCapability,
+    CandidateConfidence, DesktopApplicationState, FoundationCategory, FoundationReviewDisposition,
+    InstallationId, KnownBuildingEntityGap, LocalEvidenceAsset, PinnedAcquisitionEvidence,
+    PinnedBoundaryEvidence, ResultManifest, SourceGeometry, SourceObservation,
+    V11ConstructionCapability,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 struct ComplexBuildingFixture {
@@ -1179,6 +1181,133 @@ fn schema2_project_persists_entity_review_and_generation_consumes_its_projection
     );
 
     library.save_project(&project).unwrap();
+    let workspace = project.detailed_workspace_project().unwrap();
+    assert_eq!(workspace.building_slots.len(), 1);
+    assert_eq!(workspace.building_slots[0].id, "building:campus-library");
+    assert!(!workspace.building_slots[0].footprint.is_empty());
+    assert!(!workspace.building_slots[0].refined);
+    assert!(!workspace.detailed_building_components["building:campus-library"].is_empty());
+    assert_eq!(
+        workspace.candidates[0].confidence,
+        CandidateConfidence::Unassessed
+    );
+    assert_eq!(workspace.orientation_degrees, 0.0);
+
+    let mut desktop = DesktopApplicationState::default();
+    desktop
+        .open_schema2_detailed_workspace(
+            directory.path(),
+            "campus:putuo",
+            project.id().clone(),
+            actor(),
+        )
+        .unwrap();
+    assert!(desktop
+        .open(directory.path().join("legacy-sidecar.campus.json"))
+        .unwrap_err()
+        .contains("Return to Foundation"));
+    assert!(!directory.path().join("legacy-sidecar.campus.json").exists());
+    desktop.mutate_project(|workspace| {
+        workspace.detailed.style_preset = ArnisStylePreset::Historic;
+        workspace.building_slots[0].height_m = Some(33.0);
+        let slot_id = workspace.building_slots[0].id.clone();
+        let version = workspace.next_refinement_version(&slot_id);
+        workspace.record_refinement_draft(&slot_id, version, PathBuf::new());
+        assert_eq!(workspace.confirm_latest_refinement(&slot_id), Some(version));
+        workspace.detailed.evidence_assets.push(LocalEvidenceAsset {
+            id: "building:campus-library:evidence:front".into(),
+            slot_id: "building:campus-library".into(),
+            relative_path: "evidence/building-campus-library/front.jpg".into(),
+            source_name: "front.jpg".into(),
+            added_at_unix_ms: 1,
+            content_base64: "cmV0YWluZWQtZXZpZGVuY2U=".into(),
+        });
+        workspace.detailed.generated_artifact =
+            Some(campus_state::RetainedDetailedGeneratedArtifact {
+                slot_id: "building:campus-library".into(),
+                refinement_id: format!("building:campus-library:v{version}"),
+                file_name: "library-v1.arnis.json".into(),
+                model: serde_json::json!({"retained": true}),
+            });
+    });
+    desktop.save().unwrap();
+    let managed_json: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            directory
+                .path()
+                .join("projects")
+                .join(project.id().as_str())
+                .join("project.campus.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(managed_json["schemaVersion"], 2);
+    assert!(managed_json.get("mode").is_none());
+    assert_eq!(managed_json["retainedDetailed"]["stylePreset"], "historic");
+    let detailed_saved = library.open_project(project.id()).unwrap();
+    assert_eq!(
+        detailed_saved.retained_detailed_state().style_preset,
+        ArnisStylePreset::Historic
+    );
+    assert_eq!(
+        detailed_saved.retained_detailed_measurements()["building:campus-library"].height_m,
+        Some(33.0)
+    );
+    desktop.undo_schema2_detailed_workspace().unwrap();
+    assert_ne!(
+        desktop.project.as_ref().unwrap().detailed.style_preset,
+        ArnisStylePreset::Historic
+    );
+    assert!(desktop.undo_schema2_detailed_workspace().is_err());
+    assert!(
+        library
+            .open_project(project.id())
+            .unwrap()
+            .detailed_workspace_available(),
+        "Detailed undo must not cross into Foundation history"
+    );
+    desktop.redo_schema2_detailed_workspace().unwrap();
+    assert_eq!(
+        desktop.project.as_ref().unwrap().detailed.style_preset,
+        ArnisStylePreset::Historic
+    );
+    desktop.close_schema2_detailed_workspace();
+    assert!(!desktop.is_schema2_detailed_workspace());
+    desktop
+        .open_schema2_detailed_workspace(
+            directory.path(),
+            "campus:putuo",
+            project.id().clone(),
+            actor(),
+        )
+        .unwrap();
+    assert_eq!(
+        desktop.project.as_ref().unwrap().detailed.style_preset,
+        ArnisStylePreset::Historic,
+        "returning to Foundation and reopening Detailed must preserve retained work"
+    );
+    assert!(desktop
+        .project
+        .as_ref()
+        .unwrap()
+        .detailed
+        .generated_path
+        .as_ref()
+        .is_some_and(|path| path.is_file()));
+    assert_eq!(
+        std::fs::read(
+            desktop
+                .project_path
+                .as_ref()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("evidence/building-campus-library/front.jpg")
+        )
+        .unwrap(),
+        b"retained-evidence"
+    );
     let reopened = library.open_project(project.id()).unwrap();
     assert_eq!(reopened.building_entity_review().entries().len(), 8);
     assert_eq!(

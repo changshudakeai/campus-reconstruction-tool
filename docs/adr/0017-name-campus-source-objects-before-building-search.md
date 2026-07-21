@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; automatic naming and cross-source conflation rules superseded by ADR-0032
 
 ## Context
 

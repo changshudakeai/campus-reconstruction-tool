@@ -387,6 +387,22 @@ fn build_schema2_candidate(
     };
     candidate.foundation.generation_settings =
         migrated_generation_settings(&legacy.foundation_style_pack, legacy);
+    candidate.retained_detailed = legacy.detailed.clone();
+    candidate.retained_detailed.generated_path = None;
+    candidate.retained_detailed_measurements = legacy
+        .building_slots
+        .iter()
+        .map(|slot| {
+            (
+                slot.id.clone(),
+                DetailedBuildingMeasurements {
+                    height_m: slot.height_m,
+                    floors: slot.floors,
+                    roof_shape: slot.roof_shape.clone(),
+                },
+            )
+        })
+        .collect();
     Ok(candidate)
 }
 

@@ -1,0 +1,8 @@
+{
+  "imageId": "win11-x64-clean-acceptance-snapshot",
+  "cleanBaseline": true,
+  "architecture": "x64",
+  "windowsBuild": 26200,
+  "snapshotSha256": "<64 lowercase hexadecimal characters>",
+  "source": "<immutable VM image or snapshot reference>"
+}

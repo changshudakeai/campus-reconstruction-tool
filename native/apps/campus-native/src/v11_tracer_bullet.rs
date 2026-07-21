@@ -6,14 +6,15 @@ use campus_services::acquisition::project_acquisition::{
     ProjectAcquisitionCoordinator, ProjectAcquisitionProgress,
 };
 use campus_services::acquisition::{
-    AcquisitionClient, AcquisitionJobState, AcquisitionTransport, CoarseRasterSupplementRequest,
-    VerifiedBoundaryDiscoverySnapshot,
+    AcquisitionClient, AcquisitionJobState, AcquisitionTransport, CampusBoundaryCandidateQuery,
+    CoarseRasterSupplementRequest, VerifiedBoundaryDiscoverySnapshot,
 };
-use campus_state::ProjectId;
+#[cfg(debug_assertions)]
+use campus_state::CampusScope;
 #[cfg(test)]
 use campus_state::Schema2Project;
 use campus_state::{
-    CampusProjectLibrary, CampusScope, FoundationCategory, InstallationId,
+    CampusProjectLibrary, FoundationCategory, FoundationResumePoint, InstallationId, ProjectId,
     V11ConstructionCapability,
 };
 #[cfg(debug_assertions)]
@@ -48,6 +49,7 @@ pub struct FixedDatasetTracer<'a, T> {
     project_id: ProjectId,
 }
 
+#[cfg(debug_assertions)]
 pub struct FixedDatasetTracerRequest {
     pub library_root: PathBuf,
     pub output_root: PathBuf,
@@ -116,7 +118,96 @@ pub struct FixedDatasetTracerReport {
     pub manifest_path: PathBuf,
 }
 
+#[derive(Debug)]
+pub enum ProductionWorkflowOutcome {
+    Advanced,
+    Cancelled,
+    Exported(FixedDatasetTracerReport),
+    Complete,
+}
+
+pub fn continue_active_project<T: AcquisitionTransport>(
+    context: &super::v11_project_library::ActiveProjectContext,
+    capability: &V11ConstructionCapability,
+    acquisition_client: &AcquisitionClient<T>,
+    boundary_options: BoundaryDeskMapOptions,
+    review_options: FoundationReviewDeskMapOptions,
+) -> Result<ProductionWorkflowOutcome, String> {
+    let library = CampusProjectLibrary::open_for_construction(
+        &context.library_root,
+        context.campus_target_id.clone(),
+        capability,
+    )?;
+    let project = library.open_project(&context.project_id)?;
+    if project.resume_point() != context.resume_point {
+        return Err("The active project changed before its current task started".into());
+    }
+
+    let boundary_job_id = if context.resume_point == FoundationResumePoint::BoundaryReview
+        && project
+            .boundary_review()
+            .and_then(|review| review.snapshot())
+            .is_none()
+    {
+        let scope = project.campus_scope();
+        acquisition_client
+            .start_boundary_discovery(&CampusBoundaryCandidateQuery::new(
+                scope.canonical_name(),
+                Vec::new(),
+                scope.anchor_wgs84(),
+                2_500.0,
+                format!("{}:controlled-boundary-v1", project.id().as_str()),
+            )?)
+            .map_err(|error| error.to_string())?
+            .job_id
+    } else {
+        String::new()
+    };
+
+    let tracer = FixedDatasetTracer {
+        library_root: context.library_root.clone(),
+        output_root: context.output_root.clone(),
+        campus_target_id: context.campus_target_id.clone(),
+        actor: context.actor.clone(),
+        capability,
+        acquisition_client,
+        boundary_job_id,
+        acquisition_job_id: format!("{}:controlled-foundation-v1", context.project_id.as_str()),
+        project_id: context.project_id.clone(),
+    };
+
+    match context.resume_point {
+        FoundationResumePoint::BoundaryReview => {
+            let outcome = tracer.run_installed_boundary_tool(boundary_options)?;
+            if outcome == super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::Ignored {
+                Ok(ProductionWorkflowOutcome::Cancelled)
+            } else {
+                Ok(ProductionWorkflowOutcome::Advanced)
+            }
+        }
+        FoundationResumePoint::Acquisition => {
+            tracer.resume_persisted_foundation_acquisition()?;
+            Ok(ProductionWorkflowOutcome::Advanced)
+        }
+        FoundationResumePoint::Review(_) => {
+            let outcome = tracer.run_installed_foundation_review_tool(review_options)?;
+            if outcome
+                == super::v11_foundation_review_desk::FoundationReviewToolEventOutcome::Ignored
+            {
+                Ok(ProductionWorkflowOutcome::Cancelled)
+            } else {
+                Ok(ProductionWorkflowOutcome::Advanced)
+            }
+        }
+        FoundationResumePoint::Generation | FoundationResumePoint::Export => tracer
+            .generate_and_export()
+            .map(ProductionWorkflowOutcome::Exported),
+        FoundationResumePoint::Complete => Ok(ProductionWorkflowOutcome::Complete),
+    }
+}
+
 impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
+    #[cfg(debug_assertions)]
     pub fn confirm_campus_target(
         request: FixedDatasetTracerRequest,
         actor: InstallationId,
@@ -310,14 +401,21 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                     candidate_id,
                     enabled,
                 } => {
-                    self.update_boundary_adjustment(&mut interaction, candidate_id, *enabled)?;
+                    if let Err(message) =
+                        self.update_boundary_adjustment(&mut interaction, candidate_id, *enabled)
+                    {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                    }
                     continue;
                 }
                 ToolEvent::MapBoundaryHandleSelected {
                     candidate_id,
                     selection,
                 } => {
-                    require_boundary_adjustment(&interaction, candidate_id)?;
+                    if let Err(message) = require_boundary_adjustment(&interaction, candidate_id) {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
                     interaction.selected_handle = Some(*selection);
                     continue;
                 }
@@ -325,7 +423,12 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                     candidate_id,
                     operation,
                 } => {
-                    validate_boundary_session_operation(&interaction, candidate_id, operation)?;
+                    if let Err(message) =
+                        validate_boundary_session_operation(&interaction, candidate_id, operation)
+                    {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
                 }
                 _ => {}
             }
@@ -336,23 +439,21 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 _ => None,
             };
             let clear_handle = matches!(event, ToolEvent::MapBoundaryOperation { .. });
-            let helper_closed = matches!(
+            if matches!(
                 event,
                 ToolEvent::Closed {
                     tool: ToolKind::Map
                 }
-            );
-            let (outcome, response) = self.handle_boundary_tool_event_with_response(event)?;
-            if helper_closed {
-                let project = self.open_library()?.open_project(&self.project_id)?;
-                let feedback = project
-                    .boundary_review()
-                    .and_then(|review| review.projection().actionable_feedback)
-                    .unwrap_or_else(|| {
-                        "Campus Boundary map helper closed; retry the same review or return to Campus Target confirmation".into()
-                    });
-                return Err(feedback);
+            ) {
+                return Ok(super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::Ignored);
             }
+            let (outcome, response) = match self.handle_boundary_tool_event_with_response(event) {
+                Ok(result) => result,
+                Err(message) => {
+                    transport.send_command(ToolCommand::ShowTaskError { message })?;
+                    continue;
+                }
+            };
             if let Some(candidate_id) = candidate_selection {
                 interaction = BoundaryToolInteraction {
                     candidate_id: Some(candidate_id),
@@ -548,7 +649,6 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
         )
     }
 
-    #[cfg(not(debug_assertions))]
     fn resume_persisted_foundation_acquisition(&self) -> Result<(), String> {
         let coordinator = ProjectAcquisitionCoordinator::new(self.acquisition_client);
         let mut library = self.open_library()?;
@@ -827,10 +927,18 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 return Err(format!("Foundation review map helper failed: {message}"));
             }
             if matches!(event, ToolEvent::MapFoundationRefreshRequested) {
-                if self.complete_explicit_foundation_refresh()?
-                    != ProjectAcquisitionProgress::EvidencePinned
-                {
-                    return Err("Explicit Foundation refresh did not pin verified evidence".into());
+                let progress = match self.complete_explicit_foundation_refresh() {
+                    Ok(progress) => progress,
+                    Err(message) => {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
+                };
+                if progress != ProjectAcquisitionProgress::EvidencePinned {
+                    transport.send_command(ToolCommand::ShowTaskError {
+                        message: "Explicit Foundation refresh did not pin verified evidence".into(),
+                    })?;
+                    continue;
                 }
                 let project = self.open_library()?.open_project(&self.project_id)?;
                 transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
@@ -843,8 +951,20 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 continue;
             }
             if let ToolEvent::MapCoarseRasterSupplementRequested { category, gap_id } = &event {
-                active_category = super::v11_foundation_review_desk::parse_category(category)?;
-                self.request_controlled_coarse_raster_supplement(active_category, gap_id)?;
+                active_category = match super::v11_foundation_review_desk::parse_category(category)
+                {
+                    Ok(category) => category,
+                    Err(message) => {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
+                };
+                if let Err(message) =
+                    self.request_controlled_coarse_raster_supplement(active_category, gap_id)
+                {
+                    transport.send_command(ToolCommand::ShowTaskError { message })?;
+                    continue;
+                }
                 let project = self.open_library()?.open_project(&self.project_id)?;
                 transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
                     desk: super::v11_foundation_review_desk::map_foundation_review_desk(
@@ -856,7 +976,14 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 continue;
             }
             if let ToolEvent::MapFoundationReviewCategorySelected { category } = &event {
-                active_category = super::v11_foundation_review_desk::parse_category(category)?;
+                active_category = match super::v11_foundation_review_desk::parse_category(category)
+                {
+                    Ok(category) => category,
+                    Err(message) => {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
+                };
                 selected_subject_id = None;
                 let project = self.open_library()?.open_project(&self.project_id)?;
                 transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
@@ -873,7 +1000,14 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
                 subject_id,
             } = &event
             {
-                active_category = super::v11_foundation_review_desk::parse_category(category)?;
+                active_category = match super::v11_foundation_review_desk::parse_category(category)
+                {
+                    Ok(category) => category,
+                    Err(message) => {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
+                };
                 selected_subject_id = Some(subject_id.clone());
                 let project = self.open_library()?.open_project(&self.project_id)?;
                 transport.send_command(ToolCommand::UpdateFoundationReviewDesk {
@@ -890,13 +1024,19 @@ impl<'a, T: AcquisitionTransport> FixedDatasetTracer<'a, T> {
             let mut session = campus_state::Schema2ProjectSession::default();
             session.open_project(&library, &self.project_id)?;
             let outcome =
-                session.apply_semantic_operation(&mut library, description, |project| {
+                match session.apply_semantic_operation(&mut library, description, |project| {
                     super::v11_foundation_review_desk::apply_foundation_review_tool_event(
                         project,
                         self.actor.clone(),
                         event,
                     )
-                })?;
+                }) {
+                    Ok(outcome) => outcome,
+                    Err(message) => {
+                        transport.send_command(ToolCommand::ShowTaskError { message })?;
+                        continue;
+                    }
+                };
             let project = self.open_library()?.open_project(&self.project_id)?;
             if let campus_state::FoundationResumePoint::Review(category) = project.resume_point() {
                 if matches!(
@@ -1262,66 +1402,6 @@ pub fn bootstrap_if_enabled(
         security_code: std::env::var("GAODE_SECURITY_CODE")
             .or_else(|_| std::env::var("VITE_GAODE_SECURITY_CODE"))
             .unwrap_or_default(),
-        zoom: 17.0,
-        pitch: 45.0,
-        rotation: 0.0,
-        english: false,
-    })?;
-    tracer.generate_and_export().map(Some)
-}
-
-#[cfg(not(debug_assertions))]
-pub fn bootstrap_if_enabled(
-    application_data: &Path,
-    enabled: Option<&str>,
-    production_client: Option<&super::v11_acquisition_client::ProductionAcquisitionClient>,
-) -> Result<Option<FixedDatasetTracerReport>, String> {
-    if enabled != Some("1") {
-        return Ok(None);
-    }
-    let client = production_client.ok_or(
-        "CAMPUS_V11_FIXED_TRACER=1 requires CAMPUS_ACQUISITION_SERVICE_URL and a stored installation credential",
-    )?;
-    let boundary_job_id = std::env::var("CAMPUS_V11_BOUNDARY_JOB_ID")
-        .map_err(|_| "Controlled release startup requires CAMPUS_V11_BOUNDARY_JOB_ID")?;
-    let capability = V11ConstructionCapability::request_controlled_release(enabled)?;
-    let run_id = now_unix_ms();
-    let tracer = FixedDatasetTracer::confirm_campus_target(
-        FixedDatasetTracerRequest {
-            library_root: application_data
-                .join("v1.1-controlled-release")
-                .join("library"),
-            output_root: application_data
-                .join("v1.1-controlled-release")
-                .join("output"),
-            campus_scope: CampusScope::new(
-                "gaode:B00155J6JH",
-                "East China Normal University Putuo Campus",
-                [121.395, 31.202],
-            )?,
-            project_name: format!("V1.1 controlled release {run_id}"),
-            boundary_job_id,
-            acquisition_job_id: String::new(),
-        },
-        InstallationId::new("campus-native-controlled-release")?,
-        &capability,
-        client,
-    )?;
-    let outcome = tracer.run_installed_boundary_tool(BoundaryDeskMapOptions {
-        js_api_key: std::env::var("GAODE_JS_API_KEY").unwrap_or_default(),
-        security_code: std::env::var("GAODE_SECURITY_CODE").unwrap_or_default(),
-        zoom: 17.0,
-        pitch: 45.0,
-        rotation: 0.0,
-        english: false,
-    })?;
-    if outcome != super::v11_boundary_evidence_desk::BoundaryToolEventOutcome::AcquisitionStarted {
-        return Ok(None);
-    }
-    tracer.resume_persisted_foundation_acquisition()?;
-    tracer.run_installed_foundation_review_tool(FoundationReviewDeskMapOptions {
-        js_api_key: std::env::var("GAODE_JS_API_KEY").unwrap_or_default(),
-        security_code: std::env::var("GAODE_SECURITY_CODE").unwrap_or_default(),
         zoom: 17.0,
         pitch: 45.0,
         rotation: 0.0,
@@ -1987,8 +2067,11 @@ mod tests {
                 },
                 &mut cancelled_transport,
             )
-            .unwrap_err();
-        assert!(cancellation.contains("Retry the same boundary review"));
+            .unwrap();
+        assert_eq!(
+            cancellation,
+            crate::v11_boundary_evidence_desk::BoundaryToolEventOutcome::Ignored
+        );
         assert_eq!(
             cancelled_transport.commands.len(),
             1,

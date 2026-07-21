@@ -81,6 +81,7 @@ export component AppWindow inherits Window {
     in-out property <bool> error-visible: false;
     in-out property <string> error-summary: "";
     in-out property <string> error-details: "";
+    in-out property <int> error-recovery: 0; // 1 restart map, 2 restart preview
     in-out property <string> page-title: "选择学校与具体校区";
     in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
     in-out property <string> project-summary: "尚未建立项目";
@@ -245,6 +246,7 @@ export component AppWindow inherits Window {
     callback restore-building-suppression(int);
     callback set-locale(bool);
     callback dismiss-error();
+    callback recover-error(int);
     callback open-diagnostics();
 
     callback confirm-launcher-campus();
@@ -252,6 +254,7 @@ export component AppWindow inherits Window {
     callback import-portable-project();
     callback create-library-project(string);
     callback open-library-project(string);
+    callback continue-active-project();
     callback export-library-project(string);
     callback show-project-library();
     callback show-campus-selection();
@@ -308,6 +311,14 @@ export component AppWindow inherits Window {
                         wrap: word-wrap;
                     }
                 }
+                if root.error-recovery != 0 : Button {
+                    text: root.error-recovery == 1
+                        ? "Restart map"
+                        : "Restart preview";
+                    clicked => {
+                        root.recover-error(root.error-recovery);
+                    }
+                }
                 Button {
                     text: root.english ? "Open logs" : "打开日志";
                     clicked => { root.open-diagnostics(); }
@@ -339,7 +350,11 @@ export component AppWindow inherits Window {
                     clicked => { root.show-project-library(); }
                 }
                 Button { text: "3  FOUNDATION"; enabled: false; }
-                Button { text: "4  DETAILED"; enabled: false; }
+                Button {
+                    text: "4  DETAILED";
+                    enabled: root.can-enter-detailed;
+                    clicked => { root.switch-mode(true); }
+                }
                 Button { text: "5  AXIOM"; enabled: false; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Text {
@@ -524,6 +539,12 @@ export component AppWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
+                        Button {
+                            text: root.english ? "Continue current task" : "\u{7ee7}\u{7eed}\u{5f53}\u{524d}\u{4efb}\u{52a1}";
+                            enabled: root.launcher-active-project-id != "";
+                            clicked => { root.continue-active-project(); }
+                        }
+
                         spacing: 10px;
                         Button {
                             text: root.english ? "Back to project library" : "返回校区项目库";
@@ -1119,7 +1140,8 @@ export component AppWindow inherits Window {
             padding: 24px;
             spacing: 12px;
             SectionLabel { text: root.english ? "ABOUT CAMPUS RECONSTRUCTION TOOL" : "关于 Campus Reconstruction Tool"; }
-            Text { text: root.english ? "V1 · Native Slint / Rust campus reconstruction workbench" : "V1 · 原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
+            Text { text: root.english ? "V1.1.0 · Windows 11 x64 · Online required" : "V1.1.0 · Windows 11 x64 · 需要联网"; color: #17251f; }
+            Text { text: root.english ? "Native Slint / Rust campus reconstruction workbench" : "原生 Slint / Rust 校园复刻工作台"; color: #17251f; }
             AboutSlint {}
             Rectangle { vertical-stretch: 1; background: transparent; }
             Button { text: root.english ? "Close" : "关闭"; clicked => { root.about-visible = false; } }

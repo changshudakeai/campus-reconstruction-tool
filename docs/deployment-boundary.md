@@ -1,21 +1,31 @@
 # Deployment boundary
 
-| Capability | Local desktop | Hosted service |
+| Capability | Local Windows 11 x64 desktop | Hosted controlled service |
 |---|---:|---:|
-| Project files and review decisions | Required | Never required |
-| API credentials | Required, OS credential store | Never stored |
-| Arnis building generation | Required | No |
-| Foundation/detailed schematic export | Required | No |
-| Building template catalog (V1 fixed styles) | Cached and versioned | Release distribution |
-| Gaode 3D reference | Isolated map surface | Provider infrastructure |
-| OSM/Overture Foundation acquisition | Authenticated typed `/v1` client; no public-provider fallback | Required controlled service with pinned Dataset Bundle |
-| Shared campus annotations | Local cache | Optional |
-| App/model update manifest | Local cache | Required for updates |
+| Schema-2 projects and review decisions | Required | Never required |
+| Credentials | Windows Credential Manager | Installation credential validation only |
+| Arnis generation and schematic export | Required | No |
+| Gaode Campus Target search | Isolated map helper | Provider infrastructure |
+| Boundary and five-category Foundation acquisition | Authenticated /v1 client only | Required |
+| Dataset Bundle, coverage and result manifests | Verified and persisted | Produced and retained by policy |
+| App/model update manifest | Cached | Required for updates |
 
-Hosted service failure must not block opening, editing, regenerating, or exporting an existing project.
-It pauses new acquisition and refresh. Service rollback may deploy only a contract-compatible
-`/v1` implementation and must preserve the pinned provider and Dataset Bundle identities.
+V1.1.0 is online-required for Campus Target search and new or refreshed
+Foundation acquisition. If the controlled service is unavailable, those tasks
+pause. Persisted projects, pinned evidence, local review, generation, preview,
+and export remain available. Production never falls back to public Overpass,
+direct provider acquisition, fixture transport, blank-canvas feature drawing, or
+screenshot-derived recovery.
+
+## Installed payload
+
+The candidate installer contains only the three executables, third-party
+notices, release guidance, candidate manifest, and uninstaller. Rust target
+directories, source, toolchains, credentials, caches, fixtures, test projects,
+and hosted-service dependencies are excluded.
 
 ## Size policy
 
-Rust `target/` is build cache, not application payload. It is excluded from Git and installers. V1 Windows installers have a 50 MB budget, checked by `npm run size:release`. Large datasets, Python environments, training data, and model weights are not bundled.
+Installer size is recorded in the candidate distribution evidence for capacity
+planning. V1.1.0 has no 50 MB release gate and makes no offline-availability
+claim.

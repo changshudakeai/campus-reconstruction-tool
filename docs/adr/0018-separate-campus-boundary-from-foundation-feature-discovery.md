@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; geometry, evidence-assessment, and five-category drawing rules superseded by ADR-0032
 
 ## Context
 

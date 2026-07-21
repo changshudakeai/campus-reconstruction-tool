@@ -1,0 +1,89 @@
+{
+  "project": {
+    "schemaVersion": "1.0",
+    "name": "Legacy web portable fixture",
+    "campus": {
+      "canonicalName": "ECNU Putuo Campus",
+      "displayName": "Putuo"
+    },
+    "foundation": {
+      "orientationDegrees": 18.0,
+      "foundationStyle": { "blocksPerMeter": 1.5 },
+      "foundationStylePack": {
+        "schemaVersion": "1.0",
+        "id": "arnis:historic-red-brick/v1",
+        "name": "Historic Red-Brick Campus",
+        "features": {
+          "building": { "generator": "core:solid-fill/v1", "blocks": ["minecraft:bricks"], "width": null, "density": null, "seed": 104729 }
+        }
+      },
+      "boundaryDraft": {
+        "points": [
+          { "lng": 121.40, "lat": 31.23 },
+          { "lng": 121.41, "lat": 31.23 },
+          { "lng": 121.41, "lat": 31.22 }
+        ]
+      },
+      "reviews": {
+        "legacy-library": "accepted",
+        "legacy-road": "rejected"
+      },
+      "candidates": [
+        {
+          "id": "legacy-library",
+          "name": "Legacy Library",
+          "kind": "building",
+          "confidence": "high",
+          "provenance": { "sourceLabel": "OSM fixture" },
+          "geometry": {
+            "points": [
+              { "lng": 121.405, "lat": 31.228 },
+              { "lng": 121.406, "lat": 31.228 },
+              { "lng": 121.406, "lat": 31.227 }
+            ]
+          },
+          "heightM": 20.0,
+          "floors": 5,
+          "roofShape": "flat",
+          "tags": { "building": "university" }
+        },
+        {
+          "id": "legacy-road",
+          "name": "Legacy Road",
+          "kind": "road",
+          "source": "manual fixture",
+          "confidence": "manual",
+          "geometry": {
+            "points": [
+              { "lng": 121.405, "lat": 31.228 },
+              { "lng": 121.406, "lat": 31.227 }
+            ]
+          }
+        }
+      ],
+      "manualFeatures": [
+        {
+          "id": "legacy-water",
+          "name": "Legacy Pond",
+          "kind": "water",
+          "geometry": {
+            "points": [
+              { "lng": 121.405, "lat": 31.228 },
+              { "lng": 121.4052, "lat": 31.228 },
+              { "lng": 121.4052, "lat": 31.2278 }
+            ]
+          },
+          "block": "water"
+        }
+      ]
+    }
+  },
+  "campusMemory": {
+    "buildingNames": [
+      { "sourceId": "legacy-library", "name": "Reviewed Legacy Library", "status": "active" }
+    ],
+    "suppressions": [
+      { "sourceId": "legacy-shed", "reason": "not a campus building" }
+    ]
+  }
+}

@@ -8,7 +8,8 @@ fn main() {
 #[cfg(target_os = "windows")]
 mod windows {
     use campus_tool_protocol::{
-        read_message, write_message, ToolCommand, ToolEvent, ToolKind, PROTOCOL_VERSION,
+        forward_tool_events, read_message, write_message, ToolCommand, ToolEvent, ToolKind,
+        PROTOCOL_VERSION,
     };
     use pixels::{Pixels, SurfaceTexture};
     use serde::Deserialize;
@@ -24,6 +25,8 @@ mod windows {
 
     const WIDTH: u32 = 1100;
     const HEIGHT: u32 = 760;
+    type PipeThread = thread::JoinHandle<Result<(), String>>;
+    type ToolConnection = (ToolCommand, Sender<ToolEvent>, PipeThread);
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -59,7 +62,7 @@ mod windows {
         if std::env::var_os("CAMPUS_PREVIEW_HEADLESS").is_some() {
             return run_headless(pipe, token);
         }
-        let (command, event_tx) = connect(pipe, token)?;
+        let (command, event_tx, pipe_thread) = connect(pipe, token)?;
         let ToolCommand::OpenPreview {
             model_path,
             title,
@@ -89,13 +92,14 @@ mod windows {
             press_cursor: None,
             last_projected: Vec::new(),
             event_tx,
+            pipe_thread: Some(pipe_thread),
         };
         event_loop
             .run_app(&mut app)
             .map_err(|error| error.to_string())
     }
 
-    fn connect(pipe: String, token: String) -> Result<(ToolCommand, Sender<ToolEvent>), String> {
+    fn connect(pipe: String, token: String) -> Result<ToolConnection, String> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -125,20 +129,8 @@ mod windows {
         ))?;
         let command = runtime.block_on(read_message(&mut client))?;
         let (tx, rx) = mpsc::channel::<ToolEvent>();
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("preview pipe runtime");
-            runtime.block_on(async move {
-                while let Ok(event) = rx.recv() {
-                    if write_message(&mut client, &event).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        });
-        Ok((command, tx))
+        let pipe_thread = thread::spawn(move || runtime.block_on(forward_tool_events(client, rx)));
+        Ok((command, tx, pipe_thread))
     }
 
     fn run_headless(pipe: String, token: String) -> Result<(), String> {
@@ -258,6 +250,22 @@ mod windows {
         press_cursor: Option<(f64, f64)>,
         last_projected: Vec<(i32, i32, usize)>,
         event_tx: Sender<ToolEvent>,
+        pipe_thread: Option<thread::JoinHandle<Result<(), String>>>,
+    }
+
+    impl PreviewApplication {
+        fn finish(&mut self, event_loop: &ActiveEventLoop, error: Option<String>) {
+            if let Some(message) = error {
+                let _ = self.event_tx.send(ToolEvent::Error { message });
+            }
+            let _ = self.event_tx.send(ToolEvent::Closed {
+                tool: ToolKind::Preview,
+            });
+            if let Some(pipe_thread) = self.pipe_thread.take() {
+                let _ = pipe_thread.join();
+            }
+            event_loop.exit();
+        }
     }
 
     impl ApplicationHandler for PreviewApplication {
@@ -265,26 +273,40 @@ mod windows {
             if self.window.is_some() {
                 return;
             }
-            let window = Arc::new(
-                event_loop
-                    .create_window(
-                        Window::default_attributes()
-                            .with_title(format!(
-                                "{} · {}",
-                                if self.english {
-                                    "Native Block Preview"
-                                } else {
-                                    "原生方块预览"
-                                },
-                                self.title
-                            ))
-                            .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT)),
-                    )
-                    .expect("create preview window"),
-            );
+            let window = match event_loop.create_window(
+                Window::default_attributes()
+                    .with_title(format!(
+                        "{} · {}",
+                        if self.english {
+                            "Native Block Preview"
+                        } else {
+                            "原生方块预览"
+                        },
+                        self.title
+                    ))
+                    .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT)),
+            ) {
+                Ok(window) => Arc::new(window),
+                Err(error) => {
+                    self.finish(
+                        event_loop,
+                        Some(format!("create preview window failed: {error}")),
+                    );
+                    return;
+                }
+            };
             let size = window.inner_size();
             let texture = SurfaceTexture::new(size.width, size.height, window.clone());
-            let pixels = Pixels::new(WIDTH, HEIGHT, texture).expect("create wgpu pixel surface");
+            let pixels = match Pixels::new(WIDTH, HEIGHT, texture) {
+                Ok(pixels) => pixels,
+                Err(error) => {
+                    self.finish(
+                        event_loop,
+                        Some(format!("create preview pixel surface failed: {error}")),
+                    );
+                    return;
+                }
+            };
             let _ = self.event_tx.send(ToolEvent::Ready {
                 protocol_version: PROTOCOL_VERSION,
                 tool: ToolKind::Preview,
@@ -302,20 +324,29 @@ mod windows {
         ) {
             match event {
                 WindowEvent::CloseRequested => {
-                    let _ = self.event_tx.send(ToolEvent::Closed {
-                        tool: ToolKind::Preview,
-                    });
-                    event_loop.exit();
+                    self.finish(event_loop, None);
                 }
                 WindowEvent::RedrawRequested => {
                     self.render();
-                    if let Some(pixels) = &mut self.pixels {
-                        let _ = pixels.render();
+                    let render_error = self
+                        .pixels
+                        .as_mut()
+                        .and_then(|pixels| pixels.render().err())
+                        .map(|error| format!("render preview failed: {error}"));
+                    if render_error.is_some() {
+                        self.finish(event_loop, render_error);
                     }
                 }
                 WindowEvent::Resized(size) => {
-                    if let Some(pixels) = &mut self.pixels {
-                        let _ = pixels.resize_surface(size.width, size.height);
+                    if size.width > 0 && size.height > 0 {
+                        let resize_error = self
+                            .pixels
+                            .as_mut()
+                            .and_then(|pixels| pixels.resize_surface(size.width, size.height).err())
+                            .map(|error| format!("resize preview surface failed: {error}"));
+                        if resize_error.is_some() {
+                            self.finish(event_loop, resize_error);
+                        }
                     }
                 }
                 WindowEvent::MouseInput {

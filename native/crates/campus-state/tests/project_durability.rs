@@ -1,8 +1,8 @@
 use campus_state::{
     decode_schema2_project, AcquisitionJobState, AcquisitionRequestIdentity, CampusProjectLibrary,
     CampusScope, FoundationAcquisitionCheckpoint, InstallationId, PinnedBoundaryEvidence,
-    ProjectSaveStatus, ResultManifest, SaveFaultPoint, Schema2ProjectSession, SourceObservation,
-    V11ConstructionCapability, VerifiedAcquisitionChunk,
+    ProjectSaveStatus, RecoveryFaultPoint, ResultManifest, SaveFaultPoint, Schema2ProjectSession,
+    SourceObservation, V11ConstructionCapability, VerifiedAcquisitionChunk,
 };
 
 fn scope() -> CampusScope {
@@ -365,6 +365,59 @@ fn recovery_and_previous_confirmed_save_are_distinct_and_recovery_is_explicit() 
             .project_revision(),
         2,
         "an incoherent recovery is never merged"
+    );
+}
+
+#[test]
+fn injected_recovery_faults_never_replace_confirmed_state_or_drop_recoverable_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut library = library(directory.path());
+    let project = library
+        .create_project(scope(), "recovery fault project", actor())
+        .unwrap();
+    let project_id = project.id().clone();
+    let confirmed_revision = project.workflow().project_revision();
+    let mut session = Schema2ProjectSession::default();
+    session.open_project(&library, &project_id).unwrap();
+
+    library.inject_next_recovery_failure(RecoveryFaultPoint::BeforeWrite);
+    let error = session
+        .apply_semantic_operation(&mut library, "unsaved recovery edit", |project| {
+            project.mark_updated(actor())
+        })
+        .unwrap_err();
+    assert!(error.contains("BeforeWrite"));
+    assert_eq!(
+        library
+            .open_project(&project_id)
+            .unwrap()
+            .workflow()
+            .project_revision(),
+        confirmed_revision
+    );
+    assert!(session.is_dirty());
+    assert!(library.recovery_candidate(&project_id).unwrap().is_none());
+
+    library.inject_next_recovery_failure(RecoveryFaultPoint::AfterWrite);
+    let error = session.retry_save(&mut library).unwrap_err();
+    assert!(error.contains("AfterWrite"));
+    assert!(library.recovery_candidate(&project_id).unwrap().is_some());
+
+    library.inject_next_recovery_failure(RecoveryFaultPoint::BeforeRead);
+    assert!(session
+        .available_recovery(&library)
+        .unwrap_err()
+        .contains("BeforeRead"));
+    assert!(library.recovery_candidate(&project_id).unwrap().is_some());
+
+    library.inject_next_recovery_failure(RecoveryFaultPoint::BeforeDiscard);
+    assert!(session
+        .discard_recovery(&library)
+        .unwrap_err()
+        .contains("BeforeDiscard"));
+    assert!(
+        library.recovery_candidate(&project_id).unwrap().is_some(),
+        "a failed discard must leave the coherent recovery candidate available"
     );
 }
 

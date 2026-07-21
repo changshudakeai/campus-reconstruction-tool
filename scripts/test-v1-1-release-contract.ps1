@@ -1,0 +1,87 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+
+function Read-RepoFile([string]$RelativePath) {
+    [IO.File]::ReadAllText((Join-Path $root $RelativePath))
+}
+function Assert-Contains([string]$Text, [string]$Needle, [string]$Message) {
+    if (-not $Text.Contains($Needle)) { throw $Message }
+}
+function Assert-NotContains([string]$Text, [string]$Needle, [string]$Message) {
+    if ($Text.Contains($Needle)) { throw $Message }
+}
+
+$package = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root "package.json") | ConvertFrom-Json
+$packageLockText = Read-RepoFile "package-lock.json"
+$lockedVersions = [regex]::Matches($packageLockText, '"version"\s*:\s*"1\.1\.0"').Count
+if ($package.version -ne "1.1.0" -or $lockedVersions -lt 2) {
+    throw "npm package metadata must report 1.1.0"
+}
+
+$cargo = Read-RepoFile "native\Cargo.toml"
+$installer = Read-RepoFile "installer\campus-reconstruction-tool.nsi"
+$about = Read-RepoFile "native\apps\campus-native\ui\app.slint"
+$main = Read-RepoFile "native\apps\campus-native\src\main.rs"
+$packager = Read-RepoFile "scripts\build-native-installer.ps1"
+$sizeReport = Read-RepoFile "scripts\report-release-size.ps1"
+$releaseNotes = Read-RepoFile "docs\releases\v1.1.0-unsigned.md"
+
+Assert-Contains $cargo 'version = "1.1.0"' "Cargo workspace version must be 1.1.0"
+$candidateVerifier = Read-RepoFile "scripts\verify-v1-1-candidate.ps1"
+$installerVerifier = Read-RepoFile "scripts\verify-native-installer.ps1"
+$releaseWorkflow = Read-RepoFile ".github\workflows\release.yml"
+$releaseDecision = Read-RepoFile "docs\adr\0034-supersede-v1-desktop-release-assumptions-for-v1-1.md"
+Assert-Contains $installer '!define PRODUCT_VERSION "1.1.0"' "Installer version must be 1.1.0"
+$tracer = Read-RepoFile "native\apps\campus-native\src\v11_tracer_bullet.rs"
+Assert-Contains $about "V1.1.0" "About UI must report V1.1.0"
+Assert-Contains $main "V11ConstructionCapability::for_controlled_release()" "Production must always construct schema 2"
+Assert-NotContains $main 'std::env::var("CAMPUS_V11_PROJECT_KERNEL")' "Production must not expose the V1.1 project gate"
+Assert-NotContains $main 'argument == "--self-test"' "Release binary must not expose the legacy manual-feature self-test"
+Assert-NotContains $packager "cargo +stable build" "Packaging must not rebuild release binaries"
+Assert-NotContains $installer 'native\target\release' "NSIS must consume the candidate payload, not a mutable target directory"
+Assert-Contains $packager "Pre-package SHA-256 mismatch" "Packaging must verify payload digests before NSIS"
+Assert-Contains $packager "Packaging changed the already-tested binary" "Packaging must verify payload digests after NSIS"
+Assert-NotContains $sizeReport "50MB" "V1.1 must not retain the 50 MB release gate"
+Assert-Contains $releaseNotes "Windows 11 x64" "Release guidance must state the supported Windows image"
+Assert-Contains $releaseNotes "requires network" "Release guidance must state the online requirement"
+Assert-Contains $releaseNotes "SmartScreen" "Unsigned release guidance must explain SmartScreen"
+Assert-Contains $about "continue-active-project" "Schema-2 Resume Point must be actionable in the production UI"
+Assert-Contains $main "on_continue_active_project" "Production must route the current schema-2 task"
+Assert-Contains $tracer "continue_active_project" "Production must expose the controlled schema-2 orchestration path"
+Assert-Contains $tracer "FoundationResumePoint::Acquisition" "Production routing must include controlled acquisition"
+Assert-Contains $tracer "FoundationResumePoint::Generation | FoundationResumePoint::Export" "Production routing must include generation and export"
+Assert-Contains $releaseNotes "SHA-256" "Unsigned release guidance must require exact SHA-256 verification"
+
+Assert-Contains $candidateVerifier "CleanWindowsImageId" "Candidate evidence must identify the clean Windows image"
+Assert-Contains $candidateVerifier "release-binary-smoke" "Exact release binaries must be smoked before packaging"
+Assert-Contains $candidateVerifier "CleanWindowsImageManifest" "Clean image identity must be bound to a manifest"
+Assert-Contains $candidateVerifier '"release-contract"' "Candidate evidence must record the release contract test"
+Assert-Contains $installerVerifier '$supportedPredecessorSha256' "Supported upgrade must pin the predecessor digest"
+Assert-Contains $installerVerifier "e59c1d1e523501db373db51ae0f2167c4d4fd368125dd6d71889ab08ac77e202" "Supported V1.0.1 predecessor digest changed"
+if (
+    $candidateVerifier.IndexOf('"release-binary-smoke"') -gt
+    $candidateVerifier.IndexOf('$binaryDigests = [ordered]@{}')
+) {
+    throw "Release binary smoke must run before binaries are copied into the packaging payload"
+}
+Assert-Contains $candidateVerifier '"install-silent-fresh"' "Silent fresh install evidence is mandatory"
+Assert-Contains $candidateVerifier '"install-interactive-fresh"' "Interactive fresh install evidence is mandatory"
+Assert-Contains $candidateVerifier '"install-silent-upgrade"' "Predecessor upgrade evidence is mandatory"
+Assert-Contains $candidateVerifier '"candidate-evidence.json"' "Final evidence must be sealed after installed acceptance"
+Assert-Contains $installerVerifier '$predecessorSetup' "Upgrade must install a real predecessor"
+Assert-NotContains $installerVerifier "Supported same-line upgrade" "Reinstalling the candidate is not upgrade evidence"
+Assert-Contains $releaseWorkflow "workflow_dispatch:" "The source gate must run before tagging"
+Assert-NotContains $releaseWorkflow "tags:" "A tag must not build an unsealed candidate"
+Assert-NotContains $releaseWorkflow "softprops/action-gh-release" "The pre-tag gate must not publish a release"
+Assert-Contains $releaseDecision "both Foundation and Detailed" "The V1.1 release decision must retain both-mode parity"
+Assert-Contains $tracer "ShowTaskError" "Map validation failures must remain visible in the active tool"
+Assert-Contains $tracer "ProductionWorkflowOutcome::Cancelled" "Closing review must preserve the current task explicitly"
+
+[pscustomobject]@{
+    Version = "1.1.0"
+    ProductionProjectModel = "schema-2-only"
+    PackagingRebuildsBinaries = $false
+    SizeGate = "informational-only"
+    UnsignedGuidance = "present"
+} | Format-List

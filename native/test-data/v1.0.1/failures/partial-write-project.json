@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "partial write",
+  "campusName": "Fixture Campus",
+  "mode": "foundation",
+  "boundary": [{"lng":121.4,"lat":31.2}],
+  "candidates": [

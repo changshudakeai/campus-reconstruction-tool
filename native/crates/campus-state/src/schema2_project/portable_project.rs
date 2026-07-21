@@ -899,6 +899,62 @@ mod tests {
     }
 
     #[test]
+    fn portable_project_embeds_detailed_evidence_bytes() {
+        let source_root = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        let transfer_root = tempfile::tempdir().unwrap();
+        let portable_path = transfer_root
+            .path()
+            .join("with-evidence.campus-project.json");
+        let actor = InstallationId::new("installation-evidence").unwrap();
+        let campus = scope("putuo", "Putuo Campus", "B001");
+        let mut source_library =
+            CampusProjectLibrary::open_for_construction(source_root.path(), "putuo", &capability())
+                .unwrap();
+        let mut project = source_library
+            .create_project(campus.clone(), "Evidence Project", actor.clone())
+            .unwrap();
+        let mut detailed = DetailedBuildingState::default();
+        detailed.evidence_assets.push(crate::LocalEvidenceAsset {
+            id: "building-1:evidence:1".into(),
+            slot_id: "building-1".into(),
+            relative_path: "evidence/building-1/front.jpg".into(),
+            source_name: "front.jpg".into(),
+            added_at_unix_ms: 1,
+            content_base64: "cG9ydGFibGUtZXZpZGVuY2U=".into(),
+        });
+        project
+            .replace_retained_detailed_workspace(detailed, BTreeMap::new(), actor.clone())
+            .unwrap();
+        source_library.save_project(&project).unwrap();
+        source_library
+            .export_portable_project(&project, &portable_path, PortableDestination::CreateNew)
+            .unwrap();
+
+        let portable: serde_json::Value =
+            serde_json::from_slice(&fs::read(&portable_path).unwrap()).unwrap();
+        assert_eq!(
+            portable["project"]["retainedDetailed"]["evidenceAssets"][0]["contentBase64"],
+            "cG9ydGFibGUtZXZpZGVuY2U="
+        );
+        let mut target_library =
+            CampusProjectLibrary::open_for_construction(target_root.path(), "putuo", &capability())
+                .unwrap();
+        let imported = target_library
+            .import_portable_project(
+                &portable_path,
+                campus,
+                CampusTargetMatchApproval::AutomaticOnly,
+                actor,
+            )
+            .unwrap();
+        assert_eq!(
+            imported.retained_detailed_state().evidence_assets[0].content_base64,
+            "cG9ydGFibGUtZXZpZGVuY2U="
+        );
+    }
+
+    #[test]
     fn matching_names_and_locations_still_require_human_confirmation_without_gaode_identity() {
         let source_root = tempfile::tempdir().unwrap();
         let transfer_root = tempfile::tempdir().unwrap();

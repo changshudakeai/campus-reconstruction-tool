@@ -1,26 +1,45 @@
-name: package-v1
+name: verify-v1-1-source-and-release-binaries
 
 on:
-  push:
-    tags: ["v1.*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  windows-installer:
-    runs-on: windows-latest
+  pre-tag-windows-x64-gate:
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: native
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: 22
-      - run: choco install nsis --yes --no-progress
-      - run: npm run bundle:v1
-      - uses: softprops/action-gh-release@v2
+          python-version: "3.12"
+      - name: Verify formatting
+        run: cargo +stable fmt --manifest-path native/Cargo.toml --all -- --check
+      - name: Verify Clippy
+        run: cargo +stable clippy --manifest-path native/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Run Rust tests
+        run: cargo +stable test --manifest-path native/Cargo.toml --workspace --locked
+      - name: Run service tests
+        run: python -m unittest discover -s services -p test_*.py
+      - name: Build locked release binaries
+        run: cargo +stable build --manifest-path native/Cargo.toml --workspace --release --locked
+      - name: Smoke exact release binaries
+        shell: pwsh
+        run: |
+          native/target/release/campus-native.exe --candidate-smoke-report release-binary-smoke.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $smoke = Get-Content -Raw release-binary-smoke.json | ConvertFrom-Json
+          if ($smoke.status -ne "pass" -or $smoke.version -ne "1.1.0") { exit 1 }
+      - uses: actions/upload-artifact@v4
         with:
-          files: artifacts/installer/Campus-Reconstruction-Tool-V1-Setup.exe
+          name: v1.1-pre-tag-tested-release-binaries
+          path: |
+            native/target/release/campus-native.exe
+            native/target/release/campus-map.exe
+            native/target/release/campus-preview.exe
+            release-binary-smoke.json

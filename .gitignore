@@ -1,7 +1,4 @@
 node_modules/
-dist/
-src-tauri/target/
-src-tauri/crates/*/target/
 native/target/
 .venv*/
 .cache/

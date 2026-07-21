@@ -1,0 +1,11 @@
+{
+  "id": "overture:injected-failure",
+  "provider": "overture",
+  "providerVersion": "fixture/1.0.1",
+  "status": "failed",
+  "southWest": { "lng": 121.40, "lat": 31.22 },
+  "northEast": { "lng": 121.41, "lat": 31.23 },
+  "acquiredAtUnixMs": 1710000000000,
+  "candidates": [],
+  "error": "fixture-injected provider timeout"
+}

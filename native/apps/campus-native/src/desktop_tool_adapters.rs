@@ -1,3 +1,4 @@
+use super::ToolRecoveryAction;
 use super::{tr, DesktopLocale, GeoPoint, MapLaunchRequest, ToolSupervisor, ToolUpdate};
 use campus_tool_protocol::{MapCoordinate, MapOverlay, ToolCommand, ToolEvent, ToolKind};
 use std::path::PathBuf;
@@ -143,6 +144,7 @@ impl ToolSupervisor {
                             let _ = updates.send(ToolUpdate::Error {
                                 event: "map.campus-search".into(),
                                 message: gaode_search_failure_message(&code, locale),
+                                recovery: ToolRecoveryAction::RestartMap,
                             });
                             return;
                         }
@@ -164,6 +166,7 @@ impl ToolSupervisor {
                             let _ = updates.send(ToolUpdate::Error {
                                 event: "map.tool".into(),
                                 message,
+                                recovery: ToolRecoveryAction::RestartMap,
                             });
                             return;
                         }
@@ -201,6 +204,7 @@ impl ToolSupervisor {
                         ToolEvent::Error { message } => ToolUpdate::Error {
                             event: "preview.tool".into(),
                             message,
+                            recovery: ToolRecoveryAction::RestartPreview,
                         },
                         ToolEvent::Closed { .. } => {
                             ToolUpdate::Status("Native preview closed".into())

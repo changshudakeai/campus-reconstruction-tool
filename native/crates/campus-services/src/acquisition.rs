@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::sync::Mutex;
 
 #[cfg(debug_assertions)]
 use base64::Engine;
@@ -60,6 +61,118 @@ pub struct TransportError {
 
 pub trait AcquisitionTransport {
     fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectedAcquisitionFault {
+    NetworkLoss,
+    Timeout,
+    ServiceError,
+    Cancelled,
+    CorruptChunk,
+    AbnormalExit,
+}
+
+#[derive(Debug)]
+struct AcquisitionFaultPlan {
+    fail_on_request: usize,
+    request_count: usize,
+    fault: Option<InjectedAcquisitionFault>,
+}
+
+pub struct FaultInjectingTransport<T> {
+    inner: T,
+    plan: Mutex<AcquisitionFaultPlan>,
+}
+
+impl<T> FaultInjectingTransport<T> {
+    pub fn new(inner: T, fail_on_request: usize, fault: InjectedAcquisitionFault) -> Self {
+        Self {
+            inner,
+            plan: Mutex::new(AcquisitionFaultPlan {
+                fail_on_request: fail_on_request.max(1),
+                request_count: 0,
+                fault: Some(fault),
+            }),
+        }
+    }
+}
+
+impl<T: AcquisitionTransport> AcquisitionTransport for FaultInjectingTransport<T> {
+    fn execute(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+        let fault = {
+            let mut plan = self.plan.lock().map_err(|_| TransportError {
+                explanation: "[fault_injector_poisoned] acquisition fault plan unavailable".into(),
+            })?;
+            plan.request_count += 1;
+            if plan.request_count >= plan.fail_on_request {
+                plan.fault
+            } else {
+                None
+            }
+        };
+        let Some(fault) = fault else {
+            return self.inner.execute(request);
+        };
+        match fault {
+            InjectedAcquisitionFault::NetworkLoss => Err(TransportError {
+                explanation: "[network_lost] controlled acquisition connection was lost".into(),
+            }),
+            InjectedAcquisitionFault::Timeout => Err(TransportError {
+                explanation: "[timeout] controlled acquisition request timed out".into(),
+            }),
+            InjectedAcquisitionFault::AbnormalExit => Err(TransportError {
+                explanation: "[abnormal_exit] controlled acquisition transport stopped".into(),
+            }),
+            InjectedAcquisitionFault::ServiceError => injected_service_response(
+                503,
+                "injected_service_error",
+                true,
+                "The controlled acquisition service reported an injected failure.",
+                "Retry the same pinned request.",
+            ),
+            InjectedAcquisitionFault::Cancelled => injected_service_response(
+                409,
+                "injected_cancelled",
+                false,
+                "The controlled acquisition request was cancelled.",
+                "Restart the same task when ready.",
+            ),
+            InjectedAcquisitionFault::CorruptChunk => {
+                let mut response = self.inner.execute(request)?;
+                if response.body.is_empty() {
+                    response.body.push(0xff);
+                } else {
+                    response.body[0] ^= 0xff;
+                }
+                Ok(response)
+            }
+        }
+    }
+}
+
+fn injected_service_response(
+    status: u16,
+    code: &str,
+    retryable: bool,
+    explanation: &str,
+    suggested_action: &str,
+) -> Result<TransportResponse, TransportError> {
+    let body = serde_json::to_vec(&ServiceFailure {
+        code: code.into(),
+        scope: "injected-acquisition-boundary".into(),
+        retryable,
+        explanation: explanation.into(),
+        suggested_action: suggested_action.into(),
+    })
+    .map_err(|error| TransportError {
+        explanation: error.to_string(),
+    })?;
+    Ok(TransportResponse {
+        status,
+        headers: BTreeMap::new(),
+        body,
+    })
 }
 
 pub struct HttpsTransport {
@@ -2443,6 +2556,42 @@ mod tests {
             "retention_days": 30,
             "quota_remaining": 100
         }))
+    }
+
+    #[test]
+    fn injected_network_service_cancellation_chunk_and_exit_faults_never_succeed_or_fallback() {
+        for fault in [
+            InjectedAcquisitionFault::NetworkLoss,
+            InjectedAcquisitionFault::Timeout,
+            InjectedAcquisitionFault::ServiceError,
+            InjectedAcquisitionFault::Cancelled,
+            InjectedAcquisitionFault::CorruptChunk,
+            InjectedAcquisitionFault::AbnormalExit,
+        ] {
+            let inner = RecordingTransport::new(vec![capabilities_response()]);
+            let requests = inner.requests.clone();
+            let transport = FaultInjectingTransport::new(inner, 1, fault);
+            let client = AcquisitionClient::new(transport);
+            let error = client
+                .capabilities()
+                .expect_err("an injected acquisition incident cannot become success");
+
+            assert!(
+                matches!(
+                    error.kind,
+                    AcquisitionClientErrorKind::TransportUnavailable
+                        | AcquisitionClientErrorKind::RetryableScope
+                        | AcquisitionClientErrorKind::ServiceFailure
+                        | AcquisitionClientErrorKind::InvalidResponse
+                ),
+                "{fault:?} returned an unrelated error kind: {:?}",
+                error.kind
+            );
+            assert!(
+                requests.borrow().len() <= 1,
+                "{fault:?} must not retry through or switch to another provider"
+            );
+        }
     }
 
     #[test]

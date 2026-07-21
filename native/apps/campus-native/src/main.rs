@@ -16,6 +16,9 @@ use desktop_tool_process::DesktopToolProcessSupervisor;
 use v11_project_library::{CampusProjectLauncher, LauncherStep, ProjectRowSaveState};
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
+use campus_services::acquisition::{
+    AcquisitionClient, AcquisitionTransport, TransportError, TransportRequest, TransportResponse,
+};
 use campus_state::{
     ArnisStylePreset, CampusProject, CampusProjectLibrary, CampusReconstructionWorkflow,
     CampusScope, CampusTargetEvidence, CandidateConfidence, CandidateConfidenceFilter,
@@ -23,13 +26,16 @@ use campus_state::{
     DetailedBuildingRuleStack, DetailedBuildingWorkspace, DetailedBuildingWorkspaceTask,
     ExternalModelDecision, FeatureKind, FoundationMapTask, FoundationPhase, FoundationStep,
     FoundationStylePack, FoundationStylePreset, FoundationWorkflow, FoundationWorkflowIntent,
-    GeoPoint, MapCandidate, MapViewState, ReconstructionWorkflowIntent, ReviewDecision,
-    SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand,
-    SemanticStrength, SourceConflictDecision,
+    GeoPoint, MapCandidate, MapViewState, ProjectSaveStatus, ReconstructionWorkflowIntent,
+    ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide,
+    SemanticHeightBand, SemanticStrength, SourceConflictDecision,
 };
-use campus_tool_protocol::{MapCoordinate, MapOverlay, MapPurpose};
 #[cfg(test)]
-use campus_tool_protocol::{ToolEvent, ToolKind, PROTOCOL_VERSION};
+use campus_tool_protocol::PROTOCOL_VERSION;
+use campus_tool_protocol::{
+    MapCoordinate, MapOverlay, MapPurpose, ToolCommand, ToolEvent, ToolKind,
+};
+#[cfg(test)]
 use rand::Rng;
 #[cfg(test)]
 use slint::Model;
@@ -162,6 +168,47 @@ struct LocalCredentials {
     acquisition_secret: String,
 }
 
+#[derive(Clone, Copy)]
+struct PausedAcquisitionTransport;
+
+impl AcquisitionTransport for PausedAcquisitionTransport {
+    fn execute(&self, _request: TransportRequest) -> Result<TransportResponse, TransportError> {
+        Err(TransportError {
+            explanation: "The controlled acquisition service is not configured. Configure its HTTPS URL and installation credential, then retry the same task.".into(),
+        })
+    }
+}
+
+fn continue_schema2_task<T: AcquisitionTransport>(
+    context: &v11_project_library::ActiveProjectContext,
+    acquisition_client: &AcquisitionClient<T>,
+    credentials: &LocalCredentials,
+    english: bool,
+) -> Result<v11_tracer_bullet::ProductionWorkflowOutcome, String> {
+    let capability = campus_state::V11ConstructionCapability::for_controlled_release();
+    v11_tracer_bullet::continue_active_project(
+        context,
+        &capability,
+        acquisition_client,
+        v11_tracer_bullet::BoundaryDeskMapOptions {
+            js_api_key: credentials.js_api_key.clone(),
+            security_code: credentials.security_code.clone(),
+            zoom: 17.0,
+            pitch: 45.0,
+            rotation: 0.0,
+            english,
+        },
+        v11_tracer_bullet::FoundationReviewDeskMapOptions {
+            js_api_key: credentials.js_api_key.clone(),
+            security_code: credentials.security_code.clone(),
+            zoom: 17.0,
+            pitch: 45.0,
+            rotation: 0.0,
+            english,
+        },
+    )
+}
+
 fn credential_entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new("Campus Reconstruction Tool", account).map_err(|error| error.to_string())
 }
@@ -221,6 +268,9 @@ fn save_local_credentials(credentials: &LocalCredentials) -> Result<(), String> 
 }
 
 fn autosave(state: &Rc<RefCell<DesktopApplicationState>>) -> Result<(), String> {
+    if state.borrow().is_schema2_detailed_workspace() {
+        return state.borrow_mut().save();
+    }
     let path = state
         .borrow()
         .project_path
@@ -581,6 +631,7 @@ fn sync_project_launcher_ui(
     ui.set_launcher_projects(ModelRc::new(VecModel::from(models)));
     ui.set_can_undo(launcher.can_undo());
     ui.set_can_redo(launcher.can_redo());
+    ui.set_can_enter_detailed(launcher.detailed_workspace_available());
 
     if let Some(row) = active {
         ui.set_project_name(row.project_name.clone().into());
@@ -983,6 +1034,21 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
         }
         .into(),
     );
+    if let Some(schema2_status) = state.schema2_save_status() {
+        let status = match schema2_status {
+            ProjectSaveStatus::Saving => "Saving".to_string(),
+            ProjectSaveStatus::Saved {
+                completed_at_unix_ms,
+            } => format!(
+                "Saved Â· {}",
+                format_latest_save_time(*completed_at_unix_ms)
+            ),
+            ProjectSaveStatus::Failed { reason } => {
+                format!("Save failed Â· {reason} Â· use Save to retry")
+            }
+        };
+        ui.set_save_status(status.into());
+    }
     ui.set_project_summary(
         if english {
             format!(
@@ -1635,7 +1701,10 @@ fn candidate_matches_filter(candidate: &MapCandidate, filter: CandidateConfidenc
         }
         CandidateConfidenceFilter::Low => {
             candidate.review == ReviewDecision::Pending
-                && candidate.confidence == CandidateConfidence::Low
+                && matches!(
+                    candidate.confidence,
+                    CandidateConfidence::Low | CandidateConfidence::Unassessed
+                )
         }
         CandidateConfidenceFilter::Confirmed => candidate.review == ReviewDecision::Accepted,
         CandidateConfidenceFilter::Rejected => candidate.review == ReviewDecision::Rejected,
@@ -1646,9 +1715,48 @@ fn save_and_sync(
     ui: &AppWindow,
     state: &Rc<RefCell<DesktopApplicationState>>,
 ) -> Result<(), String> {
+    if state.borrow().is_schema2_detailed_workspace() {
+        state.borrow_mut().begin_schema2_save();
+        sync_ui(ui, &state.borrow());
+        let weak = ui.as_weak();
+        let state = state.clone();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
+            let result = autosave(&state);
+            if let Some(ui) = weak.upgrade() {
+                match result {
+                    Ok(()) => sync_ui(&ui, &state.borrow()),
+                    Err(error) => set_error_for(&ui, "schema2-detailed.save", error),
+                }
+            }
+        });
+        return Ok(());
+    }
     autosave(state)?;
     sync_ui(ui, &state.borrow());
     Ok(())
+}
+
+fn switch_schema2_launcher_mode(
+    state: &Rc<RefCell<DesktopApplicationState>>,
+    launcher: &Rc<RefCell<CampusProjectLauncher>>,
+    detailed: bool,
+) -> Result<(), String> {
+    if detailed {
+        let context = launcher.borrow().active_project_context()?;
+        state.borrow_mut().open_schema2_detailed_workspace(
+            context.library_root,
+            context.campus_target_id,
+            context.project_id,
+            context.actor,
+        )
+    } else if state.borrow().is_schema2_detailed_workspace() {
+        autosave(state)?;
+        launcher.borrow_mut().refresh_active_project()?;
+        state.borrow_mut().close_schema2_detailed_workspace();
+        Ok(())
+    } else {
+        Ok(())
+    }
 }
 
 #[track_caller]
@@ -1658,14 +1766,33 @@ fn set_error(ui: &AppWindow, message: impl AsRef<str>) {
 
 #[track_caller]
 fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
+    set_error_with_recovery(ui, event, message, None);
+}
+
+#[track_caller]
+fn set_error_with_recovery(
+    ui: &AppWindow,
+    event: &str,
+    message: impl AsRef<str>,
+    recovery: Option<ToolRecoveryAction>,
+) {
     let location = std::panic::Location::caller();
     let source = format!("{}:{}", location.file(), location.line());
     let message = v11_guidance::sanitise_registered_diagnostic_value("message", message.as_ref());
+    let recovery_result = recovery
+        .map(|_| "restart-offered")
+        .unwrap_or("not-attempted");
+    let code = recovery.map(|_| "helper.abnormal-exit").unwrap_or(event);
     let record = diagnostics::record(
         diagnostics::DiagnosticLevel::Error,
         event,
         &message,
-        &[("source", source.as_str())],
+        &[
+            ("source", source.as_str()),
+            ("task", event),
+            ("code", code),
+            ("recovery_result", recovery_result),
+        ],
     );
     let incident_id = record
         .as_ref()
@@ -1680,6 +1807,7 @@ fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
                 .unwrap_or_else(|| "diagnostic log unavailable".into())
         });
     ui.set_error_visible(true);
+    ui.set_error_recovery(recovery.map_or(0, |action| action as i32));
     ui.set_error_summary(
         if ui.get_english() {
             format!("Operation failed: {message}")
@@ -1696,6 +1824,12 @@ fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
         }
         .into(),
     );
+    if let Some(action) = recovery {
+        let details = ui.get_error_details();
+        ui.set_error_details(
+            format!("{} ? {}", details.as_str(), action.label(ui.get_english())).into(),
+        );
+    }
     ui.set_save_status(
         if ui.get_english() {
             "Operation failed"
@@ -1750,14 +1884,18 @@ fn generate_foundation_preview(
 fn generate_detailed_model(
     state: &Rc<RefCell<DesktopApplicationState>>,
 ) -> Result<(PathBuf, String), String> {
-    generate_detailed_model_to(state, &generated_model_dir())
+    let output_directory = state
+        .borrow()
+        .schema2_detailed_artifact_directory()
+        .unwrap_or_else(generated_model_dir);
+    generate_detailed_model_to(state, &output_directory)
 }
 
 fn generate_detailed_model_to(
     state: &Rc<RefCell<DesktopApplicationState>>,
     output_directory: &Path,
 ) -> Result<(PathBuf, String), String> {
-    let (slot, rules, scale, version) = {
+    let (slot, components, rules, scale, orientation_degrees, version) = {
         let borrowed = state.borrow();
         let project = borrowed.project.as_ref().ok_or("请先创建项目")?;
         let slot = project
@@ -1770,7 +1908,24 @@ fn generate_detailed_model_to(
             .ok_or("请先在地基模式接受至少一个建筑候选")?;
         let version = project.next_refinement_version(&slot.id);
         let rules = DetailedBuildingRuleStack::compile(project, &slot.id)?;
-        (slot, rules, project.blocks_per_meter, version)
+        let components = project
+            .detailed_building_components
+            .get(&slot.id)
+            .cloned()
+            .unwrap_or_else(|| {
+                vec![campus_state::BuildingFootprintComponent {
+                    exterior: slot.footprint.clone(),
+                    interior_rings: Vec::new(),
+                }]
+            });
+        (
+            slot,
+            components,
+            rules,
+            project.blocks_per_meter,
+            project.orientation_degrees,
+            version,
+        )
     };
     let mut correction_notes = vec![format!(
         "Detailed Building Rule Stack: {}",
@@ -1786,17 +1941,7 @@ fn generate_detailed_model_to(
     let generated = arnis_core::generate_building(GenerateBuildingRequest {
         candidate_id: slot.id.clone(),
         source: "campus-project".into(),
-        components: vec![FootprintComponent {
-            exterior: slot
-                .footprint
-                .iter()
-                .map(|point| arnis_core::GeoPoint {
-                    lng: point.lng,
-                    lat: point.lat,
-                })
-                .collect(),
-            interior_rings: Vec::new(),
-        }],
+        components: oriented_detailed_components(&components, orientation_degrees),
         height_m: slot.height_m,
         floors: rules.floors,
         roof_shape: rules.roof_shape.clone(),
@@ -1831,11 +1976,82 @@ fn generate_detailed_model_to(
         serde_json::to_vec_pretty(&generated).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    let retained_model = serde_json::to_value(&generated).map_err(|error| error.to_string())?;
     state.borrow_mut().mutate_project(|project| {
         project.detailed.selected_slot_id = Some(slot.id.clone());
         project.record_refinement_draft(&slot.id, version, path.clone());
+        project.detailed.generated_artifact =
+            Some(campus_state::RetainedDetailedGeneratedArtifact {
+                slot_id: slot.id.clone(),
+                refinement_id: format!("{}:v{version}", slot.id),
+                file_name: path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("detailed-building.arnis.json")
+                    .to_string(),
+                model: retained_model,
+            });
     });
     Ok((path, slot.name))
+}
+
+fn oriented_detailed_components(
+    components: &[campus_state::BuildingFootprintComponent],
+    orientation_degrees: f64,
+) -> Vec<FootprintComponent> {
+    let Some(origin) = components
+        .iter()
+        .find_map(|component| component.exterior.first())
+        .copied()
+    else {
+        return Vec::new();
+    };
+    let angle = -orientation_degrees.to_radians();
+    let (sin, cos) = angle.sin_cos();
+    let lat_scale = 111_320.0;
+    let lng_scale = lat_scale * origin.lat.to_radians().cos();
+    let rotate = |point: &GeoPoint| {
+        let east = (point.lng - origin.lng) * lng_scale;
+        let north = (point.lat - origin.lat) * lat_scale;
+        let rotated_east = east * cos - north * sin;
+        let rotated_north = east * sin + north * cos;
+        arnis_core::GeoPoint {
+            lng: origin.lng + rotated_east / lng_scale,
+            lat: origin.lat + rotated_north / lat_scale,
+        }
+    };
+    components
+        .iter()
+        .map(|component| FootprintComponent {
+            exterior: component.exterior.iter().map(rotate).collect(),
+            interior_rings: component
+                .interior_rings
+                .iter()
+                .map(|ring| ring.iter().map(rotate).collect())
+                .collect(),
+        })
+        .collect()
+}
+
+fn capture_retained_detailed_artifact(
+    state: &Rc<RefCell<DesktopApplicationState>>,
+    path: &Path,
+) -> Result<(), String> {
+    let model: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let mut updated = false;
+    state.borrow_mut().mutate_project(|project| {
+        if let Some(artifact) = project.detailed.generated_artifact.as_mut() {
+            artifact.model = model;
+            updated = true;
+        }
+    });
+    if updated {
+        Ok(())
+    } else {
+        Err("Generated Detailed artifact is not attached to the active Schema-2 state".into())
+    }
 }
 
 fn generated_palette_summary(
@@ -2231,6 +2447,7 @@ enum ToolUpdate {
     Error {
         event: String,
         message: String,
+        recovery: ToolRecoveryAction,
     },
     PreviewBlockSelected {
         x: i32,
@@ -2247,6 +2464,23 @@ enum ToolUpdate {
     MapPoint(GeoPoint),
     MapCampusTarget(CampusTargetEvidence),
     MapBoundary(Vec<GeoPoint>),
+}
+
+#[derive(Clone, Copy)]
+enum ToolRecoveryAction {
+    RestartMap = 1,
+    RestartPreview = 2,
+}
+
+impl ToolRecoveryAction {
+    fn label(self, english: bool) -> &'static str {
+        match (self, english) {
+            (Self::RestartMap, true) => "Restart the map from this task.",
+            (Self::RestartMap, false) => "???????????",
+            (Self::RestartPreview, true) => "Restart the preview from this task.",
+            (Self::RestartPreview, false) => "???????????",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2272,6 +2506,130 @@ struct MapLaunchRequest {
     english: bool,
 }
 
+#[cfg(target_os = "windows")]
+fn run_candidate_helper_smoke() -> Result<serde_json::Value, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable_directory = executable
+        .parent()
+        .ok_or("candidate executable has no parent directory")?;
+    for helper in ["campus-map.exe", "campus-preview.exe"] {
+        if !executable_directory.join(helper).is_file() {
+            return Err(format!("installed helper is missing: {helper}"));
+        }
+    }
+
+    let preview_model = std::env::temp_dir().join(format!(
+        "campus-v1.1-candidate-preview-{}.json",
+        std::process::id()
+    ));
+    std::fs::write(
+        &preview_model,
+        r#"{"width":1,"height":1,"length":1,"palette":["minecraft:air"],"blockRuns":[{"paletteIndex":0,"runLength":1}]}"#,
+    )
+    .map_err(|error| error.to_string())?;
+    std::env::set_var("CAMPUS_MAP_HEADLESS", "1");
+    std::env::set_var("CAMPUS_PREVIEW_HEADLESS", "1");
+
+    let supervisor = DesktopToolProcessSupervisor::new();
+    let (updates, events) = mpsc::channel();
+    let commands = [
+        (
+            "campus-map",
+            ToolKind::Map,
+            ToolCommand::OpenMap {
+                campus_name: "V1.1 candidate smoke".into(),
+                center_lng: 121.0,
+                center_lat: 31.0,
+                zoom: 17.0,
+                pitch: 0.0,
+                rotation: 0.0,
+                js_api_key: String::new(),
+                security_code: String::new(),
+                boundary: Vec::<MapCoordinate>::new(),
+                purpose: MapPurpose::CampusSelection,
+                overlays: Vec::new(),
+                feature_kind: None,
+                english: true,
+            },
+        ),
+        (
+            "campus-preview",
+            ToolKind::Preview,
+            ToolCommand::OpenPreview {
+                model_path: preview_model.to_string_lossy().into_owned(),
+                title: "V1.1 candidate smoke".into(),
+                english: true,
+            },
+        ),
+    ];
+    for (executable_name, tool, command) in commands {
+        let updates = updates.clone();
+        supervisor.launch(executable_name, tool, command, move |event| {
+            let updates = updates.clone();
+            async move {
+                let _ = updates.send(event);
+            }
+        })?;
+    }
+    drop(updates);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut map_closed = false;
+    let mut preview_closed = false;
+    while !(map_closed && preview_closed) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("timed out waiting for installed helper shutdown".into());
+        }
+        match events.recv_timeout(remaining) {
+            Ok(ToolEvent::Closed {
+                tool: ToolKind::Map,
+            }) => map_closed = true,
+            Ok(ToolEvent::Closed {
+                tool: ToolKind::Preview,
+            }) => preview_closed = true,
+            Ok(ToolEvent::Error { message }) => return Err(message),
+            Ok(_) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    drop(supervisor);
+    std::env::remove_var("CAMPUS_MAP_HEADLESS");
+    std::env::remove_var("CAMPUS_PREVIEW_HEADLESS");
+    let _ = std::fs::remove_file(preview_model);
+
+    Ok(serde_json::json!({
+        "status": "pass",
+        "version": env!("CARGO_PKG_VERSION"),
+        "architecture": std::env::consts::ARCH,
+        "productionProjectModel": "schema-2-only",
+        "onlineRequired": true,
+        "helpers": {
+            "campusMap": "started-and-shut-down",
+            "campusPreview": "started-and-shut-down"
+        }
+    }))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_candidate_helper_smoke() -> Result<serde_json::Value, String> {
+    Err("the V1.1 candidate helper smoke is Windows-only".into())
+}
+
+fn write_candidate_smoke_report(path: &Path, report: &serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(report).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
 fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let executable_dir = executable
@@ -2479,6 +2837,30 @@ fn run_self_test(cycles: usize) -> Result<serde_json::Value, String> {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    install_diagnostics();
+    let arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(report_path) = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--candidate-smoke-report")
+        .map(|pair| PathBuf::from(&pair[1]))
+    {
+        let result = run_candidate_helper_smoke();
+        let (report, exit_code) = match result {
+            Ok(report) => (report, 0),
+            Err(error) => (
+                serde_json::json!({
+                    "status": "fail",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "error": error
+                }),
+                1,
+            ),
+        };
+        if write_candidate_smoke_report(&report_path, &report).is_err() {
+            std::process::exit(2);
+        }
+        std::process::exit(exit_code);
+    }
     let production_acquisition_client =
         match v11_acquisition_client::production_client_if_configured(
             std::env::var("CAMPUS_ACQUISITION_SERVICE_URL")
@@ -2502,36 +2884,25 @@ fn main() -> Result<(), slint::PlatformError> {
             eprintln!("V1.1 development acquisition fixture failed: {error}");
         }
     }
-    let project_kernel_gate = std::env::var("CAMPUS_V11_PROJECT_KERNEL").ok();
-    let (v11_launcher, v11_launcher_error) = if project_kernel_gate.as_deref() == Some("1") {
-        match (|| {
-            let capability = campus_state::V11ConstructionCapability::request(
-                cfg!(debug_assertions),
-                project_kernel_gate.as_deref(),
-            )?;
-            let mut launcher = CampusProjectLauncher::open(
-                &app_data_dir(),
-                capability,
-                campus_state::InstallationId::new("campus-native")?,
-            )?;
-            if launcher.offered_campus().is_none() {
-                launcher.select_campus_candidate(
-                    CampusScope::new(
-                        "gaode:B00155J6JH",
-                        "华东师范大学普陀校区",
-                        [121.395, 31.202],
-                    )?
-                    .with_gaode_poi_id("B00155J6JH")?,
-                );
-            }
-            Ok::<_, String>(Rc::new(RefCell::new(launcher)))
-        })() {
-            Ok(launcher) => (Some(launcher), None),
-            Err(error) => (None, Some(error)),
+    let v11_launcher = match CampusProjectLauncher::open(
+        app_data_dir(),
+        campus_state::V11ConstructionCapability::for_controlled_release(),
+        campus_state::InstallationId::new("campus-native-v1.1")
+            .expect("the controlled-release installation id is valid"),
+    ) {
+        Ok(launcher) => Some(Rc::new(RefCell::new(launcher))),
+        Err(error) => {
+            diagnostics::record(
+                diagnostics::DiagnosticLevel::Error,
+                "project-library.startup",
+                &error,
+                &[("release", env!("CARGO_PKG_VERSION"))],
+            );
+            eprintln!("V1.1 project library failed to start: {error}");
+            std::process::exit(1);
         }
-    } else {
-        (None, None)
     };
+    #[cfg(debug_assertions)]
     let v11_tracer_error = match v11_tracer_bullet::bootstrap_if_enabled(
         &app_data_dir(),
         std::env::var("CAMPUS_V11_FIXED_TRACER").ok().as_deref(),
@@ -2553,44 +2924,9 @@ fn main() -> Result<(), slint::PlatformError> {
             Some(error)
         }
     };
-    install_diagnostics();
-    let arguments = std::env::args().collect::<Vec<_>>();
-    if arguments.iter().any(|argument| argument == "--self-test") {
-        let cycles = arguments
-            .windows(2)
-            .find(|pair| pair[0] == "--cycles")
-            .and_then(|pair| pair[1].parse::<usize>().ok())
-            .unwrap_or(1);
-        let report_path = arguments
-            .windows(2)
-            .find(|pair| pair[0] == "--self-test-report")
-            .map(|pair| PathBuf::from(&pair[1]));
-        match run_self_test(cycles) {
-            Ok(report) => {
-                if let Some(path) = report_path {
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap_or_default())
-                        .is_err()
-                    {
-                        std::process::exit(2);
-                    }
-                }
-                std::process::exit(0);
-            }
-            Err(error) => {
-                if let Some(path) = report_path {
-                    let report = serde_json::json!({"status": "fail", "error": error});
-                    let _ = std::fs::write(
-                        path,
-                        serde_json::to_vec_pretty(&report).unwrap_or_default(),
-                    );
-                }
-                std::process::exit(1);
-            }
-        }
-    }
+    #[cfg(not(debug_assertions))]
+    let v11_tracer_error: Option<String> = None;
+    let production_acquisition_client = Rc::new(production_acquisition_client);
     let ui = AppWindow::new()?;
     ui.set_step_labels(ModelRc::new(VecModel::from(
         FoundationStep::ALL
@@ -2685,24 +3021,14 @@ fn main() -> Result<(), slint::PlatformError> {
         updates: tool_update_tx,
     };
     let tool_update_rx = Rc::new(RefCell::new(tool_update_rx));
-    let startup_open_error = if v11_launcher.is_none() && default_project_path().exists() {
-        state.borrow_mut().open(default_project_path()).err()
-    } else {
-        None
-    };
-    if v11_launcher.is_none() && state.borrow().project.is_none() {
-        state
-            .borrow_mut()
-            .new_project("未命名项目", "华东师范大学普陀校区");
-    }
+    // Schema-1 loading is reachable only through the schema-2 library's explicit
+    // migration/import boundary; production never auto-opens a legacy project.
+    let startup_open_error: Option<String> = None;
     sync_ui(&ui, &state.borrow());
     if let Some(launcher) = &v11_launcher {
         if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
             set_error_for(&ui, "project-library.startup", error);
         }
-    }
-    if let Some(error) = v11_launcher_error {
-        set_error_for(&ui, "project-library.startup", error);
     }
     if let Some(error) = v11_tracer_error {
         set_error(&ui, error);
@@ -2818,6 +3144,91 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        {
+            let launcher = v11_launcher.clone();
+            let production_client = production_acquisition_client.clone();
+            let credentials = map_credentials.clone();
+            let weak = ui.as_weak();
+            ui.on_continue_active_project(move || {
+                let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                    return;
+                };
+                let context = match launcher.borrow().active_project_context() {
+                    Ok(context) => context,
+                    Err(error) => {
+                        set_error_for(&ui, "project-workflow.continue", error);
+                        return;
+                    }
+                };
+                ui.set_tool_status(
+                    if ui.get_english() {
+                        "Running the current V1.1 task..."
+                    } else {
+                        "\u{6b63}\u{5728}\u{6267}\u{884c}\u{5f53}\u{524d} V1.1 \u{4efb}\u{52a1}..."
+                    }
+                    .into(),
+                );
+                let credentials = credentials.borrow().clone();
+                let result = if let Some(client) = production_client.as_ref() {
+                    continue_schema2_task(&context, client, &credentials, ui.get_english())
+                } else {
+                    let paused = AcquisitionClient::new(PausedAcquisitionTransport);
+                    continue_schema2_task(&context, &paused, &credentials, ui.get_english())
+                };
+                match result {
+                    Ok(outcome) => {
+                        let refresh = launcher.borrow_mut().refresh_active_project();
+                        if let Err(error) =
+                            refresh.and_then(|()| sync_project_launcher_ui(&ui, &launcher.borrow()))
+                        {
+                            set_error_for(&ui, "project-workflow.refresh", error);
+                            return;
+                        }
+                        let status = match outcome {
+                            v11_tracer_bullet::ProductionWorkflowOutcome::Advanced => {
+                                if ui.get_english() {
+                                    "Task saved"
+                                } else {
+                                    "\u{4efb}\u{52a1}\u{5df2}\u{4fdd}\u{5b58}"
+                                }
+                                .into()
+                            }
+                            v11_tracer_bullet::ProductionWorkflowOutcome::Cancelled => {
+                                if ui.get_english() {
+                                    "Review cancelled; project unchanged"
+                                } else {
+                                    "\u{5df2}\u{53d6}\u{6d88}\u{5ba1}\u{67e5}\u{ff1b}\u{9879}\u{76ee}\u{672a}\u{66f4}\u{6539}"
+                                }
+                                .into()
+                            }
+                            v11_tracer_bullet::ProductionWorkflowOutcome::Exported(report) => {
+                                format!(
+                                    "{} - {} bytes - manifest {} - project {}",
+                                    report.schematic_path.display(),
+                                    report.schematic_bytes,
+                                    report.manifest_path.display(),
+                                    report.project_id.as_str()
+                                )
+                                .into()
+                            }
+                            v11_tracer_bullet::ProductionWorkflowOutcome::Complete => {
+                                if ui.get_english() {
+                                    "Project complete"
+                                } else {
+                                    "\u{9879}\u{76ee}\u{5df2}\u{5b8c}\u{6210}"
+                                }
+                                .into()
+                            }
+                        };
+                        ui.set_tool_status(status);
+                    }
+                    Err(error) => {
+                        ui.set_tool_status("".into());
+                        set_error_for(&ui, "project-workflow.continue", error);
+                    }
+                }
+            });
+        }
         let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_export_library_project(move |value| {
@@ -2899,6 +3310,23 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_dismiss_error(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_error_visible(false);
+                ui.set_error_recovery(0);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_recover_error(move |recovery| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_error_visible(false);
+                ui.set_error_recovery(0);
+                match recovery {
+                    value if value == ToolRecoveryAction::RestartMap as i32 => ui.invoke_open_map(),
+                    value if value == ToolRecoveryAction::RestartPreview as i32 => {
+                        ui.invoke_open_preview()
+                    }
+                    _ => {}
+                }
             }
         });
     }
@@ -2944,7 +3372,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             if let Some(ui) = weak.upgrade() {
-                if let Some(launcher) = &launcher {
+                if state.borrow().is_schema2_detailed_workspace() {
+                    sync_ui(&ui, &state.borrow());
+                } else if let Some(launcher) = &launcher {
                     ui.set_english(english);
                     sync_locale_models(&ui, locale);
                     if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
@@ -3327,7 +3757,10 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_quick_start_visible(false);
             ui.set_settings_tab(0);
             ui.set_settings_visible(true);
-            if let Some(launcher) = &launcher {
+            if state.borrow().is_schema2_detailed_workspace() {
+                let state = state.borrow();
+                sync_shortcut_rows(&ui, Some(&state), None);
+            } else if let Some(launcher) = &launcher {
                 let launcher = launcher.borrow();
                 sync_shortcut_rows(&ui, None, Some(&launcher));
             } else {
@@ -3349,7 +3782,19 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let outcome = {
                 let state = state.borrow();
-                if let Some(launcher) = &launcher {
+                if state.is_schema2_detailed_workspace() {
+                    v11_guidance::resolve_shortcut(
+                        shortcut,
+                        shortcut_context(
+                            Some(&state),
+                            None,
+                            modal_state_from_code(modal),
+                            text_input_focused,
+                            map_tool_state_from_code(map_tool),
+                        ),
+                        guidance_locale(&ui),
+                    )
+                } else if let Some(launcher) = &launcher {
                     let launcher = launcher.borrow();
                     v11_guidance::resolve_shortcut(
                         shortcut,
@@ -3379,7 +3824,10 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_shortcut_feedback(outcome.reason().into());
             let Some(action) = outcome.action() else {
                 set_status(&ui, outcome.reason(), outcome.reason());
-                if let Some(launcher) = &launcher {
+                if state.borrow().is_schema2_detailed_workspace() {
+                    let state = state.borrow();
+                    sync_shortcut_rows(&ui, Some(&state), None);
+                } else if let Some(launcher) = &launcher {
                     let launcher = launcher.borrow();
                     sync_shortcut_rows(&ui, None, Some(&launcher));
                 } else {
@@ -3423,7 +3871,9 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 v11_guidance::ShortcutAction::SaveProject => ui.invoke_save_project(),
                 v11_guidance::ShortcutAction::ExportPortableProject => {
-                    if let Some(launcher) = &launcher {
+                    if state.borrow().is_schema2_detailed_workspace() {
+                        ui.invoke_export_portable_project();
+                    } else if let Some(launcher) = &launcher {
                         let project_id = launcher
                             .borrow()
                             .active_project_id()
@@ -3444,7 +3894,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     unreachable!("map and cancellable task shortcuts are handled by their surface")
                 }
             }
-            if let Some(launcher) = &launcher {
+            if state.borrow().is_schema2_detailed_workspace() {
+                let state = state.borrow();
+                sync_shortcut_rows(&ui, Some(&state), None);
+            } else if let Some(launcher) = &launcher {
                 let launcher = launcher.borrow();
                 sync_shortcut_rows(&ui, None, Some(&launcher));
             } else {
@@ -3528,7 +3981,10 @@ fn main() -> Result<(), slint::PlatformError> {
             move || {
                 let mut changed = false;
                 while let Ok(update) = receiver.borrow_mut().try_recv() {
-                    if launcher.is_some()
+                    let launcher_visible = weak
+                        .upgrade()
+                        .is_some_and(|ui| ui.get_campus_launcher_visible());
+                    if launcher_visible
                         && !matches!(
                             &update,
                             ToolUpdate::Status(_)
@@ -3540,19 +3996,23 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                     match update {
                         ToolUpdate::Status(message) => {
-                            if launcher.is_none() {
+                            if !launcher_visible {
                                 state.borrow_mut().tool_status = Some(message.clone());
                             }
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_tool_status(message.into());
                             }
                         }
-                        ToolUpdate::Error { event, message } => {
-                            if launcher.is_none() {
+                        ToolUpdate::Error {
+                            event,
+                            message,
+                            recovery,
+                        } => {
+                            if !launcher_visible {
                                 state.borrow_mut().tool_status = Some(message.clone());
                             }
                             if let Some(ui) = weak.upgrade() {
-                                set_error_for(&ui, &event, message);
+                                set_error_with_recovery(&ui, &event, message, Some(recovery));
                             }
                         }
                         ToolUpdate::PreviewBlockSelected { x, y, z, block } => {
@@ -3667,6 +4127,24 @@ fn main() -> Result<(), slint::PlatformError> {
         let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_undo(move || {
+            if state.borrow().is_schema2_detailed_workspace() {
+                let result = state
+                    .borrow_mut()
+                    .undo_schema2_detailed_workspace()
+                    .and_then(|()| {
+                        if let Some(launcher) = &launcher {
+                            launcher.borrow_mut().refresh_active_project()?;
+                        }
+                        Ok(())
+                    });
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => sync_ui(&ui, &state.borrow()),
+                        Err(error) => set_error(&ui, error),
+                    }
+                }
+                return;
+            }
             if let Some(launcher) = &launcher {
                 let result = launcher.borrow_mut().undo();
                 if let Some(ui) = weak.upgrade() {
@@ -3746,6 +4224,24 @@ fn main() -> Result<(), slint::PlatformError> {
         let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_redo(move || {
+            if state.borrow().is_schema2_detailed_workspace() {
+                let result = state
+                    .borrow_mut()
+                    .redo_schema2_detailed_workspace()
+                    .and_then(|()| {
+                        if let Some(launcher) = &launcher {
+                            launcher.borrow_mut().refresh_active_project()?;
+                        }
+                        Ok(())
+                    });
+                if let Some(ui) = weak.upgrade() {
+                    match result {
+                        Ok(()) => sync_ui(&ui, &state.borrow()),
+                        Err(error) => set_error(&ui, error),
+                    }
+                }
+                return;
+            }
             if let Some(launcher) = &launcher {
                 let result = launcher.borrow_mut().redo();
                 if let Some(ui) = weak.upgrade() {
@@ -3894,6 +4390,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_save_project(move || {
+            if state.borrow().is_schema2_detailed_workspace() {
+                if let Some(ui) = weak.upgrade() {
+                    if let Err(error) = save_and_sync(&ui, &state) {
+                        set_error(&ui, error);
+                    }
+                }
+                return;
+            }
             if let Some(launcher) = &launcher {
                 let result = launcher.borrow_mut().request_save();
                 if let Some(ui) = weak.upgrade() {
@@ -3919,12 +4423,30 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_export_portable_project(move || {
             let Some(path) = project_file_dialog(true) else {
                 return;
             };
-            let result = state.borrow_mut().save_as_portable(path);
+            let result = if state.borrow().is_schema2_detailed_workspace() {
+                autosave(&state).and_then(|()| {
+                    let launcher = launcher
+                        .as_ref()
+                        .ok_or("Schema-2 Detailed export requires the active project launcher")?;
+                    launcher.borrow_mut().refresh_active_project()?;
+                    let project_id = launcher
+                        .borrow()
+                        .active_project_id()
+                        .cloned()
+                        .ok_or("No schema-2 project is open")?;
+                    launcher
+                        .borrow_mut()
+                        .export_project(&project_id, path, false)
+                })
+            } else {
+                state.borrow_mut().save_as_portable(path)
+            };
             if let Some(ui) = weak.upgrade() {
                 match result {
                     Ok(()) => sync_ui(&ui, &state.borrow()),
@@ -3935,8 +4457,34 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_switch_mode(move |detailed| {
+            if let Some(launcher) = &launcher {
+                let Some(ui) = weak.upgrade() else {
+                    return;
+                };
+                let result = switch_schema2_launcher_mode(&state, launcher, detailed);
+                match result {
+                    Ok(()) if detailed => {
+                        ui.set_campus_launcher_visible(false);
+                        sync_ui(&ui, &state.borrow());
+                        ui.window().request_redraw();
+                    }
+                    Ok(()) => {
+                        if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                            set_error_for(&ui, "workflow.return-foundation", error);
+                        }
+                    }
+                    Err(error) => set_localized_error(
+                        &ui,
+                        "workflow.enter-detailed",
+                        format!("暂时不能进入单栋精修：{error}"),
+                        format!("Detailed Building is not available: {error}"),
+                    ),
+                }
+                return;
+            }
             let intent = if detailed {
                 ReconstructionWorkflowIntent::EnterDetailedBuilding
             } else {
@@ -4069,15 +4617,26 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             state.borrow_mut().mutate_project(|project| {
                 let selected_id = project.detailed.selected_slot_id.clone();
-                if let Some(slot) = project.building_slots.iter_mut().find(|slot| {
-                    selected_id
-                        .as_deref()
-                        .map(|id| slot.id == id)
-                        .unwrap_or(true)
-                }) {
-                    slot.height_m = parsed_height;
-                    slot.floors = parsed_floors;
-                    slot.roof_shape = parsed_roof;
+                let edited_slot_id = project
+                    .building_slots
+                    .iter_mut()
+                    .find(|slot| {
+                        selected_id
+                            .as_deref()
+                            .map(|id| slot.id == id)
+                            .unwrap_or(true)
+                    })
+                    .map(|slot| {
+                        slot.height_m = parsed_height;
+                        slot.floors = parsed_floors;
+                        slot.roof_shape = parsed_roof;
+                        slot.id.clone()
+                    });
+                if let Some(slot_id) = edited_slot_id {
+                    let version = project.next_refinement_version(&slot_id);
+                    let generated_path =
+                        project.detailed.generated_path.clone().unwrap_or_default();
+                    project.record_refinement_draft(&slot_id, version, generated_path);
                 }
             });
             if let Some(ui) = weak.upgrade() {
@@ -4232,7 +4791,16 @@ fn main() -> Result<(), slint::PlatformError> {
         let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
         ui.on_open_map(move || {
-            let snapshot = if let Some(launcher) = &launcher {
+            let snapshot = if state.borrow().is_schema2_detailed_workspace() {
+                state.borrow().project.as_ref().map(|project| {
+                    (
+                        project.campus_name.clone(),
+                        project.map_view.clone(),
+                        project.boundary.clone(),
+                        FoundationWorkflow::projection(project).map_task,
+                    )
+                })
+            } else if let Some(launcher) = &launcher {
                 let borrowed = launcher.borrow();
                 borrowed
                     .confirmed_campus()
@@ -4251,6 +4819,21 @@ fn main() -> Result<(), slint::PlatformError> {
                             Vec::new(),
                             Some(FoundationMapTask::CampusSelection),
                         )
+                    })
+                    .or_else(|| {
+                        Some((
+                            "Search for a Campus Target".into(),
+                            MapViewState {
+                                center: GeoPoint {
+                                    lng: 104.1954,
+                                    lat: 35.8617,
+                                },
+                                zoom: 4.0,
+                                ..MapViewState::default()
+                            },
+                            Vec::new(),
+                            Some(FoundationMapTask::CampusSelection),
+                        ))
                     })
             } else {
                 state.borrow().project.as_ref().map(|project| {
@@ -4606,7 +5189,16 @@ fn main() -> Result<(), slint::PlatformError> {
                                 block.clone(),
                             );
                         });
-                        if let Err(error) = save_and_sync(&ui, &state) {
+                        let artifact_path = state
+                            .borrow()
+                            .project
+                            .as_ref()
+                            .and_then(|project| project.detailed.generated_path.clone());
+                        let result = artifact_path
+                            .ok_or("Generated Detailed artifact path is unavailable".to_string())
+                            .and_then(|path| capture_retained_detailed_artifact(&state, &path))
+                            .and_then(|()| save_and_sync(&ui, &state));
+                        if let Err(error) = result {
                             set_error(&ui, error);
                         } else {
                             ui.set_semantic_feature_label("".into());
@@ -4651,11 +5243,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         selection.z,
                         target.as_str(),
                     )
-                    .map(|previous| (selection, previous))
+                    .map(|previous| (path, selection, previous))
                 });
             if let Some(ui) = weak.upgrade() {
                 match result {
-                    Ok((selection, previous)) => {
+                    Ok((path, selection, previous)) => {
                         let normalized = normalize_minecraft_block(target.as_str())
                             .unwrap_or_else(|_| target.to_string());
                         state.borrow_mut().selected_preview_block =
@@ -4663,7 +5255,12 @@ fn main() -> Result<(), slint::PlatformError> {
                                 block: normalized.clone(),
                                 ..selection
                             });
-                        sync_ui(&ui, &state.borrow());
+                        if let Err(error) = capture_retained_detailed_artifact(&state, &path)
+                            .and_then(|()| save_and_sync(&ui, &state))
+                        {
+                            set_error(&ui, error);
+                            return;
+                        }
                         let detail = format!(
                             "({}, {}, {}): {previous} → {normalized}",
                             selection.x, selection.y, selection.z
@@ -4692,11 +5289,19 @@ fn main() -> Result<(), slint::PlatformError> {
             let result = path
                 .as_ref()
                 .ok_or_else(|| "请先生成精细建筑".to_string())
-                .and_then(|path| replace_generated_block(path, source.as_str(), target.as_str()));
+                .and_then(|path| {
+                    replace_generated_block(path, source.as_str(), target.as_str())
+                        .map(|count| (path.clone(), count))
+                });
             if let Some(ui) = weak.upgrade() {
                 match result {
-                    Ok(count) => {
-                        sync_ui(&ui, &state.borrow());
+                    Ok((path, count)) => {
+                        if let Err(error) = capture_retained_detailed_artifact(&state, &path)
+                            .and_then(|()| save_and_sync(&ui, &state))
+                        {
+                            set_error(&ui, error);
+                            return;
+                        }
                         set_status(
                             &ui,
                             format!("已替换 {count} 个方块，请重新打开预览"),
@@ -4829,6 +5434,17 @@ mod tests {
         let generated: arnis_core::GeneratedBuilding =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(title, "Fixture Library");
+        assert!(
+            state
+                .borrow()
+                .project
+                .as_ref()
+                .unwrap()
+                .detailed
+                .generated_artifact
+                .is_some(),
+            "generation must attach its editable model to project state"
+        );
         assert!(generated.report.non_air_blocks > 1_000);
         assert!(generated
             .palette
@@ -4871,6 +5487,31 @@ mod tests {
             .iter()
             .any(|note| note.contains("single block edit")));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn detailed_generation_applies_the_project_orientation() {
+        let components = vec![campus_state::BuildingFootprintComponent {
+            exterior: vec![
+                GeoPoint {
+                    lng: 121.4,
+                    lat: 31.2,
+                },
+                GeoPoint {
+                    lng: 121.401,
+                    lat: 31.2,
+                },
+                GeoPoint {
+                    lng: 121.401,
+                    lat: 31.2005,
+                },
+            ],
+            interior_rings: Vec::new(),
+        }];
+        let unrotated = oriented_detailed_components(&components, 0.0);
+        let rotated = oriented_detailed_components(&components, 90.0);
+        assert!((unrotated[0].exterior[1].lat - unrotated[0].exterior[0].lat).abs() < 1e-9);
+        assert!((rotated[0].exterior[1].lat - rotated[0].exterior[0].lat).abs() > 0.0005);
     }
 
     #[test]
@@ -4996,6 +5637,24 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             tool: ToolKind::Map,
         }));
+    }
+
+    #[test]
+    fn helper_failures_offer_restart_on_the_visible_task_surface() {
+        let ui = include_str!("../ui/app.slint");
+        assert!(
+            ui.contains("callback recover-error(int)")
+                && ui.contains("root.error-recovery != 0")
+                && ui.contains("Restart map")
+                && ui.contains("Restart preview"),
+            "a crashed helper must expose an actionable restart beside its incident"
+        );
+        assert!(
+            !tool_event_ends_stream(&ToolEvent::Error {
+                message: "injected helper failure".into()
+            }),
+            "an error is not a successful tool completion"
+        );
     }
 
     #[test]
@@ -5133,6 +5792,212 @@ mod tests {
     }
 
     #[test]
+    fn completed_schema2_launcher_route_generates_and_exports_detailed_schematic() {
+        let application_data = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        #[derive(serde::Deserialize)]
+        struct ComplexBuildingFixture {
+            observations: Vec<campus_state::SourceObservation>,
+            name_evidence: Vec<campus_state::BuildingNameEvidence>,
+        }
+        let fixture: ComplexBuildingFixture =
+            serde_json::from_slice(
+                &std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+                    "../../../contracts/acquisition/v1/fixtures/complex-building-review.json",
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let boundary_fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+                "../../../contracts/acquisition/v1/fixtures/boundary-discovery-snapshot.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let acquisition_fixture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../contracts/acquisition/v1/fixtures/canonical-acquisition.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let actor = campus_state::InstallationId::new("schema2-detailed-production-flow").unwrap();
+        let launcher = Rc::new(RefCell::new(
+            CampusProjectLauncher::open(
+                application_data.path(),
+                campus_state::V11ConstructionCapability::request(true, Some("1")).unwrap(),
+                actor.clone(),
+            )
+            .unwrap(),
+        ));
+        launcher.borrow_mut().select_campus_candidate(
+            CampusScope::new("campus:putuo", "Putuo Campus", [121.4, 31.21]).unwrap(),
+        );
+        launcher.borrow_mut().confirm_selected_campus().unwrap();
+        launcher
+            .borrow_mut()
+            .create_project("Detailed Production Flow")
+            .unwrap();
+        launcher
+            .borrow_mut()
+            .apply_active_operation("complete representative Foundation", |project| {
+                project.confirm_boundary(
+                    campus_state::PinnedBoundaryEvidence {
+                        manifest: serde_json::from_value(serde_json::json!({
+                            "contract_version": boundary_fixture["contract_version"],
+                            "bundle": boundary_fixture["bundle"],
+                            "coverage_report": boundary_fixture["coverage_report"],
+                            "licences": boundary_fixture["candidates"].as_array().unwrap()
+                                .iter().map(|candidate| candidate["licence"].clone()).collect::<Vec<_>>(),
+                            "chunks": boundary_fixture["manifest"]["chunks"],
+                            "result_sha256": boundary_fixture["manifest"]["result_sha256"]
+                        }))
+                        .map_err(|error| error.to_string())?,
+                        candidates: serde_json::from_value(boundary_fixture["candidates"].clone())
+                            .map_err(|error| error.to_string())?,
+                        selected_candidate_id: "boundary-osm-relation-100".into(),
+                        confirmed_geometry: None,
+                        assessments: Default::default(),
+                    },
+                    actor.clone(),
+                )?;
+                project.pin_acquisition(
+                    campus_state::PinnedAcquisitionEvidence {
+                        manifest: serde_json::from_value(serde_json::json!({
+                            "contract_version": acquisition_fixture["contract_version"],
+                            "bundle": acquisition_fixture["bundle"],
+                            "coverage_report": acquisition_fixture["coverage_report"],
+                            "licences": acquisition_fixture["observations"].as_array().unwrap()
+                                .iter().map(|observation| observation["licence"].clone()).collect::<Vec<_>>(),
+                            "chunks": acquisition_fixture["manifest"]["chunks"],
+                            "result_sha256": acquisition_fixture["manifest"]["result_sha256"]
+                        }))
+                        .map_err(|error| error.to_string())?,
+                        observations: fixture.observations.clone(),
+                    },
+                    actor.clone(),
+                )?;
+                project.initialize_building_entity_review(
+                    fixture.name_evidence.clone(),
+                    actor.clone(),
+                )?;
+                for decision in [
+                    campus_state::BuildingEntityDecision::SetPrimary {
+                        entity_id: "building:campus-library".into(),
+                        observation_id: "obs-campus-library-overlap".into(),
+                    },
+                    campus_state::BuildingEntityDecision::SetBoundary {
+                        entity_id: "building:campus-library".into(),
+                        decision: campus_state::BuildingBoundaryDecision::RetainWhole,
+                    },
+                    campus_state::BuildingEntityDecision::SetBoundary {
+                        entity_id: "building:annex".into(),
+                        decision: campus_state::BuildingBoundaryDecision::Exclude,
+                    },
+                    campus_state::BuildingEntityDecision::AssignName {
+                        entity_id: "building:campus-library".into(),
+                        name_evidence_id: "name-library-exclusive".into(),
+                        mode: campus_state::BuildingNameAssignmentMode::Automatic,
+                    },
+                ] {
+                    project.record_building_entity_decision(decision, actor.clone())?;
+                }
+                project.complete_foundation_review(
+                    campus_state::FoundationCategory::Building,
+                    campus_state::FoundationReviewDisposition::ReviewedBuildingEntities {
+                        entity_ids: vec!["building:campus-library".into()],
+                        known_gaps: Vec::new(),
+                    },
+                    actor.clone(),
+                )?;
+                for (category, disposition) in [
+                    (
+                        campus_state::FoundationCategory::Circulation,
+                        campus_state::FoundationReviewDisposition::SelectedEvidence {
+                            evidence_ids: vec!["obs-path".into()],
+                        },
+                    ),
+                    (
+                        campus_state::FoundationCategory::Water,
+                        campus_state::FoundationReviewDisposition::SelectedEvidence {
+                            evidence_ids: vec!["obs-water-lines".into()],
+                        },
+                    ),
+                    (
+                        campus_state::FoundationCategory::Vegetation,
+                        campus_state::FoundationReviewDisposition::SelectedEvidence {
+                            evidence_ids: vec!["obs-tree-point".into(), "obs-tree-cluster".into()],
+                        },
+                    ),
+                    (
+                        campus_state::FoundationCategory::Sports,
+                        campus_state::FoundationReviewDisposition::KnownGap {
+                            reasons: vec!["representative fixture has no sports evidence".into()],
+                        },
+                    ),
+                ] {
+                    project.complete_foundation_review(category, disposition, actor.clone())?;
+                }
+                project.record_generation(64, 8, 64, 512, actor.clone())?;
+                project.record_export(
+                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".into(),
+                    4096,
+                    "representative.foundation-manifest.json".into(),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(launcher.borrow().detailed_workspace_available());
+
+        let state = Rc::new(RefCell::new(DesktopApplicationState::default()));
+        switch_schema2_launcher_mode(&state, &launcher, true).unwrap();
+        assert!(state.borrow().is_schema2_detailed_workspace());
+        let forbidden_legacy = output.path().join("legacy-sidecar.campus.json");
+        assert!(state.borrow_mut().open(&forbidden_legacy).is_err());
+        assert!(!forbidden_legacy.exists());
+
+        let (generated_path, _) = generate_detailed_model_to(&state, output.path()).unwrap();
+        state.borrow_mut().mutate_project(|project| {
+            let slot_id = project.detailed.selected_slot_id.clone().unwrap();
+            assert!(project.confirm_latest_refinement(&slot_id).is_some());
+        });
+        state.borrow_mut().begin_schema2_save();
+        assert!(matches!(
+            state.borrow().schema2_save_status(),
+            Some(ProjectSaveStatus::Saving)
+        ));
+        state.borrow_mut().save().unwrap();
+
+        let generated: arnis_core::GeneratedBuilding =
+            serde_json::from_slice(&std::fs::read(&generated_path).unwrap()).unwrap();
+        assert!(generated.report.non_air_blocks > 0);
+        let model = campus_export::model_from_runs(
+            generated.width,
+            generated.height,
+            generated.length,
+            generated.palette,
+            generated
+                .block_runs
+                .into_iter()
+                .map(|run| (run.palette_index, run.run_length)),
+        )
+        .unwrap();
+        let schematic = output.path().join("schema2-detailed.schem");
+        campus_export::write_schematic(&schematic, "schema2-detailed", &model).unwrap();
+        assert!(schematic.is_file());
+        assert!(std::fs::metadata(&schematic).unwrap().len() > 100);
+
+        let managed_path = state.borrow().project_path.clone().unwrap();
+        let managed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(managed_path).unwrap()).unwrap();
+        assert_eq!(managed["schemaVersion"], 2);
+        assert!(managed.get("mode").is_none());
+        assert!(!forbidden_legacy.exists());
+    }
+
+    #[test]
     fn latest_save_time_is_a_readable_utc_timestamp() {
         assert_eq!(format_latest_save_time(0), "1970-01-01 00:00 UTC");
         assert_eq!(
@@ -5162,6 +6027,11 @@ mod tests {
                 && source.contains("DETAILED")
                 && source.contains("AXIOM"),
             "Variant A must expose the horizontal five-stage product route"
+        );
+        assert!(
+            source.contains("enabled: root.can-enter-detailed;")
+                && source.contains("clicked => { root.switch-mode(true); }"),
+            "the retained Detailed route must unlock only from completed schema-2 project state"
         );
         assert!(
             source.contains("root.launcher-step == 0")

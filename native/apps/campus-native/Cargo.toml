@@ -5,7 +5,7 @@ edition.workspace = true
 build = "build.rs"
 
 [dependencies]
-arnis-core = { path = "../../../src-tauri/crates/arnis-core" }
+arnis-core = { path = "../../crates/arnis-core" }
 campus-export = { path = "../../crates/campus-export" }
 campus-services = { path = "../../crates/campus-services" }
 campus-state = { path = "../../crates/campus-state" }

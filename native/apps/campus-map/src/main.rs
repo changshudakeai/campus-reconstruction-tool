@@ -247,6 +247,14 @@ mod windows {
                             }
                         }
                     }
+                    Ok(ToolCommand::ShowTaskError { message }) => {
+                        if let Some(webview) = self.webview.as_ref() {
+                            if let Ok(message) = serde_json::to_string(&message) {
+                                let _ = webview
+                                    .evaluate_script(&format!("window.showTaskError({message})"));
+                            }
+                        }
+                    }
                     Ok(ToolCommand::Shutdown) => {
                         self.finish(event_loop, None);
                         return;
@@ -419,6 +427,7 @@ function render(){const comparing=!!activeRaster();document.getElementById('comp
 function batch(decision){if(!selected.size)return;pending=true;post({type:'mapFoundationBatchReviewRequested',category:desk.activeCategory,exactSubjectIds:[...selected],basisToken:desk.basisToken,expectedLedgerSequence:desk.ledgerSequence,decision});render()}
 document.getElementById('batch-accept').onclick=()=>batch('accept');document.getElementById('batch-reject').onclick=()=>batch('reject');document.getElementById('complete').onclick=()=>{pending=true;post({type:'mapFoundationCategoryCompletionRequested',category:desk.activeCategory});render()};
 window.applyFoundationReviewDesk=next=>{desk=next;if(selectedRasterId&&!desk.coarseRasterEvidence.some(r=>r.id===selectedRasterId))selectedRasterId=null;selected.clear();pending=false;render()};render();if(boundary.length>=3){map.setFitView(null,false,[80,360,90,330]);rasterMap.setFitView(null,false,[80,360,90,330])}
+window.showTaskError=message=>{pending=false;render();window.alert(message)};
 </script></body></html>"#;
         template
             .replace("__ENGLISH__", english)
@@ -538,6 +547,7 @@ const renderDesk=()=>{
   renderHandles();
 };
 window.applyBoundaryDesk=next=>{desk=next;candidates=desk&&Array.isArray(desk.candidates)?desk.candidates:[];activeIndex=Math.max(0,candidates.findIndex(item=>item.id===(desk&&desk.selectedCandidateId)));points=(desk&&Array.isArray(desk.workingPoints)?desk.workingPoints:[]).map(p=>[p.lng,p.lat]);pending=false;selectedVertex=null;selectedEdge=null;redraw();if(polygon)map.setFitView([polygon],false,[90,360,120,360]);renderDesk()};
+window.showTaskError=message=>{pending=false;renderDesk();window.alert(message)};
 points=(desk&&Array.isArray(desk.workingPoints)?desk.workingPoints:[]).map(p=>[p.lng,p.lat]);redraw();
 document.getElementById('boundary-adjust').onclick=()=>{if(!active()||!active().valid)return;adjustment=!adjustment;selectedVertex=null;selectedEdge=null;post({type:'mapBoundaryAdjustmentChanged',candidateId:active().id,enabled:adjustment});renderDesk()};
 document.getElementById('boundary-insert').onclick=()=>{if(selectedEdge===null)return;emit({type:'insert_vertex',edgeIndex:selectedEdge})};
@@ -848,6 +858,7 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             assert!(boundary.contains("event.ctrlKey&&event.key==='Enter'"));
             assert!(boundary.contains("restore_candidate_original"));
             assert!(boundary.contains("window.applyBoundaryDesk"));
+            assert!(boundary.contains("window.showTaskError=message=>{pending=false;renderDesk()"));
             assert!(boundary.contains("Waiting for project validation"));
             assert!(!boundary.contains("geometryReason"));
             assert!(!boundary.contains("history.push"));
@@ -886,6 +897,7 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             assert!(review_queue.contains("Request controlled coarse raster"));
             assert!(review_queue.contains("mapFoundationRefreshRequested"));
             assert!(review_queue.contains("window.applyFoundationReviewDesk"));
+            assert!(review_queue.contains("window.showTaskError=message=>{pending=false;render()"));
             assert!(review_queue.contains("no blank-canvas drawing or screenshot recovery"));
             assert!(!review_queue.contains("Visual gap recovery"));
             assert!(!review_queue.contains("MapFeatureDrawn"));

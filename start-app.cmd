@@ -2,6 +2,6 @@
 setlocal
 cd /d "%~dp0"
 
-echo Starting native Campus Reconstruction Tool...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-native.ps1"
+echo Starting Campus Reconstruction Tool development watcher...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\watch-native.ps1"
 if errorlevel 1 pause

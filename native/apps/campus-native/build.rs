@@ -3,7 +3,11 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         let mut resource = winresource::WindowsResource::new();
-        resource.set_icon("../../../src-tauri/icons/icon.ico");
+        resource.set_icon("../../assets/icon.ico");
+        resource.set("FileDescription", "Campus Reconstruction Tool");
+        resource.set("ProductName", "Campus Reconstruction Tool");
+        resource.set("FileVersion", env!("CARGO_PKG_VERSION"));
+        resource.set("ProductVersion", env!("CARGO_PKG_VERSION"));
         resource.set_manifest(
             r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">

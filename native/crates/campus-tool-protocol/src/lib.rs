@@ -345,6 +345,9 @@ pub enum ToolCommand {
     UpdateFoundationReviewDesk {
         desk: MapFoundationReviewDesk,
     },
+    ShowTaskError {
+        message: String,
+    },
     OpenPreview {
         model_path: String,
         title: String,
@@ -540,6 +543,17 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             session_token: "secret".into(),
             tool: ToolKind::Map,
+        };
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &command).await.unwrap();
+        let restored: ToolCommand = read_message(&mut bytes.as_slice()).await.unwrap();
+        assert_eq!(restored, command);
+    }
+
+    #[tokio::test]
+    async fn task_error_round_trip() {
+        let command = ToolCommand::ShowTaskError {
+            message: "Select a boundary handle before moving it".into(),
         };
         let mut bytes = Vec::new();
         write_message(&mut bytes, &command).await.unwrap();

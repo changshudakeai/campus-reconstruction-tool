@@ -38,6 +38,7 @@ pub use reconstruction_workflow::{
     ReconstructionWorkflowError, ReconstructionWorkflowIntent,
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -473,6 +474,8 @@ pub enum CandidateConfidence {
     Medium,
     #[serde(rename = "low", alias = "较低", alias = "低")]
     Low,
+    #[serde(rename = "unassessed")]
+    Unassessed,
 }
 
 impl CandidateConfidence {
@@ -481,6 +484,7 @@ impl CandidateConfidence {
             Self::High => "高",
             Self::Medium => "中",
             Self::Low => "低",
+            Self::Unassessed => "未评估",
         }
     }
 }
@@ -619,6 +623,14 @@ pub struct BuildingSuppression {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct BuildingFootprintComponent {
+    pub exterior: Vec<GeoPoint>,
+    #[serde(default)]
+    pub interior_rings: Vec<Vec<GeoPoint>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct BuildingSlot {
     pub id: String,
     pub name: String,
@@ -661,6 +673,14 @@ pub struct BuildingRefinement {
     pub wall_block: Option<String>,
     pub window_density: u8,
     pub wall_depth: u8,
+    #[serde(default)]
+    pub height_m: Option<f64>,
+    #[serde(default)]
+    pub floors: Option<u32>,
+    #[serde(default)]
+    pub roof_shape: Option<String>,
+    #[serde(default)]
+    pub measurements_recorded: bool,
     pub created_at_unix_ms: u64,
 }
 
@@ -1138,6 +1158,17 @@ pub struct LocalEvidenceAsset {
     pub relative_path: String,
     pub source_name: String,
     pub added_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedDetailedGeneratedArtifact {
+    pub slot_id: String,
+    pub refinement_id: String,
+    pub file_name: String,
+    pub model: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1150,6 +1181,8 @@ pub struct DetailedBuildingState {
     pub wall_depth: u8,
     #[serde(default, skip_serializing)]
     pub generated_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_artifact: Option<RetainedDetailedGeneratedArtifact>,
     #[serde(default)]
     pub refinements: Vec<BuildingRefinement>,
     #[serde(default)]
@@ -1179,6 +1212,7 @@ impl Default for DetailedBuildingState {
             window_density: 50,
             wall_depth: 50,
             generated_path: None,
+            generated_artifact: None,
             refinements: Vec::new(),
             semantic_features: Vec::new(),
             external_models: Vec::new(),
@@ -1223,6 +1257,8 @@ pub struct CampusProject {
     pub features: Vec<MapFeature>,
     #[serde(default)]
     pub building_slots: Vec<BuildingSlot>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub detailed_building_components: BTreeMap<String, Vec<BuildingFootprintComponent>>,
     #[serde(default)]
     pub building_directory: Vec<BuildingDirectoryRecord>,
     #[serde(default)]
@@ -1262,6 +1298,7 @@ impl CampusProject {
             foundation_review_ledger: Vec::new(),
             features: Vec::new(),
             building_slots: Vec::new(),
+            detailed_building_components: BTreeMap::new(),
             building_directory: Vec::new(),
             building_suppressions: Vec::new(),
             foundation_style_preset: FoundationStylePreset::ArnisClassic,
@@ -1551,6 +1588,7 @@ impl CampusProject {
             relative_path,
             source_name: source_name.into(),
             added_at_unix_ms: now_unix_ms(),
+            content_base64: String::new(),
         });
         Ok(id)
     }
@@ -1610,6 +1648,22 @@ impl CampusProject {
             wall_block: self.detailed.wall_block.clone(),
             window_density: self.detailed.window_density,
             wall_depth: self.detailed.wall_depth,
+            height_m: self
+                .building_slots
+                .iter()
+                .find(|slot| slot.id == slot_id)
+                .and_then(|slot| slot.height_m),
+            floors: self
+                .building_slots
+                .iter()
+                .find(|slot| slot.id == slot_id)
+                .and_then(|slot| slot.floors),
+            roof_shape: self
+                .building_slots
+                .iter()
+                .find(|slot| slot.id == slot_id)
+                .and_then(|slot| slot.roof_shape.clone()),
+            measurements_recorded: true,
             created_at_unix_ms,
         });
         self.detailed.generated_path = Some(generated_path);
@@ -2261,6 +2315,14 @@ fn default_block(kind: FeatureKind) -> &'static str {
     FoundationStylePreset::ArnisClassic.block(kind)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ManagedSchema2DetailedWorkspace {
+    library_root: PathBuf,
+    campus_target_id: String,
+    project_id: ProjectId,
+    actor: InstallationId,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DesktopApplicationState {
     pub project: Option<CampusProject>,
@@ -2277,14 +2339,22 @@ pub struct DesktopApplicationState {
     pub selected_source_conflict: usize,
     pub selected_candidate_id: Option<String>,
     pub selected_suppression: usize,
+    schema2_save_status: Option<ProjectSaveStatus>,
+    schema2_detailed_workspace: Option<ManagedSchema2DetailedWorkspace>,
     undo_stack: Vec<CampusProject>,
     redo_stack: Vec<CampusProject>,
 }
 
 impl DesktopApplicationState {
     pub fn new_project(&mut self, name: impl Into<String>, campus: impl Into<String>) {
+        if self.schema2_detailed_workspace.is_some() {
+            self.last_error = Some("Return to Foundation before creating another project".into());
+            return;
+        }
         self.project = Some(CampusProject::new(name, campus));
         self.project_path = None;
+        self.schema2_save_status = None;
+        self.schema2_detailed_workspace = None;
         self.dirty = true;
         self.last_error = None;
         self.candidate_filter = CandidateConfidenceFilter::All;
@@ -2327,10 +2397,16 @@ impl DesktopApplicationState {
     }
 
     pub fn can_undo(&self) -> bool {
+        if let Some(binding) = &self.schema2_detailed_workspace {
+            return schema2_detailed_history_available(binding, true);
+        }
         !self.undo_stack.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
+        if let Some(binding) = &self.schema2_detailed_workspace {
+            return schema2_detailed_history_available(binding, false);
+        }
         !self.redo_stack.is_empty()
     }
 
@@ -2357,6 +2433,9 @@ impl DesktopApplicationState {
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        if self.schema2_detailed_workspace.is_some() {
+            return self.save_schema2_detailed_workspace();
+        }
         let path = self
             .project_path
             .clone()
@@ -2365,6 +2444,14 @@ impl DesktopApplicationState {
     }
 
     pub fn save_to(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        if self.schema2_detailed_workspace.is_some() {
+            if self.project_path.as_deref() != Some(path.as_ref()) {
+                return Err(
+                    "Use Schema-2 Portable Project export for a managed Detailed workspace".into(),
+                );
+            }
+            return self.save_schema2_detailed_workspace();
+        }
         let project = self.project.as_ref().ok_or("No project is open")?;
         let path = path.as_ref();
         let parent = path.parent().ok_or("Project path has no parent")?;
@@ -2384,6 +2471,9 @@ impl DesktopApplicationState {
     }
 
     pub fn open(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        if self.schema2_detailed_workspace.is_some() {
+            return Err("Return to Foundation before opening or importing another project".into());
+        }
         let path = path.as_ref();
         let primary = fs::read(path)
             .map_err(|error| error.to_string())
@@ -2410,6 +2500,8 @@ impl DesktopApplicationState {
         };
         self.project = Some(project);
         self.project_path = Some(path.to_path_buf());
+        self.schema2_save_status = None;
+        self.schema2_detailed_workspace = None;
         self.dirty = recovered;
         self.last_error = recovered.then(|| "已从项目恢复副本打开；请保存以修复主文件".into());
         self.candidate_filter = CandidateConfidenceFilter::All;
@@ -2424,6 +2516,277 @@ impl DesktopApplicationState {
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
+    }
+
+    pub fn open_schema2_detailed_workspace(
+        &mut self,
+        library_root: impl AsRef<Path>,
+        campus_target_id: impl Into<String>,
+        project_id: ProjectId,
+        actor: InstallationId,
+    ) -> Result<(), String> {
+        let binding = ManagedSchema2DetailedWorkspace {
+            library_root: library_root.as_ref().to_path_buf(),
+            campus_target_id: campus_target_id.into(),
+            project_id,
+            actor,
+        };
+        let library =
+            CampusProjectLibrary::open(&binding.library_root, binding.campus_target_id.clone())?;
+        let schema2 = library.open_project(&binding.project_id)?;
+        self.schema2_save_status = Some(ProjectSaveStatus::Saved {
+            completed_at_unix_ms: schema2.last_confirmed_save_unix_ms().unwrap_or_default(),
+        });
+        let mut project = schema2.detailed_workspace_project()?;
+        let project_path = binding
+            .library_root
+            .join("projects")
+            .join(binding.project_id.as_str())
+            .join("project.campus.json");
+        materialize_embedded_detailed_evidence(&project, &project_path)?;
+        materialize_retained_detailed_artifact(&mut project, &project_path)?;
+        self.project_path = Some(project_path);
+        self.project = Some(project);
+        self.schema2_detailed_workspace = Some(binding);
+        self.dirty = false;
+        self.last_error = None;
+        self.candidate_filter = CandidateConfidenceFilter::All;
+        self.candidate_page = 0;
+        self.tool_status = None;
+        self.selected_preview_block = None;
+        self.active_preview_path = None;
+        self.selected_external_model = 0;
+        self.selected_source_conflict = 0;
+        self.selected_candidate_id = None;
+        self.selected_suppression = 0;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(())
+    }
+
+    pub fn is_schema2_detailed_workspace(&self) -> bool {
+        self.schema2_detailed_workspace.is_some()
+    }
+
+    pub fn schema2_detailed_artifact_directory(&self) -> Option<PathBuf> {
+        self.schema2_detailed_workspace.as_ref()?;
+        self.project_path
+            .as_ref()?
+            .parent()
+            .map(|parent| parent.join("detailed-artifacts"))
+    }
+
+    pub fn schema2_save_status(&self) -> Option<&ProjectSaveStatus> {
+        self.schema2_save_status.as_ref()
+    }
+
+    pub fn begin_schema2_save(&mut self) {
+        if self.schema2_detailed_workspace.is_some() {
+            self.schema2_save_status = Some(ProjectSaveStatus::Saving);
+        }
+    }
+
+    pub fn close_schema2_detailed_workspace(&mut self) {
+        self.schema2_detailed_workspace = None;
+        self.schema2_save_status = None;
+        self.project = None;
+        self.project_path = None;
+        self.dirty = false;
+        self.selected_preview_block = None;
+        self.active_preview_path = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
+    pub fn save_schema2_detailed_workspace(&mut self) -> Result<(), String> {
+        self.begin_schema2_save();
+        let binding = self
+            .schema2_detailed_workspace
+            .clone()
+            .ok_or("No managed Schema-2 Detailed workspace is open")?;
+        let request_unchanged_save = !self.dirty;
+        let project = self.project.as_ref().ok_or("No project is open")?;
+        let detailed = project.detailed.clone();
+        let measurements = project
+            .detailed
+            .refinements
+            .iter()
+            .filter(|refinement| {
+                refinement.status == RefinementStatus::Confirmed && refinement.measurements_recorded
+            })
+            .map(|refinement| {
+                (
+                    refinement.slot_id.clone(),
+                    DetailedBuildingMeasurements {
+                        height_m: refinement.height_m,
+                        floors: refinement.floors,
+                        roof_shape: refinement.roof_shape.clone(),
+                    },
+                )
+            })
+            .collect();
+        let mut library =
+            CampusProjectLibrary::open(&binding.library_root, binding.campus_target_id.clone())?;
+        let mut session = Schema2ProjectSession::default();
+        session.open_project(&library, &binding.project_id)?;
+        let save_result = session.apply_semantic_operation(
+            &mut library,
+            RETAINED_DETAILED_HISTORY_DESCRIPTION,
+            |schema2| {
+                schema2.replace_retained_detailed_workspace(
+                    detailed,
+                    measurements,
+                    binding.actor.clone(),
+                )
+            },
+        );
+        if let Err(error) = save_result {
+            self.schema2_save_status = Some(ProjectSaveStatus::Failed {
+                reason: error.clone(),
+            });
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        if request_unchanged_save {
+            if let Err(error) = session.request_save(&mut library) {
+                self.schema2_save_status = Some(session.save_status().clone());
+                self.last_error = Some(error.clone());
+                return Err(error);
+            }
+        }
+        self.schema2_save_status = Some(session.save_status().clone());
+        self.dirty = false;
+        self.last_error = None;
+        Ok(())
+    }
+
+    pub fn undo_schema2_detailed_workspace(&mut self) -> Result<(), String> {
+        self.apply_schema2_detailed_history(true)
+    }
+
+    pub fn redo_schema2_detailed_workspace(&mut self) -> Result<(), String> {
+        self.apply_schema2_detailed_history(false)
+    }
+
+    fn apply_schema2_detailed_history(&mut self, undo: bool) -> Result<(), String> {
+        let binding = self
+            .schema2_detailed_workspace
+            .clone()
+            .ok_or("No managed Schema-2 Detailed workspace is open")?;
+        let mut library =
+            CampusProjectLibrary::open(&binding.library_root, binding.campus_target_id.clone())?;
+        let mut session = Schema2ProjectSession::default();
+        session.open_project(&library, &binding.project_id)?;
+        if undo {
+            session.undo_retained_detailed(&mut library)?;
+        } else {
+            session.redo_retained_detailed(&mut library)?;
+        }
+        self.schema2_save_status = Some(session.save_status().clone());
+        let mut project = session
+            .active()
+            .ok_or("No schema-2 project is open")?
+            .detailed_workspace_project()?;
+        let project_path = self
+            .project_path
+            .as_ref()
+            .ok_or("Managed Schema-2 Detailed workspace has no project path")?;
+        materialize_embedded_detailed_evidence(&project, project_path)?;
+        materialize_retained_detailed_artifact(&mut project, project_path)?;
+        self.project = Some(project);
+        self.dirty = false;
+        self.last_error = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(())
+    }
+}
+
+fn materialize_embedded_detailed_evidence(
+    project: &CampusProject,
+    project_path: &Path,
+) -> Result<(), String> {
+    let directory = project_path
+        .parent()
+        .ok_or("Managed project path has no parent")?;
+    for asset in &project.detailed.evidence_assets {
+        if asset.content_base64.is_empty() {
+            continue;
+        }
+        let relative = Path::new(&asset.relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err("Retained Detailed evidence has an unsafe relative path".into());
+        }
+        let bytes = STANDARD
+            .decode(&asset.content_base64)
+            .map_err(|error| format!("Retained Detailed evidence is corrupt: {error}"))?;
+        let path = directory.join(relative);
+        let parent = path
+            .parent()
+            .ok_or("Retained Detailed evidence has no destination directory")?;
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        atomicwrites::AtomicFile::new(&path, atomicwrites::AllowOverwrite)
+            .write(|file| file.write_all(&bytes))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn materialize_retained_detailed_artifact(
+    project: &mut CampusProject,
+    project_path: &Path,
+) -> Result<(), String> {
+    let Some(artifact) = project.detailed.generated_artifact.as_ref() else {
+        project.detailed.generated_path = None;
+        return Ok(());
+    };
+    let file_name = Path::new(&artifact.file_name);
+    if file_name.components().count() != 1 || file_name.file_name().is_none() {
+        return Err("Retained Detailed artifact has an unsafe file name".into());
+    }
+    let directory = project_path
+        .parent()
+        .ok_or("Managed project path has no parent")?
+        .join("detailed-artifacts");
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = directory.join(file_name);
+    let bytes = serde_json::to_vec_pretty(&artifact.model).map_err(|error| error.to_string())?;
+    atomicwrites::AtomicFile::new(&path, atomicwrites::AllowOverwrite)
+        .write(|file| file.write_all(&bytes))
+        .map_err(|error| error.to_string())?;
+    project.detailed.generated_path = Some(path.clone());
+    if let Some(refinement) = project
+        .detailed
+        .refinements
+        .iter_mut()
+        .find(|refinement| refinement.id == artifact.refinement_id)
+    {
+        refinement.generated_path = path;
+    }
+    Ok(())
+}
+
+fn schema2_detailed_history_available(
+    binding: &ManagedSchema2DetailedWorkspace,
+    undo: bool,
+) -> bool {
+    let Ok(library) =
+        CampusProjectLibrary::open(&binding.library_root, binding.campus_target_id.clone())
+    else {
+        return false;
+    };
+    let mut session = Schema2ProjectSession::default();
+    if session.open_project(&library, &binding.project_id).is_err() {
+        return false;
+    }
+    if undo {
+        session.can_undo_retained_detailed()
+    } else {
+        session.can_redo_retained_detailed()
     }
 }
 
@@ -3008,6 +3371,8 @@ mod tests {
             refined: false,
         });
         project.record_refinement_draft("library", 1, PathBuf::from("library-v1.json"));
+        project.building_slots[0].height_m = Some(30.0);
+        project.building_slots[0].floors = Some(8);
         project.record_refinement_draft("library", 2, PathBuf::from("library-v2.json"));
         assert_eq!(project.next_refinement_version("library"), 3);
         assert_eq!(
@@ -3015,6 +3380,10 @@ mod tests {
             RefinementStatus::Archived
         );
         assert!(!project.building_slots[0].refined);
+        assert_eq!(project.detailed.refinements[0].height_m, Some(24.0));
+        assert_eq!(project.detailed.refinements[1].height_m, Some(30.0));
+        assert_eq!(project.detailed.refinements[1].floors, Some(8));
+        assert!(project.detailed.refinements[1].measurements_recorded);
         assert_eq!(project.confirm_latest_refinement("library"), Some(2));
         assert_eq!(
             project.latest_refinement("library").unwrap().status,

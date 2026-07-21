@@ -29,12 +29,12 @@ fn preview_process_completes_authenticated_pipe_handshake() {
             .first_pipe_instance(true)
             .create(&pipe)
             .unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_campus-preview"))
-            .arg(&pipe)
-            .arg(&token)
-            .env("CAMPUS_PREVIEW_HEADLESS", "1")
-            .spawn()
-            .unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_campus-preview"));
+        command.arg(&pipe).arg(&token);
+        if std::env::var_os("CAMPUS_TEST_GUI").is_none() {
+            command.env("CAMPUS_PREVIEW_HEADLESS", "1");
+        }
+        let child = command.spawn().unwrap();
         server.connect().await.unwrap();
         let hello: ToolCommand = read_message(&mut server).await.unwrap();
         assert_eq!(

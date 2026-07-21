@@ -1,24 +1,58 @@
+mod foundation_generators;
 mod schema2_foundation;
 
-use campus_state::{CampusProject, FeatureKind, GeoPoint};
+pub use schema2_foundation::*;
+
+use campus_state::{CampusProject, FeatureKind, FoundationStylePack, GeoPoint, MapFeature};
 use fastnbt::{ByteArray, IntArray};
 use flate2::{write::GzEncoder, Compression};
-pub use schema2_foundation::*;
+use foundation_generators::{
+    FoundationFeatureGeneratorRegistry, FoundationFeatureRender, FoundationRenderTarget,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_SPAN: usize = 2048;
+static EXPORT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelModel {
     pub width: usize,
     pub height: usize,
     pub length: usize,
     pub palette: Vec<String>,
     pub blocks: Vec<u16>,
+}
+
+/// The reviewed Foundation input required by the compiler. It deliberately
+/// excludes project persistence, provider caches, candidate queues, and UI
+/// state so the compiler can be exercised from a stable seam.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewedCampusModel {
+    pub boundary: Vec<GeoPoint>,
+    pub features: Vec<MapFeature>,
+    pub orientation_degrees: f64,
+    pub blocks_per_meter: f64,
+    pub style_pack: FoundationStylePack,
+    pub road_width_blocks: i32,
+}
+
+impl From<&CampusProject> for ReviewedCampusModel {
+    fn from(project: &CampusProject) -> Self {
+        Self {
+            boundary: project.boundary.clone(),
+            features: project.features.clone(),
+            orientation_degrees: project.orientation_degrees,
+            blocks_per_meter: project.blocks_per_meter,
+            style_pack: project.foundation_style_pack.clone(),
+            road_width_blocks: project.foundation_road_width_blocks(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -56,21 +90,27 @@ struct Blocks {
 }
 
 pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
-    let mut all_points = project.boundary.clone();
-    for feature in &project.features {
+    foundation_model_from_reviewed(&ReviewedCampusModel::from(project))
+}
+
+pub fn foundation_model_from_reviewed(
+    reviewed: &ReviewedCampusModel,
+) -> Result<VoxelModel, String> {
+    let mut all_points = reviewed.boundary.clone();
+    for feature in &reviewed.features {
         all_points.extend_from_slice(&feature.points);
     }
     if all_points.len() < 3 {
         return Err("校区边界或已接受地物不足，无法导出".into());
     }
     let origin = all_points[0];
-    let angle = -project.orientation_degrees.to_radians();
+    let angle = -reviewed.orientation_degrees.to_radians();
     let (sin, cos) = angle.sin_cos();
     let lat_scale = 111_320.0;
     let lng_scale = lat_scale * origin.lat.to_radians().cos();
     let convert = |point: GeoPoint| {
-        let east = (point.lng - origin.lng) * lng_scale * project.blocks_per_meter;
-        let north = (point.lat - origin.lat) * lat_scale * project.blocks_per_meter;
+        let east = (point.lng - origin.lng) * lng_scale * reviewed.blocks_per_meter;
+        let north = (point.lat - origin.lat) * lat_scale * reviewed.blocks_per_meter;
         (east * cos - north * sin, east * sin + north * cos)
     };
     let local = all_points.iter().copied().map(convert).collect::<Vec<_>>();
@@ -105,15 +145,15 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             (z - min_z).round() as i32 + 4,
         )
     };
-    let campus_block = project
-        .foundation_style_pack
+    let campus_block = reviewed
+        .style_pack
         .features
         .get("campus")
         .and_then(|style| style.blocks.first())
         .map(|block| normalize_block(block))
         .unwrap_or_else(|| "minecraft:grass_block".into());
     let mut palette = vec!["minecraft:air".into(), campus_block];
-    for style in project.foundation_style_pack.features.values() {
+    for style in reviewed.style_pack.features.values() {
         for block in &style.blocks {
             let block = normalize_block(block);
             if !palette.contains(&block) {
@@ -121,19 +161,19 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             }
         }
     }
-    for feature in &project.features {
+    for feature in &reviewed.features {
         let block = normalize_block(&feature.block);
         if !palette.contains(&block) {
             palette.push(block);
         }
     }
-    let generated_trees = project
-        .foundation_style_pack
+    let generated_trees = reviewed
+        .style_pack
         .style(FeatureKind::Vegetation)
         .is_some_and(|style| style.generator == "arnis:vegetation/v1");
     let height = if generated_trees { 8 } else { 2 };
     let mut blocks = vec![0u16; width * height * length];
-    let boundary = project
+    let boundary = reviewed
         .boundary
         .iter()
         .copied()
@@ -142,7 +182,7 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
     if boundary.len() >= 3 {
         fill_polygon(&mut blocks, width, length, 0, &boundary, 1);
     }
-    for feature in &project.features {
+    for feature in &reviewed.features {
         let points = feature
             .points
             .iter()
@@ -155,69 +195,23 @@ pub fn foundation_model(project: &CampusProject) -> Result<VoxelModel, String> {
             .position(|entry| *entry == block)
             .ok_or_else(|| format!("missing Foundation palette entry for {}", feature.name))?
             as u16;
-        let generator_style = project.foundation_style_pack.style(feature.kind);
-        if feature.kind == FeatureKind::Road {
-            let road_width = project.foundation_road_width_blocks().max(1);
-            if generator_style.is_some_and(|style| style.generator == "arnis:road/v1") {
-                let edge_index =
-                    secondary_palette_index(generator_style, &palette, palette_index, 1);
-                draw_polyline(
-                    &mut blocks,
-                    width,
-                    length,
-                    1,
-                    &points,
-                    ((road_width + 2) / 2).max(1),
-                    edge_index,
-                );
-            }
-            draw_polyline(
-                &mut blocks,
+        let generator_style = reviewed.style_pack.style(feature.kind);
+        FoundationFeatureGeneratorRegistry::render(
+            &mut FoundationRenderTarget {
+                blocks: &mut blocks,
                 width,
+                height,
                 length,
-                1,
-                &points,
-                (road_width / 2).max(1),
+                palette: &palette,
+            },
+            FoundationFeatureRender {
+                feature,
+                points: &points,
+                style: generator_style,
                 palette_index,
-            );
-        } else if points.len() >= 3 {
-            fill_polygon(&mut blocks, width, length, 1, &points, palette_index);
-            if matches!(feature.kind, FeatureKind::Water | FeatureKind::Sports)
-                && generator_style.is_some_and(|style| {
-                    matches!(
-                        style.generator.as_str(),
-                        "arnis:water/v1" | "arnis:sports/v1"
-                    )
-                })
-            {
-                let border_index =
-                    secondary_palette_index(generator_style, &palette, palette_index, 1);
-                draw_polygon_outline(&mut blocks, width, length, 1, &points, border_index);
-            }
-            if feature.kind == FeatureKind::Vegetation
-                && generator_style.is_some_and(|style| style.generator == "arnis:vegetation/v1")
-            {
-                let log_index =
-                    secondary_palette_index(generator_style, &palette, palette_index, 1);
-                let leaves_index =
-                    secondary_palette_index(generator_style, &palette, palette_index, 2);
-                let density = generator_style
-                    .and_then(|style| style.density)
-                    .unwrap_or(0.035);
-                let seed = generator_style.and_then(|style| style.seed).unwrap_or(1);
-                draw_vegetation_trees(
-                    &mut blocks,
-                    width,
-                    height,
-                    length,
-                    &points,
-                    log_index,
-                    leaves_index,
-                    density,
-                    seed,
-                );
-            }
-        }
+                road_width_blocks: reviewed.road_width_blocks,
+            },
+        )?;
     }
     Ok(VoxelModel {
         width,
@@ -298,7 +292,26 @@ pub fn write_preview_model(path: &Path, model: &VoxelModel) -> Result<(), String
     .map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFaultPoint {
+    BeforeEncode,
+    AfterEncode,
+    AfterStageWrite,
+    BeforePublish,
+    AfterPublish,
+}
+
 pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), String> {
+    write_schematic_with_fault(path, name, model, None)
+}
+
+pub fn write_schematic_with_fault(
+    path: &Path,
+    name: &str,
+    model: &VoxelModel,
+    fault: Option<ExportFaultPoint>,
+) -> Result<(), String> {
+    fail_export_at(fault, ExportFaultPoint::BeforeEncode)?;
     if model.blocks.len() != model.width * model.height * model.length {
         return Err("方块数组尺寸与模型尺寸不一致".into());
     }
@@ -342,11 +355,85 @@ pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<()
         },
     };
     let nbt = fastnbt::to_bytes(&root).map_err(|error| error.to_string())?;
-    let file = File::create(path).map_err(|error| error.to_string())?;
-    let mut gzip = GzEncoder::new(file, Compression::best());
+    fail_export_at(fault, ExportFaultPoint::AfterEncode)?;
+    let mut gzip = GzEncoder::new(Vec::new(), Compression::best());
     gzip.write_all(&nbt).map_err(|error| error.to_string())?;
-    gzip.finish().map_err(|error| error.to_string())?;
-    Ok(())
+    let bytes = gzip.finish().map_err(|error| error.to_string())?;
+    publish_export_atomically(path, &bytes, fault)
+}
+
+fn fail_export_at(
+    injected: Option<ExportFaultPoint>,
+    point: ExportFaultPoint,
+) -> Result<(), String> {
+    if injected == Some(point) {
+        Err(format!("injected export failure at {point:?}"))
+    } else {
+        Ok(())
+    }
+}
+
+fn publish_export_atomically(
+    path: &Path,
+    bytes: &[u8],
+    fault: Option<ExportFaultPoint>,
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or("Schematic destination has no parent directory")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("Schematic destination has no file name")?;
+    let sequence = EXPORT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let stage = parent.join(format!(
+        ".{file_name}.stage-{}-{sequence}",
+        std::process::id()
+    ));
+    let backup = parent.join(format!(
+        ".{file_name}.backup-{}-{sequence}",
+        std::process::id()
+    ));
+    let mut moved_previous = false;
+    let mut published = false;
+    let result = (|| {
+        let mut file = File::create(&stage).map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        fail_export_at(fault, ExportFaultPoint::AfterStageWrite)?;
+        fail_export_at(fault, ExportFaultPoint::BeforePublish)?;
+        if path.exists() {
+            fs::rename(path, &backup).map_err(|error| error.to_string())?;
+            moved_previous = true;
+        }
+        if let Err(error) = fs::rename(&stage, path) {
+            if moved_previous {
+                let _ = fs::rename(&backup, path);
+                moved_previous = false;
+            }
+            return Err(error.to_string());
+        }
+        published = true;
+        fail_export_at(fault, ExportFaultPoint::AfterPublish)?;
+        if moved_previous {
+            fs::remove_file(&backup).map_err(|error| error.to_string())?;
+            moved_previous = false;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&stage);
+        if published {
+            let _ = fs::remove_file(path);
+        }
+        if moved_previous {
+            let _ = fs::rename(&backup, path);
+        } else {
+            let _ = fs::remove_file(&backup);
+        }
+    }
+    result
 }
 
 pub fn model_from_runs(
@@ -567,6 +654,7 @@ mod tests {
 
     #[test]
     fn exports_nonempty_sponge_v3() {
+        let output = tempfile::tempdir().unwrap();
         let mut project = CampusProject::new("test", "campus");
         project.boundary = vec![
             GeoPoint {
@@ -605,13 +693,13 @@ mod tests {
             .palette
             .iter()
             .any(|block| block == "minecraft:stone_bricks"));
-        let preview_path = std::env::temp_dir().join("campus-export-test.preview.json");
+        let preview_path = output.path().join("foundation.preview.json");
         write_preview_model(&preview_path, &model).unwrap();
         let preview: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&preview_path).unwrap()).unwrap();
         assert_eq!(preview["width"], model.width);
         assert!(preview["blockRuns"].as_array().unwrap().len() > 1);
-        let path = std::env::temp_dir().join("campus-export-test.schem");
+        let path = output.path().join("foundation.schem");
         write_schematic(&path, "test", &model).unwrap();
         assert!(std::fs::metadata(&path).unwrap().len() > 64);
         let mut decoded = Vec::new();
@@ -624,6 +712,45 @@ mod tests {
         assert!(root.contains_key("Schematic"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(preview_path);
+    }
+
+    #[test]
+    fn reviewed_campus_seam_preserves_legacy_foundation_output() {
+        let mut project = CampusProject::new("test", "campus");
+        project.boundary = vec![
+            GeoPoint {
+                lng: 121.0,
+                lat: 31.0,
+            },
+            GeoPoint {
+                lng: 121.0002,
+                lat: 31.0,
+            },
+            GeoPoint {
+                lng: 121.0002,
+                lat: 30.9998,
+            },
+            GeoPoint {
+                lng: 121.0,
+                lat: 30.9998,
+            },
+        ];
+        project.features.push(MapFeature {
+            id: "road".into(),
+            name: "path".into(),
+            kind: FeatureKind::Road,
+            points: vec![project.boundary[0], project.boundary[2]],
+            block: project
+                .foundation_style_pack
+                .primary_block(FeatureKind::Road),
+            source_id: None,
+        });
+
+        let legacy = foundation_model(&project).unwrap();
+        let reviewed = ReviewedCampusModel::from(&project);
+        let compiled = foundation_model_from_reviewed(&reviewed).unwrap();
+
+        assert_eq!(compiled, legacy);
     }
 
     #[test]
@@ -671,5 +798,38 @@ mod tests {
             .unwrap() as u16;
         assert!(model.blocks.contains(&log));
         assert!(model.blocks.contains(&leaves));
+    }
+
+    #[test]
+    fn every_export_fault_preserves_the_previous_destination_without_stage_files() {
+        let output = tempfile::tempdir().unwrap();
+        let destination = output.path().join("campus.schem");
+        let previous = b"previous-confirmed-export";
+        let model = VoxelModel {
+            width: 1,
+            height: 1,
+            length: 1,
+            palette: vec!["minecraft:stone".into()],
+            blocks: vec![0],
+        };
+
+        for point in [
+            ExportFaultPoint::BeforeEncode,
+            ExportFaultPoint::AfterEncode,
+            ExportFaultPoint::AfterStageWrite,
+            ExportFaultPoint::BeforePublish,
+            ExportFaultPoint::AfterPublish,
+        ] {
+            std::fs::write(&destination, previous).unwrap();
+            let error = write_schematic_with_fault(&destination, "campus", &model, Some(point))
+                .unwrap_err();
+            assert!(error.contains(&format!("{point:?}")));
+            assert_eq!(std::fs::read(&destination).unwrap(), previous);
+            assert_eq!(
+                std::fs::read_dir(output.path()).unwrap().count(),
+                1,
+                "{point:?} left a stage or backup file"
+            );
+        }
     }
 }

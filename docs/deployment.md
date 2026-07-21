@@ -1,59 +1,75 @@
-# Campus Reconstruction Tool V1 deployment
+# Campus Reconstruction Tool V1.1.0 deployment
 
-## Windows client
+## Supported client
 
-Install `artifacts/installer/Campus-Reconstruction-Tool-V1-Setup.exe` on
-Windows 10/11 x64. The per-user NSIS package installs:
+V1.1.0 is an online-required controlled release for Windows 11 x64. Install the
+candidate executable recorded in
+artifacts/candidates/<candidate-id>/distribution.json. The per-user NSIS package
+installs:
 
-- `campus-native.exe` — Slint/Rust main application and sole AppState owner;
-- `campus-map.exe` — isolated Gaode WebView2 helper;
-- `campus-preview.exe` — isolated native wgpu preview helper;
-- `THIRD_PARTY_NOTICES.md` and the uninstaller.
+- campus-native.exe, the Slint/Rust main process and schema-2 state owner;
+- campus-map.exe, the isolated Gaode WebView2 helper;
+- campus-preview.exe, the isolated native wgpu preview helper;
+- third-party notices, unsigned/SmartScreen guidance, the exact candidate
+  manifest, and the uninstaller.
 
-No Node.js, Rust toolchain, Python runtime, source tree, model weights, or
-dataset is installed. Microsoft Edge WebView2 Runtime is required only when
-opening the Gaode helper and is normally present on supported Windows systems.
-Existing projects, generation, preview, editing, and export remain available
-offline.
+No credentials, caches, fixtures, test projects, source tree, Node.js, Rust or
+Python toolchain, model weights, or datasets are installed. Microsoft Edge
+WebView2 Runtime is required by the Gaode helper.
 
-New Foundation acquisition and refresh use only the authenticated Controlled
-Foundation Acquisition Service configured by `CAMPUS_ACQUISITION_SERVICE_URL`.
-The desktop negotiates the `/v1` contract and an immutable Dataset Bundle;
-public Overpass, provider-specific bridges, moving release aliases, and fixture
-transports are not present in production acquisition. If the service is
-unavailable or incompatible, new acquisition pauses while persisted evidence,
-review, generation, and export remain local and available.
+Campus Target search plus new and refreshed Foundation acquisition require the
+authenticated controlled service. Production uses only the compatible /v1
+contract. Service outages pause acquisition and refresh without changing the
+provider or pinned Dataset Bundle and without preventing work on persisted
+projects and evidence.
 
-The installer registers a per-user uninstaller under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CampusReconstructionTool`
+The installer is per-user, requests no elevation, registers version 1.1.0 under
+HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CampusReconstructionTool,
 and creates Start Menu shortcuts.
 
-## Release verification
+## Candidate production
 
-From the repository root:
+Run from an exact clean commit:
 
-```powershell
-npm run bundle:v1
-npm run verify:installer
-npm run size:release
-```
+    npm run candidate:v1.1 -- -CleanWindowsImageId "<clean-image-id>" -CleanWindowsImageManifest "<image-manifest.json>"
 
-`verify:installer` performs a real silent installation, validates the exact
-payload and uninstall registration, runs the installed binary's offline
-multi-cycle self-test (project recovery, all four Foundation packs, all 19
-Arnis categories, Foundation and Detailed schematic export), and then performs
-a real silent uninstall.
+The image manifest must bind that ID to the current Windows build, an x64 clean
+baseline assertion, the immutable VM/image source, and its snapshot SHA-256.
+The candidate records both the snapshot digest and the manifest digest; a free
+text image label alone is rejected.
+
+The command checks formatting, warnings-denied Clippy, every Rust test, service
+tests, and a locked workspace release build. It records the commit, clean source
+state, operator-supplied clean Windows image identity, toolchains/dependency
+inventory, commands, logs, exit states, test counts, and binary SHA-256. The
+exact release binaries pass the three-process smoke before they are copied into
+the packaging payload.
+
+NSIS then consumes the copied tested-binaries payload without rebuilding it,
+verifies every binary SHA-256 before and after packaging, and records the
+installer size and exact SHA-256 in distribution.json and DISTRIBUTION.md.
+Installer size is informational; V1.1.0 has no 50 MB gate.
+
+Installed verification covers separate non-elevated silent-fresh,
+interactive-fresh, and predecessor-upgrade scenarios. Every scenario verifies
+the exact payload allowlist, 1.1.0 file and uninstall metadata, helper-process
+handshake, first launch, normal shutdown, and complete uninstall. Final
+candidate-evidence.json is sealed only after packaging and all three installed
+acceptance records succeed.
+The predecessor-upgrade scenario accepts only the frozen V1.0.1 Windows
+installer baseline SHA-256. Its historical uninstall metadata reports
+DisplayVersion 0.1.0; the evidence records both that legacy value and the pinned hash.
+
+## Unsigned distribution
+
+This candidate may be unsigned. Publish the exact installer SHA-256, clean source
+commit, source statement, Windows 11 x64 and online-required boundaries, and the
+SmartScreen instructions generated in DISTRIBUTION.md. Never direct users to
+bypass SmartScreen when their SHA-256 differs.
 
 ## Local user data
 
 Projects and generated snapshots live under
-`%LOCALAPPDATA%\CampusReconstructionTool`. Gaode credentials live in Windows
-Credential Manager. Language preference is application-local; portable
-project JSON remains language-neutral. Export a portable project when moving
-work between computers.
-
-## Repository-only and generated files
-
-Source (`native/`, `src/`, `src-tauri/`, `scripts/`, `docs/`) is not deployed.
-Build outputs under `native/target/`, `dist/`, and `artifacts/` are
-regenerable and are not application runtime dependencies.
+%LOCALAPPDATA%\CampusReconstructionTool. Credentials live in Windows Credential
+Manager and never enter project files, candidate evidence, logs, or the
+installer. Uninstalling the application does not silently delete user projects.

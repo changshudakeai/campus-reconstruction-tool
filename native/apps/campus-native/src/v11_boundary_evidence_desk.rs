@@ -236,20 +236,7 @@ pub(crate) fn apply_boundary_tool_event(
                 Ok(BoundaryToolEventOutcome::Ignored)
             }
         }
-        ToolEvent::Closed { .. } => {
-            if project.boundary_review().is_some() {
-                project.edit_boundary_review(actor, |desk| {
-                    desk.report_tool_failure(
-                        "Campus Boundary map helper closed before confirmation",
-                        "Retry the same boundary review or return to Campus Target confirmation",
-                    );
-                    Ok(())
-                })?;
-                Ok(BoundaryToolEventOutcome::ReviewUpdated)
-            } else {
-                Ok(BoundaryToolEventOutcome::Ignored)
-            }
-        }
+        ToolEvent::Closed { .. } => Ok(BoundaryToolEventOutcome::Ignored),
         _ => Ok(BoundaryToolEventOutcome::Ignored),
     }
 }

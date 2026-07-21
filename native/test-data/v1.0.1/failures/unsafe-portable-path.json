@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "unsafe portable path input",
+  "campusName": "Fixture Campus",
+  "mode": "detailed",
+  "detailed": {
+    "selectedSlotId": null,
+    "stylePreset": "school",
+    "wallBlock": null,
+    "windowDensity": 50,
+    "wallDepth": 50,
+    "evidenceAssets": [
+      { "id": "unsafe", "slotId": "fixture", "relativePath": "../../outside.txt", "sourceName": "outside.txt", "addedAtUnixMs": 1 }
+    ]
+  }
+}

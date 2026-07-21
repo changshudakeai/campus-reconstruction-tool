@@ -1,26 +1,33 @@
-# First Vertical Slice Architecture
+# Native V1 architecture
 
 ```mermaid
 flowchart LR
-  A["Online Map Query"] --> B["Map Candidates"]
-  B --> C["Review and Geometry Editing"]
-  C --> D["Foundation Manifest"]
-  D --> E["Minimal Arnis Adapter"]
-  E --> F["Building Geometry"]
-  F --> G["Schematic Model"]
-  G --> H["Three.js Preview and Block Editing"]
-  H --> I["Sponge v2 + Provenance Export"]
+  A["Slint main process"] --> B["Single AppState"]
+  B --> C["Foundation and Detailed workflows"]
+  C --> D["Arnis generation"]
+  C --> E["Sponge V3 export"]
+  B <-->|"authenticated named pipe"| F["Gaode WebView2 helper"]
+  B <-->|"authenticated named pipe"| G["wgpu preview helper"]
 ```
 
-## Seams
+## Runtime boundaries
 
-| Seam | Contract | Main implementation |
-| --- | --- | --- |
-| Online query | `CandidateProvider` | `src/services/onlineMapQuery.ts` |
-| Review | `ReviewedCandidate` to `MapFeature` | `src/services/candidateReview.ts` |
-| Mode handoff | `FoundationManifest` and `BuildingSlot` | `src/domain/foundationManifest.ts` |
-| Building enrichment | `BuildingGeometryProvider` | `src/adapters/minimalArnisAdapter.ts` |
-| Voxel generation | `BuildingGeometry` to `SchematicModel` | `src/services/buildingGeometryToSchematic.ts` |
-| Preview/edit/export | `SchematicModel` | `src/components/SchematicPreviewer.tsx`, `src/services/schematicEditing.ts`, `src/services/detailedSchematicExport.ts` |
+| Responsibility | Implementation |
+| --- | --- |
+| UI and sole application state owner | `native/apps/campus-native` |
+| Gaode Web JS API isolation | `native/apps/campus-map` |
+| Native 3D preview | `native/apps/campus-preview` |
+| Session diagnostics and incident IDs | `native/apps/campus-native/src/diagnostics.rs` |
+| Portable projects, autosave, undo/redo | `native/crates/campus-state` |
+| OSM and optional Overture queries | `native/crates/campus-services` |
+| Arnis appearance rules | `native/crates/arnis-core` |
+| Sponge V3 export | `native/crates/campus-export` |
+| Helper IPC protocol | `native/crates/campus-tool-protocol` |
 
-Each seam has a smoke test that exercises externally visible behavior. `scripts/smoke-first-vertical-slice-completion.mjs` verifies the complete offline path without calling live services.
+The helper processes do not own project state. The former React/Tauri
+implementation was removed after native functional-parity acceptance.
+
+The main process records ordinary operation failures, supervised-tool failures,
+startup recovery failures, and panics as JSON Lines under the application data
+directory. UI errors remain visible until dismissed and include the incident ID
+needed to locate the corresponding diagnostic record.

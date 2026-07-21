@@ -65,7 +65,13 @@ fn production_desktop_contains_only_the_controlled_v1_acquisition_route() {
     assert!(production_client.contains("AcquisitionClient"));
     let controlled_release = source(root.join("apps/campus-native/src/v11_tracer_bullet.rs"));
     assert!(desktop.contains("production_acquisition_client.as_ref()"));
-    assert!(controlled_release.contains("#[cfg(not(debug_assertions))]"));
+    assert!(controlled_release.contains("pub fn continue_active_project"));
+    assert!(controlled_release.contains("FoundationResumePoint::Acquisition"));
+    assert!(controlled_release.contains("resume_persisted_foundation_acquisition"));
+    assert!(
+        !controlled_release.contains("#[cfg(not(debug_assertions))]\npub fn bootstrap_if_enabled")
+    );
+    assert!(controlled_release.contains("#[cfg(debug_assertions)]\npub fn bootstrap_if_enabled"));
     assert!(controlled_release.contains("request_controlled_coarse_raster_supplement"));
     assert!(controlled_release.contains("retry_coarse_raster_supplement"));
 }

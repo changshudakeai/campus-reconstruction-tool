@@ -32,6 +32,16 @@ pub enum LauncherStep {
     Workspace,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveProjectContext {
+    pub library_root: PathBuf,
+    pub output_root: PathBuf,
+    pub campus_target_id: String,
+    pub project_id: ProjectId,
+    pub actor: InstallationId,
+    pub resume_point: FoundationResumePoint,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectLibraryRow {
     pub project_id: ProjectId,
@@ -142,6 +152,42 @@ impl CampusProjectLauncher {
     pub fn active_project_id(&self) -> Option<&ProjectId> {
         self.session.active().map(Schema2Project::id)
     }
+
+    pub fn detailed_workspace_available(&self) -> bool {
+        self.session
+            .active()
+            .is_some_and(Schema2Project::detailed_workspace_available)
+    }
+
+    pub fn active_project_context(&self) -> Result<ActiveProjectContext, String> {
+        let project = self
+            .session
+            .active()
+            .ok_or("Choose a Campus Reconstruction Project before continuing")?;
+        let campus_target_id = project.campus_scope().target_id().to_string();
+        Ok(ActiveProjectContext {
+            library_root: self.library_root(&campus_target_id),
+            output_root: self.application_data.join("v1.1-exports"),
+            campus_target_id,
+            project_id: project.id().clone(),
+            actor: self.actor.clone(),
+            resume_point: project.resume_point(),
+        })
+    }
+
+    pub fn refresh_active_project(&mut self) -> Result<(), String> {
+        let project_id = self
+            .session
+            .active()
+            .map(|project| project.id().clone())
+            .ok_or("No schema-2 project is open")?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or("Confirmed Campus Target has no project library")?;
+        self.session.open_project(library, &project_id)
+    }
+
     pub fn create_project(&mut self, name: impl Into<String>) -> Result<ProjectId, String> {
         let scope = self
             .confirmed_campus
@@ -191,7 +237,7 @@ impl CampusProjectLauncher {
         self.session.can_redo()
     }
     #[cfg(test)]
-    fn apply_active_operation<T>(
+    pub(crate) fn apply_active_operation<T>(
         &mut self,
         description: impl Into<String>,
         mutation: impl FnOnce(&mut Schema2Project) -> Result<T, String>,

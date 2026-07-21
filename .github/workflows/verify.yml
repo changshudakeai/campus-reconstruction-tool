@@ -1,4 +1,4 @@
-name: verify-v1
+name: verify-v1-1
 
 on:
   push:
@@ -6,32 +6,23 @@ on:
   pull_request:
 
 jobs:
-  native-v1:
+  native-v1-1:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: |
-            native
-            src-tauri/crates/arnis-core
-      - run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
-      - run: cargo fmt --manifest-path src-tauri/crates/arnis-core/Cargo.toml --all -- --check
-      - run: cargo test --manifest-path native/Cargo.toml --workspace
-      - run: cargo test --manifest-path src-tauri/crates/arnis-core/Cargo.toml
-      - run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings
-      - run: cargo clippy --manifest-path src-tauri/crates/arnis-core/Cargo.toml --all-targets -- -D warnings
-      - run: cargo build --manifest-path native/Cargo.toml --workspace --release
-
-  web-reference:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+          workspaces: native
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run web:build
-      - run: npm run test:offline-contracts
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm run test:release-contract
+      - run: python -m unittest services/test_deployment_contract.py
+      - run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path native/Cargo.toml --workspace --locked
+      - run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - run: cargo build --manifest-path native/Cargo.toml --workspace --release --locked

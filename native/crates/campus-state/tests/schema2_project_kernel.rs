@@ -1,6 +1,7 @@
 use campus_state::{
-    decode_schema2_project, CampusProjectLibrary, CampusScope, InstallationId,
-    Schema2ProjectSession, V11CompatibilityProfile, V11ConstructionCapability, SCHEMA_2_VERSION,
+    decode_schema2_project, ArnisStylePreset, CampusProjectLibrary, CampusScope,
+    DetailedBuildingState, InstallationId, Schema2ProjectSession, V11CompatibilityProfile,
+    V11ConstructionCapability, SCHEMA_2_VERSION,
 };
 use serde_json::json;
 
@@ -199,4 +200,58 @@ fn v11_construction_gate_is_internal_and_disabled_for_stable_builds() {
         )
         .unwrap_err()
         .contains("development gate"));
+
+    let release_root = tempfile::tempdir().unwrap();
+    let mut release_library = CampusProjectLibrary::open_for_construction(
+        release_root.path(),
+        "gaode:B00155J6JH",
+        &V11ConstructionCapability::for_controlled_release(),
+    )
+    .unwrap();
+    let project = release_library
+        .create_project(
+            putuo_scope(),
+            "V1.1 controlled release",
+            InstallationId::new("release-installation").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(project.schema_version(), SCHEMA_2_VERSION);
+}
+
+#[test]
+fn retained_detailed_state_is_a_schema_2_semantic_save_point() {
+    let directory = tempfile::tempdir().unwrap();
+    let actor = InstallationId::new("detailed-installation").unwrap();
+    let mut library = CampusProjectLibrary::open_for_construction(
+        directory.path(),
+        "gaode:B00155J6JH",
+        &construction_capability(),
+    )
+    .unwrap();
+    let project = library
+        .create_project(putuo_scope(), "Retained Detailed", actor.clone())
+        .unwrap();
+    let mut session = Schema2ProjectSession::default();
+    session.open_project(&library, project.id()).unwrap();
+    let detailed = DetailedBuildingState {
+        selected_slot_id: Some("building:library".into()),
+        style_preset: ArnisStylePreset::Historic,
+        ..DetailedBuildingState::default()
+    };
+
+    session
+        .apply_semantic_operation(&mut library, "choose retained Detailed style", |project| {
+            project.replace_retained_detailed_state(detailed.clone(), actor.clone())
+        })
+        .unwrap();
+
+    let reopened = library.open_project(project.id()).unwrap();
+    assert_eq!(reopened.retained_detailed_state(), &detailed);
+    assert_eq!(reopened.workflow().project_revision(), 1);
+    let encoded = serde_json::to_value(&reopened).unwrap();
+    assert_eq!(
+        encoded["retainedDetailed"]["selectedSlotId"],
+        "building:library"
+    );
+    assert_eq!(encoded["retainedDetailed"]["stylePreset"], "historic");
 }

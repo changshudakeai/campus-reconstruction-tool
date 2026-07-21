@@ -4,6 +4,8 @@ The finished application must not be a React website filling a Tauri WebView. V1
 
 Web rendering remains permitted on desktop only for the Gaode JavaScript 3D map, whose official 3D capability requires a browser environment. It opens as an independent tool window rather than an embedded region of the Slint layout and communicates through a typed Rust message boundary. It does not own application navigation, persistence, business rules, credentials, or export logic.
 
+The independent map window is one modal product task, not a detached developer tool. It owns all immediate interaction feedback for the task it displays, including validation, loading, retry, cancel, and successful completion. The main window cannot be the sole destination for an error while the map window covers it. Completion or cancellation returns focus to the originating workspace and advances or preserves that task explicitly.
+
 The Minecraft schematic preview migrates from Three.js to a Rust-native renderer and therefore does not retain a desktop WebView. A separately hosted Cloud Web Companion may reuse web presentation code, but it is never embedded into the desktop application or used as its fallback.
 
 The Cloud Web Companion is delivered only after native desktop migration and parity verification. It may reuse web domain adapters and presentation assets, but not the legacy button placement or long-page information architecture. Its later redesign follows the same action hierarchy as the native edition without blocking the desktop cutover.
