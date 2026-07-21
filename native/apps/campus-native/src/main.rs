@@ -409,46 +409,102 @@ fn guidance_locale(ui: &AppWindow) -> v11_guidance::Locale {
     }
 }
 
-fn shortcut_context(ui: &AppWindow, include_modal: bool) -> v11_guidance::ShortcutContext {
-    let modal = if !include_modal {
-        v11_guidance::ModalState::None
-    } else if ui.get_quick_start_visible() {
-        v11_guidance::ModalState::QuickStart
-    } else if ui.get_guidance_visible() {
-        v11_guidance::ModalState::Guidance
-    } else if ui.get_settings_visible() {
-        v11_guidance::ModalState::Settings
-    } else if ui.get_utilities_visible() {
-        v11_guidance::ModalState::Utilities
-    } else if ui.get_error_visible() {
-        v11_guidance::ModalState::Error
-    } else {
-        v11_guidance::ModalState::None
-    };
-    let has_active_project = if ui.get_campus_launcher_visible() {
-        !ui.get_launcher_active_project_id().is_empty()
-    } else {
-        !ui.get_project_name().is_empty()
-    };
-    v11_guidance::ShortcutContext {
-        text_input_focused: false,
-        modal,
-        map_tool: v11_guidance::MapToolState::None,
-        workflow: if !ui.get_campus_launcher_visible() && ui.get_primary_label() != "" {
-            v11_guidance::WorkflowTaskState::Confirmable
-        } else {
-            v11_guidance::WorkflowTaskState::None
-        },
-        has_active_project,
-        can_create_project: ui.get_campus_launcher_visible() && ui.get_launcher_step() == 1,
-        can_undo: ui.get_can_undo(),
-        can_redo: ui.get_can_redo(),
+fn modal_state_from_code(value: i32) -> v11_guidance::ModalState {
+    match value {
+        1 => v11_guidance::ModalState::Guidance,
+        2 => v11_guidance::ModalState::Settings,
+        3 => v11_guidance::ModalState::QuickStart,
+        4 => v11_guidance::ModalState::Utilities,
+        5 => v11_guidance::ModalState::Error,
+        _ => v11_guidance::ModalState::None,
     }
 }
 
-fn sync_shortcut_rows(ui: &AppWindow) {
+fn map_tool_state_from_code(value: i32) -> v11_guidance::MapToolState {
+    match value {
+        1 => v11_guidance::MapToolState::BoundaryVertexSelected,
+        _ => v11_guidance::MapToolState::None,
+    }
+}
+
+fn workflow_task_state(state: Option<&DesktopApplicationState>) -> v11_guidance::WorkflowTaskState {
+    let Some(project) = state.and_then(|state| state.project.as_ref()) else {
+        return v11_guidance::WorkflowTaskState::None;
+    };
+    if project.mode != DesktopMode::Foundation {
+        return v11_guidance::WorkflowTaskState::None;
+    }
+    match project.foundation_step {
+        FoundationStep::Campus | FoundationStep::Boundary => v11_guidance::WorkflowTaskState::None,
+        FoundationStep::Orientation
+            if project.campus_target.is_none() || project.boundary.len() < 3 =>
+        {
+            v11_guidance::WorkflowTaskState::None
+        }
+        _ => v11_guidance::WorkflowTaskState::Confirmable,
+    }
+}
+
+fn shortcut_context(
+    state: Option<&DesktopApplicationState>,
+    launcher: Option<&CampusProjectLauncher>,
+    modal: v11_guidance::ModalState,
+    text_input_focused: bool,
+    map_tool: v11_guidance::MapToolState,
+) -> v11_guidance::ShortcutContext {
+    let (has_active_project, can_create_project, can_undo, can_redo, workflow) =
+        if let Some(launcher) = launcher {
+            (
+                launcher.active_project_id().is_some(),
+                launcher.confirmed_campus().is_some()
+                    && launcher.step() == LauncherStep::ProjectLibrary,
+                launcher.can_undo(),
+                launcher.can_redo(),
+                v11_guidance::WorkflowTaskState::None,
+            )
+        } else if let Some(state) = state {
+            (
+                state.project.is_some(),
+                false,
+                state.can_undo(),
+                state.can_redo(),
+                workflow_task_state(Some(state)),
+            )
+        } else {
+            (
+                false,
+                false,
+                false,
+                false,
+                v11_guidance::WorkflowTaskState::None,
+            )
+        };
+
+    v11_guidance::ShortcutContext {
+        text_input_focused,
+        modal,
+        map_tool,
+        workflow,
+        has_active_project,
+        can_create_project,
+        can_undo,
+        can_redo,
+    }
+}
+
+fn sync_shortcut_rows(
+    ui: &AppWindow,
+    state: Option<&DesktopApplicationState>,
+    launcher: Option<&CampusProjectLauncher>,
+) {
     let locale = guidance_locale(ui);
-    let context = shortcut_context(ui, false);
+    let context = shortcut_context(
+        state,
+        launcher,
+        modal_state_from_code(ui.get_shortcut_modal()),
+        ui.get_text_input_focused(),
+        map_tool_state_from_code(ui.get_map_tool_state()),
+    );
     let rows = v11_guidance::Shortcut::ALL
         .into_iter()
         .map(|shortcut| {
@@ -541,13 +597,13 @@ fn sync_project_launcher_ui(
                 if english {
                     "Campus Target"
                 } else {
-                    "校园目标"
+                    "校区目标"
                 }
             } else {
                 if english {
                     "Campus Project Library"
                 } else {
-                    "校园项目库"
+                    "校区项目库"
                 }
             }
             .into(),
@@ -572,7 +628,7 @@ fn sync_project_launcher_ui(
             if english {
                 "Confirm Campus Target"
             } else {
-                "确认校园目标"
+                "确认校区目标"
             }
             .into()
         } else {
@@ -585,7 +641,7 @@ fn sync_project_launcher_ui(
         });
         ui.set_route_stage(step);
     }
-    sync_shortcut_rows(ui);
+    sync_shortcut_rows(ui, None, Some(launcher));
     Ok(())
 }
 fn launcher_project_id(
@@ -1560,7 +1616,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_blocks_per_meter(project.blocks_per_meter as f32);
     ui.set_can_undo(state.can_undo());
     ui.set_can_redo(state.can_redo());
-    sync_shortcut_rows(ui);
+    sync_shortcut_rows(ui, Some(state), None);
 }
 
 fn candidate_matches_filter(candidate: &MapCandidate, filter: CandidateConfidenceFilter) -> bool {
@@ -2613,7 +2669,13 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_guidance_visible(preferences.should_show_guidance());
     ui.set_guidance_step(0);
     ui.set_quick_start_visible(false);
-    sync_shortcut_rows(&ui);
+    if let Some(launcher) = &v11_launcher {
+        let launcher = launcher.borrow();
+        sync_shortcut_rows(&ui, None, Some(&launcher));
+    } else {
+        let state = state.borrow();
+        sync_shortcut_rows(&ui, Some(&state), None);
+    }
     let (tool_update_tx, tool_update_rx) = mpsc::channel();
     let tools = ToolSupervisor {
         processes: DesktopToolProcessSupervisor::new(),
@@ -2863,6 +2925,7 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let state = state.clone();
+        let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
         ui.on_set_locale(move |english| {
             let locale = if english {
@@ -2878,7 +2941,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             if let Some(ui) = weak.upgrade() {
-                sync_ui(&ui, &state.borrow());
+                if let Some(launcher) = &launcher {
+                    ui.set_english(english);
+                    sync_locale_models(&ui, locale);
+                    if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                        set_error(&ui, error);
+                    }
+                } else {
+                    sync_ui(&ui, &state.borrow());
+                }
             }
         });
     }
@@ -3241,74 +3312,137 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        let state = state.clone();
         let launcher = v11_launcher.clone();
         let weak = ui.as_weak();
-        ui.on_shortcut_requested(move |index| {
+        ui.on_open_settings(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            ui.set_utilities_visible(false);
+            ui.set_guidance_visible(false);
+            ui.set_quick_start_visible(false);
+            ui.set_settings_tab(0);
+            ui.set_settings_visible(true);
+            if let Some(launcher) = &launcher {
+                let launcher = launcher.borrow();
+                sync_shortcut_rows(&ui, None, Some(&launcher));
+            } else {
+                let state = state.borrow();
+                sync_shortcut_rows(&ui, Some(&state), None);
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_shortcut_requested(move |index, text_input_focused, modal, map_tool| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
             let Some(shortcut) = v11_guidance::Shortcut::ALL.get(index as usize).copied() else {
                 return;
             };
-            let outcome = v11_guidance::resolve_shortcut(
-                shortcut,
-                shortcut_context(&ui, true),
-                guidance_locale(&ui),
-            );
+            let outcome = {
+                let state = state.borrow();
+                if let Some(launcher) = &launcher {
+                    let launcher = launcher.borrow();
+                    v11_guidance::resolve_shortcut(
+                        shortcut,
+                        shortcut_context(
+                            None,
+                            Some(&launcher),
+                            modal_state_from_code(modal),
+                            text_input_focused,
+                            map_tool_state_from_code(map_tool),
+                        ),
+                        guidance_locale(&ui),
+                    )
+                } else {
+                    v11_guidance::resolve_shortcut(
+                        shortcut,
+                        shortcut_context(
+                            Some(&state),
+                            None,
+                            modal_state_from_code(modal),
+                            text_input_focused,
+                            map_tool_state_from_code(map_tool),
+                        ),
+                        guidance_locale(&ui),
+                    )
+                }
+            };
             ui.set_shortcut_feedback(outcome.reason().into());
             let Some(action) = outcome.action() else {
                 set_status(&ui, outcome.reason(), outcome.reason());
-                sync_shortcut_rows(&ui);
+                if let Some(launcher) = &launcher {
+                    let launcher = launcher.borrow();
+                    sync_shortcut_rows(&ui, None, Some(&launcher));
+                } else {
+                    let state = state.borrow();
+                    sync_shortcut_rows(&ui, Some(&state), None);
+                }
                 return;
             };
             match action {
-                "open-guidance" => {
+                v11_guidance::ShortcutAction::OpenGuidance => {
                     ui.set_settings_visible(false);
                     ui.set_utilities_visible(false);
                     ui.set_quick_start_visible(false);
                     ui.set_guidance_step(0);
                     ui.set_guidance_visible(true);
                 }
-                "close-guidance" => ui.set_guidance_visible(false),
-                "close-settings" => ui.set_settings_visible(false),
-                "close-quick-start" => ui.set_quick_start_visible(false),
-                "close-utilities" => ui.set_utilities_visible(false),
-                "dismiss-error" => ui.invoke_dismiss_error(),
-                "new-project" => {
+                v11_guidance::ShortcutAction::CloseGuidance => ui.set_guidance_visible(false),
+                v11_guidance::ShortcutAction::CloseSettings => ui.set_settings_visible(false),
+                v11_guidance::ShortcutAction::CloseQuickStart => ui.set_quick_start_visible(false),
+                v11_guidance::ShortcutAction::CloseUtilities => ui.set_utilities_visible(false),
+                v11_guidance::ShortcutAction::DismissError => ui.invoke_dismiss_error(),
+                v11_guidance::ShortcutAction::NewProject => {
                     ui.invoke_show_project_library();
                     set_status(
                         &ui,
-                        "请在校园项目库中输入唯一项目名称",
+                        "请在校区项目库中输入唯一项目名称",
                         "Enter a unique project name in the Campus Project Library",
                     );
                 }
-                "open-project" => {
+                v11_guidance::ShortcutAction::OpenProject => {
                     if launcher.is_some() {
                         ui.invoke_import_portable_project();
                     } else {
                         ui.invoke_open_project();
                     }
                 }
-                "save-project" => ui.invoke_save_project(),
-                "export-portable-project" => {
-                    if ui.get_campus_launcher_visible() {
-                        let project_id = ui.get_launcher_active_project_id();
-                        if !project_id.is_empty() {
-                            ui.invoke_export_library_project(project_id);
+                v11_guidance::ShortcutAction::SaveProject => ui.invoke_save_project(),
+                v11_guidance::ShortcutAction::ExportPortableProject => {
+                    if let Some(launcher) = &launcher {
+                        let project_id = launcher
+                            .borrow()
+                            .active_project_id()
+                            .map(|project_id| project_id.as_str().to_string());
+                        if let Some(project_id) = project_id {
+                            ui.invoke_export_library_project(project_id.into());
                         }
                     } else {
-                        ui.invoke_save_project_as();
+                        ui.invoke_export_portable_project();
                     }
                 }
-                "undo-project-history" => ui.invoke_undo(),
-                "redo-project-history" => ui.invoke_redo(),
-                "confirm-workflow-task" => ui.invoke_confirm_step(),
-                "cancel-workflow-task" | "cancel-map-tool" | "delete-boundary-vertex" => {
-                    set_status(&ui, outcome.reason(), outcome.reason());
+                v11_guidance::ShortcutAction::UndoProjectHistory => ui.invoke_undo(),
+                v11_guidance::ShortcutAction::RedoProjectHistory => ui.invoke_redo(),
+                v11_guidance::ShortcutAction::ConfirmWorkflowTask => ui.invoke_confirm_step(),
+                v11_guidance::ShortcutAction::CancelWorkflowTask
+                | v11_guidance::ShortcutAction::CancelMapTool
+                | v11_guidance::ShortcutAction::DeleteBoundaryVertex => {
+                    unreachable!("map and cancellable task shortcuts are handled by their surface")
                 }
-                _ => {}
             }
-            sync_shortcut_rows(&ui);
+            if let Some(launcher) = &launcher {
+                let launcher = launcher.borrow();
+                sync_shortcut_rows(&ui, None, Some(&launcher));
+            } else {
+                let state = state.borrow();
+                sync_shortcut_rows(&ui, Some(&state), None);
+            }
         });
     }
 
@@ -3778,7 +3912,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = ui.as_weak();
-        ui.on_save_project_as(move || {
+        ui.on_export_portable_project(move || {
             let Some(path) = project_file_dialog(true) else {
                 return;
             };
@@ -4919,8 +5053,8 @@ mod tests {
             "the retired all-in-one detailed editor must not remain as hidden dead UI"
         );
         assert!(
-            ui.contains("text: root.english ? \"More\" : \"更多\""),
-            "secondary project and diagnostic actions must be consolidated"
+            ui.contains("APPLICATION MENU") && ui.contains("root.utilities-visible = true"),
+            "secondary project, settings, and diagnostic actions must use the application menu"
         );
         assert!(
             ui.contains("创建项目并选择高德校区")
@@ -4965,6 +5099,12 @@ mod tests {
             project_id.as_str()
         );
         assert_eq!(window.get_launcher_next_task(), "Confirm Campus Boundary");
+        window.set_english(false);
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+        assert_eq!(window.get_launcher_next_task(), "确认校园边界");
+        window.set_english(true);
+        sync_project_launcher_ui(&window, &launcher).unwrap();
+
         launcher.request_save().unwrap();
 
         launcher.show_project_library();
@@ -5058,8 +5198,8 @@ mod tests {
             "first-run guidance must expose five skippable steps"
         );
         for term in [
-            "校园目标",
-            "校园项目库",
+            "校区目标",
+            "校区项目库",
             "已知地物缺口",
             "已审核校园模型",
             "校园基础清单",
@@ -5094,12 +5234,39 @@ mod tests {
         assert!(
             source.contains("BUNDLED QUICK START")
                 && source.contains("MINECRAFT 26.1.2 / AXIOM")
-                && source.contains("for shot[index] in ["),
+                && source.contains("@image-url(\"quick-start/01-campus-target.jpg\")")
+                && source.contains("@image-url(\"quick-start/02-foundation-detailed.jpg\")")
+                && source.contains("@image-url(\"quick-start/03-minecraft-axiom.jpg\")"),
             "the offline three-screenshot quick start must be bundled into the App"
         );
+        for screenshot in [
+            include_bytes!("../ui/quick-start/01-campus-target.jpg").as_slice(),
+            include_bytes!("../ui/quick-start/02-foundation-detailed.jpg").as_slice(),
+            include_bytes!("../ui/quick-start/03-minecraft-axiom.jpg").as_slice(),
+        ] {
+            assert!(screenshot.starts_with(b"\xff\xd8\xff"));
+            assert!(
+                screenshot.len() > 50_000,
+                "quick-start screenshot is only a placeholder"
+            );
+        }
         assert!(
-            source.matches("preferred-height: 0px;").count() >= 2,
-            "Settings must scroll at Windows display scales that reduce usable space"
+            source.matches("preferred-height: 0px;").count() >= 2
+                && source.contains("width: min(1000px, root.width - 48px)")
+                && source.contains("width: min(780px, root.width - 48px)")
+                && source.contains("width: min(1100px, root.width - 48px)"),
+            "core surfaces must scroll and adapt at 100%, 125%, and 150% Windows scale"
+        );
+        assert!(
+            source.contains("callback shortcut-requested(int, bool, int, int)")
+                && source.contains("changed has-focus")
+                && source.contains("root.shortcut-modal")
+                && source.contains("root.map-tool-state"),
+            "shortcut routing must receive live text, modal, and map-tool context"
+        );
+        assert!(
+            source.contains("APPLICATION MENU") && !source.contains("Save as"),
+            "Settings and Portable Project Export must use application-menu vocabulary"
         );
         for prototype_control in [
             "PROTOTYPE STATE",

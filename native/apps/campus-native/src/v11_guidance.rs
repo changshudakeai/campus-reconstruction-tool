@@ -10,6 +10,25 @@ pub enum Locale {
     ZhCn,
     En,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShortcutAction {
+    OpenGuidance,
+    CloseGuidance,
+    CloseSettings,
+    CloseQuickStart,
+    CloseUtilities,
+    DismissError,
+    NewProject,
+    OpenProject,
+    SaveProject,
+    ExportPortableProject,
+    UndoProjectHistory,
+    RedoProjectHistory,
+    DeleteBoundaryVertex,
+    ConfirmWorkflowTask,
+    CancelMapTool,
+    CancelWorkflowTask,
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -59,14 +78,14 @@ pub enum ModalState {
 }
 
 impl ModalState {
-    fn close_action(self) -> Option<&'static str> {
+    fn close_action(self) -> Option<ShortcutAction> {
         match self {
             Self::None => None,
-            Self::Guidance => Some("close-guidance"),
-            Self::Settings => Some("close-settings"),
-            Self::QuickStart => Some("close-quick-start"),
-            Self::Utilities => Some("close-utilities"),
-            Self::Error => Some("dismiss-error"),
+            Self::Guidance => Some(ShortcutAction::CloseGuidance),
+            Self::Settings => Some(ShortcutAction::CloseSettings),
+            Self::QuickStart => Some(ShortcutAction::CloseQuickStart),
+            Self::Utilities => Some(ShortcutAction::CloseUtilities),
+            Self::Error => Some(ShortcutAction::DismissError),
         }
     }
 }
@@ -83,6 +102,7 @@ pub enum WorkflowTaskState {
     #[default]
     None,
     Confirmable,
+    Cancellable,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -102,7 +122,7 @@ pub enum Shortcut {
     NewProject,
     OpenProject,
     Save,
-    SaveAs,
+    ExportPortableProject,
     Undo,
     Redo,
     Delete,
@@ -116,7 +136,7 @@ impl Shortcut {
         Self::NewProject,
         Self::OpenProject,
         Self::Save,
-        Self::SaveAs,
+        Self::ExportPortableProject,
         Self::Undo,
         Self::Redo,
         Self::Delete,
@@ -130,7 +150,7 @@ impl Shortcut {
             Self::NewProject => "Ctrl+N",
             Self::OpenProject => "Ctrl+O",
             Self::Save => "Ctrl+S",
-            Self::SaveAs => "Ctrl+Shift+S",
+            Self::ExportPortableProject => "Ctrl+Shift+S",
             Self::Undo => "Ctrl+Z",
             Self::Redo => "Ctrl+Y / Ctrl+Shift+Z",
             Self::Delete => "Delete",
@@ -148,8 +168,8 @@ impl Shortcut {
             (Self::OpenProject, Locale::En) => "Open or import Portable Project",
             (Self::Save, Locale::ZhCn) => "立即创建项目保存点",
             (Self::Save, Locale::En) => "Create a Project Save Point now",
-            (Self::SaveAs, Locale::ZhCn) => "导出便携项目",
-            (Self::SaveAs, Locale::En) => "Export Portable Project",
+            (Self::ExportPortableProject, Locale::ZhCn) => "导出便携项目",
+            (Self::ExportPortableProject, Locale::En) => "Export Portable Project",
             (Self::Undo, Locale::ZhCn) => "撤销",
             (Self::Undo, Locale::En) => "Undo",
             (Self::Redo, Locale::ZhCn) => "重做",
@@ -169,7 +189,7 @@ impl Shortcut {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShortcutOutcome {
     Available {
-        action: &'static str,
+        action: ShortcutAction,
         reason: &'static str,
     },
     Unavailable {
@@ -179,7 +199,7 @@ pub enum ShortcutOutcome {
 }
 
 impl ShortcutOutcome {
-    pub fn action(self) -> Option<&'static str> {
+    pub fn action(self) -> Option<ShortcutAction> {
         match self {
             Self::Available { action, .. } => Some(action),
             Self::Unavailable { .. } | Self::PassToTextInput => None,
@@ -199,7 +219,7 @@ impl ShortcutOutcome {
 }
 
 fn available(
-    action: &'static str,
+    action: ShortcutAction,
     zh: &'static str,
     en: &'static str,
     locale: Locale,
@@ -223,7 +243,7 @@ pub fn resolve_shortcut(
 ) -> ShortcutOutcome {
     if shortcut == Shortcut::Guidance {
         return available(
-            "open-guidance",
+            ShortcutAction::OpenGuidance,
             "引导始终可用，且不会改变项目进度。",
             "Guidance is always available and does not change project progress.",
             locale,
@@ -242,7 +262,10 @@ pub fn resolve_shortcut(
     if context.modal != ModalState::None {
         if shortcut == Shortcut::Escape {
             return available(
-                context.modal.close_action().unwrap_or("close-modal"),
+                context
+                    .modal
+                    .close_action()
+                    .expect("non-empty modal has a close action"),
                 "关闭最上层窗口。",
                 "Closes the top modal.",
                 locale,
@@ -259,74 +282,74 @@ pub fn resolve_shortcut(
         Shortcut::NewProject => {
             if context.can_create_project {
                 available(
-                    "new-project",
-                    "当前校园目标已确认，可以新建项目。",
+                    ShortcutAction::NewProject,
+                    "当前校区目标已确认，可以新建项目。",
                     "The Campus Target is confirmed; a project can be created.",
                     locale,
                 )
             } else {
                 unavailable(
-                    "请先确认校园目标，再在校园项目库中新建项目。",
+                    "请先确认校区目标，再在校区项目库中新建项目。",
                     "Confirm a Campus Target before creating a project in its Campus Project Library.",
                     locale,
                 )
             }
         }
         Shortcut::OpenProject => available(
-            "open-project",
+            ShortcutAction::OpenProject,
             "打开或导入便携项目。",
             "Open or import a Portable Project.",
             locale,
         ),
-        Shortcut::Save | Shortcut::SaveAs if !context.has_active_project => unavailable(
+        Shortcut::Save | Shortcut::ExportPortableProject if !context.has_active_project => unavailable(
             "当前没有打开的校园复刻项目。",
             "No Campus Reconstruction Project is open.",
             locale,
         ),
         Shortcut::Save => available(
-            "save-project",
+            ShortcutAction::SaveProject,
             "立即创建项目保存点。",
             "Create a Project Save Point now.",
             locale,
         ),
-        Shortcut::SaveAs => available(
-            "export-portable-project",
+        Shortcut::ExportPortableProject => available(
+            ShortcutAction::ExportPortableProject,
             "导出便携项目不会改变当前项目身份或保存位置。",
             "Exporting a Portable Project does not change the active project's identity or save destination.",
             locale,
         ),
         Shortcut::Delete if context.map_tool == MapToolState::BoundaryVertexSelected => available(
-            "delete-boundary-vertex",
+            ShortcutAction::DeleteBoundaryVertex,
             "删除当前选择的边界顶点。",
             "Delete the selected boundary vertex.",
             locale,
         ),
         Shortcut::Escape if context.map_tool != MapToolState::None => available(
-            "cancel-map-tool",
+            ShortcutAction::CancelMapTool,
             "取消当前地图工具并返回审核。",
             "Cancel the active map tool and return to review.",
             locale,
         ),
         Shortcut::Confirm if context.workflow == WorkflowTaskState::Confirmable => available(
-            "confirm-workflow-task",
+            ShortcutAction::ConfirmWorkflowTask,
             "当前任务满足确认条件。",
             "The current task is ready to confirm.",
             locale,
         ),
-        Shortcut::Escape if context.workflow != WorkflowTaskState::None => available(
-            "cancel-workflow-task",
+        Shortcut::Escape if context.workflow == WorkflowTaskState::Cancellable => available(
+            ShortcutAction::CancelWorkflowTask,
             "取消当前未提交的任务操作。",
             "Cancel the current uncommitted workflow action.",
             locale,
         ),
         Shortcut::Undo if context.can_undo => available(
-            "undo-project-history",
+            ShortcutAction::UndoProjectHistory,
             "撤销最近一个项目历史操作。",
             "Undo the latest Project History Operation.",
             locale,
         ),
         Shortcut::Redo if context.can_redo => available(
-            "redo-project-history",
+            ShortcutAction::RedoProjectHistory,
             "重做最近撤销的项目历史操作。",
             "Redo the latest undone Project History Operation.",
             locale,
@@ -414,7 +437,7 @@ mod tests {
     use super::{
         register_secret, resolve_shortcut, sanitise_diagnostic_value,
         sanitise_registered_diagnostic_value, AppPreferences, Locale, MapToolState, ModalState,
-        Shortcut, ShortcutContext, ShortcutOutcome, WorkflowTaskState,
+        Shortcut, ShortcutAction, ShortcutContext, ShortcutOutcome, WorkflowTaskState,
     };
 
     #[test]
@@ -458,7 +481,7 @@ mod tests {
         };
         assert_eq!(
             resolve_shortcut(Shortcut::Escape, context, Locale::En).action(),
-            Some("close-settings")
+            Some(ShortcutAction::CloseSettings)
         );
 
         let context = ShortcutContext {
@@ -467,7 +490,7 @@ mod tests {
         };
         assert_eq!(
             resolve_shortcut(Shortcut::Delete, context, Locale::En).action(),
-            Some("delete-boundary-vertex")
+            Some(ShortcutAction::DeleteBoundaryVertex)
         );
 
         let context = ShortcutContext {
@@ -476,11 +499,11 @@ mod tests {
         };
         assert_eq!(
             resolve_shortcut(Shortcut::Confirm, context, Locale::En).action(),
-            Some("confirm-workflow-task")
+            Some(ShortcutAction::ConfirmWorkflowTask)
         );
         assert_eq!(
             resolve_shortcut(Shortcut::Undo, context, Locale::En).action(),
-            Some("undo-project-history")
+            Some(ShortcutAction::UndoProjectHistory)
         );
     }
 
