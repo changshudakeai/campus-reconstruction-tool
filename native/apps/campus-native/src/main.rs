@@ -6,6 +6,7 @@ mod diagnostics;
 mod v11_acquisition_client;
 mod v11_boundary_evidence_desk;
 mod v11_foundation_review_desk;
+mod v11_guidance;
 #[cfg(test)]
 mod v11_project_kernel;
 mod v11_project_library;
@@ -63,7 +64,8 @@ fn install_diagnostics() {
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let message = info.to_string();
+        let message =
+            v11_guidance::sanitise_registered_diagnostic_value("panic", &info.to_string());
         let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         diagnostics::record(
             diagnostics::DiagnosticLevel::Error,
@@ -85,6 +87,10 @@ fn generated_model_dir() -> PathBuf {
 
 fn locale_path() -> PathBuf {
     app_data_dir().join("locale.txt")
+}
+
+fn preferences_path() -> PathBuf {
+    app_data_dir().join("preferences.json")
 }
 
 fn load_locale() -> DesktopLocale {
@@ -150,16 +156,17 @@ fn local_evidence_file_dialog() -> Vec<PathBuf> {
 }
 
 #[derive(Clone, Default)]
-struct MapCredentials {
+struct LocalCredentials {
     js_api_key: String,
     security_code: String,
+    acquisition_secret: String,
 }
 
 fn credential_entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new("Campus Reconstruction Tool", account).map_err(|error| error.to_string())
 }
 
-fn load_map_credentials() -> MapCredentials {
+fn load_local_credentials() -> LocalCredentials {
     let from_store = |account: &str| {
         credential_entry(account)
             .and_then(|entry| entry.get_password().map_err(|error| error.to_string()))
@@ -169,7 +176,8 @@ fn load_map_credentials() -> MapCredentials {
     };
     let stored_key = from_store("gaode-js-api-key");
     let stored_security = from_store("gaode-security-code");
-    MapCredentials {
+    let stored_acquisition_secret = from_store("acquisition-service-secret");
+    LocalCredentials {
         js_api_key: if stored_key.is_empty() {
             std::env::var("GAODE_JS_API_KEY")
                 .or_else(|_| std::env::var("VITE_GAODE_JS_API_KEY"))
@@ -188,15 +196,26 @@ fn load_map_credentials() -> MapCredentials {
         } else {
             stored_security
         },
+        acquisition_secret: if stored_acquisition_secret.is_empty() {
+            std::env::var("CAMPUS_ACQUISITION_SERVICE_SECRET")
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        } else {
+            stored_acquisition_secret
+        },
     }
 }
 
-fn save_map_credentials(credentials: &MapCredentials) -> Result<(), String> {
+fn save_local_credentials(credentials: &LocalCredentials) -> Result<(), String> {
     credential_entry("gaode-js-api-key")?
         .set_password(credentials.js_api_key.trim())
         .map_err(|error| error.to_string())?;
     credential_entry("gaode-security-code")?
         .set_password(credentials.security_code.trim())
+        .map_err(|error| error.to_string())?;
+    credential_entry("acquisition-service-secret")?
+        .set_password(credentials.acquisition_secret.trim())
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -352,13 +371,99 @@ fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
     year += i64::from(month <= 2);
     (year, month, day)
 }
-fn project_row_save_state_label(state: &ProjectRowSaveState) -> SharedString {
-    match state {
-        ProjectRowSaveState::Saved => "Saved".into(),
-        ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
-        ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
+fn project_row_save_state_label(state: &ProjectRowSaveState, english: bool) -> SharedString {
+    match (state, english) {
+        (ProjectRowSaveState::Saved, true) => "Saved".into(),
+        (ProjectRowSaveState::Saved, false) => "已保存".into(),
+        (ProjectRowSaveState::RecoveryAvailable, true) => "Recovery available".into(),
+        (ProjectRowSaveState::RecoveryAvailable, false) => "有项目恢复状态".into(),
+        (ProjectRowSaveState::SaveFailed(reason), true) => format!("Save failed: {reason}").into(),
+        (ProjectRowSaveState::SaveFailed(reason), false) => format!("保存失败：{reason}").into(),
     }
 }
+
+fn launcher_task_label(task: &str, english: bool) -> SharedString {
+    if english {
+        return task.into();
+    }
+    match task {
+        "Confirm Campus Boundary" => "确认校园边界",
+        "Acquire Foundation evidence" => "获取 Foundation 证据",
+        "Review Buildings" => "审核建筑",
+        "Review Circulation" => "审核交通",
+        "Review Water" => "审核水域",
+        "Review Vegetation" => "审核植被",
+        "Review Sports" => "审核体育设施",
+        "Generate Minecraft result" => "生成 Minecraft 结果",
+        "Export .schem and Foundation Manifest" => "导出 .schem 与 Foundation Manifest",
+        "Completion and export" => "完成与导出",
+        other => other,
+    }
+    .into()
+}
+fn guidance_locale(ui: &AppWindow) -> v11_guidance::Locale {
+    if ui.get_english() {
+        v11_guidance::Locale::En
+    } else {
+        v11_guidance::Locale::ZhCn
+    }
+}
+
+fn shortcut_context(ui: &AppWindow, include_modal: bool) -> v11_guidance::ShortcutContext {
+    let modal = if !include_modal {
+        v11_guidance::ModalState::None
+    } else if ui.get_quick_start_visible() {
+        v11_guidance::ModalState::QuickStart
+    } else if ui.get_guidance_visible() {
+        v11_guidance::ModalState::Guidance
+    } else if ui.get_settings_visible() {
+        v11_guidance::ModalState::Settings
+    } else if ui.get_utilities_visible() {
+        v11_guidance::ModalState::Utilities
+    } else if ui.get_error_visible() {
+        v11_guidance::ModalState::Error
+    } else {
+        v11_guidance::ModalState::None
+    };
+    let has_active_project = if ui.get_campus_launcher_visible() {
+        !ui.get_launcher_active_project_id().is_empty()
+    } else {
+        !ui.get_project_name().is_empty()
+    };
+    v11_guidance::ShortcutContext {
+        text_input_focused: false,
+        modal,
+        map_tool: v11_guidance::MapToolState::None,
+        workflow: if !ui.get_campus_launcher_visible() && ui.get_primary_label() != "" {
+            v11_guidance::WorkflowTaskState::Confirmable
+        } else {
+            v11_guidance::WorkflowTaskState::None
+        },
+        has_active_project,
+        can_create_project: ui.get_campus_launcher_visible() && ui.get_launcher_step() == 1,
+        can_undo: ui.get_can_undo(),
+        can_redo: ui.get_can_redo(),
+    }
+}
+
+fn sync_shortcut_rows(ui: &AppWindow) {
+    let locale = guidance_locale(ui);
+    let context = shortcut_context(ui, false);
+    let rows = v11_guidance::Shortcut::ALL
+        .into_iter()
+        .map(|shortcut| {
+            let outcome = v11_guidance::resolve_shortcut(shortcut, context, locale);
+            ShortcutRow {
+                label: shortcut.label(locale).into(),
+                keys: shortcut.keys().into(),
+                available: outcome.is_available(),
+                reason: outcome.reason().into(),
+            }
+        })
+        .collect::<Vec<_>>();
+    ui.set_shortcut_rows(ModelRc::new(VecModel::from(rows)));
+}
+
 fn sync_project_launcher_ui(
     ui: &AppWindow,
     launcher: &CampusProjectLauncher,
@@ -370,6 +475,7 @@ fn sync_project_launcher_ui(
         LauncherStep::Workspace => 2,
     };
     ui.set_launcher_step(step);
+    let english = ui.get_english();
     let campus = launcher
         .confirmed_campus()
         .or_else(|| launcher.offered_campus());
@@ -402,14 +508,14 @@ fn sync_project_launcher_ui(
             project_id: row.project_id.as_str().into(),
             project_name: row.project_name.clone().into(),
             latest_save: format_latest_save_time(row.latest_successful_save_unix_ms).into(),
-            save_state: project_row_save_state_label(&row.save_state),
+            save_state: project_row_save_state_label(&row.save_state, english),
 
             progress: format!("{} / {}", row.completed_tasks, row.total_tasks).into(),
-            next_task: row.next_incomplete_task.clone().into(),
+            next_task: launcher_task_label(&row.next_incomplete_task, english),
             action_label: if row.completed_tasks == row.total_tasks {
-                "View".into()
+                if english { "View" } else { "查看" }.into()
             } else {
-                "Continue".into()
+                if english { "Continue" } else { "继续" }.into()
             },
         })
         .collect::<Vec<_>>();
@@ -420,9 +526,9 @@ fn sync_project_launcher_ui(
     if let Some(row) = active {
         ui.set_project_name(row.project_name.clone().into());
         ui.set_launcher_progress(format!("{} / {}", row.completed_tasks, row.total_tasks).into());
-        ui.set_launcher_save_state(project_row_save_state_label(&row.save_state));
+        ui.set_launcher_save_state(project_row_save_state_label(&row.save_state, english));
 
-        ui.set_launcher_next_task(row.next_incomplete_task.clone().into());
+        ui.set_launcher_next_task(launcher_task_label(&row.next_incomplete_task, english));
         ui.set_launcher_compatibility(row.minecraft_compatibility.clone().into());
         ui.set_route_stage(if row.completed_tasks == row.total_tasks {
             4
@@ -432,21 +538,54 @@ fn sync_project_launcher_ui(
     } else {
         ui.set_project_name(
             if step == 0 {
-                "Campus Target"
+                if english {
+                    "Campus Target"
+                } else {
+                    "校园目标"
+                }
             } else {
-                "Campus Project Library"
+                if english {
+                    "Campus Project Library"
+                } else {
+                    "校园项目库"
+                }
             }
             .into(),
         );
-        ui.set_launcher_progress(format!("{} project(s)", rows.len()).into());
-        ui.set_launcher_save_state("No active project".into());
+        ui.set_launcher_progress(
+            if english {
+                format!("{} project(s)", rows.len())
+            } else {
+                format!("{} 个项目", rows.len())
+            }
+            .into(),
+        );
+        ui.set_launcher_save_state(
+            if english {
+                "No active project"
+            } else {
+                "没有活动项目"
+            }
+            .into(),
+        );
         ui.set_launcher_next_task(if step == 0 {
-            "Confirm Campus Target".into()
+            if english {
+                "Confirm Campus Target"
+            } else {
+                "确认校园目标"
+            }
+            .into()
         } else {
-            "Choose or create a project".into()
+            if english {
+                "Choose or create a project"
+            } else {
+                "选择或新建项目"
+            }
+            .into()
         });
         ui.set_route_stage(step);
     }
+    sync_shortcut_rows(ui);
     Ok(())
 }
 fn launcher_project_id(
@@ -1421,6 +1560,7 @@ fn sync_ui(ui: &AppWindow, state: &DesktopApplicationState) {
     ui.set_blocks_per_meter(project.blocks_per_meter as f32);
     ui.set_can_undo(state.can_undo());
     ui.set_can_redo(state.can_redo());
+    sync_shortcut_rows(ui);
 }
 
 fn candidate_matches_filter(candidate: &MapCandidate, filter: CandidateConfidenceFilter) -> bool {
@@ -1461,10 +1601,11 @@ fn set_error(ui: &AppWindow, message: impl AsRef<str>) {
 fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
     let location = std::panic::Location::caller();
     let source = format!("{}:{}", location.file(), location.line());
+    let message = v11_guidance::sanitise_registered_diagnostic_value("message", message.as_ref());
     let record = diagnostics::record(
         diagnostics::DiagnosticLevel::Error,
         event,
-        message.as_ref(),
+        &message,
         &[("source", source.as_str())],
     );
     let incident_id = record
@@ -1482,9 +1623,9 @@ fn set_error_for(ui: &AppWindow, event: &str, message: impl AsRef<str>) {
     ui.set_error_visible(true);
     ui.set_error_summary(
         if ui.get_english() {
-            format!("Operation failed: {}", message.as_ref())
+            format!("Operation failed: {message}")
         } else {
-            format!("操作失败：{}", message.as_ref())
+            format!("操作失败：{message}")
         }
         .into(),
     );
@@ -2456,9 +2597,23 @@ fn main() -> Result<(), slint::PlatformError> {
     let mut initial_state = DesktopApplicationState::default();
     initial_state.locale = load_locale();
     let state = Rc::new(RefCell::new(initial_state));
-    let map_credentials = Rc::new(RefCell::new(load_map_credentials()));
+    let loaded_credentials = load_local_credentials();
+    for secret in [
+        loaded_credentials.js_api_key.as_str(),
+        loaded_credentials.security_code.as_str(),
+        loaded_credentials.acquisition_secret.as_str(),
+    ] {
+        v11_guidance::register_secret(secret);
+    }
+    let map_credentials = Rc::new(RefCell::new(loaded_credentials));
     ui.set_gaode_key(map_credentials.borrow().js_api_key.clone().into());
     ui.set_gaode_security(map_credentials.borrow().security_code.clone().into());
+    ui.set_acquisition_secret(map_credentials.borrow().acquisition_secret.clone().into());
+    let preferences = v11_guidance::AppPreferences::load(&preferences_path()).unwrap_or_default();
+    ui.set_guidance_visible(preferences.should_show_guidance());
+    ui.set_guidance_step(0);
+    ui.set_quick_start_visible(false);
+    sync_shortcut_rows(&ui);
     let (tool_update_tx, tool_update_rx) = mpsc::channel();
     let tools = ToolSupervisor {
         processes: DesktopToolProcessSupervisor::new(),
@@ -2488,6 +2643,7 @@ fn main() -> Result<(), slint::PlatformError> {
         set_error(&ui, error);
     }
     if let Some(error) = startup_open_error {
+        let error = v11_guidance::sanitise_registered_diagnostic_value("message", &error);
         diagnostics::record(
             diagnostics::DiagnosticLevel::Warning,
             "project.autoload",
@@ -3056,12 +3212,114 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        let weak = ui.as_weak();
+        ui.on_dismiss_guidance(move |skipped| {
+            let result =
+                v11_guidance::AppPreferences::default().dismiss_guidance(&preferences_path());
+            if let Some(ui) = weak.upgrade() {
+                ui.set_guidance_visible(false);
+                match result {
+                    Ok(()) => {
+                        if skipped {
+                            set_status(
+                                &ui,
+                                "已跳过引导；可按 F1 或 ? 重新打开",
+                                "Guidance skipped; press F1 or ? to reopen",
+                            );
+                        } else {
+                            set_status(&ui, "首次运行引导已完成", "First-run guidance completed");
+                        }
+                    }
+                    Err(error) => set_localized_error(
+                        &ui,
+                        "guidance.preference",
+                        format!("引导偏好保存失败：{error}"),
+                        format!("Failed to save guidance preference: {error}"),
+                    ),
+                }
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_shortcut_requested(move |index| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Some(shortcut) = v11_guidance::Shortcut::ALL.get(index as usize).copied() else {
+                return;
+            };
+            let outcome = v11_guidance::resolve_shortcut(
+                shortcut,
+                shortcut_context(&ui, true),
+                guidance_locale(&ui),
+            );
+            ui.set_shortcut_feedback(outcome.reason().into());
+            let Some(action) = outcome.action() else {
+                set_status(&ui, outcome.reason(), outcome.reason());
+                sync_shortcut_rows(&ui);
+                return;
+            };
+            match action {
+                "open-guidance" => {
+                    ui.set_settings_visible(false);
+                    ui.set_utilities_visible(false);
+                    ui.set_quick_start_visible(false);
+                    ui.set_guidance_step(0);
+                    ui.set_guidance_visible(true);
+                }
+                "close-guidance" => ui.set_guidance_visible(false),
+                "close-settings" => ui.set_settings_visible(false),
+                "close-quick-start" => ui.set_quick_start_visible(false),
+                "close-utilities" => ui.set_utilities_visible(false),
+                "dismiss-error" => ui.invoke_dismiss_error(),
+                "new-project" => {
+                    ui.invoke_show_project_library();
+                    set_status(
+                        &ui,
+                        "请在校园项目库中输入唯一项目名称",
+                        "Enter a unique project name in the Campus Project Library",
+                    );
+                }
+                "open-project" => {
+                    if launcher.is_some() {
+                        ui.invoke_import_portable_project();
+                    } else {
+                        ui.invoke_open_project();
+                    }
+                }
+                "save-project" => ui.invoke_save_project(),
+                "export-portable-project" => {
+                    if ui.get_campus_launcher_visible() {
+                        let project_id = ui.get_launcher_active_project_id();
+                        if !project_id.is_empty() {
+                            ui.invoke_export_library_project(project_id);
+                        }
+                    } else {
+                        ui.invoke_save_project_as();
+                    }
+                }
+                "undo-project-history" => ui.invoke_undo(),
+                "redo-project-history" => ui.invoke_redo(),
+                "confirm-workflow-task" => ui.invoke_confirm_step(),
+                "cancel-workflow-task" | "cancel-map-tool" | "delete-boundary-vertex" => {
+                    set_status(&ui, outcome.reason(), outcome.reason());
+                }
+                _ => {}
+            }
+            sync_shortcut_rows(&ui);
+        });
+    }
+
+    {
         let map_credentials = map_credentials.clone();
         let weak = ui.as_weak();
-        ui.on_save_map_settings(move |key, security| {
-            let updated = MapCredentials {
+        ui.on_save_credentials(move |key, security, acquisition_secret| {
+            let updated = LocalCredentials {
                 js_api_key: key.trim().to_string(),
                 security_code: security.trim().to_string(),
+                acquisition_secret: acquisition_secret.trim().to_string(),
             };
             if let Some(ui) = weak.upgrade() {
                 let validation = if updated.js_api_key.is_empty() {
@@ -3087,19 +3345,30 @@ fn main() -> Result<(), slint::PlatformError> {
                     )
                     .to_string())
                 } else {
-                    save_map_credentials(&updated)
+                    save_local_credentials(&updated)
                 };
                 match validation {
                     Ok(()) => {
+                        for secret in [
+                            updated.js_api_key.as_str(),
+                            updated.security_code.as_str(),
+                            updated.acquisition_secret.as_str(),
+                        ] {
+                            v11_guidance::register_secret(secret);
+                        }
                         *map_credentials.borrow_mut() = updated;
-                        set_status(&ui, "地图密钥已安全保存", "Map credentials saved securely");
+                        set_status(
+                            &ui,
+                            "本机凭据已安全保存",
+                            "Local credentials saved securely",
+                        );
                     }
                     Err(error) => {
                         set_localized_error(
                             &ui,
-                            "map-credentials.save",
-                            format!("地图密钥保存失败：{error}"),
-                            format!("Failed to save map credentials: {error}"),
+                            "credentials.save",
+                            format!("本机凭据保存失败：{error}"),
+                            format!("Failed to save local credentials: {error}"),
                         );
                     }
                 }
@@ -4595,9 +4864,7 @@ mod tests {
             "the workflow body must scroll so detailed export and long candidate lists stay reachable"
         );
         assert!(
-            ui.contains(
-                "workflow-content := VerticalLayout {\n                        alignment: start;"
-            ),
+            ui.contains("workflow-content := VerticalLayout {") && ui.contains("alignment: start;"),
             "scroll content must keep its natural height instead of compressing its last controls"
         );
         assert!(
@@ -4605,13 +4872,12 @@ mod tests {
             "the detailed export action must remain fixed outside the scroll viewport"
         );
         assert!(
-            ui.contains(
-                "workflow-scroll := ScrollView {\n                        preferred-height: 0px;"
-            ),
+            ui.contains("workflow-scroll := ScrollView {")
+                && ui.matches("preferred-height: 0px;").count() >= 2,
             "the scroll viewport must yield space to the fixed footer action"
         );
         assert!(
-            ui.contains("width: 1280px;\n    height: 720px;"),
+            ui.contains("width: 1280px;") && ui.contains("height: 720px;"),
             "the default window must fit a common 1366x768 desktop work area"
         );
     }
@@ -4678,6 +4944,7 @@ mod tests {
         )
         .unwrap();
         let window = AppWindow::new().expect("native launcher shell should instantiate");
+        window.set_english(true);
 
         launcher.select_campus_candidate(
             CampusScope::new("gaode:native-test", "Native Test Campus", [121.395, 31.202]).unwrap(),
@@ -4734,10 +5001,9 @@ mod tests {
         );
         assert!(
             source.contains("root.campus-launcher-visible && root.launcher-step == 2")
-                && source.contains(
-                    "This workspace is backed only by the active schema-2 project session."
-                ),
-            "the active schema-2 project must open a dedicated workspace"
+                && source.contains("This workspace is backed only by the active project session.")
+                && source.contains("此工作区只使用当前项目会话"),
+            "the active project must open a dedicated localized workspace"
         );
         assert!(
             source.contains("CAMPUS TARGET")
@@ -4778,5 +5044,73 @@ mod tests {
                 && !source.contains("GLOBAL RECENT FILES")
                 && !source.contains("PROJECT WORKBENCH")
         );
+    }
+
+    #[test]
+    fn guidance_settings_shortcuts_and_secret_fields_are_production_surfaces() {
+        let source = include_str!("../ui/app.slint");
+
+        assert!(
+            source.contains("root.guidance-step == 0")
+                && source.contains("root.guidance-step == 4")
+                && source.contains("root.dismiss-guidance(true)")
+                && source.contains("root.dismiss-guidance(false)"),
+            "first-run guidance must expose five skippable steps"
+        );
+        for term in [
+            "校园目标",
+            "校园项目库",
+            "已知地物缺口",
+            "已审核校园模型",
+            "校园基础清单",
+            "项目保存点",
+            "项目恢复状态",
+            "便携项目",
+        ] {
+            assert!(
+                source.contains(term),
+                "missing Chinese product term: {term}"
+            );
+        }
+        for shortcut in [
+            "@keys(Control + N)",
+            "@keys(Control + O)",
+            "@keys(Control + S)",
+            "@keys(Control + Shift + S)",
+            "@keys(Control + Z)",
+            "@keys(Control + Y)",
+            "@keys(Control + Shift + Z)",
+            "@keys(Delete)",
+            "@keys(Control + Return)",
+            "@keys(Escape)",
+            "@keys(F1)",
+        ] {
+            assert!(source.contains(shortcut), "missing shortcut: {shortcut}");
+        }
+        assert!(
+            source.matches("input-type: password").count() >= 3,
+            "Gaode and acquisition secrets must be masked by default"
+        );
+        assert!(
+            source.contains("BUNDLED QUICK START")
+                && source.contains("MINECRAFT 26.1.2 / AXIOM")
+                && source.contains("for shot[index] in ["),
+            "the offline three-screenshot quick start must be bundled into the App"
+        );
+        assert!(
+            source.matches("preferred-height: 0px;").count() >= 2,
+            "Settings must scroll at Windows display scales that reduce usable space"
+        );
+        for prototype_control in [
+            "PROTOTYPE STATE",
+            "variant switcher",
+            "debug overlay",
+            "data-action=\"toggle-text\"",
+        ] {
+            assert!(
+                !source.contains(prototype_control),
+                "production UI contains prototype-only control: {prototype_control}"
+            );
+        }
     }
 }

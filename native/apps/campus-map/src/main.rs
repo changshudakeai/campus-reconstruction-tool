@@ -546,6 +546,29 @@ document.getElementById('boundary-undo').onclick=()=>emit({type:'undo'});
 document.getElementById('boundary-restore').onclick=()=>{if(active())emit({type:'restore_candidate_original'})};
 document.getElementById('boundary-back').onclick=()=>post({type:'mapBoundaryReturnToCampusRequested'});
 document.getElementById('boundary-confirm').onclick=()=>{const reason=blocked();if(reason){post({type:'error',message:reason});return;}post({type:'mapBoundaryConfirmed',candidateId:active().id})};
+const shortcutBlocked=reason=>post({type:'error',message:tx('快捷键当前不可用：','Shortcut unavailable: ')+reason});
+window.addEventListener('keydown',event=>{
+  if(event.target&&event.target.matches('input, textarea'))return;
+  if(event.key==='Delete'){
+    event.preventDefault();
+    const button=document.getElementById('boundary-delete');
+    if(button.disabled)shortcutBlocked(tx('请先进入调整模式并选择可删除的边界顶点。','Enter adjustment mode and select a deletable boundary vertex.'));
+    else button.click();
+    return;
+  }
+  if(event.key==='Escape'&&adjustment){
+    event.preventDefault();
+    document.getElementById('boundary-adjust').click();
+    return;
+  }
+  if(event.ctrlKey&&event.key==='Enter'){
+    event.preventDefault();
+    const button=document.getElementById('boundary-confirm');
+    if(button.disabled)shortcutBlocked(blocked()||tx('当前边界尚不可确认。','The boundary is not ready to confirm.'));
+    else button.click();
+  }
+});
+
 renderDesk();"#
                     .replace("__ENGLISH__", if *english { "true" } else { "false" })
                     .replace("__BOUNDARY_DESK__", &boundary_desk),
@@ -819,6 +842,10 @@ map.on('moveend',()=>{{const c=map.getCenter();post({{type:'mapCamera',centerLng
             assert!(boundary.contains("Adjustment mode"));
             assert!(boundary.contains("mapBoundaryOperation"));
             assert!(boundary.contains("move_vertex"));
+            assert!(boundary.contains("event.target.matches('input, textarea')"));
+            assert!(boundary.contains("event.key==='Delete'"));
+            assert!(boundary.contains("event.key==='Escape'"));
+            assert!(boundary.contains("event.ctrlKey&&event.key==='Enter'"));
             assert!(boundary.contains("restore_candidate_original"));
             assert!(boundary.contains("window.applyBoundaryDesk"));
             assert!(boundary.contains("Waiting for project validation"));

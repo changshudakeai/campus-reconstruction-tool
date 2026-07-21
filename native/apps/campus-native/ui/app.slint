@@ -18,6 +18,13 @@ export struct LauncherProjectRow {
     action-label: string,
 }
 
+export struct ShortcutRow {
+    label: string,
+    keys: string,
+    available: bool,
+    reason: string,
+}
+
 component SectionLabel inherits Text {
     color: #a54836;
     font-size: 12px;
@@ -116,10 +123,17 @@ export component AppWindow inherits Window {
     in-out property <float> wall-depth: 50;
     in-out property <string> primary-label: "确认校区并继续";
     in-out property <bool> settings-visible: false;
+    in-out property <int> settings-tab: 0;
+    in-out property <bool> guidance-visible: false;
+    in-out property <int> guidance-step: 0;
+    in-out property <bool> quick-start-visible: false;
+    in-out property <[ShortcutRow]> shortcut-rows: [];
+    in-out property <string> shortcut-feedback: "";
     in-out property <bool> about-visible: false;
     in-out property <bool> utilities-visible: false;
     in-out property <string> gaode-key: "";
     in-out property <string> gaode-security: "";
+    in-out property <string> acquisition-secret: "";
     in-out property <float> orientation-degrees: 0;
     in-out property <float> blocks-per-meter: 1;
     in-out property <bool> can-undo: false;
@@ -196,7 +210,9 @@ export component AppWindow inherits Window {
     callback confirm-refinement();
     callback export-building();
     callback export-project();
-    callback save-map-settings(string, string);
+    callback save-credentials(string, string, string);
+    callback dismiss-guidance(bool);
+    callback shortcut-requested(int);
     callback set-foundation-metrics(float, float);
     callback undo();
     callback redo();
@@ -245,6 +261,8 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Button { text: root.english ? "中文" : "EN"; clicked => { root.set-locale(!root.english); } }
+                Button { text: "?"; clicked => { root.guidance-step = 0; root.guidance-visible = true; } }
+                Button { text: root.english ? "Settings" : "设置"; clicked => { root.settings-tab = 0; root.settings-visible = true; } }
                 Button { text: root.english ? "Undo" : "撤销"; enabled: root.can-undo; clicked => { root.undo(); } }
                 Button { text: root.english ? "Redo" : "重做"; enabled: root.can-redo; clicked => { root.redo(); } }
                 if !root.campus-launcher-visible : Button { text: root.english ? "More" : "更多"; clicked => { root.utilities-visible = true; } }
@@ -297,12 +315,12 @@ export component AppWindow inherits Window {
                 padding-right: 22px;
                 spacing: 8px;
                 Button {
-                    text: "1  CAMPUS TARGET";
+                    text: root.english ? "1  CAMPUS TARGET" : "1  校园目标";
                     enabled: root.route-stage != 0;
                     clicked => { root.show-campus-selection(); }
                 }
                 Button {
-                    text: "2  PROJECT";
+                    text: root.english ? "2  PROJECT" : "2  项目";
                     enabled: root.launcher-step == 2;
                     clicked => { root.show-project-library(); }
                 }
@@ -327,7 +345,7 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 28px;
                     spacing: 14px;
-                    SectionLabel { text: "CURRENT TASK"; }
+                    SectionLabel { text: root.english ? "CURRENT TASK" : "当前任务"; }
                     if root.launcher-step == 0 : VerticalLayout {
                         spacing: 14px;
                         Text {
@@ -339,7 +357,7 @@ export component AppWindow inherits Window {
                         Text {
                             text: root.english
                                 ? "Confirm a Campus Target before any project list is shown."
-                                : "先确认校区目标，随后才显示该校区的项目。";
+                                : "先确认校园目标，随后才显示该校园的项目。";
                             color: #5b665f;
                         }
                         Rectangle {
@@ -350,7 +368,7 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 20px;
                                 spacing: 10px;
-                                SectionLabel { text: root.english ? "OFFERED CAMPUS TARGET" : "待确认校区目标"; }
+                                SectionLabel { text: root.english ? "OFFERED CAMPUS TARGET" : "待确认校园目标"; }
                                 Text { text: root.launcher-campus-name; font-size: 21px; font-weight: 700; color: #17251f; }
                                 HorizontalLayout {
                                     spacing: 10px;
@@ -374,7 +392,7 @@ export component AppWindow inherits Window {
                     if root.launcher-step == 1 : VerticalLayout {
                         spacing: 12px;
                         Text {
-                            text: root.english ? "Campus Project Library" : "校区项目库";
+                            text: root.english ? "Campus Project Library" : "校园项目库";
                             font-size: 28px;
                             font-weight: 700;
                             color: #17251f;
@@ -397,10 +415,10 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 12px;
                             SectionLabel { text: root.english ? "PROJECT NAME" : "项目名称"; width: 180px; }
-                            SectionLabel { text: "LATEST SAVE"; width: 100px; }
-                            SectionLabel { text: "SAVE / RECOVERY"; width: 120px; }
-                            SectionLabel { text: "PROGRESS"; width: 80px; }
-                            SectionLabel { text: "NEXT TASK"; }
+                            SectionLabel { text: root.english ? "LATEST SAVE" : "最近保存"; width: 100px; }
+                            SectionLabel { text: root.english ? "SAVE / RECOVERY" : "保存／恢复"; width: 120px; }
+                            SectionLabel { text: root.english ? "PROGRESS" : "进度"; width: 80px; }
+                            SectionLabel { text: root.english ? "NEXT TASK" : "下一项任务"; }
                         }
                         for project in root.launcher-projects : Rectangle {
                             height: 76px;
@@ -429,16 +447,16 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 20px;
                     spacing: 12px;
-                    SectionLabel { text: "PROJECT CONTEXT"; }
+                    SectionLabel { text: root.english ? "PROJECT CONTEXT" : "项目概况"; }
                     Text { text: root.launcher-campus-name; font-size: 18px; font-weight: 700; color: #17251f; wrap: word-wrap; }
                     Rule {}
-                    SectionLabel { text: "PROGRESS"; }
+                    SectionLabel { text: root.english ? "PROGRESS" : "进度"; }
                     Text { text: root.launcher-progress; color: #33463d; }
-                    SectionLabel { text: "SAVE / RECOVERY"; }
+                    SectionLabel { text: root.english ? "SAVE / RECOVERY" : "保存／恢复"; }
                     Text { text: root.launcher-save-state; color: #4c665b; wrap: word-wrap; }
-                    SectionLabel { text: "NEXT TASK"; }
+                    SectionLabel { text: root.english ? "NEXT TASK" : "下一项任务"; }
                     Text { text: root.launcher-next-task; color: #33463d; wrap: word-wrap; }
-                    SectionLabel { text: "MINECRAFT COMPATIBILITY"; }
+                    SectionLabel { text: root.english ? "MINECRAFT COMPATIBILITY" : "MINECRAFT 兼容性"; }
                     Text { text: root.launcher-compatibility; color: #506058; wrap: word-wrap; }
                     Rectangle { vertical-stretch: 1; background: transparent; }
                 }
@@ -452,11 +470,11 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 32px;
                     spacing: 16px;
-                    SectionLabel { text: "CURRENT TASK"; }
+                    SectionLabel { text: root.english ? "CURRENT TASK" : "当前任务"; }
                     Text {
-                        text: root.launcher-next-task == "Completion and export"
-                            ? "Completion and Portable Export"
-                            : "Resume Point";
+                        text: root.route-stage == 4
+                            ? (root.english ? "Completion and Portable Export" : "完成与便携导出")
+                            : (root.english ? "Resume Point" : "项目续做点");
                         font-size: 28px;
                         font-weight: 700;
                         color: #17251f;
@@ -475,7 +493,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             padding: 20px;
                             spacing: 10px;
-                            SectionLabel { text: "NEXT ACTION"; }
+                            SectionLabel { text: root.english ? "NEXT ACTION" : "下一项操作"; }
                             Text {
                                 text: root.launcher-next-task;
                                 font-size: 22px;
@@ -484,7 +502,7 @@ export component AppWindow inherits Window {
                                 wrap: word-wrap;
                             }
                             Text {
-                                text: "This workspace is backed only by the active schema-2 project session.";
+                                text: root.english ? "This workspace is backed only by the active project session." : "此工作区只使用当前项目会话，不会切换到其他项目。";
                                 color: #5b665f;
                                 wrap: word-wrap;
                             }
@@ -493,11 +511,11 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Button {
-                            text: "Back to project library";
+                            text: root.english ? "Back to project library" : "返回校园项目库";
                             clicked => { root.show-project-library(); }
                         }
                         Button {
-                            text: "Portable export";
+                            text: root.english ? "Portable export" : "便携导出";
                             enabled: root.launcher-active-project-id != "";
                             clicked => { root.export-library-project(root.launcher-active-project-id); }
                         }
@@ -512,17 +530,17 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 20px;
                     spacing: 12px;
-                    SectionLabel { text: "PROJECT CONTEXT"; }
+                    SectionLabel { text: root.english ? "PROJECT CONTEXT" : "项目概况"; }
                     Text { text: root.launcher-campus-name; font-size: 18px; font-weight: 700; color: #17251f; wrap: word-wrap; }
                     Text { text: root.project-name; color: #33463d; wrap: word-wrap; }
                     Rule {}
-                    SectionLabel { text: "PROGRESS"; }
+                    SectionLabel { text: root.english ? "PROGRESS" : "进度"; }
                     Text { text: root.launcher-progress; color: #33463d; }
-                    SectionLabel { text: "SAVE / RECOVERY"; }
+                    SectionLabel { text: root.english ? "SAVE / RECOVERY" : "保存／恢复"; }
                     Text { text: root.launcher-save-state; color: #4c665b; wrap: word-wrap; }
-                    SectionLabel { text: "NEXT TASK"; }
+                    SectionLabel { text: root.english ? "NEXT TASK" : "下一项任务"; }
                     Text { text: root.launcher-next-task; color: #33463d; wrap: word-wrap; }
-                    SectionLabel { text: "MINECRAFT COMPATIBILITY"; }
+                    SectionLabel { text: root.english ? "MINECRAFT COMPATIBILITY" : "MINECRAFT 兼容性"; }
                     Text { text: root.launcher-compatibility; color: #506058; wrap: word-wrap; }
                     Rectangle { vertical-stretch: 1; background: transparent; }
                 }
@@ -883,49 +901,140 @@ export component AppWindow inherits Window {
         }
         }
       }
-      KeyBinding { keys: @keys(Control + S); activated => { root.save-project(); } }
-      KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }
-      KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }
-      KeyBinding { keys: @keys(Control + Shift + Z); activated => { root.redo(); } }
+      KeyBinding { keys: @keys(Control + N); activated => { root.shortcut-requested(0); } }
+      KeyBinding { keys: @keys(Control + O); activated => { root.shortcut-requested(1); } }
+      KeyBinding { keys: @keys(Control + S); activated => { root.shortcut-requested(2); } }
+      KeyBinding { keys: @keys(Control + Shift + S); activated => { root.shortcut-requested(3); } }
+      KeyBinding { keys: @keys(Control + Z); activated => { root.shortcut-requested(4); } }
+      KeyBinding { keys: @keys(Control + Y); activated => { root.shortcut-requested(5); } }
+      KeyBinding { keys: @keys(Control + Shift + Z); activated => { root.shortcut-requested(5); } }
+      KeyBinding { keys: @keys(Delete); activated => { root.shortcut-requested(6); } }
+      KeyBinding { keys: @keys(Control + Return); activated => { root.shortcut-requested(7); } }
+      KeyBinding { keys: @keys(Escape); activated => { root.shortcut-requested(8); } }
+      KeyBinding { keys: @keys(F1); activated => { root.shortcut-requested(9); } }
+      KeyBinding { keys: @keys("?"); activated => { root.shortcut-requested(9); } }
     }
 
+
     if root.settings-visible : Rectangle {
-        x: 360px;
-        y: 170px;
-        width: 560px;
-        height: 330px;
+        x: 140px;
+        y: 82px;
+        width: 1000px;
+        height: 600px;
         background: #f4f0e5;
         border-color: #23362e;
         border-width: 2px;
         drop-shadow-blur: 20px;
         drop-shadow-color: #00000055;
-        VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-            SectionLabel { text: root.english ? "GAODE MAP SERVICE" : "高德地图服务"; }
-            Text { text: root.english ? "Credentials are stored only in Windows Credential Manager, never in projects or the repository." : "密钥只保存在 Windows 凭据管理器，不写入项目或仓库。"; color: #506058; wrap: word-wrap; }
-            LineEdit { text <=> root.gaode-key; placeholder-text: "Web JS API Key"; }
-            LineEdit { text <=> root.gaode-security; placeholder-text: root.english ? "securityJsCode paired with this Web JS API Key" : "与此 Web JS API Key 配对的 securityJsCode"; }
-            Text {
-                text: root.english ? "The key and securityJsCode must come from the same Web (JS API) entry in the Gaode console." : "Key 与 securityJsCode 必须来自高德控制台中的同一条 Web（JS API）配置。";
-                color: #506058;
-                font-size: 12px;
-                wrap: word-wrap;
+        HorizontalLayout {
+            Rectangle {
+                width: 220px;
+                background: #e8e0d0;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    SectionLabel { text: root.english ? "SETTINGS" : "设置"; }
+                    Button { text: root.english ? "General & guidance" : "常规与引导"; enabled: root.settings-tab != 0; clicked => { root.settings-tab = 0; } }
+                    Button { text: root.english ? "Save & recovery" : "保存与恢复"; enabled: root.settings-tab != 1; clicked => { root.settings-tab = 1; } }
+                    Button { text: root.english ? "Shortcuts" : "快捷键"; enabled: root.settings-tab != 2; clicked => { root.settings-tab = 2; } }
+                    Button { text: root.english ? "Credentials" : "凭据"; enabled: root.settings-tab != 3; clicked => { root.settings-tab = 3; } }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                    Button { text: root.english ? "Close settings" : "关闭设置"; clicked => { root.settings-visible = false; } }
+                }
             }
-            Rectangle { vertical-stretch: 1; background: transparent; }
-            HorizontalLayout {
-                Rectangle { horizontal-stretch: 1; background: transparent; }
-                Button { text: root.english ? "Cancel" : "取消"; clicked => { root.settings-visible = false; } }
-                Button {
-                    text: root.english ? "Save securely" : "安全保存";
-                    clicked => {
-                        root.save-map-settings(root.gaode-key, root.gaode-security);
-                        root.settings-visible = false;
+            Rectangle { width: 1px; background: #b7ad9a; }
+            ScrollView {
+                preferred-height: 0px;
+                VerticalLayout {
+                    padding: 24px;
+                    padding-right: 36px;
+                    spacing: 14px;
+                    if root.settings-tab == 0 : VerticalLayout {
+                        spacing: 14px;
+                        SectionLabel { text: root.english ? "GENERAL & GUIDANCE" : "常规与引导"; }
+                        Text { text: root.english ? "Guidance is an App preference. Reopening it never resets or redirects project progress." : "引导属于应用偏好；重新打开不会重置项目，也不会改变项目当前进度。"; color: #506058; wrap: word-wrap; }
+                        Rectangle {
+                            height: 120px;
+                            background: #eee8da;
+                            border-color: #c7bca8;
+                            border-width: 1px;
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 8px;
+                                Text { text: root.english ? "Five-step first-run guidance" : "五步首次运行引导"; font-weight: 700; color: #17251f; }
+                                Text { text: root.english ? "Campus Target → Campus Project Library → save/recovery/history → Foundation/Detailed/Axiom → shortcuts" : "校园目标 → 校园项目库 → 保存／恢复／历史 → Foundation／Detailed／Axiom → 快捷键"; color: #506058; wrap: word-wrap; }
+                                Button { text: root.english ? "Reopen guidance" : "重新打开引导"; clicked => { root.settings-visible = false; root.guidance-step = 0; root.guidance-visible = true; } }
+                            }
+                        }
+                        Rectangle {
+                            height: 105px;
+                            background: #eee8da;
+                            border-color: #c7bca8;
+                            border-width: 1px;
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 8px;
+                                Text { text: root.english ? "Bundled three-screenshot quick start" : "内置三截图快速开始"; font-weight: 700; color: #17251f; }
+                                Text { text: root.english ? "Available offline; credential fields stay masked." : "可离线查看；凭据字段始终掩码显示。"; color: #506058; }
+                                Button { text: root.english ? "View quick start" : "查看快速开始"; clicked => { root.quick-start-visible = true; } }
+                            }
+                        }
+                    }
+                    if root.settings-tab == 1 : VerticalLayout {
+                        spacing: 14px;
+                        SectionLabel { text: root.english ? "SAVE, RECOVERY & HISTORY" : "保存、恢复与历史"; }
+                        Text { text: root.english ? "Project Save Point" : "项目保存点"; font-size: 18px; font-weight: 700; color: #17251f; }
+                        Text { text: root.english ? "A durable atomic state written after a complete operation or requested with Ctrl+S." : "完整语义操作结束后原子写入的持久状态，也可按 Ctrl+S 立即创建。"; color: #506058; wrap: word-wrap; }
+                        Rule {}
+                        Text { text: root.english ? "Project Recovery State" : "项目恢复状态"; font-size: 18px; font-weight: 700; color: #17251f; }
+                        Text { text: root.english ? "Choose the coherent recovery candidate or the last confirmed Project Save Point; nothing is merged automatically." : "异常退出后选择连贯的恢复候选或最后确认的项目保存点；不会自动合并半成品。"; color: #506058; wrap: word-wrap; }
+                        Rule {}
+                        Text { text: root.english ? "Project history" : "项目历史"; font-size: 18px; font-weight: 700; color: #17251f; }
+                        Text { text: root.english ? "Up to 50 user-meaningful operations persist. Focused text fields keep their own undo and redo." : "最多保留 50 个对用户有意义的操作；文字输入框使用自己的撤销与重做。"; color: #506058; wrap: word-wrap; }
+                        Rule {}
+                        Text { text: root.english ? "Portable Project" : "便携项目"; font-size: 18px; font-weight: 700; color: #17251f; }
+                        Text { text: root.english ? "An editable copy for another computer. Export never changes active identity or save destination." : "可在另一台电脑继续编辑的副本；导出不会改变当前项目身份或受管保存位置。"; color: #506058; wrap: word-wrap; }
+                    }
+                    if root.settings-tab == 2 : VerticalLayout {
+                        spacing: 10px;
+                        SectionLabel { text: root.english ? "FIXED SHORTCUTS & LIVE AVAILABILITY" : "固定快捷键与实时可用性"; }
+                        Text { text: root.english ? "Priority: focused text → top modal → active map tool → workflow task → project history." : "优先级：文字焦点 → 顶层窗口 → 活动地图工具 → 流程任务 → 项目历史。"; color: #506058; wrap: word-wrap; }
+                        if root.shortcut-feedback != "" : Text { text: root.shortcut-feedback; color: #a54836; font-weight: 700; wrap: word-wrap; }
+                        for shortcut in root.shortcut-rows : Rectangle {
+                            height: 64px;
+                            background: shortcut.available ? #e3eee5 : #eee8da;
+                            border-color: shortcut.available ? #7b9a82 : #c7bca8;
+                            border-width: 1px;
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 12px;
+                                Text { text: shortcut.label; width: 210px; font-weight: 700; color: #17251f; wrap: word-wrap; }
+                                Text { text: shortcut.keys; width: 150px; color: #33463d; vertical-alignment: center; }
+                                Text { text: shortcut.reason; color: #506058; wrap: word-wrap; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                    if root.settings-tab == 3 : VerticalLayout {
+                        spacing: 12px;
+                        SectionLabel { text: root.english ? "LOCAL CREDENTIALS" : "本机凭据"; }
+                        Text { text: root.english ? "Secret fields are masked and stored only in Windows Credential Manager. They are excluded from screenshots, logs, projects, Portable Projects, and diagnostics." : "敏感字段默认掩码，只存入 Windows 凭据管理器；不会进入截图、日志、项目、便携项目或诊断信息。"; color: #506058; wrap: word-wrap; }
+                        Text { text: "Gaode Web JS API Key"; color: #17251f; font-weight: 700; }
+                        LineEdit { text <=> root.gaode-key; input-type: password; placeholder-text: "Web JS API Key"; }
+                        Text { text: "Gaode securityJsCode"; color: #17251f; font-weight: 700; }
+                        LineEdit { text <=> root.gaode-security; input-type: password; placeholder-text: "securityJsCode"; }
+                        Text { text: root.english ? "Acquisition service secret" : "采集服务敏感凭据"; color: #17251f; font-weight: 700; }
+                        LineEdit { text <=> root.acquisition-secret; input-type: password; placeholder-text: root.english ? "Optional local token" : "可选的本机令牌"; }
+                        Text { text: root.english ? "The Gaode key and securityJsCode must come from the same Web (JS API) entry." : "高德 Key 与 securityJsCode 必须来自同一条 Web（JS API）配置。"; color: #506058; font-size: 12px; wrap: word-wrap; }
+                        HorizontalLayout {
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            Button { text: root.english ? "Save securely" : "安全保存"; clicked => { root.save-credentials(root.gaode-key, root.gaode-security, root.acquisition-secret); } }
+                        }
                     }
                 }
             }
         }
     }
+
 
     if root.utilities-visible : Rectangle {
         x: 700px;
@@ -986,6 +1095,149 @@ export component AppWindow inherits Window {
             Button { text: root.english ? "Close" : "关闭"; clicked => { root.about-visible = false; } }
         }
     }
+
+    if root.guidance-visible : Rectangle {
+        x: 250px;
+        y: 145px;
+        width: 780px;
+        height: 430px;
+        background: #faf8f1;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000066;
+        VerticalLayout {
+            padding: 26px;
+            spacing: 14px;
+            HorizontalLayout {
+                SectionLabel { text: (root.english ? "FIRST RUN GUIDANCE · STEP " : "首次运行引导 · 第 ") + (root.guidance-step + 1) + "/5"; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: "F1 / ?"; color: #506058; }
+            }
+            Text {
+                text: root.guidance-step == 0
+                    ? (root.english ? "Confirm a Campus Target first" : "先确认校园目标")
+                    : root.guidance-step == 1
+                    ? (root.english ? "Continue from the Campus Project Library" : "从校园项目库继续")
+                    : root.guidance-step == 2
+                    ? (root.english ? "Understand save, recovery, and history" : "理解保存、恢复与历史")
+                    : root.guidance-step == 3
+                    ? (root.english ? "Complete Foundation → Detailed → Axiom" : "按 Foundation → Detailed → Axiom 完成")
+                    : (root.english ? "Use contextual shortcuts" : "使用上下文快捷键");
+                font-size: 27px;
+                font-weight: 700;
+                color: #17251f;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.guidance-step == 0
+                    ? (root.english ? "Confirm the Campus Target before opening its Campus Project Library." : "先确认要复刻的校园目标，再进入这个校园自己的校园项目库。")
+                    : root.guidance-step == 1
+                    ? (root.english ? "Choose, create, or import a project. Each keeps its own progress and next task." : "选择、新建或导入项目；每个项目保留独立进度和下一项任务。")
+                    : root.guidance-step == 2
+                    ? (root.english ? "A Project Save Point records a complete operation. You choose the Project Recovery State after an unclean exit, and project history remains undoable." : "项目保存点记录完整操作；异常退出时由你选择项目恢复状态，并可撤销或重做项目历史。")
+                    : root.guidance-step == 3
+                    ? (root.english ? "Review the Campus Foundation Checklist and Known Feature Gaps, refine the Reviewed Campus Model, then verify the Minecraft 26.1.2 export in Axiom." : "先审核校园基础清单和已知地物缺口，再精修已审核校园模型，最后按 Minecraft 26.1.2 在 Axiom 中检查导出。")
+                    : (root.english ? "Shortcuts resolve through focused text, the top modal, an active map tool, the workflow task, and project history. Unavailable actions explain why." : "快捷键依次服从文字焦点、顶层窗口、地图工具、流程任务和项目历史；不可用时会说明原因。");
+                font-size: 16px;
+                color: #506058;
+                wrap: word-wrap;
+            }
+            if root.guidance-step == 3 : Button { text: root.english ? "View the bundled three-screenshot quick start" : "查看内置三截图快速开始"; clicked => { root.quick-start-visible = true; } }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            Text {
+                text: root.english ? "Guidance never saves, resets, or redirects the active project." : "引导不会保存、重置或跳转当前项目。";
+                color: #6d665b;
+                font-size: 12px;
+            }
+            HorizontalLayout {
+                Button { text: root.english ? "Skip" : "跳过"; clicked => { root.dismiss-guidance(true); } }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: root.english ? "Back" : "上一步"; enabled: root.guidance-step > 0; clicked => { root.guidance-step -= 1; } }
+                if root.guidance-step < 4 : Button { text: root.english ? "Next" : "下一步"; clicked => { root.guidance-step += 1; } }
+                if root.guidance-step == 4 : Button { text: root.english ? "Finish guidance" : "完成引导"; clicked => { root.dismiss-guidance(false); } }
+            }
+        }
+    }
+
+    if root.quick-start-visible : Rectangle {
+        x: 90px;
+        y: 105px;
+        width: 1100px;
+        height: 540px;
+        background: #faf8f1;
+        border-color: #23362e;
+        border-width: 2px;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000066;
+        VerticalLayout {
+            padding: 22px;
+            spacing: 14px;
+            HorizontalLayout {
+                VerticalLayout {
+                    SectionLabel { text: root.english ? "BUNDLED QUICK START" : "内置快速开始"; }
+                    Text { text: root.english ? "Three screenshots from campus selection to Axiom export" : "用三张截图看懂从校园选择到 Axiom 导出"; font-size: 23px; font-weight: 700; color: #17251f; }
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: root.english ? "Close" : "关闭"; clicked => { root.quick-start-visible = false; } }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                for shot[index] in [
+                    root.english ? "1 · CAMPUS TARGET" : "1 · 校园目标",
+                    root.english ? "2 · FOUNDATION / DETAILED" : "2 · FOUNDATION／DETAILED",
+                    root.english ? "3 · MINECRAFT 26.1.2 / AXIOM" : "3 · MINECRAFT 26.1.2／AXIOM",
+                ] : Rectangle {
+                    background: #e7dfcf;
+                    border-color: #9f927d;
+                    border-width: 1px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 9px;
+                        Rectangle {
+                            height: 250px;
+                            background: index == 0 ? #d9e3dc : index == 1 ? #e1dccb : #d8dde0;
+                            border-color: #7b817a;
+                            border-width: 1px;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+                                Rectangle { height: 24px; background: #23362e; }
+                                HorizontalLayout {
+                                    Rectangle { width: 58px; background: #ece4d3; }
+                                    Rectangle {
+                                        background: #faf8f1;
+                                        VerticalLayout {
+                                            padding: 9px;
+                                            spacing: 7px;
+                                            Rectangle { height: 18px; background: #a54836; width: index == 0 ? 120px : 170px; }
+                                            Rectangle { height: 10px; background: #b7ad9a; }
+                                            Rectangle { height: 10px; background: #d0c7b6; width: 80%; }
+                                            Rectangle { vertical-stretch: 1; background: index == 2 ? #bec9ce : #dce5dc; border-color: #9faaa2; border-width: 1px; }
+                                            Rectangle { height: 25px; background: #617068; width: 45%; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text { text: shot; font-weight: 700; color: #17251f; wrap: word-wrap; }
+                        Text {
+                            text: index == 0
+                                ? (root.english ? "Confirm the Campus Target, then enter its Campus Project Library." : "确认校园目标，再进入该校园的校园项目库。")
+                                : index == 1
+                                ? (root.english ? "Review Foundation evidence and Known Feature Gaps, then refine a reviewed building." : "审核 Foundation 证据和已知地物缺口，再精修已审核建筑。")
+                                : (root.english ? "Generate for Minecraft 26.1.2, verify in Axiom, and export .schem." : "生成 Minecraft 26.1.2 结果，在 Axiom 检查并导出 .schem。");
+                            color: #506058;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+            Text { text: root.english ? "Bundled with the App; no network connection is required." : "内容随应用内置，无需网络连接。"; color: #506058; }
+        }
+    }
+
 
     if root.evidence-visible : Rectangle {
         x: 220px;
