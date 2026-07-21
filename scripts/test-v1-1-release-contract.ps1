@@ -57,6 +57,7 @@ Assert-Contains $candidateVerifier "CleanWindowsImageId" "Candidate evidence mus
 Assert-Contains $candidateVerifier "release-binary-smoke" "Exact release binaries must be smoked before packaging"
 Assert-Contains $candidateVerifier "CleanWindowsImageManifest" "Clean image identity must be bound to a manifest"
 Assert-Contains $candidateVerifier '"release-contract"' "Candidate evidence must record the release contract test"
+Assert-NotContains $candidateVerifier '"--offline"' "Candidate evidence commands must resolve locked dependencies when the local cache is incomplete"
 Assert-Contains $installerVerifier '$supportedPredecessorSha256' "Supported upgrade must pin the predecessor digest"
 Assert-Contains $installerVerifier "e59c1d1e523501db373db51ae0f2167c4d4fd368125dd6d71889ab08ac77e202" "Supported V1.0.1 predecessor digest changed"
 if (

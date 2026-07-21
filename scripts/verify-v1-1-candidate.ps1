@@ -141,7 +141,7 @@ Invoke-EvidenceCommand "release-build" "cargo" @(
 )
 Invoke-EvidenceCommand "cargo-metadata" "cargo" @(
     "+stable", "metadata", "--manifest-path", "native/Cargo.toml", "--locked",
-    "--offline", "--format-version", "1"
+    "--format-version", "1"
 )
 
 $sourceStateAfter = @(& git -C $root status --porcelain=v1)
