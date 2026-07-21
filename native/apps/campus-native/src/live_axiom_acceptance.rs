@@ -179,16 +179,14 @@ fn validate_campuses(
             "matrix must contain exactly six unique accepted campuses",
         );
     }
-    let mut exercised = BTreeSet::new();
+    let mut exercised = BTreeSet::<String>::new();
     for campus in campuses {
         let id = campus
             .get("campusId")
             .and_then(Value::as_str)
             .unwrap_or("unknown-campus");
         validate_campus_common(root, id, campus, blockers);
-        if let Some(risks) = campus.get("riskExercises").and_then(Value::as_array) {
-            exercised.extend(risks.iter().filter_map(Value::as_str));
-        }
+        validate_risk_exercises(root, id, campus, &mut exercised, blockers);
         if FULL_FLOW_CAMPUSES.contains(&id) {
             validate_full_flow(root, id, campus, inspections, blockers);
         } else if id == NEGATIVE_CAMPUS {
@@ -236,40 +234,144 @@ fn validate_campus_common(root: &Path, id: &str, campus: &Value, blockers: &mut 
     if !coordinates_ok {
         blocker(blockers, id, "Gaode coordinates are missing or invalid");
     }
-    for (pointer, label) in [
-        (
-            "/evidence/datasetBundleDigestSha256",
-            "Dataset Bundle digest",
-        ),
-        ("/evidence/providerSnapshots", "provider snapshots"),
-        ("/evidence/ruleVersions", "rule versions"),
-        ("/evidence/limits", "request limits"),
-        ("/evidence/contentDigests", "content digests"),
-    ] {
-        if campus.pointer(pointer).is_none_or(Value::is_null) {
-            blocker(blockers, id, &format!("missing {label}"));
-        }
-    }
     if !is_sha256(campus.pointer("/evidence/datasetBundleDigestSha256")) {
         blocker(blockers, id, "Dataset Bundle digest is not SHA-256");
     }
-    for category in CATEGORIES {
+    let snapshots_ok = campus
+        .pointer("/evidence/providerSnapshots")
+        .and_then(Value::as_array)
+        .is_some_and(|snapshots| {
+            !snapshots.is_empty()
+                && snapshots.iter().all(|snapshot| {
+                    non_empty_string(snapshot.get("provider"))
+                        && non_empty_string(snapshot.get("snapshotId"))
+                        && is_sha256(snapshot.get("contentDigestSha256"))
+                })
+        });
+    if !snapshots_ok {
+        blocker(blockers, id, "provider snapshots are empty or incomplete");
+    }
+    for (pointer, label) in [
+        ("/evidence/ruleVersions", "rule versions"),
+        ("/evidence/limits", "request limits"),
+    ] {
         if campus
-            .pointer(&format!("/evidence/coverageReports/{category}"))
-            .is_none()
+            .pointer(pointer)
+            .and_then(Value::as_object)
+            .is_none_or(serde_json::Map::is_empty)
         {
-            blocker(blockers, id, &format!("missing {category} Coverage Report"));
+            blocker(blockers, id, &format!("{label} must not be empty"));
+        }
+    }
+    let digests_ok = campus
+        .pointer("/evidence/contentDigests")
+        .and_then(Value::as_object)
+        .is_some_and(|digests| {
+            !digests.is_empty() && digests.values().all(|value| is_sha256(Some(value)))
+        });
+    if !digests_ok {
+        blocker(blockers, id, "content digests are empty or invalid");
+    }
+    for category in CATEGORIES {
+        let report_ok = campus
+            .pointer(&format!("/evidence/coverageReports/{category}"))
+            .and_then(Value::as_object)
+            .is_some_and(|report| {
+                let status = report.get("status").and_then(Value::as_str);
+                let allowed_status = if id == NEGATIVE_CAMPUS {
+                    status == Some("not-run-boundary-unavailable")
+                } else {
+                    matches!(
+                        status,
+                        Some("complete" | "complete-empty" | "partial" | "failed")
+                    )
+                };
+                allowed_status
+                    && is_sha256(report.get("reportDigestSha256"))
+                    && non_empty_string(report.get("classificationRuleVersion"))
+                    && report
+                        .get("queryScope")
+                        .and_then(Value::as_object)
+                        .is_some_and(|scope| !scope.is_empty())
+                    && report
+                        .get("limits")
+                        .and_then(Value::as_object)
+                        .is_some_and(|limits| !limits.is_empty())
+                    && report.get("knownGaps").and_then(Value::as_array).is_some()
+                    && report
+                        .get("providerSnapshotIds")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            !ids.is_empty() && ids.iter().all(|value| non_empty_string(Some(value)))
+                        })
+            });
+        if !report_ok {
+            blocker(
+                blockers,
+                id,
+                &format!("{category} Coverage Report has an invalid status or incomplete scope, limits, rules, gaps, snapshots, or digest"),
+            );
         }
     }
     if let Some(path) = campus
         .pointer("/evidence/acquisitionLicenceManifest")
         .and_then(Value::as_str)
     {
-        if resolve_evidence_path(root, path).is_err() {
+        let manifest_ok = resolve_evidence_path(root, path)
+            .and_then(|path| std::fs::read(path).map_err(|error| error.to_string()))
+            .and_then(|bytes| {
+                serde_json::from_slice::<Value>(&bytes).map_err(|error| error.to_string())
+            })
+            .is_ok_and(|manifest| {
+                manifest
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .is_some_and(|sources| !sources.is_empty())
+            });
+        if !manifest_ok {
             blocker(
                 blockers,
                 id,
-                "Acquisition Licence Manifest file is missing or unsafe",
+                "Acquisition Licence Manifest is missing, unsafe, or has no sources",
+            );
+        }
+    }
+}
+
+fn validate_risk_exercises(
+    root: &Path,
+    campus_id: &str,
+    campus: &Value,
+    exercised: &mut BTreeSet<String>,
+    blockers: &mut Vec<Value>,
+) {
+    let Some(risks) = campus.get("riskExercises").and_then(Value::as_array) else {
+        blocker(blockers, campus_id, "riskExercises must be an array");
+        return;
+    };
+    for risk in risks {
+        let Some(risk_id) = risk.get("riskId").and_then(Value::as_str) else {
+            blocker(blockers, campus_id, "risk exercise is missing riskId");
+            continue;
+        };
+        let evidence_ok = risk
+            .get("evidence")
+            .and_then(Value::as_array)
+            .is_some_and(|paths| {
+                !paths.is_empty()
+                    && paths.iter().all(|value| {
+                        value
+                            .as_str()
+                            .is_some_and(|path| resolve_evidence_path(root, path).is_ok())
+                    })
+            });
+        if evidence_ok {
+            exercised.insert(risk_id.to_string());
+        } else {
+            blocker(
+                blockers,
+                campus_id,
+                &format!("risk exercise {risk_id} has no existing result evidence"),
             );
         }
     }
@@ -297,6 +399,21 @@ fn validate_full_flow(
         if campus.pointer(pointer).and_then(Value::as_bool) != Some(true) {
             blocker(blockers, id, reason);
         }
+    }
+    if campus
+        .pointer("/workflow/projectRevision")
+        .and_then(Value::as_u64)
+        .is_none_or(|revision| revision == 0)
+        || campus
+            .pointer("/workflow/projectId")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        blocker(
+            blockers,
+            id,
+            "current project identity or revision is missing",
+        );
     }
     let outputs = campus
         .pointer("/outputs")
@@ -326,7 +443,7 @@ fn validate_full_flow(
         );
     }
     for output in &outputs {
-        validate_output(root, id, output, inspections, blockers);
+        validate_output(root, id, campus, output, inspections, blockers);
     }
 }
 
@@ -401,6 +518,7 @@ fn validate_negative(id: &str, campus: &Value, blockers: &mut Vec<Value>) {
 fn validate_output(
     root: &Path,
     campus_id: &str,
+    campus: &Value,
     output: &Value,
     inspections: &mut Vec<Value>,
     blockers: &mut Vec<Value>,
@@ -477,27 +595,40 @@ fn validate_output(
         Sha256::digest(std::fs::read(&schematic_path).unwrap_or_default())
     );
     if kind == "foundation" {
-        validate_foundation_manifest(
-            root,
-            campus_id,
-            output,
-            &inspection,
-            &file_sha,
+        let expected = FoundationManifestExpectation {
+            project_id: campus
+                .pointer("/workflow/projectId")
+                .and_then(Value::as_str),
+            project_revision: campus
+                .pointer("/workflow/projectRevision")
+                .and_then(Value::as_u64),
+            dataset_bundle_id: campus
+                .pointer("/evidence/datasetBundleId")
+                .and_then(Value::as_str),
             schematic_name,
-            blockers,
-        );
+            file_sha256: &file_sha,
+            inspection: &inspection,
+        };
+        validate_foundation_manifest(root, campus_id, output, &expected, blockers);
     }
     validate_axiom_import(root, campus_id, output, &file_sha, blockers);
     inspections.push(json!({"campusId": campus_id, "kind": kind, "file": schematic_name, "fileSha256": file_sha, "inspection": inspection}));
+}
+
+struct FoundationManifestExpectation<'a> {
+    project_id: Option<&'a str>,
+    project_revision: Option<u64>,
+    dataset_bundle_id: Option<&'a str>,
+    schematic_name: &'a str,
+    file_sha256: &'a str,
+    inspection: &'a campus_export::SchematicInspection,
 }
 
 fn validate_foundation_manifest(
     root: &Path,
     campus_id: &str,
     output: &Value,
-    inspection: &campus_export::SchematicInspection,
-    file_sha: &str,
-    schematic_name: &str,
+    expected: &FoundationManifestExpectation<'_>,
     blockers: &mut Vec<Value>,
 ) {
     let Some(name) = output.get("foundationManifest").and_then(Value::as_str) else {
@@ -525,16 +656,21 @@ fn validate_foundation_manifest(
         blocker(blockers, campus_id, "Foundation Manifest is invalid JSON");
         return;
     };
-    let expected_file = Path::new(schematic_name)
+    let expected_file = Path::new(expected.schematic_name)
         .file_name()
         .and_then(|name| name.to_str());
-    let schematic_bytes = std::fs::metadata(root.join(schematic_name))
+    let schematic_bytes = std::fs::metadata(root.join(expected.schematic_name))
         .map(|item| item.len())
         .ok();
-    let matches = manifest
-        .pointer("/compatibilityProfileId")
-        .and_then(Value::as_str)
-        == Some("minecraft-java-26.1.2-axiom-v1")
+    let matches = manifest.pointer("/projectId").and_then(Value::as_str) == expected.project_id
+        && manifest.pointer("/projectRevision").and_then(Value::as_u64)
+            == expected.project_revision
+        && manifest.pointer("/datasetBundleId").and_then(Value::as_str)
+            == expected.dataset_bundle_id
+        && manifest
+            .pointer("/compatibilityProfileId")
+            .and_then(Value::as_str)
+            == Some("minecraft-java-26.1.2-axiom-v1")
         && manifest
             .pointer("/schematic/fileName")
             .and_then(Value::as_str)
@@ -542,18 +678,18 @@ fn validate_foundation_manifest(
         && manifest
             .pointer("/schematic/sha256")
             .and_then(Value::as_str)
-            == Some(file_sha)
+            == Some(expected.file_sha256)
         && manifest.pointer("/schematic/bytes").and_then(Value::as_u64) == schematic_bytes
         && manifest.pointer("/schematic/width").and_then(Value::as_u64)
-            == Some(inspection.dimensions[0] as u64)
+            == Some(expected.inspection.dimensions[0] as u64)
         && manifest
             .pointer("/schematic/height")
             .and_then(Value::as_u64)
-            == Some(inspection.dimensions[1] as u64)
+            == Some(expected.inspection.dimensions[1] as u64)
         && manifest
             .pointer("/schematic/length")
             .and_then(Value::as_u64)
-            == Some(inspection.dimensions[2] as u64);
+            == Some(expected.inspection.dimensions[2] as u64);
     if !matches {
         blocker(
             blockers,
@@ -600,14 +736,41 @@ fn validate_axiom_import(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let attestation = import.get("visualAttestation");
     if screenshots.len() < 2
-        || screenshots
-            .iter()
-            .filter_map(Value::as_str)
-            .any(|path| resolve_evidence_path(root, path).is_err())
+        || screenshots.iter().any(|value| {
+            value
+                .as_str()
+                .is_none_or(|path| validate_png_screenshot(root, path).is_err())
+        })
+        || attestation
+            .and_then(|value| value.get("orientationAndPlacement"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        || attestation
+            .and_then(|value| value.get("principalFeatures"))
+            .and_then(Value::as_bool)
+            != Some(true)
     {
-        blocker(blockers, campus_id, "Axiom evidence requires existing orientation/placement and principal-feature screenshots");
+        blocker(blockers, campus_id, "Axiom evidence requires valid screenshots and explicit orientation/placement and principal-feature attestation");
     }
+}
+
+fn validate_png_screenshot(root: &Path, relative: &str) -> Result<(), String> {
+    let path = resolve_evidence_path(root, relative)?;
+    let reader = image::ImageReader::open(path)
+        .map_err(|error| error.to_string())?
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    if reader.format() != Some(image::ImageFormat::Png) {
+        return Err("screenshot is not PNG".into());
+    }
+    let decoded = reader.decode().map_err(|error| error.to_string())?;
+    let (width, height) = (decoded.width(), decoded.height());
+    if width < 640 || height < 360 {
+        return Err("screenshot is below 640x360".into());
+    }
+    Ok(())
 }
 
 fn resolve_evidence_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -645,6 +808,11 @@ fn is_sha256(value: Option<&Value>) -> bool {
         .and_then(Value::as_str)
         .is_some_and(|text| text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
+fn non_empty_string(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+}
 fn blocker(blockers: &mut Vec<Value>, case_id: &str, reason: &str) {
     blockers.push(json!({"caseId": case_id, "reason": reason}));
 }
@@ -676,25 +844,37 @@ mod tests {
         for id in FULL_FLOW_CAMPUSES.into_iter().chain([NEGATIVE_CAMPUS]) {
             let campus_root = root.path().join(id);
             std::fs::create_dir_all(&campus_root).unwrap();
-            std::fs::write(campus_root.join("licence.json"), b"{}").unwrap();
-            let risks = match id {
-                "sjtu-minhang" => json!([
+            std::fs::write(
+                campus_root.join("licence.json"),
+                br#"{"sources":[{"provider":"osm","licence":"ODbL"}]}"#,
+            )
+            .unwrap();
+            let risk_ids: &[&str] = match id {
+                "sjtu-minhang" => &[
                     "large-request-preflight",
                     "continuation-cancellation-replay",
                     "overlapping-buildings",
                     "whole-part-buildings",
-                    "sports-containment"
-                ]),
-                "wuhan-university" => json!(["complex-relations"]),
-                "xiamen-siming" => json!(["alias-disambiguation"]),
-                "xian-jiaotong-xingqing" => json!(["multipolygons"]),
-                NEGATIVE_CAMPUS => json!(["honest-unavailability"]),
-                _ => json!([]),
+                    "sports-containment",
+                ],
+                "wuhan-university" => &["complex-relations"],
+                "xiamen-siming" => &["alias-disambiguation"],
+                "xian-jiaotong-xingqing" => &["multipolygons"],
+                NEGATIVE_CAMPUS => &["honest-unavailability"],
+                _ => &[],
             };
+            let risks = risk_ids
+                .iter()
+                .map(|risk_id| {
+                    let name = format!("risk-{risk_id}.json");
+                    std::fs::write(campus_root.join(&name), b"{\"status\":\"pass\"}").unwrap();
+                    json!({"riskId":risk_id,"evidence":[format!("{id}/{name}")]})
+                })
+                .collect::<Vec<_>>();
             let workflow = if id == NEGATIVE_CAMPUS {
                 json!({"boundaryStatus":"boundary-unavailable","recoveryActions":{"retry":true,"back":true,"refresh":true},"diagnosticLineage":["event-1"],"fabricatedGeometry":false,"fiveCategoryReviewEntered":false,"exportAttempted":false})
             } else {
-                json!({"boundaryConfirmed":true,"fiveCategoryReviewComplete":true,"saveReopenPassed":true,"currentRevisionGenerated":true})
+                json!({"projectId":id,"projectRevision":1,"boundaryConfirmed":true,"fiveCategoryReviewComplete":true,"saveReopenPassed":true,"currentRevisionGenerated":true})
             };
             let mut outputs = Vec::new();
             if id != NEGATIVE_CAMPUS {
@@ -703,10 +883,15 @@ mod tests {
                     outputs.push(test_output(root.path(), id, "detailed", false));
                 }
             }
+            let coverage_status = if id == NEGATIVE_CAMPUS {
+                "not-run-boundary-unavailable"
+            } else {
+                "complete"
+            };
             campuses.push(json!({
                 "campusId": id, "campusName": id,
                 "gaode":{"poiId":"poi","address":"address","coordinates":[121.0,31.0],"providerDiagnostics":"redacted"},
-                "evidence":{"datasetBundleId":"bundle","datasetBundleDigestSha256":sha,"providerSnapshots":["osm","overture"],"coverageReports":{"building":{},"circulation":{},"water":{},"vegetation":{},"sports":{}},"acquisitionLicenceManifest":format!("{id}/licence.json"),"ruleVersions":{},"limits":{},"contentDigests":{}},
+                "evidence":{"datasetBundleId":"bundle","datasetBundleDigestSha256":sha,"providerSnapshots":[{"provider":"osm","snapshotId":"osm-1","contentDigestSha256":sha}],"coverageReports":{"building":coverage(&sha, coverage_status),"circulation":coverage(&sha, coverage_status),"water":coverage(&sha, coverage_status),"vegetation":coverage(&sha, coverage_status),"sports":coverage(&sha, coverage_status)},"acquisitionLicenceManifest":format!("{id}/licence.json"),"ruleVersions":{"conflation":"v1"},"limits":{"maxTiles":100},"contentDigests":{"observations":sha}},
                 "riskExercises":risks,"workflow":workflow,"outputs":outputs
             }));
         }
@@ -750,11 +935,11 @@ mod tests {
         let file_sha = format!("{:x}", Sha256::digest(std::fs::read(&schematic).unwrap()));
         let shot_a = directory.join(format!("{kind}-orientation.png"));
         let shot_b = directory.join(format!("{kind}-features.png"));
-        std::fs::write(&shot_a, b"screenshot-a").unwrap();
-        std::fs::write(&shot_b, b"screenshot-b").unwrap();
+        write_test_png(&shot_a);
+        write_test_png(&shot_b);
         let mut output = json!({
             "kind":kind,"schematic":format!("{campus_id}/{file_name}"),"determinismRepeat":format!("{campus_id}/{repeat_name}"),
-            "axiomImport":{"status":"pass","fileSha256":file_sha,"durationMs":1,"bounds":[0,0,0,2,1,2],"blockCount":2,"screenshots":[format!("{campus_id}/{}",shot_a.file_name().unwrap().to_string_lossy()),format!("{campus_id}/{}",shot_b.file_name().unwrap().to_string_lossy())]}
+            "axiomImport":{"status":"pass","fileSha256":file_sha,"durationMs":1,"bounds":[0,0,0,2,1,2],"blockCount":2,"screenshots":[format!("{campus_id}/{}",shot_a.file_name().unwrap().to_string_lossy()),format!("{campus_id}/{}",shot_b.file_name().unwrap().to_string_lossy())],"visualAttestation":{"orientationAndPlacement":true,"principalFeatures":true}}
         });
         if foundation {
             let manifest_name = "foundation-manifest.json";
@@ -763,5 +948,13 @@ mod tests {
             output["foundationManifest"] = json!(format!("{campus_id}/{manifest_name}"));
         }
         output
+    }
+
+    fn coverage(sha: &str, status: &str) -> Value {
+        json!({"status":status,"reportDigestSha256":sha,"providerSnapshotIds":["osm-1"],"classificationRuleVersion":"v1","queryScope":{"campusBoundary":"confirmed"},"limits":{"maxObservations":100},"knownGaps":[]})
+    }
+
+    fn write_test_png(path: &Path) {
+        image::RgbImage::new(1280, 720).save(path).unwrap();
     }
 }

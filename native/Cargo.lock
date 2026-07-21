@@ -784,6 +784,7 @@ dependencies = [
  "campus-services",
  "campus-state",
  "campus-tool-protocol",
+ "image",
  "keyring",
  "rand",
  "rfd",

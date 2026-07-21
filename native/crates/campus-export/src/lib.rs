@@ -375,8 +375,8 @@ pub fn inspect_schematic(path: &Path) -> Result<SchematicInspection, String> {
     else {
         return Err("schematic Palette must be a compound".into());
     };
-    if palette.is_empty() || palette.keys().any(|name| !name.starts_with("minecraft:")) {
-        return Err("schematic palette contains an unknown block namespace".into());
+    if palette.is_empty() || palette.keys().any(|name| !supported_v11_block(name)) {
+        return Err("schematic palette contains a block outside the pinned V1.1 catalog".into());
     }
     let air_index = match palette.get("minecraft:air") {
         Some(Value::Int(value)) => Some(*value as u32),
@@ -440,6 +440,84 @@ pub fn inspect_schematic(path: &Path) -> Result<SchematicInspection, String> {
         non_air_voxels,
         content_sha256: format!("{:x}", Sha256::digest(stable)),
     })
+}
+
+fn supported_v11_block(block: &str) -> bool {
+    let base = block.split_once('[').map_or(block, |(base, _)| base);
+    matches!(
+        base,
+        "minecraft:air"
+            | "minecraft:birch_leaves"
+            | "minecraft:birch_log"
+            | "minecraft:black_concrete"
+            | "minecraft:black_stained_glass"
+            | "minecraft:blue_stained_glass"
+            | "minecraft:bricks"
+            | "minecraft:brown_stained_glass"
+            | "minecraft:chiseled_deepslate"
+            | "minecraft:chiseled_stone_bricks"
+            | "minecraft:cobblestone"
+            | "minecraft:cut_copper"
+            | "minecraft:cyan_stained_glass"
+            | "minecraft:cyan_terracotta"
+            | "minecraft:dark_oak_door"
+            | "minecraft:dark_oak_leaves"
+            | "minecraft:dark_oak_log"
+            | "minecraft:dark_oak_planks"
+            | "minecraft:dark_oak_slab"
+            | "minecraft:deepslate_brick_slab"
+            | "minecraft:deepslate_bricks"
+            | "minecraft:deepslate_tile_slab"
+            | "minecraft:deepslate_tiles"
+            | "minecraft:diamond_block"
+            | "minecraft:exposed_copper"
+            | "minecraft:glass"
+            | "minecraft:glass_pane"
+            | "minecraft:grass_block"
+            | "minecraft:gray_concrete"
+            | "minecraft:gray_stained_glass"
+            | "minecraft:green_concrete"
+            | "minecraft:green_stained_glass"
+            | "minecraft:iron_bars"
+            | "minecraft:iron_door"
+            | "minecraft:light_blue_stained_glass"
+            | "minecraft:light_gray_concrete"
+            | "minecraft:moss_block"
+            | "minecraft:mud_bricks"
+            | "minecraft:oak_door"
+            | "minecraft:oak_leaves"
+            | "minecraft:oak_log"
+            | "minecraft:oak_planks"
+            | "minecraft:polished_andesite"
+            | "minecraft:polished_andesite_slab"
+            | "minecraft:polished_blackstone"
+            | "minecraft:polished_granite"
+            | "minecraft:purple_concrete"
+            | "minecraft:quartz_block"
+            | "minecraft:quartz_bricks"
+            | "minecraft:sand"
+            | "minecraft:sandstone"
+            | "minecraft:smooth_quartz"
+            | "minecraft:smooth_quartz_slab"
+            | "minecraft:smooth_sandstone"
+            | "minecraft:smooth_stone"
+            | "minecraft:smooth_stone_slab"
+            | "minecraft:spruce_door"
+            | "minecraft:spruce_planks"
+            | "minecraft:spruce_slab"
+            | "minecraft:stone"
+            | "minecraft:stone_brick_slab"
+            | "minecraft:stone_bricks"
+            | "minecraft:stone_slab"
+            | "minecraft:stripped_oak_log"
+            | "minecraft:stripped_spruce_log"
+            | "minecraft:terracotta"
+            | "minecraft:tinted_glass"
+            | "minecraft:water"
+            | "minecraft:white_concrete"
+            | "minecraft:yellow_concrete"
+            | "minecraft:yellow_stained_glass"
+    )
 }
 
 pub fn write_schematic_with_fault(
@@ -874,6 +952,28 @@ mod tests {
         assert_eq!(inspection.non_air_voxels, 2);
         assert_eq!(inspection.total_voxels, 4);
         assert_eq!(inspection.content_sha256.len(), 64);
+    }
+
+    #[test]
+    fn inspection_rejects_a_namespaced_block_outside_the_pinned_catalog() {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("unknown.schem");
+        write_schematic(
+            &path,
+            "unknown",
+            &VoxelModel {
+                width: 1,
+                height: 1,
+                length: 1,
+                palette: vec!["minecraft:not_a_real_block".into()],
+                blocks: vec![0],
+            },
+        )
+        .unwrap();
+
+        assert!(inspect_schematic(&path)
+            .unwrap_err()
+            .contains("pinned V1.1 catalog"));
     }
 
     #[test]
