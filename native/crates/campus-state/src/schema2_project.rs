@@ -4216,6 +4216,10 @@ pub struct CampusProjectLibraryRecord {
 }
 
 impl CampusProjectLibraryRecord {
+    pub fn project_name(&self) -> &str {
+        &self.name
+    }
+
     pub fn project_id(&self) -> &ProjectId {
         &self.project_id
     }
@@ -4348,6 +4352,10 @@ impl CampusProjectLibrary {
         self.index.projects.push(record);
         self.save_index()?;
         Ok(project)
+    }
+
+    pub fn records(&self) -> &[CampusProjectLibraryRecord] {
+        &self.index.projects
     }
 
     pub fn record(&self, project_id: &ProjectId) -> Option<&CampusProjectLibraryRecord> {

@@ -6,21 +6,25 @@ mod diagnostics;
 mod v11_acquisition_client;
 mod v11_boundary_evidence_desk;
 mod v11_foundation_review_desk;
+#[cfg(test)]
 mod v11_project_kernel;
+mod v11_project_library;
 mod v11_tracer_bullet;
 
 use desktop_tool_process::DesktopToolProcessSupervisor;
+use v11_project_library::{CampusProjectLauncher, LauncherStep, ProjectRowSaveState};
 
 use arnis_core::{FootprintComponent, GenerateBuildingRequest, MaterialOverrides};
 use campus_state::{
-    ArnisStylePreset, CampusProject, CampusReconstructionWorkflow, CampusTargetEvidence,
-    CandidateConfidence, CandidateConfidenceFilter, DesktopApplicationState, DesktopLocale,
-    DesktopMode, DetailedBuildingHandoff, DetailedBuildingRuleStack, DetailedBuildingWorkspace,
-    DetailedBuildingWorkspaceTask, ExternalModelDecision, FeatureKind, FoundationMapTask,
-    FoundationPhase, FoundationStep, FoundationStylePack, FoundationStylePreset,
-    FoundationWorkflow, FoundationWorkflowIntent, GeoPoint, MapCandidate, MapViewState,
-    ReconstructionWorkflowIntent, ReviewDecision, SemanticFeatureDraft, SemanticFeatureKind,
-    SemanticFeatureSide, SemanticHeightBand, SemanticStrength, SourceConflictDecision,
+    ArnisStylePreset, CampusProject, CampusProjectLibrary, CampusReconstructionWorkflow,
+    CampusScope, CampusTargetEvidence, CandidateConfidence, CandidateConfidenceFilter,
+    DesktopApplicationState, DesktopLocale, DesktopMode, DetailedBuildingHandoff,
+    DetailedBuildingRuleStack, DetailedBuildingWorkspace, DetailedBuildingWorkspaceTask,
+    ExternalModelDecision, FeatureKind, FoundationMapTask, FoundationPhase, FoundationStep,
+    FoundationStylePack, FoundationStylePreset, FoundationWorkflow, FoundationWorkflowIntent,
+    GeoPoint, MapCandidate, MapViewState, ReconstructionWorkflowIntent, ReviewDecision,
+    SemanticFeatureDraft, SemanticFeatureKind, SemanticFeatureSide, SemanticHeightBand,
+    SemanticStrength, SourceConflictDecision,
 };
 use campus_tool_protocol::{MapCoordinate, MapOverlay, MapPurpose};
 #[cfg(test)]
@@ -315,6 +319,97 @@ fn strings(values: &[&str]) -> ModelRc<SharedString> {
             .map(|value| SharedString::from(*value))
             .collect::<Vec<_>>(),
     ))
+}
+
+fn sync_project_launcher_ui(
+    ui: &AppWindow,
+    launcher: &CampusProjectLauncher,
+) -> Result<(), String> {
+    ui.set_campus_launcher_visible(true);
+    let step = match launcher.step() {
+        LauncherStep::CampusTarget => 0,
+        LauncherStep::ProjectLibrary => 1,
+        LauncherStep::Workspace => 2,
+    };
+    ui.set_launcher_step(step);
+    let campus = launcher
+        .confirmed_campus()
+        .or_else(|| launcher.offered_campus());
+    ui.set_launcher_campus_name(
+        campus
+            .map(CampusScope::canonical_name)
+            .unwrap_or_default()
+            .into(),
+    );
+
+    let rows = if launcher.confirmed_campus().is_some() {
+        launcher.rows()?
+    } else {
+        Vec::new()
+    };
+    let active_id = launcher.active_project_id().cloned();
+    let active = active_id
+        .as_ref()
+        .and_then(|project_id| rows.iter().find(|row| &row.project_id == project_id));
+    let models = rows
+        .iter()
+        .map(|row| LauncherProjectRow {
+            project_id: row.project_id.as_str().into(),
+            project_name: row.project_name.clone().into(),
+            latest_save: format!("{}", row.latest_successful_save_unix_ms).into(),
+            save_state: match &row.save_state {
+                ProjectRowSaveState::Saved => "Saved".into(),
+                ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
+                ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
+            },
+            progress: format!("{} / {}", row.completed_tasks, row.total_tasks).into(),
+            next_task: row.next_incomplete_task.clone().into(),
+            action_label: if row.completed_tasks == row.total_tasks {
+                "View".into()
+            } else {
+                "Continue".into()
+            },
+        })
+        .collect::<Vec<_>>();
+    ui.set_launcher_projects(ModelRc::new(VecModel::from(models)));
+
+    if let Some(row) = active {
+        ui.set_project_name(row.project_name.clone().into());
+        ui.set_launcher_progress(format!("{} / {}", row.completed_tasks, row.total_tasks).into());
+        ui.set_launcher_save_state(match &row.save_state {
+            ProjectRowSaveState::Saved => "Saved".into(),
+            ProjectRowSaveState::RecoveryAvailable => "Recovery available".into(),
+            ProjectRowSaveState::SaveFailed(reason) => format!("Save failed: {reason}").into(),
+        });
+        ui.set_launcher_next_task(row.next_incomplete_task.clone().into());
+        ui.set_launcher_compatibility(row.minecraft_compatibility.clone().into());
+        ui.set_route_stage(if row.completed_tasks == row.total_tasks {
+            4
+        } else {
+            2
+        });
+    } else {
+        ui.set_launcher_progress(format!("{} project(s)", rows.len()).into());
+        ui.set_launcher_save_state("No active project".into());
+        ui.set_launcher_next_task(if step == 0 {
+            "Confirm Campus Target".into()
+        } else {
+            "Choose or create a project".into()
+        });
+        ui.set_route_stage(step);
+    }
+    Ok(())
+}
+fn launcher_project_id(
+    launcher: &CampusProjectLauncher,
+    value: &str,
+) -> Result<campus_state::ProjectId, String> {
+    launcher
+        .rows()?
+        .into_iter()
+        .find(|row| row.project_id.as_str() == value)
+        .map(|row| row.project_id)
+        .ok_or_else(|| format!("Project is not in the confirmed campus library: {value}"))
 }
 
 fn sync_locale_models(ui: &AppWindow, locale: DesktopLocale) {
@@ -2158,13 +2253,36 @@ fn main() -> Result<(), slint::PlatformError> {
             eprintln!("V1.1 development acquisition fixture failed: {error}");
         }
     }
-    if let Err(error) = v11_project_kernel::bootstrap_if_enabled(
-        &app_data_dir(),
-        cfg!(debug_assertions),
-        std::env::var("CAMPUS_V11_PROJECT_KERNEL").ok().as_deref(),
-    ) {
-        eprintln!("V1.1 development project kernel failed: {error}");
-    }
+    let project_kernel_gate = std::env::var("CAMPUS_V11_PROJECT_KERNEL").ok();
+    let (v11_launcher, v11_launcher_error) = if project_kernel_gate.as_deref() == Some("1") {
+        match (|| {
+            let capability = campus_state::V11ConstructionCapability::request(
+                cfg!(debug_assertions),
+                project_kernel_gate.as_deref(),
+            )?;
+            let mut launcher = CampusProjectLauncher::open(
+                &app_data_dir(),
+                capability,
+                campus_state::InstallationId::new("campus-native")?,
+            )?;
+            if launcher.offered_campus().is_none() {
+                launcher.select_campus_candidate(
+                    CampusScope::new(
+                        "gaode:B00155J6JH",
+                        "华东师范大学普陀校区",
+                        [121.395, 31.202],
+                    )?
+                    .with_gaode_poi_id("B00155J6JH")?,
+                );
+            }
+            Ok::<_, String>(Rc::new(RefCell::new(launcher)))
+        })() {
+            Ok(launcher) => (Some(launcher), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
     let v11_tracer_error = match v11_tracer_bullet::bootstrap_if_enabled(
         &app_data_dir(),
         std::env::var("CAMPUS_V11_FIXED_TRACER").ok().as_deref(),
@@ -2309,6 +2427,14 @@ fn main() -> Result<(), slint::PlatformError> {
             .new_project("未命名项目", "华东师范大学普陀校区");
     }
     sync_ui(&ui, &state.borrow());
+    if let Some(launcher) = &v11_launcher {
+        if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+            set_error_for(&ui, "project-library.startup", error);
+        }
+    }
+    if let Some(error) = v11_launcher_error {
+        set_error_for(&ui, "project-library.startup", error);
+    }
     if let Some(error) = v11_tracer_error {
         set_error(&ui, error);
     }
@@ -2323,6 +2449,170 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let tool_timer = Timer::default();
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_confirm_launcher_campus(move || {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            match launcher.borrow_mut().confirm_selected_campus() {
+                Ok(()) => {
+                    if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                        set_error_for(&ui, "project-library.confirm-campus", error);
+                    }
+                }
+                Err(error) => set_error_for(&ui, "project-library.confirm-campus", error),
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_show_campus_selection(move || {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            launcher.borrow_mut().begin_campus_selection();
+            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                set_error_for(&ui, "project-library.switch-campus", error);
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_search_launcher_campus(move || {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            launcher.borrow_mut().begin_campus_selection();
+            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                set_error_for(&ui, "project-library.search-campus", error);
+                return;
+            }
+            ui.invoke_open_map();
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_show_project_library(move || {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            launcher.borrow_mut().show_project_library();
+            if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                set_error_for(&ui, "project-library.show", error);
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_create_library_project(move |name| {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            match launcher.borrow_mut().create_project(name.as_str()) {
+                Ok(_) => {
+                    ui.set_launcher_new_project_name("".into());
+                    if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                        set_error_for(&ui, "project-library.create", error);
+                    }
+                }
+                Err(error) => set_error_for(&ui, "project-library.create", error),
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_open_library_project(move |value| {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            let result = {
+                let borrowed = launcher.borrow();
+                launcher_project_id(&borrowed, value.as_str())
+            }
+            .and_then(|project_id| launcher.borrow_mut().open_project(&project_id));
+            match result {
+                Ok(_) => {
+                    if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                        set_error_for(&ui, "project-library.open", error);
+                    }
+                }
+                Err(error) => set_error_for(&ui, "project-library.open", error),
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_export_library_project(move |value| {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            let Some(destination) = project_file_dialog(true) else {
+                return;
+            };
+            let project_id = {
+                let borrowed = launcher.borrow();
+                launcher_project_id(&borrowed, value.as_str())
+            };
+            let replace = if destination.exists() {
+                rfd::MessageDialog::new()
+                    .set_title("Replace Portable Project?")
+                    .set_description("The selected Portable Project already exists. Replace it?")
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show()
+                    == rfd::MessageDialogResult::Yes
+            } else {
+                false
+            };
+            let result = project_id.and_then(|project_id| {
+                launcher
+                    .borrow_mut()
+                    .export_project(&project_id, destination, replace)
+            });
+            if let Err(error) = result {
+                set_error_for(&ui, "project-library.export", error);
+            }
+        });
+    }
+    {
+        let launcher = v11_launcher.clone();
+        let weak = ui.as_weak();
+        ui.on_import_portable_project(move || {
+            let (Some(launcher), Some(ui)) = (&launcher, weak.upgrade()) else {
+                return;
+            };
+            let Some(source) = project_file_dialog(false) else {
+                return;
+            };
+            let approval = CampusProjectLibrary::portable_project_scope(&source)
+                .ok()
+                .zip(launcher.borrow().confirmed_campus().cloned())
+                .is_none_or(|(portable, current)| {
+                    portable.target_id() == current.target_id()
+                        || rfd::MessageDialog::new()
+                            .set_title("Switch campus for import?")
+                            .set_description("This Portable Project belongs to another campus. Save the current project and switch campuses?")
+                            .set_buttons(rfd::MessageButtons::YesNo)
+                            .show()
+                            == rfd::MessageDialogResult::Yes
+                });
+            match launcher.borrow_mut().import_portable_project(source, approval) {
+                Ok(_) => {
+                    if let Err(error) = sync_project_launcher_ui(&ui, &launcher.borrow()) {
+                        set_error_for(&ui, "project-library.import", error);
+                    }
+                }
+                Err(error) => set_error_for(&ui, "project-library.import", error),
+            }
+        });
+    }
     {
         let weak = ui.as_weak();
         ui.on_dismiss_error(move || {
@@ -2760,6 +3050,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = ui.as_weak();
         let receiver = tool_update_rx.clone();
+        let launcher = v11_launcher.clone();
         tool_timer.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(120),
@@ -2815,20 +3106,47 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         ToolUpdate::MapCampusTarget(target) => {
                             let name = target.name.clone();
+                            let launcher_result = if let Some(launcher) = &launcher {
+                                CampusScope::new(
+                                    format!("gaode:{}", target.poi_id),
+                                    target.name.clone(),
+                                    [target.wgs84.lng, target.wgs84.lat],
+                                )
+                                .and_then(|scope| scope.with_gaode_poi_id(target.poi_id.clone()))
+                                .and_then(|scope| {
+                                    launcher.borrow_mut().select_campus_candidate(scope);
+                                    launcher.borrow_mut().confirm_selected_campus()
+                                })
+                            } else {
+                                Ok(())
+                            };
                             let result = state.borrow_mut().apply_foundation_intent(
                                 FoundationWorkflowIntent::SelectCampusTarget(target),
                             );
                             if let Some(ui) = weak.upgrade() {
-                                match &result {
-                                    Ok(()) => set_status(
-                                        &ui,
-                                        format!("高德校园目标已确认：{name}"),
-                                        format!("Gaode campus target confirmed: {name}"),
-                                    ),
-                                    Err(error) => set_error(&ui, error),
+                                match (&result, &launcher_result) {
+                                    (Ok(()), Ok(())) => {
+                                        set_status(
+                                            &ui,
+                                            format!("高德校园目标已确认：{name}"),
+                                            format!("Gaode campus target confirmed: {name}"),
+                                        );
+                                        if let Some(launcher) = &launcher {
+                                            if let Err(error) =
+                                                sync_project_launcher_ui(&ui, &launcher.borrow())
+                                            {
+                                                set_error_for(
+                                                    &ui,
+                                                    "project-library.search-campus",
+                                                    error,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    (Err(error), _) | (_, Err(error)) => set_error(&ui, error),
                                 }
                             }
-                            changed = result.is_ok();
+                            changed = result.is_ok() && launcher_result.is_ok();
                         }
                         ToolUpdate::MapBoundary(points) => {
                             let result = state.borrow_mut().apply_foundation_intent(
@@ -4202,6 +4520,43 @@ mod tests {
         assert!(
             ui.contains("root.active-step > 2 && root.active-step < 8"),
             "campus boundary must not render the candidate-review toolbar"
+        );
+    }
+
+    #[test]
+    fn route_first_shell_exposes_the_two_step_campus_project_flow() {
+        let ui = include_str!("../ui/app.slint");
+        assert!(
+            ui.contains("CAMPUS TARGET")
+                && ui.contains("PROJECT")
+                && ui.contains("FOUNDATION")
+                && ui.contains("DETAILED")
+                && ui.contains("AXIOM"),
+            "Variant A must expose the horizontal five-stage product route"
+        );
+        assert!(
+            ui.contains("root.launcher-step == 0")
+                && ui.contains("root.launcher-step == 1")
+                && ui.contains("for project in root.launcher-projects"),
+            "Campus Target confirmation must precede the campus-scoped project table"
+        );
+        assert!(
+            ui.contains("LATEST SAVE")
+                && ui.contains("SAVE / RECOVERY")
+                && ui.contains("PROGRESS")
+                && ui.contains("NEXT TASK")
+                && ui.contains("MINECRAFT COMPATIBILITY"),
+            "project rows and compact context must expose durable resume information"
+        );
+        assert!(
+            ui.contains("CURRENT TASK") && ui.contains("PROJECT CONTEXT"),
+            "one dominant current-task workspace must sit beside a compact project summary"
+        );
+        assert!(
+            !ui.contains("PERSISTENT CAMPUS SIDEBAR")
+                && !ui.contains("RESUME HERO")
+                && !ui.contains("GLOBAL RECENT FILES")
+                && !ui.contains("PROJECT WORKBENCH")
         );
     }
 }

@@ -8,6 +8,16 @@ export struct CandidateRow {
     pending: bool,
 }
 
+export struct LauncherProjectRow {
+    project-id: string,
+    project-name: string,
+    latest-save: string,
+    save-state: string,
+    progress: string,
+    next-task: string,
+    action-label: string,
+}
+
 component SectionLabel inherits Text {
     color: #a54836;
     font-size: 12px;
@@ -65,6 +75,17 @@ export component AppWindow inherits Window {
     in-out property <string> page-title: "选择学校与具体校区";
     in-out property <string> page-help: "确认校区后再发现建筑、道路、水域、植被与体育设施。";
     in-out property <string> project-summary: "尚未建立项目";
+    in-out property <bool> campus-launcher-visible: false;
+    in-out property <int> launcher-step: 0;
+    in-out property <int> route-stage: 0;
+    in-out property <string> launcher-campus-name: "";
+    in-out property <string> launcher-new-project-name: "";
+    in-out property <[LauncherProjectRow]> launcher-projects: [];
+    in-out property <string> launcher-progress: "0 / 9";
+    in-out property <string> launcher-save-state: "";
+    in-out property <string> launcher-next-task: "";
+    in-out property <string> launcher-compatibility: "Minecraft Java Edition 26.1.2";
+
     in-out property <bool> detailed-active: false;
     in-out property <bool> can-enter-detailed: false;
     // 0 blocked, 1 select building, 2 evidence/template, 3 facade rules, 4 preview
@@ -194,6 +215,14 @@ export component AppWindow inherits Window {
     callback dismiss-error();
     callback open-diagnostics();
 
+    callback confirm-launcher-campus();
+    callback search-launcher-campus();
+    callback import-portable-project();
+    callback create-library-project(string);
+    callback open-library-project(string);
+    callback export-library-project(string);
+    callback show-project-library();
+    callback show-campus-selection();
     shortcut-scope := FocusScope {
       VerticalLayout {
         spacing: 0px;
@@ -257,9 +286,163 @@ export component AppWindow inherits Window {
             }
         }
 
-        HorizontalLayout {
+        if !root.campus-launcher-visible || root.launcher-step == 2 : HorizontalLayout {
+            spacing: 0px;
+        if root.campus-launcher-visible : Rectangle {
+            height: 64px;
+            background: #e7dfcf;
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 22px;
+                spacing: 8px;
+                Button {
+                    text: "1  CAMPUS TARGET";
+                    enabled: root.route-stage != 0;
+                    clicked => { root.show-campus-selection(); }
+                }
+                Button {
+                    text: "2  PROJECT";
+                    enabled: root.launcher-step == 2;
+                    clicked => { root.show-project-library(); }
+                }
+                Button { text: "3  FOUNDATION"; enabled: false; }
+                Button { text: "4  DETAILED"; enabled: false; }
+                Button { text: "5  AXIOM"; enabled: false; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text {
+                    text: root.launcher-campus-name;
+                    color: #4c5b53;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.campus-launcher-visible && root.launcher-step < 2 : HorizontalLayout {
             spacing: 0px;
             Rectangle {
+                background: #faf8f1;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+                    SectionLabel { text: "CURRENT TASK"; }
+                    if root.launcher-step == 0 : VerticalLayout {
+                        spacing: 14px;
+                        Text {
+                            text: root.english ? "Confirm the campus to reconstruct" : "确认要复刻的校区";
+                            font-size: 28px;
+                            font-weight: 700;
+                            color: #17251f;
+                        }
+                        Text {
+                            text: root.english
+                                ? "Confirm a Campus Target before any project list is shown."
+                                : "先确认校区目标，随后才显示该校区的项目。";
+                            color: #5b665f;
+                        }
+                        Rectangle {
+                            height: 150px;
+                            background: #f0eadc;
+                            border-color: #b7ad9a;
+                            border-width: 1px;
+                            VerticalLayout {
+                                padding: 20px;
+                                spacing: 10px;
+                                SectionLabel { text: root.english ? "OFFERED CAMPUS TARGET" : "待确认校区目标"; }
+                                Text { text: root.launcher-campus-name; font-size: 21px; font-weight: 700; color: #17251f; }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Button {
+                                        text: root.english ? "Confirm this campus" : "确认该校区";
+                                        enabled: root.launcher-campus-name != "";
+                                        clicked => { root.confirm-launcher-campus(); }
+                                    }
+                                    Button {
+                                        text: root.english ? "Search another campus" : "搜索其他校区";
+                                        clicked => { root.search-launcher-campus(); }
+                                    }
+                                    Button {
+                                        text: root.english ? "Import Portable Project" : "导入便携项目";
+                                        clicked => { root.import-portable-project(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.launcher-step == 1 : VerticalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: root.english ? "Campus Project Library" : "校区项目库";
+                            font-size: 28px;
+                            font-weight: 700;
+                            color: #17251f;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                text <=> root.launcher-new-project-name;
+                                placeholder-text: root.english ? "New project name" : "新项目名称";
+                            }
+                            Button {
+                                text: root.english ? "Create project" : "新建项目";
+                                clicked => { root.create-library-project(root.launcher-new-project-name); }
+                            }
+                            Button {
+                                text: root.english ? "Import Portable Project" : "导入便携项目";
+                                clicked => { root.import-portable-project(); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            SectionLabel { text: root.english ? "PROJECT NAME" : "项目名称"; width: 180px; }
+                            SectionLabel { text: "LATEST SAVE"; width: 100px; }
+                            SectionLabel { text: "SAVE / RECOVERY"; width: 120px; }
+                            SectionLabel { text: "PROGRESS"; width: 80px; }
+                            SectionLabel { text: "NEXT TASK"; }
+                        }
+                        for project in root.launcher-projects : Rectangle {
+                            height: 76px;
+                            background: #f4f0e5;
+                            border-color: #c7bca8;
+                            border-width: 1px;
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 12px;
+                                Text { text: project.project-name; width: 180px; font-weight: 700; color: #17251f; }
+                                Text { text: project.latest-save; width: 100px; color: #506058; }
+                                Text { text: project.save-state; width: 120px; color: #506058; }
+                                Text { text: project.progress; width: 80px; color: #506058; }
+                                Text { text: project.next-task; color: #33463d; }
+                                Button { text: project.action-label; clicked => { root.open-library-project(project.project-id); } }
+                                Button { text: root.english ? "Portable export" : "便携导出"; clicked => { root.export-library-project(project.project-id); } }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { width: 1px; background: #d0c7b6; }
+            Rectangle {
+                width: 280px;
+                background: #f2eee4;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    SectionLabel { text: "PROJECT CONTEXT"; }
+                    Text { text: root.launcher-campus-name; font-size: 18px; font-weight: 700; color: #17251f; wrap: word-wrap; }
+                    Rule {}
+                    SectionLabel { text: "PROGRESS"; }
+                    Text { text: root.launcher-progress; color: #33463d; }
+                    SectionLabel { text: "SAVE / RECOVERY"; }
+                    Text { text: root.launcher-save-state; color: #4c665b; wrap: word-wrap; }
+                    SectionLabel { text: "NEXT TASK"; }
+                    Text { text: root.launcher-next-task; color: #33463d; wrap: word-wrap; }
+                    SectionLabel { text: "MINECRAFT COMPATIBILITY"; }
+                    Text { text: root.launcher-compatibility; color: #506058; wrap: word-wrap; }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+        }
+
+            if !root.campus-launcher-visible : Rectangle {
                 width: 260px;
                 background: #ece4d3;
                 VerticalLayout {
@@ -311,7 +494,7 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; background: transparent; }
                 }
             }
-            Rectangle { width: 1px; background: #948a78; }
+            if !root.campus-launcher-visible : Rectangle { width: 1px; background: #948a78; }
 
             Rectangle {
                 background: #faf8f1;

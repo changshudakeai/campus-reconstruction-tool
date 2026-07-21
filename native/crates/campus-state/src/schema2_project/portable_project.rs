@@ -133,6 +133,18 @@ impl CampusProjectLibrary {
         result
     }
 
+    pub fn portable_project_scope(source: impl AsRef<Path>) -> Result<CampusScope, String> {
+        let bytes = fs::read(source.as_ref()).map_err(|error| error.to_string())?;
+        match decode_portable_envelope(&bytes) {
+            Ok(envelope) => Ok(envelope.project.campus_scope().clone()),
+            Err(portable_error) => portable_schema1_scope(&bytes).map_err(|migration_error| {
+                format!(
+                    "Unsupported Portable Project; schema-2 validation: {portable_error}; schema-1 validation: {migration_error}"
+                )
+            }),
+        }
+    }
+
     pub fn inspect_portable_project(
         source: impl AsRef<Path>,
         selected_scope: &CampusScope,
