@@ -2889,9 +2889,22 @@ fn main() -> Result<(), slint::PlatformError> {
             .find(|pair| pair[0] == "--reliability-cycles")
             .and_then(|pair| pair[1].parse::<u64>().ok())
             .unwrap_or(120);
-        let exit_code = installed_acceptance::write_report(&report_path, reliability_cycles)
-            .map(|report| if report.status == "pass" { 0 } else { 1 })
-            .unwrap_or(2);
+        let exit_code = match installed_acceptance::write_report(&report_path, reliability_cycles) {
+            Ok(report) => {
+                if report.status == "pass" {
+                    0
+                } else {
+                    1
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "Installed durability acceptance failed: {}",
+                    installed_acceptance::safe_error_message(&error)
+                );
+                2
+            }
+        };
         std::process::exit(exit_code);
     }
     if let Some(report_path) = arguments

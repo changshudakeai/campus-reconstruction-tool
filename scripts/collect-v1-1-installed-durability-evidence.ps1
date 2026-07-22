@@ -53,6 +53,8 @@ if (Test-Path -LiteralPath $EvidenceDirectory) {
 $evidence = New-Item -ItemType Directory -Path $EvidenceDirectory
 $reportPath = Join-Path $evidence.FullName "installed-durability-report.json"
 $application = Join-Path $installed "campus-native.exe"
+$stdoutPath = Join-Path $evidence.FullName "installed-durability.stdout.log"
+$stderrPath = Join-Path $evidence.FullName "installed-durability.stderr.log"
 $argumentLine = @(
     "--installed-durability-report",
     '"' + ($reportPath -replace '"', '\"') + '"',
@@ -60,9 +62,11 @@ $argumentLine = @(
     $ReliabilityCycles
 ) -join " "
 $process = Start-Process -FilePath $application -ArgumentList $argumentLine `
-    -Wait -PassThru -WindowStyle Hidden
+    -Wait -PassThru -WindowStyle Hidden `
+    -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
 if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
-    throw "Installed candidate did not produce a durability report (exit $($process.ExitCode))"
+    $failureDetail = (Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue).Trim()
+    throw "Installed candidate did not produce a durability report (exit $($process.ExitCode)): $failureDetail"
 }
 $report = Get-Content -Raw -Encoding UTF8 -LiteralPath $reportPath | ConvertFrom-Json
 if ($report.version -ne "1.1.0" -or $report.architecture -ne "x86_64" -or $report.cases.Count -ne 8 -or $report.reliabilityCyclesRequired -ne $ReliabilityCycles) {

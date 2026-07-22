@@ -144,7 +144,7 @@ pub(crate) fn write_report(
                 diagnostic_event(case_id, "pass", "work-preserved"),
             ),
             Err(error) => {
-                let safe_error = sanitise_error(&error);
+                let safe_error = safe_error_message(&error);
                 let finish_event = diagnostic_event(case_id, "fail", "release-blocked");
                 blockers.push(ReleaseBlocker {
                     case_id: case_id.into(),
@@ -927,7 +927,7 @@ fn diagnostic_event(case_id: &str, phase: &str, recovery: &str) -> String {
     .unwrap_or_else(|| format!("installed-{case_id}-{phase}"))
 }
 
-fn sanitise_error(error: &str) -> String {
+pub(crate) fn safe_error_message(error: &str) -> String {
     error
         .split(['{', '['])
         .next()
