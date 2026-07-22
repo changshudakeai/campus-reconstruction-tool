@@ -708,6 +708,7 @@ fn reliability_case(root: &Path, reliability_cycles: u64) -> Result<CaseOutcome,
             format!("reliability cycle {cycle}"),
             |project| project.mark_updated(actor()),
         )?;
+        drop(session);
         let reopened = CampusProjectLibrary::open(&reliability_root, "putuo")?;
         if reopened.open_project(&id)?.workflow().project_revision() != cycle + 1 {
             return Err("reliability reopen lost a confirmed operation".into());

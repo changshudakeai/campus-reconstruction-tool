@@ -54,15 +54,12 @@ $evidence = New-Item -ItemType Directory -Path $EvidenceDirectory
 $staging = Join-Path ([IO.Path]::GetTempPath()) ("campus-v11-durability-" + [guid]::NewGuid().ToString("N"))
 [IO.Directory]::CreateDirectory($staging) | Out-Null
 $reportPath = Join-Path $staging "installed-durability-report.json"
-if ($reportPath -match '\s') {
-    throw "Installed durability staging path must not contain whitespace: $reportPath"
-}
 $application = Join-Path $installed "campus-native.exe"
 $stdoutPath = Join-Path $evidence.FullName "installed-durability.stdout.log"
 $stderrPath = Join-Path $evidence.FullName "installed-durability.stderr.log"
-$argumentLine = "--installed-durability-report $reportPath --reliability-cycles $ReliabilityCycles"
+$argumentLine = "--installed-durability-report installed-durability-report.json --reliability-cycles $ReliabilityCycles"
 $process = Start-Process -FilePath $application -ArgumentList $argumentLine `
-    -Wait -PassThru -WindowStyle Hidden `
+    -WorkingDirectory $staging -Wait -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
 if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
     $failureDetail = (Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue).Trim()
