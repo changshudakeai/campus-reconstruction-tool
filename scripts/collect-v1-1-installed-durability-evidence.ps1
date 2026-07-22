@@ -51,16 +51,16 @@ if (Test-Path -LiteralPath $EvidenceDirectory) {
     throw "Evidence directory already exists: $EvidenceDirectory"
 }
 $evidence = New-Item -ItemType Directory -Path $EvidenceDirectory
-$reportPath = Join-Path $evidence.FullName "installed-durability-report.json"
+$staging = Join-Path ([IO.Path]::GetTempPath()) ("campus-v11-durability-" + [guid]::NewGuid().ToString("N"))
+[IO.Directory]::CreateDirectory($staging) | Out-Null
+$reportPath = Join-Path $staging "installed-durability-report.json"
+if ($reportPath -match '\s') {
+    throw "Installed durability staging path must not contain whitespace: $reportPath"
+}
 $application = Join-Path $installed "campus-native.exe"
 $stdoutPath = Join-Path $evidence.FullName "installed-durability.stdout.log"
 $stderrPath = Join-Path $evidence.FullName "installed-durability.stderr.log"
-$argumentLine = @(
-    "--installed-durability-report",
-    '"' + ($reportPath -replace '"', '\"') + '"',
-    "--reliability-cycles",
-    $ReliabilityCycles
-) -join " "
+$argumentLine = "--installed-durability-report $reportPath --reliability-cycles $ReliabilityCycles"
 $process = Start-Process -FilePath $application -ArgumentList $argumentLine `
     -Wait -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
@@ -91,6 +91,11 @@ foreach ($secretName in @("GAODE_JS_API_KEY", "VITE_GAODE_JS_API_KEY", "GAODE_SE
         throw "Installed evidence leaked a configured secret"
     }
 }
+
+Move-Item -LiteralPath (Join-Path $staging "cases") -Destination (Join-Path $evidence.FullName "cases")
+Move-Item -LiteralPath $reportPath -Destination (Join-Path $evidence.FullName "installed-durability-report.json")
+Remove-Item -LiteralPath $staging -Force
+$reportPath = Join-Path $evidence.FullName "installed-durability-report.json"
 
 $formal = $ReliabilityCycles -ge 120 -and -not $DevelopmentShortRun
 $status = if ($process.ExitCode -eq 0 -and $report.status -eq "pass" -and $formal) {
