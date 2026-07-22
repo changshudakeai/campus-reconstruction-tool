@@ -29,6 +29,9 @@ $releaseNotes = Read-RepoFile "docs\releases\v1.1.0-unsigned.md"
 $durabilityEvidence = Read-RepoFile "scripts\collect-v1-1-installed-durability-evidence.ps1"
 $liveAxiomEvidence = Read-RepoFile "scripts\collect-v1-1-live-axiom-evidence.ps1"
 $liveAxiomTemplate = Read-RepoFile "docs\releases\v1.1-live-axiom-operator-record.template.json"
+$operatorExperienceEvidence = Read-RepoFile "scripts\collect-v1-1-operator-experience-evidence.ps1"
+$operatorExperienceTemplate = Read-RepoFile "docs\releases\v1.1-operator-experience-record.template.json"
+$operatorExperienceGuide = Read-RepoFile "docs\releases\v1.1-operator-experience-evidence.md"
 
 Assert-Contains $cargo 'version = "1.1.0"' "Cargo workspace version must be 1.1.0"
 $candidateVerifier = Read-RepoFile "scripts\verify-v1-1-candidate.ps1"
@@ -92,6 +95,23 @@ Assert-Contains $durabilityEvidence 'binaryDigests' "Installed evidence must bin
 Assert-Contains $liveAxiomEvidence '--live-axiom-operator-record' "Live/Axiom evidence must be validated by the installed release binary"
 Assert-Contains $liveAxiomEvidence 'releaseBlockers' "Live/Axiom mandatory failures must remain Release Blockers"
 Assert-Contains $liveAxiomEvidence 'binaryDigests' "Live/Axiom evidence must bind all installed candidate binary digests"
+Assert-Contains $operatorExperienceEvidence '--operator-experience-record' "Operator evidence must be validated by the installed release binary"
+Assert-Contains $operatorExperienceEvidence 'binaryDigests' "Operator evidence must bind all installed candidate binary digests"
+Assert-Contains $operatorExperienceEvidence 'releaseBlockers' "Operator mandatory failures must remain Release Blockers"
+Assert-Contains $operatorExperienceEvidence 'OSArchitecture' "Operator evidence must inspect the actual host architecture"
+Assert-Contains $operatorExperienceEvidence '22000' "Operator evidence must require a Windows 11 build"
+Assert-Contains $operatorExperienceEvidence 'architecture = $architecture' "Operator envelope must record detected architecture"
+Assert-Contains $operatorExperienceEvidence 'GetEnvironmentVariable' "Operator evidence must scan configured secret values"
+foreach ($scale in @(100, 125, 150)) {
+    Assert-Contains $operatorExperienceTemplate ('"percent": ' + $scale) "Operator template is missing $scale% Windows scaling"
+}
+foreach ($locale in @('zh-CN', 'en')) {
+    Assert-Contains $operatorExperienceTemplate ('"locale": "' + $locale + '"') "Operator template is missing the $locale sweep"
+}
+Assert-Contains $operatorExperienceTemplate 'receivedGoalOnly' "Operator template must attest goal-only instructions"
+Assert-Contains $operatorExperienceTemplate 'blockingDeveloperExplanations' "Operator template must record blocking developer explanations"
+Assert-Contains $operatorExperienceGuide 'F1' "Operator guide must cover F1 guidance reopening"
+Assert-Contains $operatorExperienceGuide 'Release Blocker' "Operator guide must fail closed on blocking usability findings"
 foreach ($campusId in @('putuo', 'sjtu-minhang', 'wuhan-university', 'xiamen-siming', 'xian-jiaotong-xingqing', 'nyu-shanghai-qiantan')) {
     Assert-Contains $liveAxiomTemplate $campusId "Live/Axiom operator template is missing $campusId"
 }

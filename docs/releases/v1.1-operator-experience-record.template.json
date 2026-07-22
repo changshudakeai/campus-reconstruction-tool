@@ -1,0 +1,90 @@
+{
+  "candidateId": "replace-with-candidate-id",
+  "commit": "replace-with-candidate-commit",
+  "operator": {
+    "name": "replace-with-operator-name",
+    "attested": false,
+    "isDeveloper": false,
+    "receivedGoalOnly": true,
+    "assistanceRequired": false
+  },
+  "environment": {
+    "windowsVersion": "Windows 11 x64 build replace",
+    "standardUser": true,
+    "repositoryPresent": false,
+    "toolchainsPresent": false,
+    "fixturesPresent": false,
+    "developerUtilitiesPresent": false,
+    "installedCandidateId": "replace-with-candidate-id",
+    "installedCommit": "replace-with-candidate-commit"
+  },
+  "independentRun": {
+    "status": "replace-with-pass-or-fail",
+    "steps": {
+      "campusSearchedAndConfirmed": false,
+      "campusScopedProjectCreated": false,
+      "boundaryConfirmed": false,
+      "fiveCategoryReviewCompleted": false,
+      "saveReopenCompleted": false,
+      "generated": false,
+      "exported": false
+    },
+    "evidence": ["run/goal.png", "run/campus.png", "run/review.png", "run/export.png"],
+    "hesitations": [],
+    "errors": [],
+    "assistance": [{ "observation": "remove if none", "affectedIndependence": false }],
+    "abandonments": [{ "observation": "remove if none", "affectedCompletion": false }],
+    "blockingDeveloperExplanations": []
+  },
+  "guidance": {
+    "firstRunAppeared": false,
+    "skipWorked": false,
+    "teachesCampusBeforeProject": false,
+    "reopenedBy": { "f1": false, "questionMark": false, "settings": false },
+    "evidence": ["guidance/first-run.png", "guidance/reopen-f1.png", "guidance/reopen-question-mark.png", "guidance/reopen-settings.png"]
+  },
+  "shortcuts": {
+    "fixedSetExercised": false,
+    "contexts": { "textFocus": false, "modalStack": false, "activeMapTool": false, "vertexSelection": false, "history": false, "workflowStage": false },
+    "disabledReasonsVisible": false,
+    "escapeUnwindsOneLayer": false,
+    "evidence": ["shortcuts/context-matrix.json", "shortcuts/disabled-reason.png", "shortcuts/escape-layers.json"]
+  },
+  "localisation": {
+    "fullRunLocale": "zh-CN",
+    "sweeps": [
+      { "locale": "zh-CN", "allScreens": false, "keyErrorStates": false, "defects": [], "evidence": ["localisation/zh-CN.png"] },
+      { "locale": "en", "allScreens": false, "keyErrorStates": false, "defects": [], "evidence": ["localisation/en.png"] }
+    ]
+  },
+  "scaling": [
+    { "percent": 100, "principalFlowPassed": false, "visibleFocus": false, "modalsEscapable": false, "keyboardCoreNonMap": false, "evidence": ["scaling/100.png"] },
+    { "percent": 125, "principalFlowPassed": false, "visibleFocus": false, "modalsEscapable": false, "keyboardCoreNonMap": false, "evidence": ["scaling/125.png"] },
+    { "percent": 150, "principalFlowPassed": false, "visibleFocus": false, "modalsEscapable": false, "keyboardCoreNonMap": false, "evidence": ["scaling/150.png"] }
+  ],
+  "secretSafety": {
+    "fieldsMaskedByDefault": false,
+    "scannedArtifacts": [
+      { "kind": "screenshot", "path": "run/goal.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "run/campus.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "run/review.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "run/export.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "guidance/first-run.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "guidance/reopen-f1.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "guidance/reopen-question-mark.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "guidance/reopen-settings.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "shortcuts/disabled-reason.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "localisation/zh-CN.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "localisation/en.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "scaling/100.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "scaling/125.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "screenshot", "path": "scaling/150.png", "sha256": "replace-with-64-hex", "visualInspectionPassed": false },
+      { "kind": "log", "path": "secret-safety/application.log", "sha256": "replace-with-64-hex" },
+      { "kind": "project", "path": "secret-safety/project.campus.json", "sha256": "replace-with-64-hex" },
+      { "kind": "portable-project", "path": "secret-safety/portable.campus.json", "sha256": "replace-with-64-hex" },
+      { "kind": "evidence", "path": "secret-safety/operator-notes.json", "sha256": "replace-with-64-hex" }
+    ],
+    "credentialFindings": []
+  },
+  "releaseBlockerObservations": []
+}
