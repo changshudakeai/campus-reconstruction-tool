@@ -10,7 +10,7 @@
     "test:state": "cargo +stable test --manifest-path native/Cargo.toml -p campus-state --lib --locked",
     "test:services": "cargo +stable test --manifest-path native/Cargo.toml -p campus-services --lib --locked",
     "test:deployment": "python -m unittest discover -s services -p test_*.py",
-    "test:release-contract": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-v1-1-release-contract.ps1",
+    "test:release-contract": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-v1-1-release-contract.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-v1-1-evidence-seal.ps1",
     "check:ui": "cargo +stable check --manifest-path native/Cargo.toml -p campus-native --locked",
     "overture:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-overture-service.ps1",
     "overture:serve": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-overture-service.ps1",

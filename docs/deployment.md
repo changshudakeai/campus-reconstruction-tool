@@ -73,3 +73,6 @@ Projects and generated snapshots live under
 %LOCALAPPDATA%\CampusReconstructionTool. Credentials live in Windows Credential
 Manager and never enter project files, candidate evidence, logs, or the
 installer. Uninstalling the application does not silently delete user projects.
+## Zero-waiver release gate
+
+Before creating `v1.1.0`, follow `docs/releases/v1.1-release-gate.md` to seal and re-verify one candidate Evidence Bundle. The release tag command refuses candidates with missing evidence, installed-acceptance waivers, non-zero Release Blockers, digest drift, an unpinned service, incomplete sign-off, or a dirty/mismatched source commit.

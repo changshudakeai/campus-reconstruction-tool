@@ -86,6 +86,17 @@ foreach ($name in $payloadNames) {
     }
 }
 
+$candidateReleaseNotesName = "V1.1.0-RELEASE-NOTES.md"
+$candidateReleaseNotes = Join-Path $candidate $candidateReleaseNotesName
+Copy-Item -LiteralPath $releaseNotes -Destination $candidateReleaseNotes -Force
+$candidateNoticesName = "THIRD_PARTY_NOTICES.md"
+Copy-Item -LiteralPath (Join-Path $root $candidateNoticesName) -Destination (Join-Path $candidate $candidateNoticesName) -Force
+$knownIssuesName = "KNOWN-ISSUES.json"
+$knownIssuesPath = Join-Path $candidate $knownIssuesName
+if (-not (Test-Path -LiteralPath $knownIssuesPath)) {
+    [IO.File]::WriteAllText($knownIssuesPath, "{`n  `"issues`": []`n}", [Text.UTF8Encoding]::new($false))
+}
+
 $installerItem = Get-Item -LiteralPath $installer
 $installerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
 $distribution = [ordered]@{
@@ -99,6 +110,8 @@ $distribution = [ordered]@{
     installer = $installerItem.Name
     installerBytes = $installerItem.Length
     installerSha256 = $installerSha256
+    releaseNotes = $candidateReleaseNotesName
+    knownIssues = $knownIssuesName
     payloadSha256BeforePackaging = $hashesBefore
     payloadSha256AfterPackaging = $hashesBefore
     packagingRebuiltBinaries = $false
@@ -125,6 +138,8 @@ $statement = @"
 - Network: required for campus search and new/refresh Foundation acquisition
 - Signature: unsigned
 - Installed acceptance: $($manifest.installedAcceptance.status)
+- Release notes: $candidateReleaseNotesName
+- Known Issues: $knownIssuesName
 
 Source statement: built from the exact clean commit above. NSIS consumed the
 already-tested binaries from tested-binaries and their SHA-256 values were

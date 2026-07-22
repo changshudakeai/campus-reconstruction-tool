@@ -1,0 +1,49 @@
+{
+  "candidateId": "",
+  "version": "1.1.0",
+  "commit": "",
+  "evidence": [
+    { "id": "automated", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "installer", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "durability-migration", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "live-service", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "six-campus", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "axiom", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "non-developer", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "localisation", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "reliability", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "diagnostics", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "redaction", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "dependencies", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "licences", "mandatory": true, "status": "pass", "reason": null, "evidence": [] },
+    { "id": "known-issues", "mandatory": true, "status": "pass", "reason": null, "evidence": [] }
+  ],
+  "artifacts": [
+    { "role": "installer", "path": "" },
+    { "role": "executable-main", "path": "tested-binaries/campus-native.exe" },
+    { "role": "executable-map", "path": "tested-binaries/campus-map.exe" },
+    { "role": "executable-preview", "path": "tested-binaries/campus-preview.exe" },
+    { "role": "notices", "path": "THIRD_PARTY_NOTICES.md" },
+    { "role": "foundation-schematic", "campus": "putuo", "path": "" },
+    { "role": "foundation-schematic", "campus": "shanghai-jiao-tong-minhang", "path": "" },
+    { "role": "foundation-schematic", "campus": "wuhan-university", "path": "" },
+    { "role": "foundation-schematic", "campus": "xiamen-university-siming", "path": "" },
+    { "role": "foundation-schematic", "campus": "xian-jiaotong-xingqing", "path": "" },
+    { "role": "detailed-schematic", "campus": "putuo", "path": "" },
+    { "role": "foundation-manifest", "campus": "putuo", "path": "" },
+    { "role": "foundation-manifest", "campus": "shanghai-jiao-tong-minhang", "path": "" },
+    { "role": "foundation-manifest", "campus": "wuhan-university", "path": "" },
+    { "role": "foundation-manifest", "campus": "xiamen-university-siming", "path": "" },
+    { "role": "foundation-manifest", "campus": "xian-jiaotong-xingqing", "path": "" },
+    { "role": "dataset-summary", "path": "" },
+    { "role": "coverage-summary", "path": "" }
+  ],
+  "knownIssues": "KNOWN-ISSUES.json",
+  "controlledService": {
+    "version": "", "deploymentId": "", "contractVersion": "v1", "deployed": true,
+    "pinned": true, "healthStatus": "pass", "healthEvidence": "", "rollbackReady": true,
+    "rollbackVersion": ""
+  },
+  "independentOperator": { "name": "", "attested": true, "attestedUtc": "", "record": "" },
+  "releaseOwner": { "name": "", "approved": true, "approvedUtc": "", "releaseBlockerCount": 0 }
+}

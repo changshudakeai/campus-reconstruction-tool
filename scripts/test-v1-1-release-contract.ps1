@@ -82,6 +82,16 @@ if ($candidateVerifier -notmatch '(?s)if \(-not \$SkipInstalledAcceptance\) \{\s
     throw "The default candidate path must guard all three installed-acceptance scenarios"
 }
 Assert-Contains $packager 'installedAcceptanceStatus' "Distribution evidence must publish the installed-acceptance status"
+Assert-Contains $packager 'releaseNotes = $candidateReleaseNotesName' "Distribution evidence must identify exact release notes"
+Assert-Contains $packager 'knownIssues = $knownIssuesName' "Distribution evidence must identify Known Issues"
+$evidenceSealer = Read-RepoFile "scripts\seal-v1-1-evidence-bundle.ps1"
+$evidenceVerifier = Read-RepoFile "scripts\verify-v1-1-evidence-bundle.ps1"
+$releaseTagger = Read-RepoFile "scripts\create-v1-1-release-tag.ps1"
+$distributionVerifier = Read-RepoFile "scripts\verify-v1-1-distributed-artifact.ps1"
+Assert-Contains $evidenceSealer 'Evidence Bundle is already sealed' "Evidence Bundle sealing must be append-once"
+Assert-Contains $evidenceVerifier 'Test-EvidenceBundle' "Sealed evidence must be independently re-verifiable"
+Assert-Contains $releaseTagger 'Tag $Tag already exists and will not be moved' "The V1.1.0 tag must be immutable"
+Assert-Contains $distributionVerifier 'Explicit release-owner approval' "Handoff verification must require release-owner approval"
 if ($packager -notmatch '(?s)\$sourceStatus = @\(& git -C \$root status --porcelain=v1\)\s*if \(\$LASTEXITCODE -ne 0\) \{[^}]*\}\s*if \(\$sourceStatus\.Count -ne 0\)') {
     throw "Packaging must fail closed on git-status errors before it evaluates clean-worktree output"
 }
