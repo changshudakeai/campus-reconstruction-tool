@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +25,7 @@ pub(crate) struct InstalledAcceptanceReport {
     pub architecture: String,
     pub started_utc_unix_ms: u128,
     pub finished_utc_unix_ms: u128,
-    pub soak_seconds_required: u64,
+    pub reliability_cycles_required: u64,
     pub cases: Vec<InstalledAcceptanceCase>,
     pub release_blockers: Vec<ReleaseBlocker>,
 }
@@ -65,7 +65,7 @@ type CaseFn = fn(&Path, u64) -> Result<CaseOutcome, String>;
 
 pub(crate) fn write_report(
     report_path: &Path,
-    soak_seconds: u64,
+    reliability_cycles: u64,
 ) -> Result<InstalledAcceptanceReport, String> {
     let parent = report_path
         .parent()
@@ -121,9 +121,9 @@ pub(crate) fn write_report(
             hostile_input_case,
         ),
         (
-            "helper-network-exit-and-soak-reliability",
+            "helper-network-exit-and-cycle-reliability",
             "reliability",
-            "helper termination, six acquisition faults, abnormal exit, and soak",
+            "helper termination, six acquisition faults, abnormal exit, and durable reopen cycles",
             reliability_case,
         ),
     ];
@@ -133,7 +133,7 @@ pub(crate) fn write_report(
         let case_root = cases_root.join(case_id);
         std::fs::create_dir(&case_root).map_err(|error| error.to_string())?;
         let start_event = diagnostic_event(case_id, "start", "not-attempted");
-        let result = run(&case_root, soak_seconds);
+        let result = run(&case_root, reliability_cycles);
         let (status, failure_point, expected, actual, summary, finish_event) = match result {
             Ok(outcome) => (
                 "pass".to_string(),
@@ -205,7 +205,7 @@ pub(crate) fn write_report(
         architecture: std::env::consts::ARCH.into(),
         started_utc_unix_ms: started,
         finished_utc_unix_ms: unix_ms(),
-        soak_seconds_required: soak_seconds,
+        reliability_cycles_required: reliability_cycles,
         cases,
         release_blockers: blockers,
     };
@@ -235,7 +235,7 @@ fn library(root: &Path, target_id: &str) -> Result<CampusProjectLibrary, String>
     CampusProjectLibrary::open_for_construction(root, target_id, &capability())
 }
 
-fn project_identity_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn project_identity_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let campus = scope("putuo", "Putuo Campus", "B001");
     let mut putuo = library(&root.join("putuo"), "putuo")?;
     let first = putuo.create_project(campus.clone(), "Library", actor())?;
@@ -261,7 +261,7 @@ fn project_identity_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String>
     })
 }
 
-fn atomic_save_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn atomic_save_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let mut stages = Vec::new();
     for fault in SaveFaultPoint::ALL {
         let stage_root = root.join(format!("{fault:?}"));
@@ -307,7 +307,7 @@ fn atomic_save_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
     })
 }
 
-fn recovery_history_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn recovery_history_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let mut store = library(root, "putuo")?;
     let project =
         store.create_project(scope("putuo", "Putuo Campus", "B001"), "Recovery", actor())?;
@@ -375,7 +375,7 @@ fn recovery_history_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String>
     })
 }
 
-fn resume_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn resume_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let mut store = library(root, "putuo")?;
     let mut project =
         store.create_project(scope("putuo", "Putuo Campus", "B001"), "Resume", actor())?;
@@ -421,7 +421,7 @@ fn resume_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
     })
 }
 
-fn portability_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn portability_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let source_root = root.join("source");
     let target_root = root.join("target");
     let cross_root = root.join("cross");
@@ -497,7 +497,7 @@ fn portability_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
     })
 }
 
-fn migration_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn migration_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let native_bytes = populated_native_schema1_bytes()?;
     let managed_root = root.join("managed-library");
     std::fs::create_dir_all(&managed_root).map_err(|error| error.to_string())?;
@@ -546,7 +546,7 @@ fn migration_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
     })
 }
 
-fn hostile_input_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
+fn hostile_input_case(root: &Path, _reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let corrupt_root = root.join("corrupt-library");
     std::fs::create_dir_all(&corrupt_root).map_err(|error| error.to_string())?;
     let corrupt = corrupt_root.join("corrupt.json");
@@ -673,7 +673,7 @@ fn hostile_input_case(root: &Path, _soak: u64) -> Result<CaseOutcome, String> {
     })
 }
 
-fn reliability_case(root: &Path, soak_seconds: u64) -> Result<CaseOutcome, String> {
+fn reliability_case(root: &Path, reliability_cycles: u64) -> Result<CaseOutcome, String> {
     let helper = helper_smoke()?;
     helper_termination_fault()?;
     let mut faults = Vec::new();
@@ -691,40 +691,34 @@ fn reliability_case(root: &Path, soak_seconds: u64) -> Result<CaseOutcome, Strin
         }
         faults.push(format!("{fault:?}"));
     }
-    let soak_root = root.join("soak");
-    let mut store = library(&soak_root, "putuo")?;
-    let project =
-        store.create_project(scope("putuo", "Putuo", "B001"), "Reliability soak", actor())?;
+    let reliability_root = root.join("reliability-cycles");
+    let mut store = library(&reliability_root, "putuo")?;
+    let project = store.create_project(
+        scope("putuo", "Putuo", "B001"),
+        "Reliability cycles",
+        actor(),
+    )?;
     let id = project.id().clone();
     let started = Instant::now();
-    let duration = Duration::from_secs(soak_seconds);
-    let mut cycles = 0_u64;
-    loop {
+    for cycle in 0..reliability_cycles {
         let mut session = Schema2ProjectSession::default();
         session.open_project(&store, &id)?;
         session.apply_semantic_operation(
             &mut store,
-            format!("soak cycle {cycles}"),
+            format!("reliability cycle {cycle}"),
             |project| project.mark_updated(actor()),
         )?;
-        let reopened = CampusProjectLibrary::open(&soak_root, "putuo")?;
-        if reopened.open_project(&id)?.workflow().project_revision() != cycles + 1 {
-            return Err("soak reopen lost a confirmed operation".into());
+        let reopened = CampusProjectLibrary::open(&reliability_root, "putuo")?;
+        if reopened.open_project(&id)?.workflow().project_revision() != cycle + 1 {
+            return Err("reliability reopen lost a confirmed operation".into());
         }
-        cycles += 1;
-        if started.elapsed() >= duration {
-            break;
-        }
-        std::thread::sleep(
-            Duration::from_millis(250).min(duration.saturating_sub(started.elapsed())),
-        );
     }
-    let elapsed = started.elapsed().as_secs();
+    let elapsed_ms = started.elapsed().as_millis();
     Ok(CaseOutcome {
-        failure_point: "installed helper lifecycle, network/service/chunk faults, abnormal exit, timed workflow".into(),
-        expected: json!({"helperStatus": "pass", "faults": 6, "minimumSoakSeconds": soak_seconds, "falseSuccess": false}),
-        actual: json!({"helperStatus": helper["status"], "helperTermination": "recovered", "faults": faults.len(), "elapsedSoakSeconds": elapsed, "cycles": cycles, "falseSuccess": false}),
-        summary: json!({"helper": helper, "faults": faults, "cycles": cycles, "finalRevision": store.open_project(&id)?.workflow().project_revision()}),
+        failure_point: "installed helper lifecycle, network/service/chunk faults, abnormal exit, durable reopen cycles".into(),
+        expected: json!({"helperStatus": "pass", "faults": 6, "minimumReliabilityCycles": reliability_cycles, "falseSuccess": false}),
+        actual: json!({"helperStatus": helper["status"], "helperTermination": "recovered", "faults": faults.len(), "elapsedWallClockMs": elapsed_ms, "cycles": reliability_cycles, "falseSuccess": false}),
+        summary: json!({"helper": helper, "faults": faults, "cycles": reliability_cycles, "elapsedWallClockMs": elapsed_ms, "finalRevision": store.open_project(&id)?.workflow().project_revision()}),
     })
 }
 
@@ -966,9 +960,10 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let report_path = root.join("report.json");
-        let report = write_report(&report_path, 0).unwrap();
+        let report = write_report(&report_path, 3).unwrap();
         assert_eq!(report.status, "pass", "{:?}", report.release_blockers);
         assert_eq!(report.cases.len(), 8);
+        assert_eq!(report.reliability_cycles_required, 3);
         for case in &report.cases {
             assert!(case.mandatory);
             assert_eq!(case.status, "pass");
@@ -980,6 +975,13 @@ mod tests {
             assert!(!case.event_ids.is_empty());
             assert!(!case.result_evidence.is_empty());
         }
+        let reliability = report
+            .cases
+            .iter()
+            .find(|case| case.case_id == "helper-network-exit-and-cycle-reliability")
+            .expect("reliability case");
+        assert_eq!(reliability.actual_state["cycles"], json!(3));
+        assert!(reliability.actual_state["elapsedWallClockMs"].is_number());
         assert!(report.release_blockers.is_empty());
         assert!(report_path.is_file());
         let _ = std::fs::remove_dir_all(root);

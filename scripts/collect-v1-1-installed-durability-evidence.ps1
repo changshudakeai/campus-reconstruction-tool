@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$CandidateDirectory,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Programs\Campus Reconstruction Tool"),
     [string]$EvidenceDirectory,
-    [ValidateRange(0, 86400)][int]$SoakSeconds = 7200,
+    [ValidateRange(0, 10000)][int]$ReliabilityCycles = 120,
     [switch]$DevelopmentShortRun
 )
 
@@ -16,8 +16,8 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $distributionPath -PathType Leaf)) {
     throw "Candidate is missing release-candidate.json or distribution.json"
 }
-if ($SoakSeconds -lt 7200 -and -not $DevelopmentShortRun) {
-    throw "Formal installed reliability evidence requires a soak of at least 7200 seconds"
+if ($ReliabilityCycles -lt 120 -and -not $DevelopmentShortRun) {
+    throw "Formal installed reliability evidence requires at least 120 cycles"
 }
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 $installedManifestPath = Join-Path $installed "release-candidate.json"
@@ -56,8 +56,8 @@ $application = Join-Path $installed "campus-native.exe"
 $argumentLine = @(
     "--installed-durability-report",
     '"' + ($reportPath -replace '"', '\"') + '"',
-    "--soak-seconds",
-    $SoakSeconds
+    "--reliability-cycles",
+    $ReliabilityCycles
 ) -join " "
 $process = Start-Process -FilePath $application -ArgumentList $argumentLine `
     -Wait -PassThru -WindowStyle Hidden
@@ -65,7 +65,7 @@ if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
     throw "Installed candidate did not produce a durability report (exit $($process.ExitCode))"
 }
 $report = Get-Content -Raw -Encoding UTF8 -LiteralPath $reportPath | ConvertFrom-Json
-if ($report.version -ne "1.1.0" -or $report.architecture -ne "x86_64" -or $report.cases.Count -ne 8) {
+if ($report.version -ne "1.1.0" -or $report.architecture -ne "x86_64" -or $report.cases.Count -ne 8 -or $report.reliabilityCyclesRequired -ne $ReliabilityCycles) {
     throw "Installed durability report has the wrong version, architecture, or mandatory case count"
 }
 foreach ($case in $report.cases) {
@@ -88,7 +88,7 @@ foreach ($secretName in @("GAODE_JS_API_KEY", "VITE_GAODE_JS_API_KEY", "GAODE_SE
     }
 }
 
-$formal = $SoakSeconds -ge 7200 -and -not $DevelopmentShortRun
+$formal = $ReliabilityCycles -ge 120 -and -not $DevelopmentShortRun
 $status = if ($process.ExitCode -eq 0 -and $report.status -eq "pass" -and $formal) {
     "pass"
 } elseif ($process.ExitCode -eq 0 -and $report.status -eq "pass") {
@@ -110,8 +110,9 @@ $envelope = [ordered]@{
     architecture = "x64"
     installedDirectoryName = (Split-Path -Leaf $installed)
     binaryDigests = $binaryDigests
-    soakSecondsRequired = 7200
-    soakSecondsExecuted = $SoakSeconds
+    reliabilityCyclesRequired = 120
+    reliabilityCyclesExecuted = $ReliabilityCycles
+    elapsedWallClockMs = [uint64]($report.finishedUtcUnixMs - $report.startedUtcUnixMs)
     applicationExitCode = $process.ExitCode
     report = "installed-durability-report.json"
     reportSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $reportPath).Hash.ToLowerInvariant()

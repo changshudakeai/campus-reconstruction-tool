@@ -2884,12 +2884,12 @@ fn main() -> Result<(), slint::PlatformError> {
         .find(|pair| pair[0] == "--installed-durability-report")
         .map(|pair| PathBuf::from(&pair[1]))
     {
-        let soak_seconds = arguments
+        let reliability_cycles = arguments
             .windows(2)
-            .find(|pair| pair[0] == "--soak-seconds")
+            .find(|pair| pair[0] == "--reliability-cycles")
             .and_then(|pair| pair[1].parse::<u64>().ok())
-            .unwrap_or(7_200);
-        let exit_code = installed_acceptance::write_report(&report_path, soak_seconds)
+            .unwrap_or(120);
+        let exit_code = installed_acceptance::write_report(&report_path, reliability_cycles)
             .map(|report| if report.status == "pass" { 0 } else { 1 })
             .unwrap_or(2);
         std::process::exit(exit_code);
