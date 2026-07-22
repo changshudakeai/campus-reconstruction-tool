@@ -88,10 +88,15 @@ $evidenceSealer = Read-RepoFile "scripts\seal-v1-1-evidence-bundle.ps1"
 $evidenceVerifier = Read-RepoFile "scripts\verify-v1-1-evidence-bundle.ps1"
 $releaseTagger = Read-RepoFile "scripts\create-v1-1-release-tag.ps1"
 $distributionVerifier = Read-RepoFile "scripts\verify-v1-1-distributed-artifact.ps1"
+$evidenceBundleModule = Read-RepoFile "scripts\v1-1-evidence-bundle.psm1"
+$evidenceSealTest = Read-RepoFile "scripts\test-v1-1-evidence-seal.ps1"
 Assert-Contains $evidenceSealer 'Evidence Bundle is already sealed' "Evidence Bundle sealing must be append-once"
 Assert-Contains $evidenceVerifier 'Test-EvidenceBundle' "Sealed evidence must be independently re-verifiable"
 Assert-Contains $releaseTagger 'Tag $Tag already exists and will not be moved' "The V1.1.0 tag must be immutable"
 Assert-Contains $distributionVerifier 'Explicit release-owner approval' "Handoff verification must require release-owner approval"
+foreach ($portableHashConsumer in @($evidenceSealer, $evidenceVerifier, $releaseTagger, $distributionVerifier, $evidenceBundleModule, $evidenceSealTest)) {
+    Assert-NotContains $portableHashConsumer 'Get-FileHash' "Release-gate hashing must work when Get-FileHash is unavailable"
+}
 if ($packager -notmatch '(?s)\$sourceStatus = @\(& git -C \$root status --porcelain=v1\)\s*if \(\$LASTEXITCODE -ne 0\) \{[^}]*\}\s*if \(\$sourceStatus\.Count -ne 0\)') {
     throw "Packaging must fail closed on git-status errors before it evaluates clean-worktree output"
 }

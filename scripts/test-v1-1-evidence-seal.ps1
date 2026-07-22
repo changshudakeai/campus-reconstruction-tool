@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+Import-Module (Join-Path $PSScriptRoot "v1-1-evidence-bundle.psm1") -Force
 $sandbox = Join-Path ([IO.Path]::GetTempPath()) ("campus-v11-seal-test-" + [guid]::NewGuid().ToString("N"))
 $candidate = Join-Path $sandbox "candidate"
 $utf8 = [Text.UTF8Encoding]::new($false)
@@ -54,14 +55,14 @@ try {
     foreach ($file in $files) { Write-Fixture $file $file }
     $binaryDigests = [ordered]@{}
     foreach ($name in @("campus-native.exe", "campus-map.exe", "campus-preview.exe")) {
-        $binaryDigests[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $candidate "tested-binaries/$name")).Hash.ToLowerInvariant()
+        $binaryDigests[$name] = Get-Sha256Hex (Join-Path $candidate "tested-binaries/$name")
     }
     Write-Json (Join-Path $candidate "release-candidate.json") ($identity + @{
         installedAcceptance = @{ status = "passed" }; commands = @(@{ name = "tests"; command = "test"; exitCode = 0; log = "logs/tests.log" })
         binaryDigests = $binaryDigests; windowsImage = "Windows 11 test"; cleanWindowsImageId = "clean-test"
         architecture = "x64"; toolchains = @{ powershell = "test" }
     })
-    $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $candidate "installer.exe")).Hash.ToLowerInvariant()
+    $installerHash = Get-Sha256Hex (Join-Path $candidate "installer.exe")
     Write-Json (Join-Path $candidate "distribution.json") ($identity + @{
         installer = "installer.exe"; installerSha256 = $installerHash; installedAcceptanceStatus = "passed"
         onlineRequired = $true; platform = "Windows 11 x64"; signed = $false

@@ -19,7 +19,7 @@ if ($approval.approved -ne $true -or $approval.candidateId -ne $index.candidateI
 }
 $installer = @($index.artifacts | Where-Object { $_.role -eq "installer" })
 if ($installer.Count -ne 1) { throw "Sealed bundle must identify exactly one installer" }
-$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifactPath).Hash.ToLowerInvariant()
+$actualHash = Get-Sha256Hex $artifactPath
 if ($actualHash -ne $installer[0].sha256) { throw "Downloaded or handed-off artifact SHA-256 does not match the sealed installer" }
 $output = [IO.Path]::GetFullPath($OutputRecord)
 if (Test-Path -LiteralPath $output) { throw "Distribution verification record already exists: $output" }
@@ -28,7 +28,7 @@ $record = [ordered]@{
     artifactName = (Split-Path -Leaf $artifactPath); bytes = (Get-Item -LiteralPath $artifactPath).Length
     sha256 = $actualHash; expectedSha256 = $installer[0].sha256; status = "pass"
     releaseOwner = $approval.owner; approvalUtc = $approval.approvedUtc
-    approvalRecordSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $approvalPath).Hash.ToLowerInvariant()
+    approvalRecordSha256 = Get-Sha256Hex $approvalPath
     verifiedUtc = (Get-Date).ToUniversalTime().ToString("o")
 }
 $parent = Split-Path -Parent $output

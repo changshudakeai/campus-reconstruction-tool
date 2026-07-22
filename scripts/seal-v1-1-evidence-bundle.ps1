@@ -17,7 +17,7 @@ try {
     [IO.File]::WriteAllText($indexPath, ($index | ConvertTo-Json -Depth 30), $utf8)
     $seal = [ordered]@{
         schemaVersion = 1; candidateId = $index.candidateId; version = $index.version; commit = $index.commit
-        evidenceIndexSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $indexPath).Hash.ToLowerInvariant()
+        evidenceIndexSha256 = Get-Sha256Hex $indexPath
         releaseBlockerCount = 0; independentOperator = $index.independentOperator
         releaseOwner = $index.releaseOwner; sealedUtc = (Get-Date).ToUniversalTime().ToString("o")
         immutableAfterTag = $true

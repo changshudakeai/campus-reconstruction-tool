@@ -12,6 +12,18 @@ $script:RequiredArtifactRoles = @(
     "coverage-summary"
 )
 
+function Get-Sha256Hex([string]$Path) {
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $stream = [IO.File]::OpenRead($resolved)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Required JSON file is missing: $Path" }
     try { return Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json }
@@ -45,7 +57,7 @@ function Get-FileRecord([string]$CandidateDirectory, [string]$RelativePath, [str
     return [ordered]@{
         path = $RelativePath.Replace('\', '/')
         bytes = (Get-Item -LiteralPath $path).Length
-        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+        sha256 = Get-Sha256Hex $path
     }
 }
 
@@ -202,7 +214,7 @@ function Test-EvidenceBundle([string]$CandidateDirectory) {
     $index = Read-JsonFile $indexPath
     $seal = Read-JsonFile $sealPath
     Assert-CandidateIdentity $index $seal "Seal"
-    $indexHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $indexPath).Hash.ToLowerInvariant()
+    $indexHash = Get-Sha256Hex $indexPath
     if ($seal.evidenceIndexSha256 -ne $indexHash -or $index.releaseBlockerCount -ne 0) { throw "Evidence index seal or Release Blocker count is invalid" }
     foreach ($command in @($index.commands)) {
         if ([int]$command.exitCode -ne 0) { throw "Sealed command failed: $($command.name)" }
@@ -228,4 +240,4 @@ function Test-EvidenceBundle([string]$CandidateDirectory) {
     return $index
 }
 
-Export-ModuleMember -Function New-EvidenceIndex, Test-EvidenceBundle
+Export-ModuleMember -Function Get-Sha256Hex, New-EvidenceIndex, Test-EvidenceBundle
