@@ -1,0 +1,27 @@
+# MCRebuild V2 —— clippy 禁用类型/方法表（执法清单 1.7，zed 模式）
+#
+# 作用：禁止"越过底座 crate 直呼底层库"。每条必须带 reason（为什么禁）
+# 与 replacement（正道是什么）。唯一合法使用者在自己代码里用
+# `#[allow(clippy::disallowed_types, reason = "…")]` 显式豁免——
+# 豁免必须留痕（workspace.lints 的 allow_attributes_without_reason 强制）。
+#
+# 本文件受 CODEOWNERS 守卫：想加禁令或开豁免，先过守门人。
+# 新的重依赖引入时（rusqlite/slint/网络库等），必须同步补充本表与 deny.toml。
+
+disallowed-types = [
+    # SQLite 只准 B2 data-persistence 访问（ADR-0002/0017 红线表）
+    { path = "rusqlite::Connection", reason = "数据库访问必须经 B2 data-persistence 的存储接口，其他模块不得直连 SQLite", replacement = "data-persistence 公开的存储 trait" },
+]
+
+disallowed-methods = [
+    # 子进程调用：业务模块不得静默拉起外部进程（弹窗铁律/安静哨兵纪律，ADR-0019/0021）
+    { path = "std::process::Command::new", reason = "业务模块不得直接拉起子进程；构建自动化属 xtask 职责", replacement = "xtask 子命令（xtask 内部带 reason 豁免）" },
+    # 线程阻塞：UI 与功能模块禁止同步睡眠（评审台无卡顿铁律，ADR-0016）
+    { path = "std::thread::sleep", reason = "阻塞睡眠会冻结 UI 线程，违反无卡顿铁律", replacement = "事件驱动/定时器（Slint Timer 或异步任务）" },
+]
+
+disallowed-macros = [
+    # 面向用户的文字禁止硬编码拼接输出（ADR-0005 文本外置）
+    { path = "std::eprint", reason = "错误呈现走通知中心三级分派（弹窗/toast/留底），不直写终端", replacement = "B7 notification-center / B11 diagnostics" },
+    { path = "std::eprintln", reason = "错误呈现走通知中心三级分派（弹窗/toast/留底），不直写终端", replacement = "B7 notification-center / B11 diagnostics" },
+]

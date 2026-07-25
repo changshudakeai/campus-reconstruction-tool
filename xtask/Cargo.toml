@@ -1,0 +1,19 @@
+# S2 构建与自动化（ADR-0017）——三层锁执法的 CI 层工具
+#
+# 子命令：tidy（规模红线/模块文档/TODO 禁令）、arch（架构测试）、
+# timings（编译时间预算）、dev-shortcut（开发版快捷方式，ADR-0014）。
+# 检查本身写成 #[test]，`cargo test -p xtask` 即执法（执法即测试）。
+
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

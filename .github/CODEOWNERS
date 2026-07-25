@@ -1,0 +1,26 @@
+# MCRebuild V2 —— 守门人配置（执法清单 3.2，vscode 三模式）
+#
+# 三个守卫模式：① 门禁配置本身有门神；② 共享类型/公开 API 有门神；
+# ③ 豁免白名单有门神——想给自己开例外，先说服守门人。
+# 配合分支保护 "Require review from Code Owners" 才是硬门禁
+# （见 .github/rulesets/main-branch-protection.json）。
+#
+# 守门人 = 产品负责人的 GitHub 账号（依据 git 提交身份 changshudakeai；
+# 仓库推上 GitHub 后如有出入在此更正）。
+
+# ① 依赖清单：每个 Cargo.toml 的 [dependencies] 即依赖白名单（调研 §1.1）
+**/Cargo.toml @changshudakeai
+Cargo.lock @changshudakeai
+
+# ① 门禁配置：lint 禁用表 / 依赖禁令 / CI 工作流 / 守门人名单自身
+clippy.toml @changshudakeai
+deny.toml @changshudakeai
+/.cargo/ @changshudakeai
+/.github/ @changshudakeai
+/xtask/ @changshudakeai
+
+# ② 共享类型（B1 共同语言，T02 立户于 core/domain）
+/core/domain/ @changshudakeai
+
+# ② 公开 API 快照：任何 pub 增删必须现形并过守门人（执法清单 2.5）
+**/tests/snapshots/public-api.txt @changshudakeai
