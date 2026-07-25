@@ -1,0 +1,181 @@
+# ADR-0017：模块化单体架构与 crate 目录清单
+
+## 状态
+
+已接受（2026-07-25，产品负责人确认；同日被 ADR-0022 调整：B8 暂缓实施；同日被 ADR-0024 修订：新增 B18 初始校园生成引擎，模块总数 29 → 30）
+
+## 背景
+
+v1.x 失败的核心原因是代码耦合严重：一个 Cargo workspace 内所有功能挤在少数巨型 crate 里（单文件最大 5900 行），任何修改都触发 20-30 分钟的全量重编译。V2 采用"模块化单体"架构，需明确定义每个模块的职责、接口和依赖方向，确保"修改一个不会影响其他功能"。
+
+本研究综合三轮调研结果（见 `docs/research/` 目录）与业界最佳实践（Zed、Rust-analyzer、QGIS、Apache Airflow 等），确立最终的 29 模块清单及 10 项模块化原则。
+
+## 决定
+
+### 一、模块化十戒（硬规则）
+
+以下原则适用于所有模块的设计与实现，违反任一原则即视为架构违规：
+
+| # | 原则 | 具体要求 | 检验方式 |
+|---|------|---------|---------|
+| 1 | **高内聚** | 模块内部功能高度相关，围绕单一目标展开 | 模块名 = 职责描述 |
+| 2 | **低耦合** | 模块间无直接依赖，只通过 trait 接口交互 | `cargo dep tree` 无环、横向零依赖 |
+| 3 | **单一职责** | 一个模块只有一个修改原因 | 单模块 Git 提交历史不混入无关改动 |
+| 4 | **信息隐藏** | 内部实现细节对外不可见，只暴露必要接口 | Rust `pub` 符号表最小化 |
+| 5 | **接口清晰最小化** | trait 方法 ≤5 个/模块，参数/返回值易理解 | 代码审查时公开 API ≤5 行文档 |
+| 6 | **依赖方向合理** | 高层业务依赖抽象，底层不提供反向依赖 | 依赖图是 DAG（有向无环图） |
+| 7 | **可替换性** | 模块实现可在不修改其他模块的前提下更换 | 同一 trait 有多个 impl（如高德 vs Overpass） |
+| 8 | **可复用性** | 模块避免过度绑定具体场景，但不做"可能复用"的过度抽象 | 模块名不含具体业务词（如"校园"） |
+| 9 | **可测试性** | 模块可独立单元测试，输入输出可控 | CI 中每个 crate 有 ≥80% 覆盖率的 `tests/` |
+| 10 | **粒度适中** | 单 crate 最大文件 <1000 行，不超过 10 个源文件 | `cargo clippy` + CI 脚本检查 |
+
+---
+
+### 二、最终模块目录清单（30 个 crate，ADR-0024 后）
+
+#### （A）功能模块（7 个）—— 用户能感知到的业务能力
+
+| 编号 | 中文名称 | Crate 名建议 | 核心职责 | 对应 ADR / 备注 |
+|------|----------|-------------|---------|----------------|
+| F1 | 应用全局设置 | `global-settings` | 语言选择、Minecraft 版本配置（应用级全局设置） | ADR-0004 |
+| F2 | 新手教程 | `onboarding-tutorial` | 首次启动引导、三步快速开始演示 | ⚠️ 待访谈 UI 形态 |
+| F3 | 项目方案管理 | `project-management` | 校区/方案的增删改查、列表页展示 | ⚠️ 待访谈列表页设计（话题 C） |
+| F4 | 数据采集 | `data-acquisition` | 从高德/Overture 拉取候选对象、六类互斥分类 | ADR-0012 |
+| F5 | 候选审核 | `review-workbench` | 评审工作台（保留/剔除/批量操作/A3 混合模式） | ADR-0016 |
+| F7 | 覆盖率审计 | `coverage-audit` | 对比真实校园边界生成漏网报告（标签覆盖审计） | ⚠️ **新增 ADR 需求** |
+| F9 | 导出控制台 | `export-console` | `.schem` 打包 + `foundation_manifest.json` 生成 + Minecraft 兼容性验证 | ADR-0012 |
+
+#### （B）基础模块（17 个，含 ADR-0024 新增的 B18）—— 为功能模块提供通用能力
+
+| 编号 | 中文名称 | Crate 名建议 | 核心职责 | 对应 ADR / 备注 |
+|------|----------|-------------|---------|----------------|
+| B1 | 共享领域类型 | `shared-domain-types` | 所有模块共用的枚举、结构体、常量定义 | Rust workspace `core/domain` |
+| B2 | 数据持久化 | `data-persistence` | SQLite CRUD、项目文件读写 | ADR-0002 |
+| B3 | 高德地图客户端 | `gaode-client` | 高德 Web API 封装、坐标拾取、边界绘制 | ADR-0008 |
+| B4 | Sponge 导出引擎 | `sponge-export` | Sponge V3 `.schem` 文件格式生成器 | v1.x 复用来源（ADR-0003） |
+| B5 | 地基模式引擎 | `foundation-mode` | 边界绘制、朝向计算、坐标系转换子模块 | ADR-0011 |
+| B6 | 国际化/i18n | `localization` | 界面文本资源文件管理、多语言切换 | ADR-0005 |
+| B7 | 通知中心 | `notification-center` | 系统消息推送、 Toast 提示、历史通知列表 | ADR-0037（v1.x 参考） |
+| B8 | 撤销重做 | `undo-redo` | 命令模式实现的多步撤销/重做栈 | ⚠️ 暂缓实施（ADR-0022）：v2.0.0 不动工，保留席位与接口预留 |
+| B9 | 全局快捷键 | `global-shortcuts` | Windows 热键注册、跨进程消息拦截 | ⚠️ 需评估 OS 耦合影响 |
+| B10 | 主题/外观 | `theming` | 颜色方案、字体大小、暗色/亮色模式 | ⚠️ 建议新增 ADR |
+| B11 | 诊断日志 | `diagnostics` | 结构化日志、性能计时器、错误堆栈捕获 | ADR-0039 |
+| B12 | 数据源适配器 | `data-source-adapters` | Overture Bridge、Overpass API、图生图插件接入 | ✅ ETL 特有 |
+| B13 | 数据转换器 | `data-transformers` | 字段映射、标签转类别、几何投影变换 | ✅ ETL+GIS 特有 |
+| B14 | 几何验证器 | `geometry-validator` | 多边形闭合检查、自相交检测、**内含 R-tree 空间索引子模块** | ✅ GIS 特有 |
+| B15 | 拓扑规则引擎 | `topology-rules` | 建筑物重叠检测、道路连通性规则 | ✅ GIS 特有 |
+| B17 | Manifest 生成器 | `manifest-generator` | `foundation_manifest.json` schema 生成器 + SHA256 校验和 | ✅ ETL 特有 |
+| B18 | 初始校园生成引擎 | `generation-engine` | 评审保留数据 → 方块模型；Arnis 建筑规则 + 六类生成规则 + 用料配置表（MC 版本绑定） | ADR-0024；复用 v1.x arnis-core |
+
+#### （C）应用壳（2 个）—— 薄壳 UI 层 + 工程工具
+
+| 编号 | 中文名称 | Crate 名建议 | 核心职责 | 备注 |
+|------|----------|-------------|---------|------|
+| S1 | 主程序应用壳 | `desktop-shell` | Slint 界面渲染 + ViewModel 绑定（零业务逻辑） | 薄壳原则 |
+| S2 | 构建与自动化 | `xtask` | CI 脚本、编译时间预算检查、crate 规模红线 | 工程规范 |
+
+---
+
+### 三、依赖关系图（DAG 单向依赖）
+
+```
+┌─────────────────────────────────────────────┐
+│          S1: desktop-shell（UI 薄壳）        │
+│  - 只依赖：F1-F9, B2-B7, B9-B11, B17       │
+│  - 绝对不允许依赖：B12-B16（数据源/几何层）│
+└────────────────┬────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────────────┐
+│         功能模块层（F1-F9，横向无依赖）      │
+│  - F3 ↔ F1（项目管→全局设置）               │
+│  - F4 → F12, F13, B3, B5                    │
+│  - F5 → B14, B15                            │
+│  - F7 → B2, B15                             │
+│  - F9 → B4, B5, B17                         │
+└────────────────┬────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────────────┐
+│       基础模块层（B1-B17，横向零依赖）        │
+│  - B1 被所有模块引用                         │
+│  - B2 ↔ B1（持久化依赖领域类型）             │
+│  - B12-B15 之间只有单向依赖（B13→B14→B15）   │
+│  - B16 空间索引降级为 B14 的内部子模块         │
+└────────────────┬────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────────────┐
+│         S2: xtask（仅构建期依赖）            │
+│  - 运行 CI 检查：compile-time-budget.sh     │
+│  - 扫描 crate 大小：max-file-lines=1000     │
+└─────────────────────────────────────────────┘
+```
+
+**关键约束**：
+1. **横向零依赖**：同一层的模块之间不能有交叉引用（如 F4 不能直接调用 F5 的函数）；
+2. **单向向下依赖**：上层只能依赖下层，下层绝不依赖上层（否则形成循环）；
+3. **B12-B16 隔离**：这些 ETL/GIS 专属模块不得被 S1 直接引用（必须通过 F4/F5/F7/F9 中转）。
+
+---
+
+### 四、违反检测机制（CI 红线；2026-07-25 按调研报告 docs/research/module-boundary-enforcement.md 修订工具选型）
+
+| 检查项 | 工具 | 阈值 | 处理方式 |
+|--------|------|------|---------|
+| 单文件行数 | xtask tidy 脚本（仿 rustc tidy） | 超过 1000 行 | CI 阻断；豁免须留标记 + 理由 |
+| 循环依赖 | Cargo 原生拒绝（crate 级循环无法构建，无需额外工具） | 出现环 | 编译失败 |
+| 同层横向依赖/分层违规 | xtask 架构测试（cargo metadata 断言依赖图规则，仿 rust-analyzer） | F* 互依/底座反依/壳越白名单 | CI 阻断 |
+| 重依赖越级直呼 | cargo-deny（deny.toml wrappers，仿 bevy） | 如 rusqlite 只准 data-persistence 依赖 | CI 阻断 |
+| 公开 API 膨胀 | cargo-public-api 快照测试（API 全量入 git，任何 pub 增删现形于 PR diff） | 快照不一致 | CI 阻断，评审后更新快照 |
+| 虚胖 pub / 门禁 lint | workspace.lints（unreachable_pub 等）+ clippy -D warnings | 违规 lint | CI 阻断 |
+| 增量编译时间 | cargo build --timings | 单 crate >2 分钟 | CI 告警 |
+| 未用依赖 | cargo-machete | 声明了没用的依赖 | CI 阻断 |
+
+---
+
+## 五、模块访谈路线图（后续工作目录）
+
+| 优先级 | 模块 | 讨论话题 | 预计产出 ADR |
+|--------|------|---------|-------------|
+| P0 | F7 | 覆盖率审计的流程、漏网判定规则、审计报告格式 | ADR-0018 |
+| P0 | F3 | 方案列表页卡片设计（进度/缩略图/时间）、搜索过滤 | ADR-0019 |
+| P1 | B8 | 撤销/重做的范围（能否回退到上一步评审前？）、历史记录存储 | ADR-0020 |
+| P1 | B10 | 主题系统的范围（仅颜色还是包括布局？）、用户自定义皮肤 | ADR-0021 |
+| P1 | F2 | 新手教程的步骤数、交互式 vs 视频式、是否支持跳过 | ADR-0022 |
+| P2 | F1 | 全局设置的扩展点（未来加"默认导出路径""自动备份"等） | ADR-0023 |
+| ... | ... | ... | ... |
+
+---
+
+## 六、后果
+
+### 正面后果
+
+- **增量编译时间从 20-30 分钟降到分钟级以内**：每次修改只重编译 1-2 个 crate；
+- **模块可独立测试**：F5 评审模块的单元测试可脱离 UI 运行；
+- **团队并行开发**：A 工程师负责 F4，B 工程师负责 F5，互不干扰；
+- **未来可扩展**：新增"三维可视化预览"只需加一个新 crate（F10），不改现有 F1-F9；
+- **符合开发者直觉**：按业务范围而非技术实现划分模块，降低认知成本。
+
+### 负面后果
+
+- **前期接口设计成本高**：需要花时间定义每个 crate 的 public trait；
+- **跨模块通信略显繁琐**：需通过 trait 而不是直接调用，增加少量样板代码；
+- **模块过多时的包管理复杂度**：Cargo.toml 中的 members 列表较长，新人上手需时间理解。
+
+### 缓解措施
+
+- 建立"接口 RFC 模板"：每个新 crate 在实现前先写 interface design doc；
+- 编写 `ARCHITECTURE.md` 辅助文档：解释依赖图和常用调用路径；
+- 引入 IDE 插件（rust-analyzer）自动显示依赖箭头，减少认知负担。
+
+---
+
+## 七、参考来源
+
+1. Matklad: [Large Rust Workspaces](https://matklad.github.io/2021/08/22/large-rust-workspaces.html) – 增量编译优化经验；
+2. Martin Fowler: [Modular Monolith Architecture](https://martinfowler.com/bliki/ModularMonolith.html) – 模块划分原则；
+3. Robert C. Martin: [Clean Architecture](https://www.amazon.com/Clean-Architecture-Craftsmans-Software-Structure/dp/0134494164) – 依赖方向与接口设计；
+4. Zed Editor: [GitHub Repository Structure](https://github.com/zed-industries/zed) – 实际模块化案例（240+ crates）；
+5. QGIS: [Source Directory Layout](https://github.com/qgis/QGIS/tree/master) – GIS 软件的空间模块划分；
+6. Apache Airflow: [Core Components](https://airflow.apache.org/docs/apache-airflow/stable/concepts.html) – ETL 流水线模块设计；
+7. Slint Framework: [Energy Monitor Demo](https://github.com/slint-ui/slint/blob/master/examples/energy-monitor) – Slint 项目组织模式；
+8. GDAL/OGR: [Coordinate System Transformation](https://gdal.org/user/cordinate_systems.html) – GIS 特有的投影变换经验。
