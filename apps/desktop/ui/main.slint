@@ -45,6 +45,9 @@ export component AppWindow inherits Window {
     callback error-dialog-dismissed();
 
     title: root.app-title;
+    // femtovg 渲染器的默认字体缺部分中文字形（显示方块），显式指定
+    // 微软雅黑（Windows 系统自带，开发版目标平台 ADR-0014）
+    default-font-family: "Microsoft YaHei";
     preferred-width: 800px;
     preferred-height: 600px;
     min-width: 480px;
