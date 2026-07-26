@@ -1,7 +1,7 @@
 //! xtask arch —— 架构测试（执法清单 2.2，仿 rust-analyzer / rustc tidy deps）。
 //!
 //! 用 `cargo metadata` 读出真实依赖图（workspace 成员间的 normal/build 边，
-//! dev-dependencies 不计），断言 ADR-0017 第三节依赖 DAG 的整套规则：
+//! dev-dependencies 不计），断言 ADR-0017 + ADR-0025 的依赖 DAG：
 //! 1. 功能模块（F*）横向零依赖；
 //! 2. 壳 `desktop-shell` 的成员依赖 ⊆ 白名单（F1-F9、B1-B7、B9-B11、B17；
 //!    绝对禁止 B12-B15 ETL/GIS 层）；
@@ -56,7 +56,8 @@ const SHELL_CRATE: &str = "desktop-shell";
 /// S2 工程工具（仅构建期，不与业务 crate 相互依赖）。
 const TOOLING_CRATE: &str = "xtask";
 
-/// 壳允许依赖的成员 crate 白名单（ADR-0017 DAG：F1-F9 + B1-B7 + B9-B11 + B17）。
+/// 壳允许依赖的成员 crate 白名单（ADR-0017 + ADR-0025：F1-F9 + B1-B7 + B9-B11 + B17）。
+/// B1 shared-domain-types 是唯一的例外授权（T01 修正，见 ADR-0025）。
 const SHELL_ALLOWED_MEMBER_DEPS: &[&str] = &[
     // 功能层
     "global-settings",

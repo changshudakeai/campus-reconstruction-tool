@@ -71,6 +71,29 @@ fn public_api() {
 公开 API 的任何增删改由此**必然现形于 PR diff**；快照文件受 CODEOWNERS
 守卫，更新快照需守门人批准（十戒第 5 条"接口最小化"的客观量尺）。
 
+---
+
+## xtask 测试架构（内嵌模式）
+
+本项目的执法测试采用**内嵌模式**（`#[test]` 直接写在 source file 中），
+而非独立的测试目录结构：
+
+| 模块 | 测试位置 | 测试内容 |
+|------|---------|----------|
+| tidy | `xtask/src/tidy.rs` | 行数/模块文档/半成品禁令等纯函数测试 |
+| arch | `xtask/src/arch.rs` | 架构断言的白名单/禁止边单元测试 |
+| main | `xtask/src/main.rs` | 全量 workspace 执法扫描集成测试 |
+| timings | `xtask/src/timings.rs` | cargo-timing HTML 解析器测试 |
+| shortcut | `xtask/src/shortcut.rs` | PowerShell 脚本生成逻辑测试 |
+
+这种设计的好处：
+1. **单 crate 自闭环**：每个子命令的逻辑 + 测试在同一文件，阅读方便；
+2. **减少样板代码**：无需额外的 `mod tests`、fixture 目录管理；
+3. **便于增量修改**：改 tidy.rs 时可直接看到对应的单元测试，符合 TDD 流程。
+
+注意：public-api 快照测试不在这里——每个基础 crate 有自己的 `tests/` 目录，
+因为快照是对外公开面的客观度量，必须由 crate 自己的 Cargo.toml 管理依赖。
+
 ## 流程层：GitHub 仓库建立后的一次性设置
 
 本地仓库已就绪，以下三步在仓库推上 GitHub 后执行（约十分钟）：
