@@ -1,4 +1,4 @@
-# T19 — S1 薄壳实现状态（T19B-1 后）
+# T19 — S1 薄壳实现状态（T19B-2 后）
 
 > 本文件随 T19B 系列子工单逐单更新，反映仓库真实状态。
 
@@ -29,11 +29,41 @@
 - 设计备注：B2 `Database` 不可 Clone → 壳对同库开两连接（F1/F3 各持一条）；
   F9 门控暂用 `MockSealGate` 占位，真门控归 T19B-8
 
-## 🚧 剩余接线债务（归 T19B-2..8，勿当已完成）
+### T19B-2（首次运行向导 + 债务② + 装喇叭，2026-07-27）
 
-1. 页面级导航骨架（步骤条向导式，ADR-0027）与各页属性/回调绑定
-2. F4→F7 采集报告入口、F2 教程钩子与"重新查看教程"按钮
-3. F9 真封账门控（壳实现 SealGate 调 F5 seal）+ B7 Slint Presenter 注册
+- `ui/settings_wizard.slint`（新建）：首跑向导组件——语言/MC 版本下拉框
+  （选项来自 F1 `SUPPORTED_*` 常量，首版仅 zh-CN / 26.1.2）+ 知情告知
+  勾选框；未勾选时“继续”按钮禁用（ADR-0004 强制，F1 侧另有二次校验）
+- `ui/main.slint`：三屏路由（active-screen：0 首跑向导 / 1 着陆占位 /
+  2 设置页）+ B7 错误模态遮罩层；显式指定 Microsoft YaHei 字体
+  （femtovg 默认字体缺中文字形显方块）
+- `src/injector.rs`：`inject` 注入向导/设置页/弹窗文案与选项 model；
+  新增 `bind(&Rc<RefCell<Self>>, &window)` 接线两个回调——向导完成
+  （F1 `complete_first_run` 落库 → 重判着陆跳下一屏）与重看教程
+  （债务②：文案取 F2 `settings_entry().replay_label`，点击接 F2
+  `restart(db)` 借道 F3 连接落库）；回调错误一律递 `report_callback_error`
+- `src/presenter.rs`（新建）：`ShellPresenter` 实现 B7 `Presenter`，启动时
+  经 `PresenterRegistry::set_presenter` 注册（装喇叭，无论库是否可用）。
+  Error 级点亮全窗模态遮罩（TouchArea 吞全部输入，点“知道了”前界面
+  不可操作）；非 UI 线程调用真阻塞到确认，UI 线程调用点亮即返回
+  （Slint 公开 API 不支持嵌套事件循环，字面阻塞会死锁——见模块文档
+  “诚实声明”节）；toast/铃铛呈现归公告栏工单
+- `tests/ui_bindings.rs`（新建）：窗口类场景集中单进程串行（Slint 平台
+  只能单线程初始化一次）：注入断言 / 向导双保险与落库跳屏 /
+  重看教程清零落库 / 遮罩亮灭；跨模块断言用同一临时文件连接组
+- zh-CN.json 新增 `settings.*` 六键（单独 commit）；B6 `ResourceBundle`
+  增设 settings 类别
+- 手动验收已过（删库→向导→勾选→下一屏；重启不再出向导；设置页
+  重看教程可点；无方块字）
+
+## 🚧 剩余接线债务（归 T19B-3..8，勿当已完成）
+
+1. 五步步骤条导航骨架（ADR-0027）与各步骤页属性/回调绑定；当前
+   着陆/设置两屏仅为占位（校区选择归 T19B-3，方案列表归 T19B-4）
+2. F4→F7 采集报告入口【债务①】与 F2 三个里程碑钩子【债务③，
+   ADR-0028 三泡】（债务②设置页按钮已于 T19B-2 落地）
+3. F9 真封账门控（壳实现 SealGate 调 F5 seal）；B7 warn 级 toast 与
+   铃铛角标的 Slint 呈现（随公告栏界面）
 4. 开发版快捷方式端到端验收（`cargo xtask dev-shortcut` 已有实现）
 5. public-api 快照 + CODEOWNERS 守卫 .lnk 文件
 
