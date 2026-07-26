@@ -116,6 +116,17 @@
     "skipped_line": "{category}：未采集（跳过）",
     "no_issues": "本次体检没有发现疑点"
   },
+  "tutorial": {
+    "source_tag": "新手引导",
+    "dismiss_button": "知道了",
+    "skip_all_button": "跳过全部引导",
+    "replay_button": "重新查看教程",
+    "skip_notice_title": "已跳过全部新手引导",
+    "skip_notice_body": "想再看时，到设置里点“重新查看教程”即可。",
+    "step_plan_list": "点这里新建你的第一个方案",
+    "step_collection_done": "采集完成了——去评审工作台把候选过目一遍",
+    "step_export_done": "导出完成了——去导出清单看看你的成果"
+  },
   "dialog": {
     "error_title": "错误",
     "warning_title": "警告",

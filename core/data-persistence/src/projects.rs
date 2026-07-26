@@ -55,6 +55,10 @@ pub enum AppSettingKey {
     FirstRunCompleted,
     /// 覆盖体检疑点裁决记忆（F7，按方案分组的 JSON，ADR-0019）
     CoverageAuditDecisions,
+    /// 新手引导进度（F2，已见提示点 + 是否全跳的 JSON，ADR-0020）
+    OnboardingProgress,
+    /// 新手引导完成时刻（F2，RFC3339；空字符串表示未完成）
+    OnboardingCompletedAt,
 }
 
 impl AppSettingKey {
@@ -66,6 +70,8 @@ impl AppSettingKey {
             AppSettingKey::MinecraftVersion => "minecraft_version",
             AppSettingKey::FirstRunCompleted => "first_run_completed",
             AppSettingKey::CoverageAuditDecisions => "coverage_audit_decisions",
+            AppSettingKey::OnboardingProgress => "onboarding_progress",
+            AppSettingKey::OnboardingCompletedAt => "onboarding_completed_at",
         }
     }
 }

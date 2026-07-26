@@ -1,0 +1,120 @@
+---
+# onboarding-tutorial Public API Snapshot
+#
+# 本文件记录 F2 新手教程的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T17 实施)
+
+## Constants
+
+pub const ALL_STEPS: [TutorialStep; 3]                    (三个里程碑钩子，顺序即任务链先后)
+
+## Enums
+
+pub enum TutorialStep {                                   (提示点清单待 T19 界面审核扩容)
+    PlanListIntro,                                        (首次进入方案列表页)
+    CollectionCompleted,                                  (首次完成数据采集)
+    ExportCompleted,                                      (首次完成导出)
+}
+impl TutorialStep {
+    pub fn id(&self) -> &'static str                      (引导进度存储用的稳定标识符)
+    pub fn message_key(&self) -> &'static str             (tutorial.* 文本键)
+}
+
+pub enum TutorialStatus {                                 (状态机：NotStarted → InProgress → Completed)
+    NotStarted,                                           (首次使用或"重新查看教程"之后)
+    InProgress,                                           (部分提示点已见过)
+    Completed,                                            (全部见过或一键全跳)
+}
+
+pub enum Error {                                          (#[non_exhaustive])
+    Storage(data_persistence::Error),
+    Corrupted(serde_json::Error),
+}
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, Error>
+
+## Structures
+
+pub struct TutorialProgress { .. }                        (应用级引导进度，不分方案——规矩③依据)
+impl TutorialProgress {
+    pub fn new() -> Self
+    pub fn load(db: &impl AppSettingsApi) -> Result<Self>
+    pub fn save(&self, db: &mut impl AppSettingsApi) -> Result<()>
+    pub fn status(&self) -> TutorialStatus
+    pub fn has_seen(&self, step: TutorialStep) -> bool
+    pub fn is_first_bubble(&self) -> bool                 (第一泡才附"跳过全部引导")
+    pub fn mark_seen(&mut self, step: TutorialStep)       (看完最后一泡自动盖完成章)
+    pub fn skip_all(&mut self)
+    pub fn restart(&mut self)                             (规矩④：清零回 NotStarted)
+    pub fn completed_at(&self) -> Option<&str>            (RFC3339；未完成为 None)
+}
+impl Default for TutorialProgress
+
+pub struct BubblePlacement {                              (⚠️ 占位值，定稿归 T19 界面审核)
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+}
+impl BubblePlacement {
+    pub const fn placeholder() -> Self                    (0, 0, 280 —— 界面审核前统一占位)
+}
+impl Default for BubblePlacement
+
+pub struct TutorialBubble {                               (气泡 ViewModel，零 slint)
+    pub step: TutorialStep,
+    pub placement: BubblePlacement,
+    pub message_key: &'static str,                        (tutorial.* 文本键)
+    pub message: String,                                  (B6 解析后的成品文案)
+    pub dismiss_label: String,                            ("知道了"，规矩①)
+    pub skip_all_label: Option<String>,                   (仅第一泡附带，规矩②)
+}
+
+pub struct SettingsEntryView {                            (设置页"重新查看教程"入口，T19 接线)
+    pub replay_label: String,
+}
+
+pub struct OnboardingTutorial { .. }                      (教程编排入口——壳的唯一对话对象)
+impl OnboardingTutorial {
+    pub fn new() -> Self
+    pub fn load(db: &impl AppSettingsApi) -> Result<Self>
+    pub fn status(&self) -> TutorialStatus
+    pub fn progress(&self) -> &TutorialProgress
+    pub fn bubble_for(&self, step, l10n) -> Option<TutorialBubble>  (已见过/已完成 → None)
+    pub fn dismiss(&mut self, db, step) -> Result<()>     (规矩①：每泡可关)
+    pub fn skip_all(&mut self, db, l10n) -> Result<()>    (规矩②：一键全跳 + B7 info 留底)
+    pub fn restart(&mut self, db) -> Result<()>           (规矩④：设置可重看)
+    pub fn settings_entry(&self, l10n) -> SettingsEntryView
+}
+impl Default for OnboardingTutorial
+
+impl std::error::Error for Error                          (thiserror)
+impl std::fmt::Display for Error                          (thiserror)
+
+## Derives
+
+TutorialStep: Debug, Clone, Copy, PartialEq, Eq, Hash
+TutorialStatus: Debug, Clone, Copy, PartialEq, Eq
+TutorialProgress: Debug, Clone, Default, PartialEq, Eq
+BubblePlacement: Debug, Clone, Copy, PartialEq           (含 f32，无 Eq)
+TutorialBubble: Debug, Clone, PartialEq                  (含 f32，无 Eq)
+SettingsEntryView: Debug, Clone, PartialEq, Eq
+OnboardingTutorial: Debug, Clone, Default, PartialEq, Eq
+Error: Debug, thiserror::Error
+
+## 铁律备注
+
+- 跟练式而非说明书式：不设教程页，气泡是任务链的旁白（ADR-0020）
+- 四条规矩：① 每泡可关 ② 一键全跳（第一泡附选项）③ 只教一次
+  （应用级持久化，建第二个方案全程安静）④ 设置可重看（跳过可逆）
+- 引导进度存 B2 app_settings（onboarding_progress + onboarding_completed_at 键）
+- 气泡位置与文案均为占位，定稿归界面成型后的开发版审核（T19）
+- 一键全跳经 B7 info 级留底"设置里可重看"，不打扰（禁横幅之外的最低档）
+- 引导不碰业务数据、不阻挡操作：最坏情况是气泡未出现，不影响任何功能
+
+---
+END OF PUBLIC API SNAPSHOT
+---

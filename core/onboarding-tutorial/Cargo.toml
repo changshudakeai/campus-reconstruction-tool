@@ -1,0 +1,45 @@
+# MCRebuild V2 —— F2 新手教程（跟练式气泡引导）
+#
+# 职责：不设教程页，用户直接建第一个真实方案，软件在真实操作中由气泡
+# 当场指路（ADR-0020）——气泡是任务链的旁白，不是独立课程。
+# 四条规矩：① 每泡可关 ② 一键全跳 ③ 只教一次 ④ 设置可重看。
+# 气泡位置与文案本阶段只留占位，定稿归界面成型后的开发版审核（T19）。
+#
+# ⚖️ 本依赖段即白名单：F2 依赖 B2/B6/B7，不得依赖其他 F* 功能模块
+# （xtask arch 断言 1 强制）。slint 只准壳依赖：本 crate 只产出纯数据 ViewModel。
+#
+# 公开接口：
+# - `OnboardingTutorial`：教程编排（气泡索取 / 关泡 / 全跳 / 重看）
+# - `TutorialStep` / `TutorialStatus` / `ALL_STEPS`：里程碑提示点与状态机
+# - `TutorialProgress`：引导进度（app_settings 应用级持久化）
+# - `TutorialBubble` / `BubblePlacement`：气泡 ViewModel（位置为占位值）
+# - `SettingsEntryView`：设置页"重新查看教程"入口（T19 接线）
+
+[package]
+name = "onboarding-tutorial"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F2 新手教程：跟练式气泡引导 + 四条规矩（ADR-0020）"
+
+[dependencies]
+# B2 数据持久化（引导状态只经 AppSettingsApi 公开 trait，不触碰 SQL）
+data-persistence = { path = "../data-persistence" }
+# B6 国际化（文本键 → 成品文案，气泡文字禁止硬编码）
+localization = { workspace = true }
+# B7 通知中心（一键全跳后 info 级留底"设置里可重看"，不打扰）
+notification-center = { path = "../notification-center" }
+# 引导完成时刻的 RFC3339 时间戳
+chrono = { workspace = true }
+# 引导进度 JSON 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing
+public-api.workspace = true

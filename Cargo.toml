@@ -52,6 +52,8 @@ members = [
     "core/generation-engine",
     # T16：F7 覆盖率审计（安静哨兵 + 两条疑点规则）
     "core/coverage-audit",
+    # T17：F2 新手教程（跟练式气泡引导 + 四条规矩）
+    "core/onboarding-tutorial",
 ]
 
 [workspace.package]
@@ -83,6 +85,8 @@ flate2 = "1"
 sha2 = "0.10"
 # 测试临时目录
 tempfile = "3"
+# RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # public-api snapshot testing
 public-api = "0.52"
 # 路径依赖
