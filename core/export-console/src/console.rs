@@ -91,7 +91,10 @@ impl<G: SealGate> ExportConsole<G> {
     /// 确认弹窗视图（汇总 + 封账后果 + 待定报数）；无请求时为 None
     pub fn confirm_dialog_view(&self) -> Option<ExportConfirmDialogView> {
         match self.state {
-            State::RequestReady => self.request.as_ref().map(ExportConfirmDialogView::from_request),
+            State::RequestReady => self
+                .request
+                .as_ref()
+                .map(ExportConfirmDialogView::from_request),
             _ => None,
         }
     }

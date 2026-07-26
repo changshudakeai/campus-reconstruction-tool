@@ -166,7 +166,10 @@ mod tests {
         );
         let view = ExportConfirmDialogView::from_request(&request);
         assert_eq!(view.summary_rows.len(), 2);
-        assert_eq!(view.summary_rows[0].label_key, "collection.category_building");
+        assert_eq!(
+            view.summary_rows[0].label_key,
+            "collection.category_building"
+        );
         assert_eq!(view.summary_rows[0].keep_count, 80);
         // 待定如实报数、不拦截（ADR-0022）
         assert_eq!(view.pending_count, 7);

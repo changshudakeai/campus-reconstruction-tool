@@ -49,7 +49,9 @@ pub use error::{Error, Result};
 pub use pipeline::{adapt_to_voxel_model, export_schematic};
 pub use progress::ProgressTracker;
 pub use seal_gate::{MockSealGate, SealGate};
-pub use views::{text_keys, ExportConfirmDialogView, ExportProgressView, NavigationTarget, SummaryRowView};
+pub use views::{
+    text_keys, ExportConfirmDialogView, ExportProgressView, NavigationTarget, SummaryRowView,
+};
 
 /// 带 Mock 门控的导出控制台别名（测试与文档示例用）
 pub type MockExportConsole = ExportConsole<MockSealGate>;
