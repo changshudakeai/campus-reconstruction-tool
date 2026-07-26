@@ -127,7 +127,9 @@ fn restore_conflict_with_same_name_is_rejected() {
 
     // 站外又建了一个同名方案 → 恢复必须报冲突
     manager.create_plan(&campus_id, "方案 1").unwrap();
-    let err = manager.restore_plan(&campus_id, &trash.trash_id).unwrap_err();
+    let err = manager
+        .restore_plan(&campus_id, &trash.trash_id)
+        .unwrap_err();
     assert!(matches!(err, Error::RestoreNameConflict(name) if name == "方案 1"));
 }
 

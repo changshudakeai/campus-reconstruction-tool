@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use notification_center::{NotificationCenter, Notification, Presenter, PresenterRegistry};
+use notification_center::{Notification, NotificationCenter, Presenter, PresenterRegistry};
 
 /// 模拟用户 100ms 后才点"知道了"的模态弹窗 Presenter，记录全部事件顺序。
 struct BlockingDialogPresenter {
@@ -20,7 +20,10 @@ struct BlockingDialogPresenter {
 
 impl BlockingDialogPresenter {
     fn record(&self, event: impl Into<String>) {
-        self.events.lock().expect("事件记录锁不可中毒").push(event.into());
+        self.events
+            .lock()
+            .expect("事件记录锁不可中毒")
+            .push(event.into());
     }
 }
 
@@ -59,7 +62,10 @@ fn error_popup_blocks_warn_toasts_info_stays_quiet() {
     let start = Instant::now();
     notification_center::error("方案 2", "导出失败", "磁盘写入被拒绝");
     let elapsed = start.elapsed();
-    events.lock().expect("事件记录锁不可中毒").push("after-error-returned".into());
+    events
+        .lock()
+        .expect("事件记录锁不可中毒")
+        .push("after-error-returned".into());
 
     // 阻塞证据 1：error() 的耗时 ≥ 弹窗停留时间
     assert!(

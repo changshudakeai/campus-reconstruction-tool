@@ -137,17 +137,23 @@ mod tests {
     fn out_of_range_angles_are_normalized() {
         // -90° → 270°
         assert_eq!(
-            OrientationCalculator::normalize_angle(-90.0).unwrap().degree(),
+            OrientationCalculator::normalize_angle(-90.0)
+                .unwrap()
+                .degree(),
             270.0
         );
         // 400° → 40°
         assert_eq!(
-            OrientationCalculator::normalize_angle(400.0).unwrap().degree(),
+            OrientationCalculator::normalize_angle(400.0)
+                .unwrap()
+                .degree(),
             40.0
         );
         // 360° → 0°
         assert_eq!(
-            OrientationCalculator::normalize_angle(360.0).unwrap().degree(),
+            OrientationCalculator::normalize_angle(360.0)
+                .unwrap()
+                .degree(),
             0.0
         );
     }

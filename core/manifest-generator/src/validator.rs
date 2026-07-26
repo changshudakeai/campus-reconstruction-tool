@@ -119,10 +119,7 @@ mod tests {
             "minecraft:glass_pane".to_string(),
         ];
 
-        let result = validator.validate_blocks_for_version(
-            MinecraftVersion::V1_20_4,
-            &blocks,
-        );
+        let result = validator.validate_blocks_for_version(MinecraftVersion::V1_20_4, &blocks);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 3);
     }
@@ -144,10 +141,8 @@ mod tests {
         let crafter_block = vec!["minecraft:crafter".to_string()];
 
         // 1.20.4 中不应认可 crafter
-        let result = validator.validate_blocks_for_version(
-            MinecraftVersion::V1_20_4,
-            &crafter_block,
-        );
+        let result =
+            validator.validate_blocks_for_version(MinecraftVersion::V1_20_4, &crafter_block);
         assert!(result.is_err());
 
         // 1.21 中应认可 crafter
@@ -190,8 +185,8 @@ mod tests {
         let validator = MaterialValidator::new();
         let blocks = vec![
             "minecraft:stone_bricks".to_string(), // 有效
-            "air".to_string(),                      // 无效
-            "minecraft:bricks".to_string(),         // 有效
+            "air".to_string(),                    // 无效
+            "minecraft:bricks".to_string(),       // 有效
         ];
 
         let result = validator.validate_blocks_for_version(MinecraftVersion::V1_20_4, &blocks);

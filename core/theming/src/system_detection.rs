@@ -18,20 +18,22 @@ pub enum SystemColorScheme {
 /// - Non-Windows:默认返回 Light
 #[cfg(target_os = "windows")]
 pub fn detect_system_color_scheme() -> SystemColorScheme {
-    use winreg::enums::*;
+    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
     match hklm.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") {
-        Ok(key) => {
-            match key.get_value::<u32, _>("AppsUseLightTheme") {
-                Ok(value) => {
-                    if value == 1 { SystemColorScheme::Light } else { SystemColorScheme::Dark }
-                },
-                Err(_) => {
-                    log::warn!("无法读取 AppsUseLightTheme 注册表项，默认使用亮色");
+        Ok(key) => match key.get_value::<u32, _>("AppsUseLightTheme") {
+            Ok(value) => {
+                if value == 1 {
                     SystemColorScheme::Light
+                } else {
+                    SystemColorScheme::Dark
                 }
+            }
+            Err(_) => {
+                log::warn!("无法读取 AppsUseLightTheme 注册表项，默认使用亮色");
+                SystemColorScheme::Light
             }
         },
         Err(_) => {

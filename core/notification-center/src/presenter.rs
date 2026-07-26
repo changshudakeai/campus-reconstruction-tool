@@ -166,7 +166,9 @@ mod tests {
     fn clones_share_registration_and_storage() {
         let registry = PresenterRegistry::new();
         let alias = registry.clone();
-        alias.storage().append(Notification::info("test", "消息", "内容"));
+        alias
+            .storage()
+            .append(Notification::info("test", "消息", "内容"));
         assert_eq!(registry.storage().all_notifications().len(), 1);
     }
 }

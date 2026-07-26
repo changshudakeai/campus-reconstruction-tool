@@ -131,7 +131,12 @@ impl VoxelModel {
     /// filled with `ground_block`, with `height - 1` empty layers above it
     /// reserved for future structures. This realizes the ADR-0024 flat-ground
     /// decision while keeping the Y dimension extensible.
-    pub fn flat_ground(width: usize, length: usize, height: usize, ground_block: &str) -> Result<Self, String> {
+    pub fn flat_ground(
+        width: usize,
+        length: usize,
+        height: usize,
+        ground_block: &str,
+    ) -> Result<Self, String> {
         if height == 0 {
             return Err("height must be at least 1 for the ground layer".into());
         }
@@ -208,17 +213,35 @@ pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<()
     );
 
     let mut schematic = HashMap::new();
-    schematic.insert("Version".to_string(), fastnbt::Value::Int(SPONGE_SCHEMATIC_VERSION));
-    schematic.insert("DataVersion".to_string(), fastnbt::Value::Int(PINNED_DATA_VERSION));
+    schematic.insert(
+        "Version".to_string(),
+        fastnbt::Value::Int(SPONGE_SCHEMATIC_VERSION),
+    );
+    schematic.insert(
+        "DataVersion".to_string(),
+        fastnbt::Value::Int(PINNED_DATA_VERSION),
+    );
     schematic.insert("Metadata".to_string(), fastnbt::Value::Compound(metadata));
-    schematic.insert("Width".to_string(), fastnbt::Value::Short(model.width as i16));
-    schematic.insert("Height".to_string(), fastnbt::Value::Short(model.height as i16));
-    schematic.insert("Length".to_string(), fastnbt::Value::Short(model.length as i16));
+    schematic.insert(
+        "Width".to_string(),
+        fastnbt::Value::Short(model.width as i16),
+    );
+    schematic.insert(
+        "Height".to_string(),
+        fastnbt::Value::Short(model.height as i16),
+    );
+    schematic.insert(
+        "Length".to_string(),
+        fastnbt::Value::Short(model.length as i16),
+    );
     schematic.insert(
         "Offset".to_string(),
         fastnbt::Value::IntArray(fastnbt::IntArray::new(vec![0, 0, 0])),
     );
-    schematic.insert("Blocks".to_string(), fastnbt::Value::Compound(blocks_compound));
+    schematic.insert(
+        "Blocks".to_string(),
+        fastnbt::Value::Compound(blocks_compound),
+    );
 
     let mut root = HashMap::new();
     root.insert("Schematic".to_string(), fastnbt::Value::Compound(schematic));
@@ -382,14 +405,20 @@ fn get_compound<'a>(
     }
 }
 
-fn get_int_array(map: &HashMap<String, fastnbt::Value>, name: &str) -> Result<Vec<i32>, anyhow::Error> {
+fn get_int_array(
+    map: &HashMap<String, fastnbt::Value>,
+    name: &str,
+) -> Result<Vec<i32>, anyhow::Error> {
     match map.get(name) {
         Some(fastnbt::Value::IntArray(arr)) => Ok(arr.clone().into_inner()),
         _ => Err(anyhow::anyhow!("{name} must be int array")),
     }
 }
 
-fn get_byte_array(map: &HashMap<String, fastnbt::Value>, name: &str) -> Result<Vec<i8>, anyhow::Error> {
+fn get_byte_array(
+    map: &HashMap<String, fastnbt::Value>,
+    name: &str,
+) -> Result<Vec<i8>, anyhow::Error> {
     match map.get(name) {
         Some(fastnbt::Value::ByteArray(arr)) => Ok(arr.clone().into_inner()),
         _ => Err(anyhow::anyhow!("{name} must be byte array")),
@@ -431,8 +460,14 @@ fn publish_atomically(path: &Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("destination has no valid file name"))?;
     let sequence = EXPORT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let stage = parent.join(format!(".{filename}.stage-{}-{sequence}", std::process::id()));
-    let backup = parent.join(format!(".{filename}.backup-{}-{sequence}", std::process::id()));
+    let stage = parent.join(format!(
+        ".{filename}.stage-{}-{sequence}",
+        std::process::id()
+    ));
+    let backup = parent.join(format!(
+        ".{filename}.backup-{}-{sequence}",
+        std::process::id()
+    ));
 
     let mut moved_previous = false;
     let mut published = false;

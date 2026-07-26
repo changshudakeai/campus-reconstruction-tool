@@ -196,7 +196,10 @@ mod tests {
             table.building_presets.school.foundation,
             "minecraft:stone_bricks"
         );
-        assert_eq!(table.building_presets.residential.wall, "minecraft:white_concrete");
+        assert_eq!(
+            table.building_presets.residential.wall,
+            "minecraft:white_concrete"
+        );
     }
 
     #[test]

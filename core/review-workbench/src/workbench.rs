@@ -51,8 +51,10 @@ impl ReviewWorkbench {
     pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self> {
         let plan_key = plan_id.to_string();
         let observations = db.list_raw_observations(&plan_key)?;
-        let mut candidates: Vec<Candidate> =
-            observations.iter().map(Candidate::from_observation).collect();
+        let mut candidates: Vec<Candidate> = observations
+            .iter()
+            .map(Candidate::from_observation)
+            .collect();
 
         // 上一轮封账写回的终态对回内存（没有记录的保持"待定"）
         for decision in db.list_review_decisions(&plan_key)? {
@@ -260,8 +262,7 @@ impl ReviewWorkbench {
                 selected: c.selected,
             })
             .collect();
-        SessionSnapshot::new(self.plan_id.clone(), self.active_category, entries)
-            .save_to_file(path)
+        SessionSnapshot::new(self.plan_id.clone(), self.active_category, entries).save_to_file(path)
     }
 
     /// 恢复评审：从临时文件把状态对回内存。

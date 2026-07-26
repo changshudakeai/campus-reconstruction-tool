@@ -57,7 +57,13 @@ impl ColorRole {
     /// 返回该颜色角色在 Slint theme 中的属性名
     pub fn slint_property_name(&self) -> String {
         // 使用 serde 序列化然后转为 kebab-case(不带引号)
-        format!("--{}", serde_json::to_string(self).unwrap().trim_matches('"').replace('_', "-"))
+        format!(
+            "--{}",
+            serde_json::to_string(self)
+                .unwrap()
+                .trim_matches('"')
+                .replace('_', "-")
+        )
     }
 
     /// 验证色卡是否包含所有必需的角色
@@ -72,12 +78,20 @@ impl ColorRole {
     }
 }
 
-fn missing_roles(colors: &HashMap<ColorRole, String>, required: &[ColorRole]) -> Result<(), Vec<ColorRole>> {
-    let missing: Vec<_> = required.iter()
+fn missing_roles(
+    colors: &HashMap<ColorRole, String>,
+    required: &[ColorRole],
+) -> Result<(), Vec<ColorRole>> {
+    let missing: Vec<_> = required
+        .iter()
         .filter(|r| !colors.contains_key(*r))
         .copied()
         .collect();
-    if missing.is_empty() { Ok(()) } else { Err(missing) }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing)
+    }
 }
 
 /// 单张色卡数据——一个主题的所有颜色值
@@ -100,7 +114,8 @@ impl ColorCard {
 
     /// 获取指定角色名的颜色值，如果缺失则 panic(用于内部调用)
     pub fn get_required(&self, role: ColorRole) -> Result<&str, ThemingError> {
-        self.get(role).ok_or(ThemingError::ColorRoleNotFound(format!("{:?})", role)))
+        self.get(role)
+            .ok_or(ThemingError::ColorRoleNotFound(format!("{:?})", role)))
     }
 
     /// 验证色卡完整性
@@ -113,11 +128,16 @@ impl ColorCard {
         let hex = hex.trim_start_matches('#');
         match hex.len() {
             6 => u32::from_str_radix(hex, 16)
-                .map(|rgb| (0xFF << 24) | rgb)  // 默认完全不透明
-                .map_err(|_| ThemingError::InvalidColorValue { value: hex.to_string() }),
-            8 => u32::from_str_radix(hex, 16)
-                .map_err(|_| ThemingError::InvalidColorValue { value: hex.to_string() }),
-            _ => Err(ThemingError::InvalidColorValue { value: hex.to_string() }),
+                .map(|rgb| (0xFF << 24) | rgb) // 默认完全不透明
+                .map_err(|_| ThemingError::InvalidColorValue {
+                    value: hex.to_string(),
+                }),
+            8 => u32::from_str_radix(hex, 16).map_err(|_| ThemingError::InvalidColorValue {
+                value: hex.to_string(),
+            }),
+            _ => Err(ThemingError::InvalidColorValue {
+                value: hex.to_string(),
+            }),
         }
     }
 }

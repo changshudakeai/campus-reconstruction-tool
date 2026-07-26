@@ -142,6 +142,8 @@ mod tests {
             vec![TagPattern::new("building=yes")],
         )]);
         let error = ClassifyEngine::new(config).unwrap_err();
-        assert!(matches!(error, TransformError::UnknownCategoryKey(key) if key == "collection.category_unknown"));
+        assert!(
+            matches!(error, TransformError::UnknownCategoryKey(key) if key == "collection.category_unknown")
+        );
     }
 }

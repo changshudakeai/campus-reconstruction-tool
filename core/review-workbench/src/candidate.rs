@@ -147,7 +147,9 @@ mod tests {
             "tags": { "building": "school" },
             "geometry": [[1, 2]]
         })));
-        assert!(candidate.tags.contains(&("levels".to_owned(), "3".to_owned())));
+        assert!(candidate
+            .tags
+            .contains(&("levels".to_owned(), "3".to_owned())));
         assert!(candidate
             .tags
             .contains(&("building".to_owned(), "school".to_owned())));

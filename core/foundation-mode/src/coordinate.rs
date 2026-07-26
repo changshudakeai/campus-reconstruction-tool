@@ -149,7 +149,10 @@ impl CoordinateConverter {
         let north_m = (mercator.y - center.y) * scale;
 
         // x=East, y=North（与 Point2D 一致）
-        Some(PlaneMileUnit { x: east_m, y: north_m })
+        Some(PlaneMileUnit {
+            x: east_m,
+            y: north_m,
+        })
     }
 
     /// 将平面米单位转为 MC 块坐标

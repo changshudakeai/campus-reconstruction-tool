@@ -107,7 +107,9 @@ mod tests {
     #[test]
     fn missing_building_rules_is_reported() {
         let mut config = five_category_config();
-        config.rules.retain(|rule| rule.category_tkey != "collection.category_building");
+        config
+            .rules
+            .retain(|rule| rule.category_tkey != "collection.category_building");
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert!(matches!(&errors[0], TransformError::MissingCategoryRules(name) if name == "建筑"));
@@ -116,18 +118,26 @@ mod tests {
     #[test]
     fn unknown_category_is_not_silently_dropped() {
         let mut config = five_category_config();
-        config.rules.push(entry("collection.category_unknown", "building=hut"));
+        config
+            .rules
+            .push(entry("collection.category_unknown", "building=hut"));
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
-        assert!(matches!(&errors[0], TransformError::UnknownCategoryKey(name) if name == "collection.category_unknown"));
+        assert!(
+            matches!(&errors[0], TransformError::UnknownCategoryKey(name) if name == "collection.category_unknown")
+        );
     }
 
     #[test]
     fn empty_tag_list_is_reported() {
         let mut config = five_category_config();
-        config.rules.push(TagRuleEntry::new("collection.category_other", Vec::new()));
+        config
+            .rules
+            .push(TagRuleEntry::new("collection.category_other", Vec::new()));
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
-        assert!(matches!(&errors[0], TransformError::EmptyTagList(name) if name == "collection.category_other"));
+        assert!(
+            matches!(&errors[0], TransformError::EmptyTagList(name) if name == "collection.category_other")
+        );
     }
 }

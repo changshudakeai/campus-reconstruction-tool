@@ -56,7 +56,9 @@ fn public_api_types_exist() {
     assert_eq!(manager.purge_expired_trash().unwrap(), 0);
 
     // Error #[non_exhaustive]：带类型错误可匹配，同名冲突可判别
-    let err: Error = manager.create_plan(&campus_id, "方案 1 - 全景复刻").unwrap_err();
+    let err: Error = manager
+        .create_plan(&campus_id, "方案 1 - 全景复刻")
+        .unwrap_err();
     assert!(err.is_duplicate_name());
     assert!(!err.to_string().is_empty());
 }

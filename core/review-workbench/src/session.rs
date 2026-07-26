@@ -64,7 +64,8 @@ impl SessionSnapshot {
 
     /// 从临时文件读回（格式版本不符按损坏处理）
     pub(crate) fn load_from_file(path: &Path) -> Result<Self> {
-        let json = std::fs::read_to_string(path).map_err(|err| Error::SessionIo(err.to_string()))?;
+        let json =
+            std::fs::read_to_string(path).map_err(|err| Error::SessionIo(err.to_string()))?;
         let snapshot: Self =
             serde_json::from_str(&json).map_err(|err| Error::SessionCorrupt(err.to_string()))?;
         if snapshot.version != SNAPSHOT_FORMAT_VERSION {

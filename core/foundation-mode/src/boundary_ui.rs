@@ -239,7 +239,10 @@ mod tests {
     #[test]
     fn confirm_with_three_points_reaches_determined() {
         let mut drawer = drawer_with_triangle();
-        assert_eq!(drawer.handle_event(BoundaryUiEvent::Confirm), EventResult::Accepted);
+        assert_eq!(
+            drawer.handle_event(BoundaryUiEvent::Confirm),
+            EventResult::Accepted
+        );
         assert_eq!(drawer.state(), BoundaryState::Determined);
     }
 

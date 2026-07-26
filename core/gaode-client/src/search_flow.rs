@@ -130,7 +130,9 @@ impl CampusSearchFlow {
     /// 详情页返回候选列表（重选）
     pub fn back_to_candidates(&mut self) -> Result<()> {
         if !matches!(self.state, SearchFlowState::Detail { .. }) {
-            return Err(Error::InvalidFlowStep("只有详情页可以返回候选列表".to_owned()));
+            return Err(Error::InvalidFlowStep(
+                "只有详情页可以返回候选列表".to_owned(),
+            ));
         }
         self.state = SearchFlowState::Candidates;
         Ok(())

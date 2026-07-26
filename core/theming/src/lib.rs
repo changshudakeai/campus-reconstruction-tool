@@ -11,15 +11,15 @@
 
 mod color_card;
 mod motion_table;
+mod slint_bridge;
 mod system_detection;
 mod theme_manager;
-mod slint_bridge;
 
 pub use color_card::*;
 pub use motion_table::*;
+pub use slint_bridge::*;
 pub use system_detection::*;
 pub use theme_manager::*;
-pub use slint_bridge::*;
 
 /// 主题系统错误类型
 #[derive(Debug, thiserror::Error)]

@@ -36,7 +36,8 @@ fn public_api_types_exist() {
     assert_eq!(format!("{}", &plan_info.campus_name), "test");
 
     let validator = MaterialValidator::new();
-    let _blocks = validator.get_default_blocks_for_version(manifest_generator::MinecraftVersion::V1_20_4);
+    let _blocks =
+        validator.get_default_blocks_for_version(manifest_generator::MinecraftVersion::V1_20_4);
 
     // Error types - just check variants exist (Serialization variant needs serde_json::Error which has no easy ctor,
     // so we just verify the variant exists via type inference)

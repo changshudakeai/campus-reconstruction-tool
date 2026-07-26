@@ -2,15 +2,19 @@
 //!
 //! 管理亮暗双色卡、当前主题模式和动画设置，支持"跟随系统".
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
-use crate::*;
+use crate::{
+    system_detection, ColorCard, ColorRole, MotionSettings, MotionTable, MotionToken, Result,
+    ThemingError,
+};
 
 /// 当前使用的主题模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
     /// 使用亮色主题
+    #[default]
     Light,
     /// 使用暗色主题
     Dark,
@@ -27,10 +31,6 @@ impl ThemeMode {
             ThemeMode::System => "跟随系统",
         }
     }
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self { ThemeMode::Light }
 }
 
 /// 从 Slint 传递过来的主题设置 payload
@@ -70,7 +70,7 @@ impl ThemeManager {
         let light_card: ColorCard = serde_json::from_str(light_json)?;
         let dark_card: ColorCard = serde_json::from_str(dark_json)?;
         let motion_table: MotionTable = serde_json::from_str(motion_json)?;
-        
+
         // 验证色卡完整性
         light_card.validate().map_err(|_| {
             ThemingError::MissingRequiredColors(vec![
@@ -80,7 +80,7 @@ impl ThemeManager {
                 ColorRole::AccentColor,
             ])
         })?;
-        
+
         Ok(Self {
             light_card,
             dark_card,
@@ -93,11 +93,9 @@ impl ThemeManager {
     /// 获取当前激活的色卡
     pub fn active_colors(&self) -> &ColorCard {
         match self.current_mode {
-            ThemeMode::System => {
-                match system_detection::detect_system_color_scheme() {
-                    system_detection::SystemColorScheme::Light => &self.light_card,
-                    system_detection::SystemColorScheme::Dark => &self.dark_card,
-                }
+            ThemeMode::System => match system_detection::detect_system_color_scheme() {
+                system_detection::SystemColorScheme::Light => &self.light_card,
+                system_detection::SystemColorScheme::Dark => &self.dark_card,
             },
             ThemeMode::Light => &self.light_card,
             ThemeMode::Dark => &self.dark_card,
@@ -111,21 +109,31 @@ impl ThemeManager {
 
     /// 获取指定角色的 ARGB 格式颜色值
     pub fn get_color_argb(&self, role: ColorRole) -> Result<u32> {
-        let hex = self.get_color(role).ok_or(ThemingError::ColorRoleNotFound(format!("{:?})", role)))?;
+        let hex = self
+            .get_color(role)
+            .ok_or(ThemingError::ColorRoleNotFound(format!("{:?})", role)))?;
         ColorCard::parse_hex_to_argb(hex)
     }
 
     /// 设置当前主题模式
-    pub fn set_mode(&mut self, mode: ThemeMode) { self.current_mode = mode; }
+    pub fn set_mode(&mut self, mode: ThemeMode) {
+        self.current_mode = mode;
+    }
 
     /// 获取当前主题模式
-    pub fn current_mode(&self) -> ThemeMode { self.current_mode }
+    pub fn current_mode(&self) -> ThemeMode {
+        self.current_mode
+    }
 
     /// 获取动效表
-    pub fn motion_table(&self) -> &MotionTable { &self.motion_table }
+    pub fn motion_table(&self) -> &MotionTable {
+        &self.motion_table
+    }
 
     /// 获取运动设置
-    pub fn motion_settings(&self) -> &MotionSettings { &self.motion_settings }
+    pub fn motion_settings(&self) -> &MotionSettings {
+        &self.motion_settings
+    }
 
     /// 设置运动设置
     pub fn set_motion_settings(&mut self, settings: MotionSettings) {
@@ -134,13 +142,21 @@ impl ThemeManager {
 
     /// 获取有效时长 (考虑所有设置)
     pub fn effective_duration(&self, token: MotionToken) -> f64 {
-        self.motion_table.effective_duration(token, self.motion_settings.reduce_motion, self.motion_settings.speed_factor)
+        self.motion_table.effective_duration(
+            token,
+            self.motion_settings.reduce_motion,
+            self.motion_settings.speed_factor,
+        )
     }
 
     /// 检查是否启用了任何动画
-    pub fn has_any_animation(&self) -> bool { self.motion_settings.has_any_animation() }
+    pub fn has_any_animation(&self) -> bool {
+        self.motion_settings.has_any_animation()
+    }
 }
 
 impl Default for ThemeManager {
-    fn default() -> Self { Self::built_in() }
+    fn default() -> Self {
+        Self::built_in()
+    }
 }

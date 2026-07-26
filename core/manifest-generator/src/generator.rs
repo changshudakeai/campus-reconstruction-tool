@@ -164,13 +164,25 @@ mod tests {
         assert_eq!(manifest.excluded().len(), 4);
 
         // 验证具体类别状态
-        let building = manifest.categories.iter().find(|c| c.name == "建筑").unwrap();
+        let building = manifest
+            .categories
+            .iter()
+            .find(|c| c.name == "建筑")
+            .unwrap();
         assert!(building.included);
 
-        let water = manifest.categories.iter().find(|c| c.name == "水域").unwrap();
+        let water = manifest
+            .categories
+            .iter()
+            .find(|c| c.name == "水域")
+            .unwrap();
         assert!(!water.included);
 
-        let other = manifest.categories.iter().find(|c| c.name == "其他").unwrap();
+        let other = manifest
+            .categories
+            .iter()
+            .find(|c| c.name == "其他")
+            .unwrap();
         assert!(other.included);
     }
 

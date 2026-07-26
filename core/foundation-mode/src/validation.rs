@@ -50,7 +50,9 @@ pub fn validate_polygon_closure(vertices: &[Vertex]) -> ValidationResult {
     if vertices.len() < 3 {
         return ValidationResult {
             is_valid: false,
-            errors: vec![BoundaryValidationError::InsufficientVertices(vertices.len())],
+            errors: vec![BoundaryValidationError::InsufficientVertices(
+                vertices.len(),
+            )],
             area: None,
         };
     }

@@ -2,8 +2,8 @@
 //!
 //! 提供将 Rust 主题数据传递给 Slint UI 的接口.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// 从 Rust 传递到 Slint 的颜色映射 payload
 #[derive(Debug, Clone, Serialize, Deserialize)]

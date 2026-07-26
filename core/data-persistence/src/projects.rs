@@ -363,11 +363,7 @@ impl crate::Database {
     ///
     /// 方案行保留（`list_plans` 自动隐藏），回收站登记一条可恢复条目并返回。
     /// 已在站的方案不能重复删除。
-    pub fn delete_plan_to_trash(
-        &mut self,
-        campus_id: &str,
-        plan_id: &str,
-    ) -> Result<TrashItem> {
+    pub fn delete_plan_to_trash(&mut self, campus_id: &str, plan_id: &str) -> Result<TrashItem> {
         let plan = self
             .find_plan_by_id(plan_id)?
             .ok_or_else(|| Error::PlanNotFound(plan_id.to_owned()))?;

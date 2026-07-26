@@ -128,7 +128,11 @@ pub fn format_impact_details(report: &OrientationImpactReport) -> String {
     } else {
         lines.push("以下已生成数据将被重新计算：".to_string());
         for item in &report.items {
-            let marker = if item.requires_confirmation { "⚠" } else { "•" };
+            let marker = if item.requires_confirmation {
+                "⚠"
+            } else {
+                "•"
+            };
             lines.push(format!(
                 "{marker} {}：{} 项",
                 item.category.display_name(),
@@ -194,11 +198,8 @@ mod tests {
         existing.insert(CandidateCategory::Water, 5);
 
         // 350° → 10° 的实际偏差是 20°，不是 340°
-        let report = check_orientation_change_impact(
-            &existing,
-            Some(orientation(350.0)),
-            orientation(10.0),
-        );
+        let report =
+            check_orientation_change_impact(&existing, Some(orientation(350.0)), orientation(10.0));
 
         assert!(report.details.contains("20.0"));
         assert!(report.title.contains("小幅旋转"));

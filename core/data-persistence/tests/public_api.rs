@@ -87,7 +87,8 @@ fn public_api_types_exist() {
     let dup = db.create_plan(&campus.id, "方案 1 改").unwrap_err();
     assert!(matches!(dup, Error::DuplicatePlanName(_)));
 
-    db.set_setting(AppSettingKey::LastUsedCampus, &campus.id).unwrap();
+    db.set_setting(AppSettingKey::LastUsedCampus, &campus.id)
+        .unwrap();
     assert_eq!(
         db.get_setting(AppSettingKey::LastUsedCampus).unwrap(),
         Some(campus.id.clone())

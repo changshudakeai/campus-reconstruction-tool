@@ -40,7 +40,9 @@ pub enum EasingType {
     EaseInOut,
 }
 
-fn default_easing() -> EasingType { EasingType::Linear }
+fn default_easing() -> EasingType {
+    EasingType::Linear
+}
 
 /// 完整的动效表配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,8 +66,12 @@ pub struct MotionSettings {
     pub speed_factor: f64,
 }
 
-fn default_reduce_motion() -> bool { false }
-fn default_speed_factor() -> f64 { 1.0 }
+fn default_reduce_motion() -> bool {
+    false
+}
+fn default_speed_factor() -> f64 {
+    1.0
+}
 
 impl MotionTable {
     /// 获取某个 token 的原始时长 (不考虑 reduce_motion 和 speed_factor)
@@ -78,8 +84,15 @@ impl MotionTable {
     }
 
     /// 获取有效时长 (考虑 reduce_motion 和 speed_factor)
-    pub fn effective_duration(&self, token: MotionToken, reduce_motion: bool, speed_factor: f64) -> f64 {
-        if reduce_motion { return 0.0; }  // 减少动画模式返回 0
+    pub fn effective_duration(
+        &self,
+        token: MotionToken,
+        reduce_motion: bool,
+        speed_factor: f64,
+    ) -> f64 {
+        if reduce_motion {
+            return 0.0;
+        } // 减少动画模式返回 0
         self.get_duration(token) * speed_factor
     }
 }
@@ -87,13 +100,20 @@ impl MotionTable {
 impl MotionSettings {
     /// 创建默认的运动设置
     pub fn new() -> Self {
-        Self { reduce_motion: false, speed_factor: 1.0 }
+        Self {
+            reduce_motion: false,
+            speed_factor: 1.0,
+        }
     }
 
     /// 检查是否启用了任何动画
-    pub fn has_any_animation(&self) -> bool { !self.reduce_motion }
+    pub fn has_any_animation(&self) -> bool {
+        !self.reduce_motion
+    }
 }
 
 impl Default for MotionSettings {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

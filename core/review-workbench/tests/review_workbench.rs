@@ -4,10 +4,10 @@
 //! 批量确认闸 → 暂停/恢复 → 封账批量写回。
 
 use data_persistence::{Database, RawObservation, RawObservationsApi, ReviewDecisionsApi};
+use review_workbench::CandidateKey;
 use review_workbench::{
     CommandOutcome, Error, ReviewWorkbench, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
 };
-use review_workbench::CandidateKey;
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 
 /// 在内存库里种入一批候选：6 栋建筑 + 2 条道路 + 1 处水域
@@ -76,7 +76,10 @@ fn pending_to_keep_transition_via_state_change_operation() {
         .submit(StateChange::single(building_key(0), ReviewState::Keep))
         .unwrap();
     assert_eq!(outcome, CommandOutcome::Applied { changed: 1 });
-    assert_eq!(workbench.state_of(&building_key(0)), Some(ReviewState::Keep));
+    assert_eq!(
+        workbench.state_of(&building_key(0)),
+        Some(ReviewState::Keep)
+    );
 
     // 点错了改点另一个状态即可（状态即后悔药）：Keep → Remove → Pending
     workbench
@@ -207,8 +210,7 @@ fn highlight_links_map_and_cards_both_ways() {
     let highlighted_cards: Vec<_> = view.cards.iter().filter(|c| c.highlighted).collect();
     assert_eq!(highlighted_cards.len(), 1);
     assert_eq!(highlighted_cards[0].entity_id, "way/b2");
-    let highlighted_objects: Vec<_> =
-        view.map_objects.iter().filter(|o| o.highlighted).collect();
+    let highlighted_objects: Vec<_> = view.map_objects.iter().filter(|o| o.highlighted).collect();
     assert_eq!(highlighted_objects.len(), 1);
     assert_eq!(highlighted_objects[0].entity_id, "way/b2");
 
@@ -274,11 +276,17 @@ fn pause_and_resume_roundtrip_via_temp_file() {
 
     // 退出再回来：重新进台一次性读入，再从临时文件恢复进度
     let mut resumed = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    assert_eq!(resumed.state_of(&building_key(0)), Some(ReviewState::Pending));
+    assert_eq!(
+        resumed.state_of(&building_key(0)),
+        Some(ReviewState::Pending)
+    );
     resumed.restore_session(&session_path).unwrap();
 
     assert_eq!(resumed.state_of(&building_key(0)), Some(ReviewState::Keep));
-    assert_eq!(resumed.state_of(&building_key(1)), Some(ReviewState::Remove));
+    assert_eq!(
+        resumed.state_of(&building_key(1)),
+        Some(ReviewState::Remove)
+    );
     assert_eq!(resumed.selected_count(), 1);
     assert_eq!(resumed.active_category(), CandidateCategory::Road);
 

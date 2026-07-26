@@ -75,10 +75,7 @@ impl Notification {
 
     /// 是否已超过留存天数（30 天，自动清理判据）。
     pub fn is_expired(&self) -> bool {
-        Utc::now()
-            .signed_duration_since(self.created_at)
-            .num_days()
-            > MAX_RETAINED_DAYS
+        Utc::now().signed_duration_since(self.created_at).num_days() > MAX_RETAINED_DAYS
     }
 
     /// 公告栏"复制"按钮取的整段文字（来源标签 + 时间 + 标题 + 正文）。

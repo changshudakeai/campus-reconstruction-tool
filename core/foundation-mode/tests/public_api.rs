@@ -27,13 +27,15 @@ fn public_api_types_exist() {
     assert!(mc.block_x > 0);
 
     // OrientationLine + OrientationCalculator：产出 B1 Orientation（T02 复用）
-    let line = OrientationLine::new(Point2D::new(0.0, 0.0), Point2D::new(100.0, 0.0))
-        .expect("非重合两点");
+    let line =
+        OrientationLine::new(Point2D::new(0.0, 0.0), Point2D::new(100.0, 0.0)).expect("非重合两点");
     assert_eq!(line.length(), 100.0);
     let orientation: Orientation = OrientationCalculator::calculate(&line).expect("正东 90°");
     assert_eq!(orientation.degree(), 90.0);
     assert_eq!(
-        OrientationCalculator::normalize_angle(-90.0).unwrap().degree(),
+        OrientationCalculator::normalize_angle(-90.0)
+            .unwrap()
+            .degree(),
         270.0
     );
 
@@ -46,7 +48,10 @@ fn public_api_types_exist() {
     );
     drawer.handle_event(BoundaryUiEvent::ClickAt { x: 50.0, y: 0.0 });
     drawer.handle_event(BoundaryUiEvent::ClickAt { x: 25.0, y: 40.0 });
-    assert_eq!(drawer.handle_event(BoundaryUiEvent::Confirm), EventResult::Accepted);
+    assert_eq!(
+        drawer.handle_event(BoundaryUiEvent::Confirm),
+        EventResult::Accepted
+    );
     assert_eq!(drawer.state(), BoundaryState::Determined);
     assert_eq!(drawer.vertices().len(), 3);
 

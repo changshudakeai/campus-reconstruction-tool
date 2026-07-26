@@ -169,11 +169,12 @@
 ### B17 Manifest 生成器 `manifest-generator`
 
 - ✅ foundation_manifest.json 如实记录包含/缺失类别（ADR-0012）
+- ✅ 用料配置表与版本校验器同居此处（ADR-0026，修订 ADR-0024）
 
 ### B18 初始校园生成引擎 `generation-engine`
 
 - ✅ 新立模块（ADR-0024，模块总数 30）：评审保留数据 → 方块模型；承载全部生成规则（Arnis 建筑规则：height 优先/层数×4+2 估高/屋顶规则；六类生成规则）与用料配置表
-- ✅ 复用来源：v1.x arnis-core crate 迁入作地基（ADR-0024）
+- ✅ 复用来源：v1.x arnis-core crate 迁入作地基（ADR-0024）；用料表只读调用 B17（ADR-0026，白名单横向边）
 
 ---
 
