@@ -95,7 +95,15 @@
     "category_other": "其他",
     "data_source_label": "数据源",
     "orientation_recalc_notice": "修改朝向将触发重算，以下已生成数据会受影响",
-    "report_entry": "采集报告"
+    "report_entry": "采集报告",
+    "progress_title": "采集进度",
+    "progress_fetching": "正在从地图平台拉数据……",
+    "progress_done": "完成了 {count} 个对象",
+    "diff_added": "新增",
+    "diff_updated": "更新",
+    "diff_unchanged": "未变",
+    "diff_summary": "新增 {added} 项 · 更新 {updated} 项 · 未变 {unchanged} 项",
+    "source_gaode": "高德地图"
   },
   "dialog": {
     "error_title": "错误",
