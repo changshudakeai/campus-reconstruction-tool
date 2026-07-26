@@ -16,6 +16,7 @@
     "recycle_bin": "校园级回收站"
   },
   "app": {
+    "source_tag": "应用",
     "welcome_title": "校园复刻工具",
     "settings_title": "设置",
     "language_label": "界面语言",
