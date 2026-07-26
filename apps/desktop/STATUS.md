@@ -1,4 +1,4 @@
-# T19 — S1 薄壳实现状态（T19B-2 后）
+# T19 — S1 薄壳实现状态（T19B-4 后）
 
 > 本文件随 T19B 系列子工单逐单更新，反映仓库真实状态。
 
@@ -56,16 +56,47 @@
 - 手动验收已过（删库→向导→勾选→下一屏；重启不再出向导；设置页
   重看教程可点；无方块字）
 
-## 🚧 剩余接线债务（归 T19B-3..8，勿当已完成）
+### T19B-3（校区选择页 + 五屏路由，2026-07-27）
 
-1. 五步步骤条导航骨架（ADR-0027）与各步骤页属性/回调绑定；当前
-   着陆/设置两屏仅为占位（校区选择归 T19B-3，方案列表归 T19B-4）
-2. F4→F7 采集报告入口【债务①】与 F2 三个里程碑钩子【债务③，
-   ADR-0028 三泡】（债务②设置页按钮已于 T19B-2 落地）
-3. F9 真封账门控（壳实现 SealGate 调 F5 seal）；B7 warn 级 toast 与
+- `ui/campus_select.slint`（新建）：校区选择页组件——标题 / 占位文案 /
+  示例校区 A、B 按钮 / 设置按钮；全部文案由 Rust 侧 l10n 注入
+- `ui/main.slint`：五屏路由（0 向导 / 1 校区选择 / 2 方案列表 / 3 设置）
+- `src/injector.rs`：`bind_campus_select` 接线——点击校区 →
+  `remember_campus` → 刷新方案列表 → 跳屏 2；点击设置 → 跳屏 3
+- zh-CN.json 新增 `app.campus_select_*` 四键 + `app.settings_button`
+
+### T19B-4（方案列表页 CRUD + 教程气泡钩子，2026-07-27）
+
+- `ui/plan_list.slint`（新建）：方案列表页组件——标题 / 校区名 /
+  新建按钮 / 卡片 ListView（PlanCardData struct）/ 返回按钮 /
+  教程气泡浮层；全部文案由 Rust 侧 l10n 注入，零硬编码中文
+- `ui/main.slint`：屏 2 从占位替换为 PlanList 组件，新增
+  plan-list-* 属性组 + 7 个回调声明
+- `src/injector.rs`：`bind_plan_list` 接线——新建方案（自动命名
+  “新方案 1”“新方案 2”……）/ 返回校区选择 / 复制方案（F3 duplicate_plan）/
+  删除到回收站（F3 delete_plan，保留 30 天）/ 改名占位（待对话框
+  基础设施）/ 教程气泡钩子（F2 bubble_for PlanListIntro，坐标占位，
+  定稿归 T19B-8）
+- `src/injector.rs`：`refresh_plan_list` 辅助方法——刷新校区名 +
+  卡片模型 + 教程气泡；`next_plan_name` 自动命名；
+  `dismiss_tutorial_step` / `skip_all_tutorial` 解决借用冲突
+- `src/lib.rs`：导出 `PlanCardData` 生成类型
+- zh-CN.json 新增 `plan.empty_list` / `plan.delete_confirm`
+- 手动验收已过（删库→向导→校区选择→点示例校区→方案列表页
+  →新建方案→卡片出现→复制→删除→设置页可进）
+
+## 🚧 剩余接线债务（归 T19B-5..8，勿当已完成）
+
+1. 五步步骤条导航骨架（ADR-0027）与各步骤页属性/回调绑定；
+   校区选择与方案列表已于 T19B-3/4 落地，剩余步骤页归 T19B-5..8
+2. F4→F7 采集报告入口【债务①】与 F2 剩余两个里程碑钩子【债务③，
+   ADR-0028 三泡】（首进方案列表已于 T19B-4 落地；步骤条总介绍归
+   T19B-5，首进评审页归 T19B-7）
+3. 改名对话框基础设施（T19B-4 改名回调为占位，待对话框落地后接入）
+4. F9 真封账门控（壳实现 SealGate 调 F5 seal）；B7 warn 级 toast 与
    铃铛角标的 Slint 呈现（随公告栏界面）
-4. 开发版快捷方式端到端验收（`cargo xtask dev-shortcut` 已有实现）
-5. public-api 快照 + CODEOWNERS 守卫 .lnk 文件
+5. 开发版快捷方式端到端验收（`cargo xtask dev-shortcut` 已有实现）
+6. public-api 快照 + CODEOWNERS 守卫 .lnk 文件
 
 ## 验证命令
 

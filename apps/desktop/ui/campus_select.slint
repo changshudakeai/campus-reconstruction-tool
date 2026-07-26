@@ -1,0 +1,62 @@
+// T19B-3 — 校区选择页（极简占位屏）。
+// 
+// 注意：本文件仅作为占位符，真实功能需后续工单完善。
+// 当前只演示基本的 CampusSelect component 能正常编译通过。
+
+import { Button } from "std-widgets.slint";
+
+export component CampusSelect inherits Rectangle {
+    in property <string> title;
+    in property <string> campus-list-placeholder-text;
+    in property <string> example-campus-a-text;
+    in property <string> example-campus-b-text;
+    in property <string> settings-button-text;
+
+    callback campus-selected(campus_id: string);
+    callback settings-clicked();
+    
+    width: 800px;
+    height: 600px;
+    
+    VerticalLayout {
+        spacing: 16px;
+        padding: 24px;
+        
+        Text {
+            text: root.title;
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+        
+        Text {
+            text: root.campus-list-placeholder-text;
+            font-size: 14px;
+            color: #888;
+        }
+        
+        Button {
+            text: root.example-campus-a-text;
+            clicked => {
+                root.campus-selected("campus_001");
+            }
+        }
+        
+        Button {
+            text: root.example-campus-b-text;
+            clicked => {
+                root.campus-selected("campus_002");
+            }
+        }
+        
+        HorizontalLayout {
+            alignment: end;
+            
+                        Button {
+                text: root.settings-button-text;
+                clicked => {
+                    root.settings-clicked();
+                }
+            }
+        }
+    }
+}

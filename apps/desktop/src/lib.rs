@@ -37,4 +37,4 @@ mod generated {
     slint::include_modules!();
 }
 
-pub use generated::AppWindow;
+pub use generated::{AppWindow, PlanCardData};

@@ -21,10 +21,10 @@ use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
 use global_settings::{FirstRunSetup, SettingsManager};
 use localization::{Language, Localization};
-use onboarding_tutorial::OnboardingTutorial;
+use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::PlanId;
+use shared_domain_types::{CampusId, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::dispatch::report_callback_error;
@@ -105,8 +105,8 @@ impl ViewModelInjector {
 
     /// 把 VM 视图状态注入 Slint 窗口（只设 in property）。
     ///
-    /// T19B-2 起覆盖：首开文案 + 首跑向导（屏 0）+ 设置页文案（屏 2）+
-    /// B7 弹窗静态文案；其余页面属性随 T19B-3..8 逐单接线（ADR-0027）。
+    /// T19B-2 起覆盖：首开文案 + 首跑向导（屏 0）+ 设置页文案（屏 3）+
+    /// B7 弹窗静态文案；T19B-3 校区选择页文案；T19B-4 方案列表页文案。
     pub fn inject(&self, window: &AppWindow) {
         let l10n = &self.l10n;
         window.set_app_title(l10n.t("app.welcome_title").into());
@@ -138,9 +138,34 @@ impl ViewModelInjector {
 
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
+
+        // 校区选择页（T19B-3）
+        window.set_campus_select_title(l10n.t("app.campus_select_title").into());
+        window.set_campus_select_campus_list_placeholder_text(
+            l10n.t("app.campus_select_placeholder").into(),
+        );
+        window
+            .set_campus_select_example_campus_a_text(l10n.t("app.campus_select_example_a").into());
+        window
+            .set_campus_select_example_campus_b_text(l10n.t("app.campus_select_example_b").into());
+        window.set_campus_select_settings_button_text(l10n.t("app.settings_button").into());
+
+        // 方案列表页（T19B-4）
+        window.set_plan_list_title(l10n.t("plan.list_header").into());
+        window.set_plan_list_create_button_text(l10n.t("plan.create").into());
+        window.set_plan_list_back_button_text(l10n.t("app.switch_campus").into());
+        window.set_plan_list_empty_text(l10n.t("plan.empty_list").into());
+        window.set_plan_list_rename_label(l10n.t("plan.rename").into());
+        window.set_plan_list_duplicate_label(l10n.t("plan.duplicate").into());
+        window.set_plan_list_delete_label(l10n.t("plan.delete").into());
+        window.set_plan_list_tutorial_visible(false);
+        window.set_plan_list_tutorial_text(SharedString::new());
+        window.set_plan_list_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
+        window.set_plan_list_tutorial_skip_all_label(SharedString::new());
     }
 
-    /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程）。
+    /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程；T19B-3：校区选择；
+    /// T19B-4：方案列表 CRUD + 教程气泡钩子）。
     ///
     /// 回调闭包持 `Rc<RefCell<Self>>` 共享可变访问（Slint 单线程 UI）；
     /// 回调错误一律递 [`report_callback_error`]（弹窗铁律 ADR-0021）。
@@ -175,6 +200,156 @@ impl ViewModelInjector {
             if let Err(error) = injector.restart_tutorial() {
                 report_callback_error(injector.l10n(), &error);
             }
+        });
+
+        // ── T19B-3：校区选择页回调 ────────────────────────────
+        Self::bind_campus_select(injector, window);
+        // ── T19B-4：方案列表页回调 ────────────────────────────
+        Self::bind_plan_list(injector, window);
+    }
+
+    /// T19B-3：校区选择页回调绑定。
+    ///
+    /// 点击示例校区 → remember_campus → 刷新方案列表 → 跳屏 2；
+    /// 点击设置 → 跳屏 3。
+    fn bind_campus_select(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_campus_select_campus_selected(move |campus_id_str| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let campus_id = match CampusId::parse(&campus_id_str) {
+                Ok(id) => id,
+                Err(e) => {
+                    report_callback_error(injector.l10n(), &e);
+                    return;
+                }
+            };
+            if let Err(error) = injector.projects_mut().remember_campus(&campus_id) {
+                report_callback_error(injector.l10n(), &error);
+                return;
+            }
+            // 刷新方案列表页数据并跳屏 2
+            injector.refresh_plan_list(&window, &campus_id);
+            window.set_active_screen(2);
+        });
+
+        let weak = window.as_weak();
+        window.on_campus_select_settings_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_active_screen(3);
+        });
+    }
+
+    /// T19B-4：方案列表页回调绑定。
+    ///
+    /// 新建方案（自动命名）/ 返回校区选择 / 改名、复制、删除占位 /
+    /// 教程气泡钩子（F2 规矩①②）。
+    fn bind_plan_list(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        // 新建方案：自动生成不冲突的名称（“新方案 1”“新方案 2”……）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_plan_list_create_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let Some(campus_id) = injector.current_campus_id() else {
+                report_callback_error(injector.l10n(), &"cannot create plan: no campus selected");
+                return;
+            };
+            let base_name = injector.l10n().t("plan.default_name");
+            let name = injector.next_plan_name(&campus_id, &base_name);
+            match injector.projects_mut().create_plan(&campus_id, &name) {
+                Ok(_) => injector.refresh_plan_list(&window, &campus_id),
+                Err(error) => report_callback_error(injector.l10n(), &error),
+            }
+        });
+
+        // 返回校区选择页
+        let weak = window.as_weak();
+        window.on_plan_list_back_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_active_screen(1);
+        });
+
+        // 改名（占位：待对话框基础设施落地后接入 F3 rename_plan）
+        let shared = Rc::clone(injector);
+        window.on_plan_list_rename_clicked(move |_plan_id| {
+            let injector = shared.borrow();
+            report_callback_error(
+                injector.l10n(),
+                &"rename dialog not yet implemented (T19B-4 placeholder)",
+            );
+        });
+
+        // 复制方案：调 F3 duplicate_plan，后缀取 l10n “副本”
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_plan_list_duplicate_clicked(move |plan_id_str| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let plan_id = match PlanId::parse(&plan_id_str) {
+                Ok(id) => id,
+                Err(e) => {
+                    report_callback_error(injector.l10n(), &e);
+                    return;
+                }
+            };
+            let suffix = injector.l10n().t("plan.duplicate_suffix");
+            match injector.projects_mut().duplicate_plan(&plan_id, &suffix) {
+                Ok(_) => {
+                    if let Some(campus_id) = injector.current_campus_id() {
+                        injector.refresh_plan_list(&window, &campus_id);
+                    }
+                }
+                Err(error) => report_callback_error(injector.l10n(), &error),
+            }
+        });
+
+        // 删除到回收站：调 F3 delete_plan（保留 30 天）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_plan_list_delete_clicked(move |plan_id_str| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let plan_id = match PlanId::parse(&plan_id_str) {
+                Ok(id) => id,
+                Err(e) => {
+                    report_callback_error(injector.l10n(), &e);
+                    return;
+                }
+            };
+            let Some(campus_id) = injector.current_campus_id() else {
+                report_callback_error(injector.l10n(), &"cannot delete plan: no campus selected");
+                return;
+            };
+            match injector.projects_mut().delete_plan(&campus_id, &plan_id) {
+                Ok(_) => injector.refresh_plan_list(&window, &campus_id),
+                Err(error) => report_callback_error(injector.l10n(), &error),
+            }
+        });
+
+        // 教程气泡“知道了”（F2 规矩①）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_plan_list_tutorial_dismiss_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            if let Err(error) = injector.dismiss_tutorial_step(TutorialStep::PlanListIntro) {
+                report_callback_error(injector.l10n(), &error);
+            }
+            window.set_plan_list_tutorial_visible(false);
+        });
+
+        // 教程气泡“跳过全部引导”（F2 规矩②）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_plan_list_tutorial_skip_all_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            if let Err(error) = injector.skip_all_tutorial() {
+                report_callback_error(injector.l10n(), &error);
+            }
+            window.set_plan_list_tutorial_visible(false);
         });
     }
 
@@ -217,6 +392,11 @@ impl ViewModelInjector {
         &self.tutorial
     }
 
+    /// F2 新手教程（可变：气泡 dismiss/skip_all 落库）
+    pub fn tutorial_mut(&mut self) -> &mut OnboardingTutorial {
+        &mut self.tutorial
+    }
+
     /// 债务②：设置页“重新查看教程”→ F2 进度清零（规矩④）。
     ///
     /// F2 落库借道 F3 连接（与装载时同库），壳只做转接不碰业务。
@@ -225,6 +405,27 @@ impl ViewModelInjector {
             tutorial, projects, ..
         } = self;
         tutorial.restart(projects.database_mut())?;
+        Ok(())
+    }
+
+    /// F2 规矩①：气泡“知道了”→ 该提示点记为已见并落库。
+    pub fn dismiss_tutorial_step(&mut self, step: TutorialStep) -> Result<()> {
+        let Self {
+            tutorial, projects, ..
+        } = self;
+        tutorial.dismiss(projects.database_mut(), step)?;
+        Ok(())
+    }
+
+    /// F2 规矩②：“跳过全部引导”→ 直接转 Completed，经 B7 留底。
+    pub fn skip_all_tutorial(&mut self) -> Result<()> {
+        let Self {
+            tutorial,
+            projects,
+            l10n,
+            ..
+        } = self;
+        tutorial.skip_all(projects.database_mut(), l10n)?;
         Ok(())
     }
 
@@ -256,6 +457,76 @@ impl ViewModelInjector {
     /// F9 导出控制台
     pub fn export(&self) -> &ExportConsole<MockSealGate> {
         &self.export
+    }
+
+    // ── T19B-4 辅助方法：方案列表页数据流转 ─────────────────
+
+    /// 当前校区 ID（读 B2 app_settings 中的“上次使用的校区”）
+    fn current_campus_id(&self) -> Option<CampusId> {
+        self.projects
+            .landing_campus()
+            .ok()
+            .flatten()
+            .and_then(|c| CampusId::parse(&c.id).ok())
+    }
+
+    /// 刷新方案列表页数据：校区名 + 卡片模型 + 教程气泡钩子。
+    ///
+    /// 教程气泡（ADR-0028 plan_list_intro）：首次渲染方案列表页时调用
+    /// F2 `bubble_for`，若教程未看完且未全跳则弹出气泡（坐标占位值，
+    /// 定稿归 T19B-8 负责人审核）。
+    fn refresh_plan_list(&mut self, window: &AppWindow, campus_id: &CampusId) {
+        let l10n = &self.l10n;
+
+        // 校区名显示
+        let campus_name = self
+            .projects
+            .landing_campus()
+            .ok()
+            .flatten()
+            .map(|c| l10n.t_with_array("app.shell_status_last_campus", &[&c.name]))
+            .unwrap_or_default();
+        window.set_plan_list_campus_name(campus_name.into());
+
+        // 卡片模型（F3 返回已按修改时间倒序）
+        let cards = self.projects.list_plan_cards(campus_id).unwrap_or_default();
+        let model: Vec<crate::PlanCardData> = cards
+            .iter()
+            .map(|card| crate::PlanCardData {
+                plan_id: card.plan_id.clone().into(),
+                name: card.name.clone().into(),
+                progress_desc: l10n.t(card.progress.text_key()).into(),
+                last_modified: l10n
+                    .t_with_array("plan.last_modified", &[&card.last_modified_at])
+                    .into(),
+            })
+            .collect();
+        window.set_plan_list_model(ModelRc::new(VecModel::from(model)));
+
+        // 教程气泡钩子（F2 规矩③“只教一次”：已见过则返回 None）
+        if let Some(bubble) = self.tutorial.bubble_for(TutorialStep::PlanListIntro, l10n) {
+            window.set_plan_list_tutorial_visible(true);
+            window.set_plan_list_tutorial_text(bubble.message.into());
+            window.set_plan_list_tutorial_dismiss_label(bubble.dismiss_label.into());
+            window.set_plan_list_tutorial_skip_all_label(
+                bubble.skip_all_label.unwrap_or_default().into(),
+            );
+        } else {
+            window.set_plan_list_tutorial_visible(false);
+        }
+    }
+
+    /// 生成不冲突的方案名：“新方案 1”“新方案 2”……
+    fn next_plan_name(&self, campus_id: &CampusId, base_name: &str) -> String {
+        let existing = self.projects.list_plan_cards(campus_id).unwrap_or_default();
+        let names: Vec<&str> = existing.iter().map(|c| c.name.as_str()).collect();
+        for n in 1..1000 {
+            let candidate = format!("{base_name} {n}");
+            if !names.contains(&candidate.as_str()) {
+                return candidate;
+            }
+        }
+        format!("{base_name} {}", names.len() + 1)
     }
 }
 

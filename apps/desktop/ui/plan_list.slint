@@ -1,0 +1,219 @@
+// T19B-4 — 方案列表页（Screen 2）。
+//
+// 薄壳原则（ADR-0017）：零业务逻辑，全部文案由 Rust 侧经 B6 l10n 注入。
+// 卡片三件套（ADR-0018）：方案名 / 进度描述 / 最后修改时间。
+// 右键菜单操作（重命名/复制/删除）由回调递 Rust 侧执行。
+
+import { Button, ListView, StandardButton } from "std-widgets.slint";
+
+/// 方案卡片视图数据（由 Rust 侧 F3 list_plan_cards 产出）
+export struct PlanCardData {
+    /// 方案 ID
+    plan-id: string,
+    /// 方案名
+    name: string,
+    /// 进度描述（B6 解析后的成品文案）
+    progress-desc: string,
+    /// 最后修改时间（格式化后的成品文案）
+    last-modified: string,
+}
+
+export component PlanList inherits Rectangle {
+    // ── 文案属性（全部由 Rust 侧 l10n 注入）──────────────────
+    in property <string> title;
+    in property <string> campus-name;
+    in property <string> create-button-text;
+    in property <string> back-button-text;
+    in property <string> empty-list-text;
+    // 右键菜单项文案
+    in property <string> rename-label;
+    in property <string> duplicate-label;
+    in property <string> delete-label;
+    // 教程气泡（F2 钩子，坐标占位，定稿归 T19B-8）
+    in property <bool> tutorial-bubble-visible;
+    in property <string> tutorial-bubble-text;
+    in property <string> tutorial-dismiss-label;
+    in property <string> tutorial-skip-all-label;
+
+    // ── 数据模型 ──────────────────────────────────────────────
+    in property <[PlanCardData]> plan-model;
+
+    // ── 回调（Rust 侧绑定业务逻辑）──────────────────────────
+    callback create-plan-clicked();
+    callback back-to-campus-clicked();
+    callback rename-plan-clicked(plan-id: string);
+    callback duplicate-plan-clicked(plan-id: string);
+    callback delete-plan-clicked(plan-id: string);
+    callback tutorial-dismiss-clicked();
+    callback tutorial-skip-all-clicked();
+
+    width: 800px;
+    height: 600px;
+
+    VerticalLayout {
+        spacing: 12px;
+        padding: 24px;
+
+        // 顶部：标题行 + 当前校区名
+        HorizontalLayout {
+            spacing: 12px;
+
+            Text {
+                text: root.title;
+                font-size: 22px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                // 弹性间隔
+            }
+
+            Button {
+                text: root.create-button-text;
+                primary: true;
+                clicked => { root.create-plan-clicked(); }
+            }
+        }
+
+        Text {
+            text: root.campus-name;
+            font-size: 13px;
+            color: #666;
+        }
+
+        // 卡片列表区域
+        if root.plan-model.length == 0: VerticalLayout {
+            alignment: center;
+
+            Text {
+                text: root.empty-list-text;
+                font-size: 15px;
+                color: #999;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.plan-model.length > 0: ListView {
+            for card in root.plan-model: Rectangle {
+                height: 72px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+
+                        Text {
+                            text: card.name;
+                            font-size: 16px;
+                        }
+
+                        Text {
+                            text: card.progress-desc;
+                            font-size: 12px;
+                            color: #888;
+                        }
+                    }
+
+                    Rectangle { width: 8px; }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Text {
+                            text: card.last-modified;
+                            font-size: 12px;
+                            color: #aaa;
+                            horizontal-alignment: right;
+                        }
+                    }
+
+                    // 操作菜单按钮（···）
+                    VerticalLayout {
+                        alignment: center;
+                        width: 80px;
+
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: end;
+
+                            Button {
+                                text: root.rename-label;
+                                clicked => { root.rename-plan-clicked(card.plan-id); }
+                            }
+
+                            Button {
+                                text: root.duplicate-label;
+                                clicked => { root.duplicate-plan-clicked(card.plan-id); }
+                            }
+
+                            Button {
+                                text: root.delete-label;
+                                clicked => { root.delete-plan-clicked(card.plan-id); }
+                            }
+                        }
+                    }
+                }
+
+                // 卡片分隔线
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #e0e0e0;
+                }
+            }
+        }
+
+        // 底部：返回校区选择
+        HorizontalLayout {
+            alignment: start;
+
+            Button {
+                text: root.back-button-text;
+                clicked => { root.back-to-campus-clicked(); }
+            }
+        }
+    }
+
+    // 教程气泡浮层（F2 钩子，坐标占位，定稿归 T19B-8）
+    if root.tutorial-bubble-visible: Rectangle {
+        x: 16px;
+        y: 80px;
+        width: 300px;
+        height: bubble-layout.preferred-height + 24px;
+        background: #fffde7;
+        border-radius: 8px;
+        border-color: #fbc02d;
+        border-width: 1px;
+
+        bubble-layout := VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+
+            Text {
+                text: root.tutorial-bubble-text;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+
+                Button {
+                    text: root.tutorial-dismiss-label;
+                    primary: true;
+                    clicked => { root.tutorial-dismiss-clicked(); }
+                }
+
+                if root.tutorial-skip-all-label != "": Button {
+                    text: root.tutorial-skip-all-label;
+                    clicked => { root.tutorial-skip-all-clicked(); }
+                }
+            }
+        }
+    }
+}

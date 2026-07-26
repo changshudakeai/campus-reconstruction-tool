@@ -4,12 +4,15 @@
 // .slint 内不得出现硬编码的用户可见文字。
 // T19B-2：首跑向导屏 + 着陆占位屏 + 设置页（债务②）+ B7 错误模态遮罩。
 // 完整五步步骤条导航骨架（ADR-0027）随 T19B-3..8 逐单落地。
+// T19B-3：校区选择页（campus_select.slint）接入，五屏路由（0 向导/1 选择/2 列表占位/3 设置）
 
 import { Button } from "std-widgets.slint";
 import { SettingsWizard } from "settings_wizard.slint";
+import { CampusSelect } from "campus_select.slint";
+import { PlanList, PlanCardData } from "plan_list.slint";
 
 export component AppWindow inherits Window {
-    // 路由屏号：0 = 首跑向导，1 = 着陆占位（校区选择/方案列表占位），2 = 设置页
+    // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表占位，3 = 设置页
     in-out property <int> active-screen: 1;
 
     // 窗口标题与着陆状态文案，均由壳的 Rust 侧填充
@@ -39,10 +42,45 @@ export component AppWindow inherits Window {
     in property <string> error-dialog-source;
     in property <string> error-dialog-body;
     in property <string> error-dialog-ok-label;
+    
+    // ── 校区选择页属性（T19B-3 新增）────────────────────
+    in property <string> campus-select-title;
+    in property <string> campus-select-campus-list-placeholder-text;
+    in property <string> campus-select-example-campus-a-text;
+    in property <string> campus-select-example-campus-b-text;
+    in property <string> campus-select-settings-button-text;
+
+    callback campus-select-campus-selected(campus-id: string);
+    callback campus-select-settings-clicked();
+
+    // ── 方案列表页属性（T19B-4 新增）────────────────────
+    in property <string> plan-list-title;
+    in property <string> plan-list-campus-name;
+    in property <string> plan-list-create-button-text;
+    in property <string> plan-list-back-button-text;
+    in property <string> plan-list-empty-text;
+    in property <string> plan-list-rename-label;
+    in property <string> plan-list-duplicate-label;
+    in property <string> plan-list-delete-label;
+    in property <[PlanCardData]> plan-list-model;
+    // 教程气泡（F2 钩子）
+    in property <bool> plan-list-tutorial-visible;
+    in property <string> plan-list-tutorial-text;
+    in property <string> plan-list-tutorial-dismiss-label;
+    in property <string> plan-list-tutorial-skip-all-label;
+
+    callback plan-list-create-clicked();
+    callback plan-list-back-clicked();
+    callback plan-list-rename-clicked(plan-id: string);
+    callback plan-list-duplicate-clicked(plan-id: string);
+    callback plan-list-delete-clicked(plan-id: string);
+    callback plan-list-tutorial-dismiss-clicked();
+    callback plan-list-tutorial-skip-all-clicked();
 
     callback wizard-continue-clicked();
     callback replay-tutorial-clicked();
     callback error-dialog-dismissed();
+    callback settings-clicked();
 
     title: root.app-title;
     // femtovg 渲染器的默认字体缺部分中文字形（显示方块），显式指定
@@ -70,64 +108,41 @@ export component AppWindow inherits Window {
         }
     }
 
-    // 屏 1：着陆占位（校区选择页/方案列表页归 T19B-3/4）+ 设置入口
-    if root.active-screen == 1: VerticalLayout {
-        alignment: center;
-        spacing: 16px;
+    // ── 屏 1：校区选择页（T19B-3 新增）──────────────────
+    if root.active-screen == 1: CampusSelect {
+        title <=> root.campus-select-title;
+        campus-list-placeholder-text <=> root.campus-select-campus-list-placeholder-text;
+        example-campus-a-text <=> root.campus-select-example-campus-a-text;
+        example-campus-b-text <=> root.campus-select-example-campus-b-text;
+        settings-button-text <=> root.campus-select-settings-button-text;
 
-        Text {
-            text: root.status-text;
-            horizontal-alignment: center;
-            font-size: 16px;
-            wrap: word-wrap;
-        }
-
-        HorizontalLayout {
-            alignment: center;
-
-            Button {
-                text: root.settings-title;
-                clicked => {
-                    root.active-screen = 2;
-                }
-            }
-        }
+        campus-selected(id) => { root.campus-select-campus-selected(id) }
+        settings-clicked => { root.campus-select-settings-clicked() }
     }
 
-    // 屏 2：常规设置页（T19B-2 只负责摆入“重新查看教程”按钮，
-    // 语言/版本改动入口随后续工单完善）
-    if root.active-screen == 2: VerticalLayout {
-        alignment: center;
-        spacing: 16px;
-        padding: 32px;
+    // ── 屏 2：方案列表页（T19B-4）────────────────────────
+    if root.active-screen == 2: PlanList {
+        title: root.plan-list-title;
+        campus-name: root.plan-list-campus-name;
+        create-button-text: root.plan-list-create-button-text;
+        back-button-text: root.plan-list-back-button-text;
+        empty-list-text: root.plan-list-empty-text;
+        rename-label: root.plan-list-rename-label;
+        duplicate-label: root.plan-list-duplicate-label;
+        delete-label: root.plan-list-delete-label;
+        plan-model: root.plan-list-model;
+        tutorial-bubble-visible: root.plan-list-tutorial-visible;
+        tutorial-bubble-text: root.plan-list-tutorial-text;
+        tutorial-dismiss-label: root.plan-list-tutorial-dismiss-label;
+        tutorial-skip-all-label: root.plan-list-tutorial-skip-all-label;
 
-        Text {
-            text: root.settings-title;
-            horizontal-alignment: center;
-            font-size: 20px;
-        }
-
-        HorizontalLayout {
-            alignment: center;
-
-            Button {
-                text: root.tutorial-replay-label;
-                clicked => {
-                    root.replay-tutorial-clicked();
-                }
-            }
-        }
-
-        HorizontalLayout {
-            alignment: center;
-
-            Button {
-                text: root.settings-back-label;
-                clicked => {
-                    root.active-screen = 1;
-                }
-            }
-        }
+        create-plan-clicked => { root.plan-list-create-clicked() }
+        back-to-campus-clicked => { root.plan-list-back-clicked() }
+        rename-plan-clicked(id) => { root.plan-list-rename-clicked(id) }
+        duplicate-plan-clicked(id) => { root.plan-list-duplicate-clicked(id) }
+        delete-plan-clicked(id) => { root.plan-list-delete-clicked(id) }
+        tutorial-dismiss-clicked => { root.plan-list-tutorial-dismiss-clicked() }
+        tutorial-skip-all-clicked => { root.plan-list-tutorial-skip-all-clicked() }
     }
 
     // B7 错误模态遮罩：盖住全窗吞掉全部输入，点“知道了”前界面不可操作
@@ -182,6 +197,41 @@ export component AppWindow inherits Window {
                             root.error-dialog-dismissed();
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // ── 屏 3：设置页（T19B-2 已实现，债务②）───────────────
+    if root.active-screen == 3: VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        padding: 32px;
+
+        Text {
+            text: root.settings-title;
+            horizontal-alignment: center;
+            font-size: 20px;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.tutorial-replay-label;
+                clicked => {
+                    root.replay-tutorial-clicked();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.settings-back-label;
+                clicked => {
+                    root.active-screen = 1; // 回校区选择页
                 }
             }
         }
