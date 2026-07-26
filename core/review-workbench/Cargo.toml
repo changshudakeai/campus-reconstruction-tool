@@ -1,0 +1,39 @@
+# MCRebuild V2 —— F5 候选审核工作台
+#
+# 职责：三态评审状态机（待定/保留/剔除）、左中右三栏布局 ViewModel、
+# 批量操作确认闸、评审暂停/恢复、封账批量写回。
+# 依据 ADR-0016（评审交互设计）+ ADR-0022（三态评审 + 撤销暂缓）。
+# ⚖️ 本依赖段即白名单：F5 依赖 B1/B2，不得依赖其他 F* 功能模块
+# （xtask arch 断言 1 强制）。文案只产出 B6 文本键，由 UI 层解析（ADR-0005）。
+#
+# 公开接口：
+# - `ReviewWorkbench`：评审台核心（一次性读入、状态变更操作、封账写回）
+# - `StateChange` / `CommandOutcome`：明确的"状态变更操作"（B8 接口预留）
+# - `WorkbenchView` 等：三栏布局纯数据视图（卡片列表 + 地图 + 信息面板）
+
+[package]
+name = "review-workbench"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F5 候选审核工作台：三态评审、三栏布局 ViewModel、批量确认闸、封账批量写回"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
+shared-domain-types = { workspace = true }
+# B2 数据持久化（缝 4：进台一次性读入 + 封账批量写回）
+data-persistence = { path = "../data-persistence" }
+# 暂停/恢复会话快照的序列化（临时文件为 JSON）
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# B6 国际化（仅测试用：断言本 crate 产出的全部文本键在 zh-CN.json 可解析）
+localization = { workspace = true }
+# public-api snapshot testing
+public-api.workspace = true

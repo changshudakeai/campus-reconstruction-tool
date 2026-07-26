@@ -1,0 +1,140 @@
+---
+# review-workbench Public API Snapshot
+# 
+# 本文件记录 F5 候选审核工作台的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新: 2026-07-26 (T06 实施)
+
+## Constants
+
+pub const BATCH_REMOVE_CONFIRM_THRESHOLD: usize = 5
+
+## Text Keys (pub mod text_keys)
+
+WORKBENCH_TITLE = "review.workbench_title"
+STATE_PENDING = "review.pending"
+STATE_KEEP = "review.keep"
+STATE_REJECT = "review.reject"
+STATE_LABEL = "review.state_label"
+SELECT_ALL = "review.select_all"
+DESELECT_ALL = "review.deselect_all"
+SET_KEEP = "review.set_keep"
+SET_REJECT = "review.set_reject"
+SET_PENDING = "review.set_pending"
+BATCH_REJECT_CONFIRM_TITLE = "review.batch_reject_confirm_title"
+BATCH_REJECT_CONFIRM_BODY = "review.batch_reject_confirm_body"
+SELECTED_COUNT = "review.selected_count"
+ITEM_COUNT = "review.item_count"
+PENDING_COUNT = "review.pending_count"
+INFO_CATEGORY = "review.info_category"
+INFO_TAGS = "review.info_tags"
+PAUSE = "review.pause"
+RESUME = "review.resume"
+CONFIRM_BUTTON = "app.confirm_button"
+CANCEL_BUTTON = "app.cancel_button"
+
+## Structures
+
+pub struct CandidateKey { pub category: CandidateCategory, pub entity_id: String }
+pub struct Candidate { pub key: CandidateKey, pub title: String, pub tags: Vec<(String, String)>, pub state: ReviewState, pub selected: bool }
+pub struct StateChange { pub targets: Vec<CandidateKey>, pub to: ReviewState }
+pub struct ConfirmationRequest { pub title_key: &'static str, pub body_key: &'static str, pub count: usize, pub confirm_key: &'static str, pub cancel_key: &'static str }   #[non_exhaustive]
+pub struct ReviewWorkbench { .. }
+pub struct CategoryTabView { pub category: CandidateCategory, pub label_key: &'static str, pub count: usize, pub active: bool }   #[non_exhaustive]
+pub struct CandidateCardView { pub entity_id: String, pub title: String, pub state: ReviewState, pub state_key: &'static str, pub selected: bool, pub highlighted: bool }   #[non_exhaustive]
+pub struct MapObjectView { pub entity_id: String, pub category: CandidateCategory, pub state: ReviewState, pub highlighted: bool }   #[non_exhaustive]
+pub struct InfoPanelView { pub title: String, pub category_label_key: &'static str, pub category_key: &'static str, pub tags_label_key: &'static str, pub tags: Vec<(String, String)>, pub state_label_key: &'static str, pub state_key: &'static str }   #[non_exhaustive]
+pub struct WorkbenchView { pub title_key: &'static str, pub category_tabs: Vec<CategoryTabView>, pub cards: Vec<CandidateCardView>, pub map_objects: Vec<MapObjectView>, pub info_panel: Option<InfoPanelView>, pub selected_count: usize, pub bulk_buttons_visible: bool, pub pending_confirmation: Option<ConfirmationRequest>, pub sealed: bool }   #[non_exhaustive]
+pub struct ExportSummary { pub keep_by_category: Vec<(CandidateCategory, usize)>, pub keep_total: usize, pub pending_count: usize, pub remove_count: usize }   #[non_exhaustive]
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, Error>
+
+## Enums #[non_exhaustive]
+
+pub enum CommandOutcome {
+    Applied { changed: usize },
+    NeedsConfirmation(ConfirmationRequest),
+}
+
+pub enum Error {
+    Persistence(data_persistence::Error),
+    AlreadySealed,
+    CandidateNotFound(String),
+    NoPendingConfirmation,
+    SessionIo(String),
+    SessionCorrupt(String),
+    SessionPlanMismatch { expected: String, found: String },
+}
+
+## Traits & Implementations
+
+impl CandidateKey {
+    pub fn new(category: CandidateCategory, entity_id: impl Into<String>) -> Self
+}
+
+impl Candidate {
+    pub fn from_observation(observation: &RawObservation) -> Self
+}
+
+impl StateChange {
+    pub fn single(target: CandidateKey, to: ReviewState) -> Self
+    pub fn batch(targets: Vec<CandidateKey>, to: ReviewState) -> Self
+    pub fn needs_confirmation(&self) -> bool
+}
+
+impl ReviewWorkbench {
+    // 缝 4：一次性读入
+    pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self>
+    pub fn plan_id(&self) -> &str
+    pub fn candidate_count(&self) -> usize
+    pub fn state_of(&self, key: &CandidateKey) -> Option<ReviewState>
+    // 状态变更操作（B8 接口预留）
+    pub fn submit(&mut self, change: StateChange) -> Result<CommandOutcome>
+    pub fn confirm_pending(&mut self) -> Result<CommandOutcome>
+    pub fn cancel_pending(&mut self) -> Result<()>
+    pub fn submit_for_selected(&mut self, to: ReviewState) -> Result<CommandOutcome>
+    // 勾选与全选浮现
+    pub fn toggle_selected(&mut self, key: &CandidateKey) -> Result<bool>
+    pub fn select_all_in_active_category(&mut self)
+    pub fn deselect_all_in_active_category(&mut self)
+    pub fn selected_count(&self) -> usize
+    pub fn bulk_buttons_visible(&self) -> bool
+    // 类别抽屉与高亮联动
+    pub fn set_active_category(&mut self, category: CandidateCategory)
+    pub fn active_category(&self) -> CandidateCategory
+    pub fn highlight(&mut self, key: &CandidateKey) -> Result<()>
+    pub fn clear_highlight(&mut self)
+    pub fn highlighted(&self) -> Option<&CandidateKey>
+    // 暂停/恢复
+    pub fn save_session(&self, path: &Path) -> Result<()>
+    pub fn restore_session(&mut self, path: &Path) -> Result<()>
+    // 封账（缝 4 批量写回 + 缝 5 汇总）
+    pub fn export_summary(&self) -> ExportSummary
+    pub fn seal(&mut self, db: &mut Database) -> Result<ExportSummary>
+    pub fn is_sealed(&self) -> bool
+    // 三栏布局视图
+    pub fn view(&self) -> WorkbenchView
+}
+
+impl std::fmt::Display for CandidateKey
+impl std::error::Error for Error            (thiserror)
+impl std::fmt::Display for Error            (thiserror)
+impl From<data_persistence::Error> for Error
+
+## Derives
+
+CandidateKey: Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord
+Candidate: Debug, Clone, PartialEq, Eq
+StateChange: Debug, Clone, PartialEq, Eq
+CommandOutcome: Debug, Clone, PartialEq, Eq
+ConfirmationRequest: Debug, Clone, PartialEq, Eq
+ReviewWorkbench: Debug, Clone
+CategoryTabView / CandidateCardView / MapObjectView / InfoPanelView / WorkbenchView / ExportSummary: Debug, Clone, PartialEq, Eq
+Error: Debug, thiserror::Error
+
+---
+END OF PUBLIC API SNAPSHOT
+---

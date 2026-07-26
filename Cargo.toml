@@ -24,6 +24,8 @@ members = [
     "core/project-management",
     # T11：B2 数据持久化核心（原始观测表 + 评审终态 + 回收站）
     "core/data-persistence",
+    # T06：F5 候选审核工作台（三态评审 + 三栏布局 ViewModel + 封账写回）
+    "core/review-workbench",
     # T12：B13 数据转换器（标签映射表 + 六类别归类）
     "core/data-transformers",
     # T03: B6 国际化模块

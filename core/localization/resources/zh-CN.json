@@ -58,7 +58,14 @@
     "batch_reject_confirm_body": "确定要剔除选中的 {count} 项吗？",
     "item_count": "{count} 项候选",
     "selected_count": "已选 {count} 项",
-    "pending_count": "待定 {count} 项"
+    "pending_count": "待定 {count} 项",
+    "set_keep": "改为保留",
+    "set_reject": "改为剔除",
+    "set_pending": "改回待定",
+    "info_category": "类别",
+    "info_tags": "标签与属性",
+    "pause": "暂停评审",
+    "resume": "继续评审"
   },
   "export": {
     "start_button": "导出地基",
