@@ -18,6 +18,10 @@
 [workspace]
 resolver = "2"
 members = [
+    # T03: B6 国际化模块
+    "core/localization",
+    # T02：B1 共享领域类型
+    "core/shared-domain-types",
     # S2 构建与自动化（三层锁执法地基，T01）
     "xtask",
 ]
@@ -33,7 +37,17 @@ edition = "2021"
 [workspace.dependencies]
 anyhow = "1"
 cargo_metadata = "0.19"
+# B6 国际化
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+once_cell = "1.19"
+log = "0.4"
+# B1 共享领域类型
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+# 路径依赖
+shared-domain-types = { path = "core/shared-domain-types" }
+localization = { path = "core/localization" }
 
 # ── lint 门禁（执法清单 1.3 / 1.6，抄 zed / rust-analyzer / bevy 并集）──
 # 成员 crate 写 `[lints] workspace = true` 继承。

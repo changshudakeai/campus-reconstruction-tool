@@ -1,0 +1,29 @@
+# MCRebuild V2 —— B1 共享领域类型 crate 清单
+#
+# 全工程唯一的名词定义：校区、方案、候选、六类别、三态评审、封账等术语
+# 的 Rust 类型实现。零内部依赖——词汇的最底座。
+#
+# 依据 ADR-0017（模块化单体）+ ADR-0025（S1→B1 例外授权）。
+# ⚖️ 本依赖段即白名单：B1 不得声明任何 workspace 成员 crate 依赖
+# （xtask arch 断言 3 强制）。
+
+[package]
+name = "shared-domain-types"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "共享领域类型：CampusId, PlanId, CandidateCategory, ReviewState (无内部依赖)"
+
+[dependencies]
+# Uuid 用于生成/解析 CampusId/PlanId
+uuid = { workspace = true }
+# 序列化支持（JSON 存储、跨模块传输）
+serde = { workspace = true }
+# JSON 值承载（Boundary coordinates）
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

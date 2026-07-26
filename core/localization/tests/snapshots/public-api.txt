@@ -1,0 +1,33 @@
+---
+# localization Public API Snapshot
+#
+# 本文件记录 B6 国际化模块的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T03 实施)
+
+## Enums
+
+pub enum Language { ZhCn }
+    impl Default for Language  # 默认 ZhCn
+
+## Structures
+
+pub struct Localization  # 字段私有：language + resources 映射表
+
+## Implementations
+
+impl Localization {
+    pub fn new(language: Language) -> Result<Self, String>  # 从 resources/zh-CN.json 加载
+    pub fn language(&self) -> Language
+    pub fn t(&self, key: &str) -> String  # 简单文本键翻译；缺失 key 回退为 key 本身
+    pub fn t_with_args(&self, key: &str, args: serde_json::Value) -> String  # 占位符插值（ADR-0005）
+    pub fn t_with_array(&self, key: &str, args: &[&str]) -> String  # 位置参数插值 {0} {1}
+}
+
+## Free Functions（全局翻译器）
+
+pub static GLOBAL_LOCALIZATION: Lazy<Mutex<Option<Localization>>>
+pub fn init_global(localization: Localization)
+pub fn t(key: &str) -> String
+pub fn t_with(key: &str, args: serde_json::Value) -> String

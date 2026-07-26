@@ -1,0 +1,20 @@
+[package]
+name = "localization"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "B6 国际化模块：界面文本资源管理、多语言支持、占位符插值"
+rust-version = "1.75"
+
+[dependencies]
+# JSON 解析（文本文件加载）；版本由根 workspace 单点管理
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 单例初始化（全局翻译函数）
+once_cell = { workspace = true }
+# 日志（未找到 key 时警告）
+log = { workspace = true }
+
+[lints]
+workspace = true

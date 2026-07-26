@@ -1,0 +1,100 @@
+---
+# shared-domain-types Public API Snapshot
+# 
+# 本文件记录 B1 共享领域类型的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新: 2026-07-26 (T02 实施)
+
+## Structures
+
+pub struct CampusId(Uuid)
+pub struct PlanId(Uuid)
+pub struct Boundary { pub type: String, pub coordinates: serde_json::Value }
+pub struct Orientation(f32)
+pub struct ParseIdError(String)
+
+## Enums #[non_exhaustive]
+
+pub enum CandidateCategory { Building, Road, Water, Vegetation, Sports, Other }
+pub enum ReviewState { Pending, Keep, Remove }
+pub enum CollectionJobStatus { Pending, InProgress, Completed, Failed }
+
+## Traits & Implementations
+
+impl CampusId {
+    pub fn generate() -> Self
+    pub fn parse(s: &str) -> Result<Self, ParseIdError>
+    pub fn as_hyphenated(&self) -> uuid::fmt::Hyphenated
+    pub fn as_simple(&self) -> uuid::fmt::Simple
+}
+
+impl std::fmt::Display for CampusId
+impl serde::Serialize for CampusId
+impl<'de> serde::Deserialize<'de> for CampusId
+
+impl PlanId {
+    pub fn generate() -> Self
+    pub fn parse(s: &str) -> Result<Self, ParseIdError>
+    pub fn as_hyphenated(&self) -> uuid::fmt::Hyphenated
+    pub fn as_simple(&self) -> uuid::fmt::Simple
+}
+
+impl std::fmt::Display for PlanId
+impl serde::Serialize for PlanId
+impl<'de> serde::Deserialize<'de> for PlanId
+
+impl Boundary {
+    pub fn empty() -> Self
+    pub fn is_empty(&self) -> bool
+}
+
+impl Default for Boundary
+
+impl Orientation {
+    pub fn new(degree: f32) -> Option<Self>
+    pub fn parse(s: &str) -> Option<Self>
+    pub fn degree(&self) -> f32
+    pub fn cardinal_direction(&self) -> &'static str
+}
+
+impl std::fmt::Display for Orientation
+
+impl CandidateCategory {
+    pub fn display_name(&self) -> &'static str
+    pub fn priority(&self) -> u8
+}
+
+impl ReviewState {
+    pub fn display_name(&self) -> &'static str
+    pub fn is_keep(&self) -> bool
+    pub fn is_pending(&self) -> bool
+    pub fn is_remove(&self) -> bool
+    pub fn parse(s: &str) -> Option<Self>
+    pub fn to_identifier(&self) -> &'static str
+}
+
+impl serde::Serialize for ReviewState
+impl<'de> serde::Deserialize<'de> for ReviewState
+
+impl CollectionJobStatus {
+    pub fn display_name(&self) -> &'static str
+    pub fn is_finished(&self) -> bool
+    pub fn is_success(&self) -> bool
+}
+
+## Derives
+
+CampusId: Debug, Clone, Copy, PartialEq, Eq, Hash
+PlanId: Debug, Clone, Copy, PartialEq, Eq, Hash
+Boundary: Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize
+Orientation: Debug, Clone, Copy, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize
+ParseIdError: Debug, thiserror::Error
+
+CandidateCategory: Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize
+ReviewState: Debug, Clone, Copy, PartialEq, Eq
+CollectionJobStatus: Debug, Clone, Copy, PartialEq, Eq
+
+---
+END OF PUBLIC API SNAPSHOT
+---
