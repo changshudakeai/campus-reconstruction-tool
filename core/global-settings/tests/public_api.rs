@@ -1,0 +1,58 @@
+//! 公开 API 快照测试（执法清单 2.5）
+//!
+//! 任何公开类型的增删都会反映在快照中，PR diff 可见。
+//!
+//! 简单方式：检查所有公开类型可实例化、关键行为可调用。
+
+use data_persistence::Database;
+use global_settings::{
+    Error, FirstRunSetup, GlobalSettings, LandingCampus, SettingsManager, DEFAULT_LANGUAGE,
+    DEFAULT_MINECRAFT_VERSION, SUPPORTED_LANGUAGES, SUPPORTED_MINECRAFT_VERSIONS,
+    VERSION_NOTICE_TEXT,
+};
+use shared_domain_types::CampusId;
+
+#[test]
+fn public_api_types_exist() {
+    // 常量：支持范围与默认值（ADR-0004：仅中文 / 26.1.2，菜单预留扩充位）
+    assert_eq!(SUPPORTED_LANGUAGES, ["zh-CN"]);
+    assert_eq!(SUPPORTED_MINECRAFT_VERSIONS, ["26.1.2"]);
+    assert_eq!(DEFAULT_LANGUAGE, "zh-CN");
+    assert_eq!(DEFAULT_MINECRAFT_VERSION, "26.1.2");
+    assert!(VERSION_NOTICE_TEXT.contains("Minecraft"));
+
+    // GlobalSettings / FirstRunSetup：默认值即当前唯一支持范围
+    let defaults = GlobalSettings::default();
+    assert_eq!(defaults.language, DEFAULT_LANGUAGE);
+    assert_eq!(defaults.minecraft_version, DEFAULT_MINECRAFT_VERSION);
+    let setup = FirstRunSetup::default();
+    assert!(!setup.acknowledged, "知情告知默认未勾选");
+
+    // SettingsManager：首次向导 → 设置读写
+    let db = Database::open_in_memory().expect("内存库可打开");
+    let mut manager = SettingsManager::new(db);
+    assert!(manager.is_first_run().unwrap());
+
+    // 未勾选知情告知 → 拒绝完成（Error 可匹配，#[non_exhaustive]）
+    let err = manager.complete_first_run(&setup).unwrap_err();
+    assert!(matches!(err, Error::NoticeNotAcknowledged));
+    assert!(!err.to_string().is_empty());
+
+    let acknowledged = FirstRunSetup {
+        acknowledged: true,
+        ..FirstRunSetup::default()
+    };
+    manager.complete_first_run(&acknowledged).unwrap();
+    assert!(!manager.is_first_run().unwrap());
+    assert_eq!(manager.settings().unwrap(), defaults);
+
+    manager.set_language("zh-CN").unwrap();
+    manager.set_minecraft_version("26.1.2").unwrap();
+
+    // 着陆流程（ADR-0006）：remember → landing；无记录时 None
+    assert!(manager.landing_campus().unwrap().is_none());
+    let ghost = CampusId::generate();
+    manager.remember_campus(&ghost).unwrap();
+    let landed: Option<LandingCampus> = manager.landing_campus().unwrap();
+    assert!(landed.is_none(), "校区不存在 → None（退回校区选择页）");
+}

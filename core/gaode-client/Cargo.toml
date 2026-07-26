@@ -1,0 +1,35 @@
+# MCRebuild V2 —— B3 高德地图客户端模块
+#
+# 职责：高德 Web API 封装——POI 搜索响应解析与学校类筛选、校区搜索
+# 确认流程（候选列表 → 详情 → 显式确认）、WebView 地图页生成（官方 CDN）。
+# 依据 ADR-0008（校区通过高德搜索选定）+ ADR-0017（B3 目录席位）。
+# ⚖️ 本依赖段即白名单：B3 只依赖 B1，不得依赖任何 F* 功能模块。
+#
+# 公开接口：
+# - `SchoolPoi` / `parse_place_search_response`：POI 响应解析 + 教育类筛选
+# - `CampusSearchFlow` / `ConfirmedCampus`：搜索确认状态机（显式确认）
+# - `CampusPoiRecord`：校区 POI 持久化载荷（identity + coordinate lineage）
+# - `MapPageConfig` / `build_map_page_html`：地图页 HTML（官方 CDN v1.2）
+
+[package]
+name = "gaode-client"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "B3 高德地图客户端：POI 搜索解析、校区确认流程、地图页生成"
+
+[dependencies]
+# B1 共享领域类型（CampusId 复用，T02；基础层唯一合法内部依赖）
+shared-domain-types = { workspace = true }
+# 高德响应 JSON 解析与 POI 记录序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing
+public-api.workspace = true

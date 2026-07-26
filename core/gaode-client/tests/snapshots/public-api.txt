@@ -1,0 +1,86 @@
+---
+# gaode-client Public API Snapshot
+#
+# 本文件记录 B3 高德地图客户端的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T05 实施)
+
+## Constants
+
+pub const GAODE_CDN_URL_TEMPLATE: &str                       (官方 CDN v1.2 + PlaceSearch 插件)
+pub const MAP_MIN_HEIGHT_PX: u32 = 300                       (地图最小高度硬约束)
+pub const SCHOOL_TYPECODE_PREFIX: &str = "1412"              (高德教育类目前缀)
+
+## Structures
+
+pub struct SchoolPoi {                                       (Serialize + Deserialize)
+    pub poi_id: String,
+    pub name: String,
+    pub address: String,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub typecode: String,
+}
+pub fn SchoolPoi::is_school(&self) -> bool
+
+pub struct CampusPoiRecord {                                 (Serialize + Deserialize)
+    pub gaode_poi_id: String,
+    pub name: String,
+    pub address: String,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub coordinate_system: String,
+    pub data_source: String,
+}
+pub const CampusPoiRecord::COORDINATE_SYSTEM_GCJ02: &str = "GCJ-02"
+pub const CampusPoiRecord::DATA_SOURCE_GAODE: &str = "gaode"
+pub fn CampusPoiRecord::from_poi(poi: &SchoolPoi) -> Self
+
+pub struct ConfirmedCampus {
+    pub campus_id: CampusId,                                 (B1 共享类型，T02 复用)
+    pub record: CampusPoiRecord,
+}
+
+pub enum SearchFlowState {
+    Idle,
+    Searching { keyword: String },
+    Candidates,
+    Detail { selected: usize },
+    Confirmed,
+}
+
+pub struct CampusSearchFlow { .. }
+
+## CampusSearchFlow Methods
+
+pub fn new() -> Self                                          (+ Default)
+pub fn state(&self) -> &SearchFlowState
+pub fn candidates(&self) -> &[SchoolPoi]
+pub fn start_search(&mut self, keyword: &str) -> Result<()>
+pub fn receive_results(&mut self, results: Vec<SchoolPoi>) -> Result<()>
+pub fn view_detail(&mut self, index: usize) -> Result<&SchoolPoi>
+pub fn back_to_candidates(&mut self) -> Result<()>
+pub fn confirm(&mut self) -> Result<ConfirmedCampus>          (显式确认，唯一出口)
+
+## Functions
+
+pub fn parse_place_search_response(json: &str) -> Result<Vec<SchoolPoi>>
+pub fn build_map_page_html(config: &MapPageConfig) -> Result<String>
+
+pub struct MapPageConfig {
+    pub api_key: String,
+    pub height_px: u32,
+}
+pub fn MapPageConfig::new(api_key: impl Into<String>) -> Self
+pub fn MapPageConfig::effective_height_px(&self) -> u32       (钳制 >= 300)
+
+## Errors
+
+pub type Result<T> = std::result::Result<T, Error>
+pub enum Error {                                              (#[non_exhaustive])
+    MalformedResponse(String),
+    ServiceRejected { info: String },
+    InvalidFlowStep(String),
+    CandidateOutOfRange(usize),
+}

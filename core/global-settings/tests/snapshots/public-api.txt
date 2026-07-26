@@ -1,0 +1,58 @@
+---
+# global-settings Public API Snapshot
+#
+# 本文件记录 F1 应用全局设置的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T05 实施)
+
+## Constants
+
+pub const SUPPORTED_LANGUAGES: &[&str] = &["zh-CN"]           (ADR-0004：当前仅中文)
+pub const SUPPORTED_MINECRAFT_VERSIONS: &[&str] = &["26.1.2"] (ADR-0004：当前仅 26.1.2)
+pub const DEFAULT_LANGUAGE: &str = "zh-CN"
+pub const DEFAULT_MINECRAFT_VERSION: &str = "26.1.2"
+pub const VERSION_NOTICE_TEXT: &str                           (首次设置页知情告知文字)
+
+## Structures
+
+pub struct GlobalSettings {
+    pub language: String,
+    pub minecraft_version: String,
+}
+impl Default for GlobalSettings                               (zh-CN / 26.1.2)
+
+pub struct FirstRunSetup {
+    pub language: String,
+    pub minecraft_version: String,
+    pub acknowledged: bool,
+}
+impl Default for FirstRunSetup                                (默认未勾选知情告知)
+
+pub struct LandingCampus {
+    pub id: CampusId,                                         (B1 共享类型，T02 复用)
+    pub name: String,
+}
+
+pub struct SettingsManager { .. }                             (内部持有 Database，不外泄)
+
+## SettingsManager Methods
+
+pub fn new(db: Database) -> Self
+pub fn is_first_run(&self) -> Result<bool>
+pub fn settings(&self) -> Result<GlobalSettings>
+pub fn set_language(&mut self, language: &str) -> Result<()>
+pub fn set_minecraft_version(&mut self, version: &str) -> Result<()>
+pub fn complete_first_run(&mut self, setup: &FirstRunSetup) -> Result<()>
+pub fn landing_campus(&self) -> Result<Option<LandingCampus>>  (ADR-0006：被删/未设置 → None)
+pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()>
+
+## Errors
+
+pub type Result<T> = std::result::Result<T, Error>
+pub enum Error {                                              (#[non_exhaustive])
+    Storage(data_persistence::Error),
+    UnsupportedLanguage(String),
+    UnsupportedMinecraftVersion(String),
+    NoticeNotAcknowledged,
+}

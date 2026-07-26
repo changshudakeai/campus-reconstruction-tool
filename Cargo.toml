@@ -36,6 +36,10 @@ members = [
     "core/foundation-mode",
     # T15：B7 通知中心（弹窗铁律 + 公告栏铃铛）
     "core/notification-center",
+    # T05：F1 应用全局设置（语言/MC 版本 + 首次向导 + 上次使用的校区）
+    "core/global-settings",
+    # T05：B3 高德地图客户端（POI 搜索解析 + 校区确认流程 + 地图页）
+    "core/gaode-client",
     # S2 构建与自动化（三层锁执法地基，T01）
     "xtask", "core/manifest-generator",
 ]

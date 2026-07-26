@@ -304,6 +304,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaode-client"
+version = "2.0.0-dev"
+dependencies = [
+ "public-api",
+ "serde",
+ "serde_json",
+ "shared-domain-types",
+ "thiserror",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,6 +371,16 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "global-settings"
+version = "2.0.0-dev"
+dependencies = [
+ "data-persistence",
+ "public-api",
+ "shared-domain-types",
+ "thiserror",
 ]
 
 [[package]]
@@ -610,6 +631,19 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "review-workbench"
+version = "2.0.0-dev"
+dependencies = [
+ "data-persistence",
+ "localization",
+ "public-api",
+ "serde",
+ "serde_json",
+ "shared-domain-types",
+ "thiserror",
+]
 
 [[package]]
 name = "robust"

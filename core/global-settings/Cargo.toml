@@ -1,0 +1,32 @@
+# MCRebuild V2 —— F1 应用全局设置模块
+#
+# 职责：语言 / Minecraft 版本的应用级全局设置、首次设置向导（兼任知情告知）、
+# "上次使用的校区"读写（着陆流程）。
+# 依据 ADR-0004（应用级全局设置）+ ADR-0006（记住上次校区，落在方案列表）。
+# ⚖️ 本依赖段即白名单：F1 依赖 B1/B2，不得依赖其他 F* 功能模块。
+#
+# 公开接口：
+# - `SettingsManager`：全局设置读写 + 首次设置向导 + 着陆校区读写
+# - `GlobalSettings` / `FirstRunSetup` / `LandingCampus`：设置值与视图模型
+
+[package]
+name = "global-settings"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F1 应用全局设置：语言/MC 版本全局配置、首次设置向导、上次使用的校区"
+
+[dependencies]
+# B1 共享领域类型（CampusId 复用，T02）
+shared-domain-types = { workspace = true }
+# B2 数据持久化（只经 AppSettingsApi / CampusCrudApi 公开 trait 使用存储）
+data-persistence = { path = "../data-persistence" }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing
+public-api.workspace = true
