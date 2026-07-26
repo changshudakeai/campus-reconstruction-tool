@@ -1,0 +1,56 @@
+// T19 - 主程序应用 Shell (Slint UI) 模板
+// 薄壳原则：零业务逻辑，只负责展示和事件分发
+
+import { MainWindow } from "slint-templates";
+
+export component App inherits MainWindow {
+    width: 800px;
+    height: 600px;
+    
+    title: "校园复刻工具 - 开发版";
+    
+    in-out property<string> app_title: "MCRebuild V2";
+    
+    // Callbacks for navigation (to be wired to VMs)
+    callback navigate_to_plan_list();
+    callback start_collection();
+    callback start_review();
+    callback export_diy();
+    
+    Component root := MainWindow {
+        title: root.app_title;
+        
+        // Top menu bar (placeholder)
+        MenuBar {
+            Menu { text: l10n.t("app.menu_file"); }
+            Menu { text: l10n.t("app.menu_campus"); }
+            Menu { text: l10n.t("app.menu_help"); }
+        }
+        
+        // Main content area - to be populated by ViewModels
+        ContentArea {}
+    }
+}
+
+component MainWindow {
+    width: 800px;
+    height: 600px;
+    
+    in-out property<string> title;
+    
+    Template {
+        Rectangle {
+            color: lightgray;
+            width: parent.width;
+            height: parent.height;
+            
+            // TODO: Add status bar, navigation panel
+        }
+    }
+}
+
+// Placeholder components - implement per module VMs
+component ContentArea {
+    width: parent.width;
+    height: parent.height;
+}

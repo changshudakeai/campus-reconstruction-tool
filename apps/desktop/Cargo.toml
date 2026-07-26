@@ -1,0 +1,49 @@
+# T19 — S1 主程序应用壳（薄壳 UI + 开发版快捷方式）
+
+[package]
+name = "desktop-shell"
+version.workspace = true
+edition.workspace = true
+description = "S1: Main application shell with Slint UI and zero business logic"
+license.workspace = true
+
+[[bin]]
+name = "campus-tool-dev"
+path = "src/main.rs"
+
+[[bin]]
+name = "campus-tool-service"  
+path = "src/service.rs"
+
+[build-dependencies]
+slint-build.workspace = true
+anyhow.workspace = true
+
+[dependencies]
+# UI framework (only S1 can depend on this, ADR-0017)
+slint.workspace = true
+
+# F1-F9 功能模块
+global-settings = { path = "../../core/global-settings" }
+onboarding-tutorial = { path = "../../core/onboarding-tutorial" }
+project-management = { path = "../../core/project-management" }
+data-acquisition = { path = "../../core/data-acquisition" }
+review-workbench = { path = "../../core/review-workbench" }
+coverage-audit = { path = "../../core/coverage-audit" }
+export-console = { path = "../../core/export-console" }
+
+# B1-B7 + B9-B11 + B17 基础模块
+shared-domain-types = { path = "../../core/shared-domain-types" }
+data-persistence = { path = "../../core/data-persistence" }
+gaode-client = { path = "../../core/gaode-client" }
+localization = { path = "../../core/localization" }
+foundation-mode = { path = "../../core/foundation-mode" }
+notification-center = { path = "../../core/notification-center" }
+theming = { path = "../../core/theming" }
+sponge-export = { path = "../../core/sponge-export" }
+manifest-generator = { path = "../../core/manifest-generator" }
+
+# 工具库
+anyhow.workspace = true
+log.workspace = true
+chrono.workspace = true

@@ -54,6 +54,8 @@ members = [
     "core/coverage-audit",
     # T17：F2 新手教程（跟练式气泡引导 + 四条规矩）
     "core/onboarding-tutorial",
+    # T19: S1 主程序应用壳（Slint UI 薄壳）
+    "apps/desktop",
 ]
 
 [workspace.package]
@@ -83,6 +85,9 @@ geo = "0.28"
 fastnbt = "2"
 flate2 = "1"
 sha2 = "0.10"
+# T19 S1 UI 框架 (slint 只准 desktop-shell 依赖，deny.toml 已配置 bans)
+slint = { version = "1.9", default-features = false, features = ["internal", "experimental"] }
+slint-build = "1.9"
 # 测试临时目录
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
