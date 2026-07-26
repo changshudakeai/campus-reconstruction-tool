@@ -1,0 +1,86 @@
+---
+# theming Public API Snapshot
+#
+# 本文件记录 B10 主题系统的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新：2026-07-26 (T18 实施)
+
+## Enums
+
+pub enum ColorRole { PrimaryBackground, SecondaryBackground, TertiaryBackground, OverlayBackground, TextPrimary, TextSecondary, TextTertiary, TextAccent, PrimaryForeground, SecondaryForeground, AccentColor, SuccessColor, WarningColor, ErrorColor, InfoColor, BorderColor, ShadowColor, HighlightColor, SelectionColor }
+    impl ColorRole: Copy
+    impl ColorRole: Clone
+    impl ColorRole: Debug
+    impl ColorRole: PartialEq
+    impl ColorRole: Eq
+    impl ColorRole: Hash
+    impl ColorRole: Serialize
+    impl ColorRole: Deserialize<'_>
+
+pub enum MotionToken { Fast, Medium, Slow }
+
+pub enum EasingType { Linear, EaseIn, EaseOut, EaseInOut }
+
+pub enum ThemeMode { Light, Dark, System }
+
+## Structures
+
+pub struct ColorCard { pub name: String, pub colors: HashMap<ColorRole, String> }
+    impl ColorCard {
+        pub fn get(&self, role: ColorRole) -> Option<&str>
+        pub fn get_required(&self, role: ColorRole) -> Result<&str, ThemingError>
+        pub fn validate(&self) -> Result<(), Vec<ColorRole>>
+        pub fn parse_hex_to_argb(hex: &str) -> Result<u32, ThemingError>
+    }
+
+pub struct MotionTable { pub fast: DurationConfig, pub medium: DurationConfig, pub slow: DurationConfig }
+    impl MotionTable {
+        pub fn get_duration(&self, token: MotionToken) -> f64
+        pub fn effective_duration(&self, token: MotionToken, reduce_motion: bool, speed_factor: f64) -> f64
+    }
+
+pub struct DurationConfig { pub duration: f64, pub easing: EasingType }
+
+pub struct MotionSettings { pub reduce_motion: bool, pub speed_factor: f64 }
+    impl MotionSettings { pub fn new() -> Self; pub fn has_any_animation(&self) -> bool }
+
+pub struct ThemeManager { ... private fields ... }
+    impl ThemeManager {
+        pub fn built_in() -> Self
+        pub fn from_json_strings(light_json: &str, dark_json: &str, motion_json: &str) -> Result<Self, ThemingError>
+        pub fn active_colors(&self) -> &ColorCard
+        pub fn get_color(&self, role: ColorRole) -> Option<&str>
+        pub fn get_color_argb(&self, role: ColorRole) -> Result<u32>
+        pub fn set_mode(&mut self, mode: ThemeMode)
+        pub fn current_mode(&self) -> ThemeMode
+        pub fn motion_table(&self) -> &MotionTable
+        pub fn motion_settings(&self) -> &MotionSettings
+        pub fn set_motion_settings(&mut self, settings: MotionSettings)
+        pub fn effective_duration(&self, token: MotionToken) -> f64
+        pub fn has_any_animation(&self) -> bool
+    }
+
+pub struct SlintThemePayload { ... }
+    impl SlintThemePayload { pub fn from_color_card(card: &ColorCard) -> Self }
+
+pub struct SlintColorPayload { pub colors: HashMap<String, String> }
+    impl SlintColorPayload { pub fn from_color_card(card: &ColorCard) -> Self }
+
+pub struct SlintMotionPayload { pub reduce_motion: bool, pub speed_factor: f64, pub fast_duration: f64, pub medium_duration: f64, pub slow_duration: f64 }
+    impl SlintMotionPayload { pub fn from_manager(manager: &ThemeManager) -> Self }
+
+## Free Functions
+
+pub fn detect_system_color_scheme() -> SystemColorScheme
+
+pub enum SystemColorScheme { Light, Dark }
+
+## Error Types
+
+pub enum ThemingError { JsonParseError(serde_json::Error), ColorRoleNotFound(String), InvalidColorValue { value: String }, MissingRequiredColors(Vec<ColorRole>) }
+    impl std::error::Error for ThemingError
+    impl std::fmt::Debug for ThemingError
+    impl std::fmt::Display for ThemingError
+    impl From<serde_json::Error> for ThemingError
+

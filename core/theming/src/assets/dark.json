@@ -1,0 +1,22 @@
+{
+  "name": "Dark Theme",
+  "primary_background": "#1E1E1E",
+  "secondary_background": "#2D2D2D",
+  "tertiary_background": "#323232",
+  "overlay_background": "#CC1E1E1E",
+  "text_primary": "#FFFFFF",
+  "text_secondary": "#BDBDBD",
+  "text_tertiary": "#757575",
+  "text_accent": "#64B5F6",
+  "primary_foreground": "#64B5F6",
+  "secondary_foreground": "#E0E0E0",
+  "accent_color": "#64B5F6",
+  "success_color": "#81C784",
+  "warning_color": "#FFB74D",
+  "error_color": "#E57373",
+  "info_color": "#64B5F6",
+  "border_color": "#424242",
+  "shadow_color": "#00000040",
+  "highlight_color": "#FFF59D",
+  "selection_color": "#1E88E5"
+}

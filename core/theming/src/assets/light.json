@@ -1,0 +1,22 @@
+{
+  "name": "Light Theme",
+  "primary_background": "#FFFFFF",
+  "secondary_background": "#F5F5F5",
+  "tertiary_background": "#FAFAFA",
+  "overlay_background": "#CCFFFFFF",
+  "text_primary": "#212121",
+  "text_secondary": "#757575",
+  "text_tertiary": "#9E9E9E",
+  "text_accent": "#1976D2",
+  "primary_foreground": "#1976D2",
+  "secondary_foreground": "#424242",
+  "accent_color": "#1976D2",
+  "success_color": "#4CAF50",
+  "warning_color": "#FF9800",
+  "error_color": "#F44336",
+  "info_color": "#2196F3",
+  "border_color": "#E0E0E0",
+  "shadow_color": "#00000020",
+  "highlight_color": "#FFF59D",
+  "selection_color": "#BBDEFB"
+}

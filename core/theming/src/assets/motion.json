@@ -1,0 +1,14 @@
+{
+  "fast": {
+    "duration": 0.2,
+    "easing": "easeout"
+  },
+  "medium": {
+    "duration": 0.5,
+    "easing": "easeinout"
+  },
+  "slow": {
+    "duration": 1.0,
+    "easing": "easeinout"
+  }
+}

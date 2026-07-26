@@ -1,0 +1,31 @@
+# MCRebuild V2 —— B10 主题与动画 crate 清单
+#
+# 职责：色卡机制 (亮暗双色卡)、动效表配置、"减少动画"开关。
+# 依据 ADR-0023(主题与动画——色卡机制 + 动效表 + Codex 手感基准)。
+#
+# ⚖️ 本依赖段即白名单(ADR-0017):B10 是基础模块,仅可依赖B1;禁止依赖功能模块或其他基础模块。
+#
+# 色卡硬约束(ADR-0023 §1):代码只写颜色角色名禁写颜色号;切主题 = 换色卡.
+# 动效表硬约束(ADR-0023 §4):节奏全部集中于一张全局动效表,代码禁止写死时长数字.
+
+[package]
+name = "theming"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "B10 主题系统：色卡机制 (亮/暗双色卡) + 动效表配置 + 减少动画开关"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+public-api.workspace = true

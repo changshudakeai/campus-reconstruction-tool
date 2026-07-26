@@ -18,6 +18,8 @@
 [workspace]
 resolver = "2"
 members = [
+    # T18: B10 主题与动画
+    "core/theming",
     # T04: F3 项目方案管理（方案 CRUD + ViewModel）
     "core/project-management",
     # T11：B2 数据持久化核心（原始观测表 + 评审终态 + 回收站）
@@ -55,6 +57,8 @@ log = "0.4"
 # B1 共享领域类型
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
+# Windows registry access for system theme detection (theming/B10)
+winreg = "0.55"
 # B5 地基模式：几何面积计算
 geo = "0.28"
 # public-api snapshot testing
