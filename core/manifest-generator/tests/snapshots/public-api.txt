@@ -1,0 +1,122 @@
+---
+# manifest-generator Public API Snapshot
+# 
+# 本文件记录 B17 Manifest 生成器的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新：2026-07-26 (T08 实施)
+
+## Structures
+
+pub struct FoundationManifest { pub version: String, pub id: String, pub campus_name: String, pub plan_id: String, pub plan_name: String, pub minecraft_version: String, pub exported_at: String, pub categories: Vec<CategoryStatus> }
+pub struct CategoryStatus { pub name: String, pub display_name: String, pub included: bool }
+pub struct PlanInfo { pub campus_name: String, pub plan_id: shared_domain_types::PlanId, pub plan_name: String, pub minecraft_version: String }
+pub struct BuildingBlocks { pub foundation: String, pub wall: String, pub window: String, pub floor: String, pub roof: String, pub entrance: String, pub accent: String }
+pub struct MaterialTable { pub minecraft_version: MinecraftVersion, pub building_presets: BuildingPresets }
+pub struct BuildingPresets { pub school: BuildingBlocks, pub residential: BuildingBlocks }
+pub struct ValidationError { pub invalid_blocks: Vec<String>, pub version: String }
+
+## Enums #[non_exhaustive]
+
+pub enum MinecraftVersion { V1_20_4, V1_20_2, V1_21 }
+pub enum GeneratorError { Serialization(serde_json::Error), Io(std::io::Error, std::path::PathBuf) }
+
+## Traits & Implementations
+
+impl FoundationManifest {
+    pub fn new(id: impl Into<String>, campus_name: impl Into<String>, plan_id: impl Into<String>, plan_name: impl Into<String>, minecraft_version: impl Into<String>, included_categories: &[shared_domain_types::CandidateCategory], exported_at: impl Into<String>) -> Self
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error>
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error>
+    pub fn included(&self) -> Vec<&CategoryStatus>
+    pub fn excluded(&self) -> Vec<&CategoryStatus>
+}
+
+impl std::fmt::Debug for FoundationManifest
+impl serde::Serialize for FoundationManifest
+impl<'de> serde::Deserialize<'de> for FoundationManifest
+impl PartialEq for FoundationManifest
+
+impl CategoryStatus {
+    pub fn new(name: impl Into<String>, display_name: impl Into<String>, included: bool) -> Self
+}
+
+impl std::fmt::Debug for CategoryStatus
+impl serde::Serialize for CategoryStatus
+impl<'de> serde::Deserialize<'de> for CategoryStatus
+impl PartialEq for CategoryStatus
+impl Eq for CategoryStatus
+
+impl PlanInfo {
+    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>) -> Self
+}
+
+impl std::fmt::Display for PlanInfo
+impl std::fmt::Debug for PlanInfo
+
+impl BuildingBlocks {
+    pub fn school_preset() -> Self
+    pub fn residential_preset() -> Self
+}
+
+impl Default for BuildingBlocks
+impl std::fmt::Debug for BuildingBlocks
+impl serde::Serialize for BuildingBlocks
+impl<'de> serde::Deserialize<'de> for BuildingBlocks
+impl PartialEq for BuildingBlocks
+
+impl MaterialTable {
+    pub fn v1_20_4_school() -> Self
+    pub fn validate_blocks(&self, blocks: &[String]) -> Result<Vec<String>, ValidationError>
+}
+
+impl std::fmt::Debug for MaterialTable
+impl serde::Serialize for MaterialTable
+impl<'de> serde::Deserialize<'de> for MaterialTable
+impl PartialEq for MaterialTable
+
+impl BuildingPresets {
+    // no fields shown - use struct literal syntax
+}
+
+impl Default for BuildingPresets
+impl std::fmt::Debug for BuildingPresets
+impl serde::Serialize for BuildingPresets
+impl<'de> serde::Deserialize<'de> for BuildingPresets
+impl PartialEq for BuildingPresets
+
+impl std::fmt::Debug for MinecraftVersion
+impl Clone Copy for MinecraftVersion
+impl PartialEq for MinecraftVersion
+impl Eq for MinecraftVersion
+impl Hash for MinecraftVersion
+impl serde::Serialize for MinecraftVersion
+impl<'de> serde::Deserialize<'de> for MinecraftVersion
+impl std::fmt::Display for MinecraftVersion
+
+impl std::fmt::Display for ValidationError
+impl std::error::Error for ValidationError
+impl PartialEq for ValidationError
+impl Eq for ValidationError
+
+impl ManifestGenerator {
+    pub fn new() -> Self
+    pub fn generate_manifest(&self, plan_info: &PlanInfo, review_decisions: &[(shared_domain_types::CandidateCategory, bool)], manifest_id: impl Into<String>, exported_at: impl Into<String>) -> Result<FoundationManifest, GeneratorError>
+    pub fn write_to_file(&self, manifest: &FoundationManifest, dir_path: impl AsRef<std::path::Path>, filename: &str) -> Result<(), GeneratorError>
+}
+
+impl Default for ManifestGenerator
+
+impl MaterialValidator {
+    pub fn new() -> Self
+    pub fn validate_blocks_for_version(&self, version: MinecraftVersion, blocks: &[String]) -> Result<Vec<String>, ValidationError>
+    pub fn get_default_blocks_for_version(&self, version: MinecraftVersion) -> Vec<String>
+}
+
+impl Default for MaterialValidator
+
+impl std::fmt::Display for GeneratorError
+impl std::error::Error for GeneratorError
+
+---
+END OF PUBLIC API SNAPSHOT
+---

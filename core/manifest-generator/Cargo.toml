@@ -1,0 +1,24 @@
+# MCRebuild V2 —— B17 Manifest 生成器与用料表配置
+#
+# 职责：导出时自动生成 foundation_manifest.json，如实记录本次包含/缺失哪些类别；
+# 用料表集中配置且与 MC 版本强绑定（只准用目标版本存在的方块）。
+#
+# 依据 ADR-0012（可选采集 + manifest）+ ADR-0024（用料表按版本核对）。
+# ⚖️ 本依赖段即白名单：B17 只依赖 B1（共享类型），不得依赖其他功能模块（F*）或 B2（由上层 F9 传入评审终态数据）。
+#
+
+[package]
+name = "manifest-generator"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "B17 Manifest 生成：foundation_manifest.json + 用料表配置 + 版本验证"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖）
+shared-domain-types = { workspace = true }
+# serde JSON 序列化（material table + manifest 落盘）
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# 这个 crate 不需要额外依赖（xtask arch 断言 3 验证），manifest 时间戳用 String，UUID 由 F9 传入
