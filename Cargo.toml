@@ -50,6 +50,8 @@ members = [
     "xtask", "core/manifest-generator",
     # T10: B18 初始校园生成引擎 (刚刚创建)
     "core/generation-engine",
+    # T16：F7 覆盖率审计（安静哨兵 + 两条疑点规则）
+    "core/coverage-audit",
 ]
 
 [workspace.package]

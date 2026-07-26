@@ -1,0 +1,44 @@
+# MCRebuild V2 —— F7 覆盖率审计（安静哨兵）
+#
+# 职责：采集后默默体检（纯内存数数，不联网、不写盘）；两条纯统计疑点规则
+# （空类别 / "其他"占比超阈值）；有疑点时经 B7 弹一个合并窗（禁横幅）；
+# 点"知道了"后记住裁决，仅重新采集时重新评估；常驻"采集报告"视图。
+# 依据 ADR-0019（安静哨兵 + 纯数据依据）+ ADR-0021（弹窗铁律）。
+#
+# ⚖️ 本依赖段即白名单：F7 依赖 B1/B2/B6/B7，不得依赖其他 F* 功能模块
+# （xtask arch 断言 1 强制）。slint 只准壳依赖：本 crate 只产出纯数据 ViewModel。
+#
+# 公开接口：
+# - `CoverageAudit`：两条疑点规则的检测引擎（阈值实现层可调）
+# - `AuditIssue` / `AuditResult` / `IssueRule`：疑点数据结构
+# - `DecisionResolver`：裁决记忆（按方案持久化到 B2 app_settings）
+# - `QuietSentinel`：采集后体检编排（弹窗分派 + 裁决落库）
+# - `AuditPopupView` / `AuditReportView`：弹窗与常驻报告的视图数据
+
+[package]
+name = "coverage-audit"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F7 覆盖率审计：安静哨兵体检 + 两条疑点规则 + 裁决记忆（ADR-0019）"
+
+[dependencies]
+# B1 共享领域类型（六类别、方案 ID）
+shared-domain-types = { workspace = true }
+# B2 数据持久化（裁决记忆只经 AppSettingsApi 公开 trait，不触碰 SQL）
+data-persistence = { path = "../data-persistence" }
+# B6 国际化（文本键 → 成品问句，递给 B7 呈现）
+localization = { workspace = true }
+# B7 通知中心（弹窗铁律：疑点关乎数据质量 → error 模态弹窗，禁横幅）
+notification-center = { path = "../notification-center" }
+# 裁决记忆 JSON 序列化
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing
+public-api.workspace = true

@@ -53,6 +53,8 @@ pub enum AppSettingKey {
     MinecraftVersion,
     /// 首次运行完成标志
     FirstRunCompleted,
+    /// 覆盖体检疑点裁决记忆（F7，按方案分组的 JSON，ADR-0019）
+    CoverageAuditDecisions,
 }
 
 impl AppSettingKey {
@@ -63,6 +65,7 @@ impl AppSettingKey {
             AppSettingKey::Language => "language",
             AppSettingKey::MinecraftVersion => "minecraft_version",
             AppSettingKey::FirstRunCompleted => "first_run_completed",
+            AppSettingKey::CoverageAuditDecisions => "coverage_audit_decisions",
         }
     }
 }

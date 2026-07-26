@@ -45,6 +45,7 @@
 //! - **review** - 评审台按钮与状态
 //! - **export** - 导出确认弹窗与进度条
 //! - **collection** - 数据采集相关
+//! - **audit** - 覆盖体检（安静哨兵）报告与疑点问句
 //! - **dialog** - 弹窗标题/正文
 //! - **error** - 错误消息
 //!
@@ -86,6 +87,9 @@ struct ResourceBundle {
     /// 采集相关
     #[serde(default)]
     pub collection: HashMap<String, String>,
+    /// 覆盖体检（安静哨兵，ADR-0019）
+    #[serde(default)]
+    pub audit: HashMap<String, String>,
     /// 弹窗与通知
     #[serde(default)]
     pub dialog: HashMap<String, String>,
@@ -111,6 +115,7 @@ impl ResourceBundle {
             ("review", self.review),
             ("export", self.export),
             ("collection", self.collection),
+            ("audit", self.audit),
             ("dialog", self.dialog),
             ("error", self.error),
             ("messages", self.messages),

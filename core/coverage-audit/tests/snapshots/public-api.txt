@@ -1,0 +1,132 @@
+---
+# coverage-audit Public API Snapshot
+#
+# 本文件记录 F7 覆盖率审计的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T16 实施)
+
+## Constants
+
+pub const DEFAULT_OTHER_THRESHOLD: u32 = 20               (ADR-0019："其他"占比默认阈值)
+pub const ALL_CATEGORIES: [CandidateCategory; 6]          (六类别全集，counts 下标顺序)
+
+## Enums
+
+pub enum IssueRule {                                      (仅两条纯统计规则)
+    EmptyCategory,                                        (① 采集过但 0 项)
+    HighOtherRatio,                                       (② "其他"占比超阈值)
+}
+impl IssueRule {
+    pub fn id(&self) -> &'static str                      ("empty_category" / "high_other_ratio")
+}
+
+pub enum Error {                                          (#[non_exhaustive])
+    Storage(data_persistence::Error),
+    Corrupted(serde_json::Error),
+}
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, Error>
+
+## Structures
+
+pub struct AuditIssue {
+    pub rule: IssueRule,
+    pub message_key: &'static str,                        (audit.* 文本键)
+    pub category: Option<CandidateCategory>,              (仅规则①有值)
+    pub other_count: Option<u32>,                         (仅规则②有值)
+    pub other_percentage: Option<u32>,                    (仅规则②有值，整数百分比)
+}
+impl AuditIssue {
+    pub fn stable_id(&self) -> String                     (裁决记忆的键，占比数字不参与)
+    pub fn message(&self, l10n: &Localization) -> String  (成品问句，B7 只收成品文字)
+}
+
+pub struct AuditResult {
+    pub issues: Vec<AuditIssue>,
+    pub category_counts: [u32; 6],                        (下标顺序同 ALL_CATEGORIES)
+    pub total_count: u32,
+    pub skipped_categories: Vec<CandidateCategory>,
+}
+impl AuditResult {
+    pub fn has_issues(&self) -> bool
+    pub fn category_index(category: CandidateCategory) -> usize
+}
+
+pub struct CoverageAudit { .. }                           (检测引擎，阈值实现层可调)
+impl CoverageAudit {
+    pub fn new() -> Self                                  (默认阈值 20%)
+    pub fn with_threshold(percent: u32) -> Self
+    pub fn threshold(&self) -> u32
+    pub fn audit(&self, counts: &[u32; 6], skipped_categories: Vec<CandidateCategory>) -> AuditResult
+}
+impl Default for CoverageAudit
+
+pub struct DecisionResolver { .. }                        (裁决记忆，按方案持久化)
+impl DecisionResolver {
+    pub fn new() -> Self
+    pub fn load(db: &impl AppSettingsApi, plan_id: &PlanId) -> Result<Self>
+    pub fn save(&self, db: &mut impl AppSettingsApi, plan_id: &PlanId) -> Result<()>
+    pub fn is_decided(&self, issue: &AuditIssue) -> bool
+    pub fn record_decision(&mut self, issue: &AuditIssue)
+    pub fn undecided<'a>(&self, issues: &'a [AuditIssue]) -> Vec<&'a AuditIssue>
+    pub fn reset(&mut self)                               (重新采集：裁决作废)
+}
+impl Default for DecisionResolver
+
+pub struct AuditPopupView {                               (合并疑点弹窗 ViewModel，零 slint)
+    pub title: String,
+    pub body: String,                                     (疑点问句逐行合并)
+    pub ack_label: String,                                ("知道了")
+}
+
+pub struct AuditReportView {                              (常驻"采集报告" ViewModel)
+    pub title: String,
+    pub entry_label: String,
+    pub category_lines: Vec<String>,                      (数量或"未采集（跳过）")
+    pub issue_lines: Vec<String>,                         (含已关闭的疑点)
+    pub no_issues_line: Option<String>,
+}
+
+pub struct AuditOutcome {
+    pub result: AuditResult,
+    pub popup: Option<AuditPopupView>,                    (None = 安静通过)
+}
+
+pub struct QuietSentinel { .. }                           (采集后体检编排入口)
+impl QuietSentinel {
+    pub fn new() -> Self
+    pub fn with_threshold(percent: u32) -> Self
+    pub fn after_collection(&self, db, plan_id, counts, skipped_categories, l10n) -> Result<AuditOutcome>
+    pub fn on_plan_opened(&self, db, plan_id, counts, skipped_categories, l10n) -> Result<AuditOutcome>
+    pub fn report_view(&self, result: &AuditResult, l10n: &Localization) -> AuditReportView
+}
+impl Default for QuietSentinel
+
+impl std::error::Error for Error                          (thiserror)
+impl std::fmt::Display for Error                          (thiserror)
+
+## Derives
+
+IssueRule: Debug, Clone, Copy, PartialEq, Eq, Hash
+AuditIssue: Debug, Clone, PartialEq, Eq
+AuditResult: Debug, Clone, Default, PartialEq, Eq
+CoverageAudit: Debug, Clone
+DecisionResolver: Debug, Clone, Default, PartialEq, Eq
+AuditPopupView / AuditReportView / AuditOutcome: Debug, Clone, PartialEq, Eq
+QuietSentinel: Debug, Clone, Default
+Error: Debug, thiserror::Error
+
+## 铁律备注
+
+- 体检纯内存数数：不联网、不写盘、报告只提问不断言（ADR-0019）
+- 疑点弹窗走 B7 error 级（模态、禁横幅），一次采集最多弹一次、合并一窗
+- 裁决记忆按方案存 B2 app_settings（coverage_audit_decisions 键）；
+  重新采集时裁决作废、重新评估
+- 跳过的类别不触发空类别规则，报告标注"未采集（跳过）"
+
+---
+END OF PUBLIC API SNAPSHOT
+---

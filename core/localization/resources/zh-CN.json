@@ -105,6 +105,17 @@
     "diff_summary": "新增 {added} 项 · 更新 {updated} 项 · 未变 {unchanged} 项",
     "source_gaode": "高德地图"
   },
+  "audit": {
+    "source_tag": "采集体检",
+    "popup_title": "采集体检发现疑点",
+    "empty_category": "{category}类别下没有发现任何对象——您的校园真的没有{category}吗？",
+    "high_other_ratio": "{count} 个对象进了“其他”，占 {percent}%——要不要过目一下，看看有没有认错的？",
+    "report_title": "采集报告",
+    "report_entry": "查看采集报告",
+    "category_line": "{category}：{count} 项",
+    "skipped_line": "{category}：未采集（跳过）",
+    "no_issues": "本次体检没有发现疑点"
+  },
   "dialog": {
     "error_title": "错误",
     "warning_title": "警告",
