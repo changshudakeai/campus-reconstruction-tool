@@ -1,0 +1,141 @@
+---
+# export-console Public API Snapshot
+#
+# 本文件记录 F9 导出控制台的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T07 实施)
+
+## Text Keys (pub mod text_keys)
+
+START_BUTTON = "export.start_button"
+CONFIRM_TITLE = "export.confirm_title"
+CONFIRM_SUMMARY = "export.confirm_summary"
+SEAL_NOTICE = "export.seal_notice"
+PENDING_NOTICE = "export.pending_notice"
+IN_PROGRESS = "export.in_progress"
+DONE = "export.done"
+EXPORT_FAILED = "error.export_failed"
+CONFIRM_BUTTON = "app.confirm_button"
+CANCEL_BUTTON = "app.cancel_button"
+
+## Structures
+
+pub struct ExportRequest { pub plan_id: String, pub keep_by_category: Vec<(CandidateCategory, usize)>, pub keep_total: usize, pub pending_count: usize, pub remove_count: usize, pub keep_candidates: Vec<String> }
+pub struct ExportSummary { pub plan_id: String, pub export_count: usize, pub by_category: Vec<(CandidateCategory, usize)>, pub output_path: String }   #[non_exhaustive]
+pub struct ExportConsole<G: SealGate> { .. }
+pub struct ProgressTracker { .. }
+pub struct MockSealGate { .. }
+pub struct SummaryRowView { pub category: CandidateCategory, pub label_key: &'static str, pub keep_count: usize }   #[non_exhaustive]
+pub struct ExportConfirmDialogView { pub title_key: &'static str, pub summary_label_key: &'static str, pub summary_rows: Vec<SummaryRowView>, pub seal_notice_key: &'static str, pub pending_notice_key: &'static str, pub pending_count: usize, pub confirm_key: &'static str, pub cancel_key: &'static str }   #[non_exhaustive]
+pub struct ExportProgressView { pub visible: bool, pub percent: u32, pub stage_key: &'static str, pub is_done: bool, pub is_failed: bool }   #[non_exhaustive]
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, Error>
+pub type MockExportConsole = ExportConsole<MockSealGate>
+
+## Enums #[non_exhaustive]
+
+pub enum ExportStage {
+    Waiting,
+    Sealing,
+    Generating,
+    Writing,
+    Done,
+    Failed,
+}
+
+pub enum NavigationTarget {
+    ExportCompleted(ExportSummary),
+    PlanList,
+    ContinueReview,
+}
+
+pub enum Error {
+    InvalidState(&'static str),
+    BadPlanId(String),
+    SealFailed(String),
+    Generation(generation_engine::GenerationError),
+    SchematicWrite(String),
+}
+
+## Traits & Implementations
+
+pub trait SealGate: Send + Sync {
+    fn seal(&self, plan_id: &PlanId) -> Result<(), String>
+    fn release(&self, plan_id: &PlanId) -> Result<(), String>
+}
+
+impl ExportRequest {
+    pub fn new(plan_id: String, keep_by_category: Vec<(CandidateCategory, usize)>, keep_total: usize, pending_count: usize, remove_count: usize, keep_candidates: Vec<String>) -> Self
+}
+
+impl ExportStage {
+    pub fn label_key(self) -> &'static str
+    pub fn index(self) -> u32
+    pub fn from_index(index: u32) -> Self
+}
+
+impl ProgressTracker {
+    pub fn new() -> Self
+    pub fn set_stage(&self, stage: ExportStage)
+    pub fn stage(&self) -> ExportStage
+    pub fn report_percent(&self, percent: u32) -> bool
+    pub fn percent(&self) -> u32
+    pub fn finish(&self)
+    pub fn fail(&self)
+}
+
+impl MockSealGate {
+    pub fn new() -> Self
+    pub fn is_sealed(&self) -> bool
+}
+impl SealGate for MockSealGate
+
+impl<G: SealGate> ExportConsole<G> {
+    // 缝 5：接收导出请求 + 确认弹窗
+    pub fn new(gate: G) -> Self
+    pub fn load_request(&mut self, request: ExportRequest) -> Result<()>
+    pub fn confirm_dialog_view(&self) -> Option<ExportConfirmDialogView>
+    pub fn cancel(&mut self) -> Result<()>
+    // 封账闸门（确认即封账；封账失败不生效）
+    pub fn confirm_export(&mut self) -> Result<()>
+    // 缝 6：导出执行（成功跳转 / 失败回滚 + B7 弹窗铁律）
+    pub fn execute_export(&mut self, model: &BlockModel, output_path: &Path) -> Result<NavigationTarget>
+    pub fn failure_target(&self) -> Option<NavigationTarget>
+    // 非阻塞进度条
+    pub fn progress(&self) -> &ProgressTracker
+    pub fn progress_view(&self) -> ExportProgressView
+    pub fn is_exporting(&self) -> bool
+}
+
+impl ExportConfirmDialogView {
+    pub fn from_request(request: &ExportRequest) -> Self
+}
+
+impl ExportProgressView {
+    pub fn from_tracker(tracker: &ProgressTracker) -> Self
+}
+
+## Functions（缝 6 适配器）
+
+pub fn adapt_to_voxel_model(model: &BlockModel) -> Result<VoxelModel>
+pub fn export_schematic(model: &BlockModel, output_path: &Path, schematic_name: &str, progress: &ProgressTracker) -> Result<()>
+
+impl std::error::Error for Error            (thiserror)
+impl std::fmt::Display for Error            (thiserror)
+impl From<generation_engine::GenerationError> for Error
+
+## Derives
+
+ExportRequest: Debug, Clone, PartialEq, Eq
+ExportSummary / ExportStage / NavigationTarget: Debug, Clone, PartialEq, Eq (Stage 另有 Copy)
+ProgressTracker: Debug, Clone, Default
+MockSealGate: Debug, Default, Clone
+SummaryRowView / ExportConfirmDialogView / ExportProgressView: Debug, Clone, PartialEq, Eq
+Error: Debug, thiserror::Error
+
+---
+END OF PUBLIC API SNAPSHOT
+---

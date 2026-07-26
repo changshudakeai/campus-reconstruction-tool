@@ -1,0 +1,52 @@
+# MCRebuild V2 —— F9 导出控制台
+#
+# 职责：缝 5（接收 F5 递交的导出请求 → 确认弹窗 → 封账闸门）+
+# 缝 6（B18 方块模型 → B4 .schem 落盘的居中适配）+ 非阻塞进度条 +
+# 导出失败回滚（封账失效、评审恢复可改）+ 成功跳转。
+# 依据 ADR-0016（评审交互三阶段）+ ADR-0021（弹窗铁律）+ ADR-0022（封账语义）。
+#
+# ⚖️ 本依赖段即白名单：F9 依赖 B1/B4/B6/B7/B18，不得依赖其他 F* 功能模块
+# （xtask arch 断言 1 强制）。封账动作经 SealGate trait 由壳接线到 F5，
+# F5 只出现在 dev-dependencies（集成测试验证回滚语义，不入依赖图）。
+# slint 只准壳依赖：本 crate 只产出纯数据 ViewModel（deny.toml bans）。
+#
+# 公开接口：
+# - `ExportConsole`：导出状态机（接收请求、确认/取消、封账、执行、回滚）
+# - `SealGate` / `MockSealGate`：封账门控接缝（壳实现，接线 F5 seal()）
+# - `ProgressTracker` / `ExportProgressView`：非阻塞进度条（5% 步进）
+# - `ExportConfirmDialogView` / `NavigationTarget`：确认弹窗与跳转目标
+
+[package]
+name = "export-console"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F9 导出控制台：封账确认弹窗 + 非阻塞进度条 + 失败回滚"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
+shared-domain-types = { workspace = true }
+# B4 Sponge 导出引擎（缝 6：.schem 落盘，只调公开 API）
+sponge-export = { path = "../sponge-export" }
+# B6 国际化（文本键 → 成品文字，递给 B7 呈现）
+localization = { workspace = true }
+# B7 通知中心（弹窗铁律三级分派：error 模态弹窗 / warn toast）
+notification-center = { path = "../notification-center" }
+# B18 生成引擎（缝 6：接收纯内存方块模型，只调公开 API）
+generation-engine = { path = "../generation-engine" }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# F5 评审台 + B2 持久化（仅集成测试：验证封账写回与失败回滚语义）
+review-workbench = { path = "../review-workbench" }
+data-persistence = { path = "../data-persistence" }
+# 测试夹具的 source_data JSON
+serde_json = { workspace = true }
+# .schem 落盘测试的临时目录
+tempfile = { workspace = true }
+# public-api snapshot testing
+public-api.workspace = true

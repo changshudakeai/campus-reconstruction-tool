@@ -26,6 +26,8 @@ members = [
     "core/data-persistence",
     # T06：F5 候选审核工作台（三态评审 + 三栏布局 ViewModel + 封账写回）
     "core/review-workbench",
+    # T07：F9 导出控制台（封账确认 + 非阻塞进度条）
+    "core/export-console",
     # T12：B13 数据转换器（标签映射表 + 六类别归类）
     "core/data-transformers",
     # T13：F4 数据采集（可插拔数据源 + 增量刷新检测 + 原始观测落库）

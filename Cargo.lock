@@ -196,6 +196,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-acquisition"
+version = "2.0.0-dev"
+dependencies = [
+ "data-persistence",
+ "data-transformers",
+ "gaode-client",
+ "localization",
+ "public-api",
+ "serde_json",
+ "shared-domain-types",
+ "thiserror",
+]
+
+[[package]]
 name = "data-persistence"
 version = "2.0.0-dev"
 dependencies = [
@@ -267,6 +281,23 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "export-console"
+version = "2.0.0-dev"
+dependencies = [
+ "data-persistence",
+ "generation-engine",
+ "localization",
+ "notification-center",
+ "public-api",
+ "review-workbench",
+ "serde_json",
+ "shared-domain-types",
+ "sponge-export",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
