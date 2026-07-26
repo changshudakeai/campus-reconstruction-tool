@@ -76,6 +76,9 @@ struct ResourceBundle {
     /// 应用级文本（首屏、设置页）
     #[serde(default)]
     pub app: HashMap<String, String>,
+    /// 全局设置与首次运行向导（ADR-0004，T19B-2）
+    #[serde(default)]
+    pub settings: HashMap<String, String>,
     /// 方案列表与卡片
     #[serde(default)]
     pub plan: HashMap<String, String>,
@@ -115,6 +118,7 @@ impl ResourceBundle {
         let categories = [
             ("domain", self.domain),
             ("app", self.app),
+            ("settings", self.settings),
             ("plan", self.plan),
             ("review", self.review),
             ("export", self.export),

@@ -33,6 +33,14 @@
     "shell_status_campus_select": "欢迎回来！请选择或新建校区",
     "shell_status_last_campus": "上次使用的校区：{0}"
   },
+  "settings": {
+    "wizard_title": "欢迎使用校园复刻工具",
+    "language_label": "界面语言",
+    "minecraft_version_label": "Minecraft 版本",
+    "notice_checkbox": "请确认你的 Minecraft 游戏版本与此一致，否则导入可能失败",
+    "continue_button": "继续",
+    "save_success": "设置已保存"
+  },
   "plan": {
     "list_header": "方案列表",
     "create": "新建方案",
