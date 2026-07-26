@@ -1,0 +1,58 @@
+---
+# sponge-export Public API Snapshot
+#
+# 本文件记录 B4 Sponge 导出引擎的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T09 实施)
+
+## Constants
+
+pub const SPONGE_SCHEMATIC_VERSION: i32 = 3
+pub const PINNED_DATA_VERSION: i32 = 3955
+
+## Structures
+
+pub struct VoxelModel {
+    pub width: usize,
+    pub height: usize,
+    pub length: usize,
+    pub palette: Vec<String>,
+    pub blocks: Vec<u16>,
+}
+
+pub struct SchematicInspection {
+    pub sponge_version: i32,
+    pub data_version: i32,
+    pub dimensions: [usize; 3],
+    pub offset: [i32; 3],
+    pub palette_entries: usize,
+    pub total_voxels: usize,
+    pub non_air_voxels: usize,
+    pub voxels: Vec<u32>,
+    pub palette: HashMap<String, i32>,
+    pub content_sha256: String,
+}
+
+## Functions
+
+pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), anyhow::Error>
+pub fn inspect_schematic(path: &Path) -> Result<SchematicInspection, anyhow::Error>
+pub fn verify_worldedit_import_contract(path: &Path) -> Result<SchematicInspection, anyhow::Error>
+
+## Traits & Implementations
+
+impl VoxelModel {
+    pub fn validate(&self) -> Result<(), String>
+    pub fn empty(width: usize, height: usize, length: usize) -> Self
+    pub fn flat_ground(width: usize, length: usize, height: usize, ground_block: &str) -> Result<Self, String>
+}
+
+## Derives
+
+VoxelModel: Debug, Clone, PartialEq, Eq
+SchematicInspection: Debug, Clone, PartialEq, Eq
+
+---
+END OF PUBLIC API SNAPSHOT
+---
