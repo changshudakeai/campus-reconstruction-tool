@@ -18,7 +18,7 @@ pub struct Localization  # 字段私有：language + resources 映射表
 ## Implementations
 
 impl Localization {
-    pub fn new(language: Language) -> Result<Self, String>  # 从 resources/zh-CN.json 加载
+    pub fn new(language: Language) -> Result<Self, String>  # 加载顺序：可执行文件旁 resources/ → cwd resources/ → 内嵌副本兑底
     pub fn language(&self) -> Language
     pub fn t(&self, key: &str) -> String  # 简单文本键翻译；缺失 key 回退为 key 本身
     pub fn t_with_args(&self, key: &str, args: serde_json::Value) -> String  # 占位符插值（ADR-0005）

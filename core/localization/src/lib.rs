@@ -132,16 +132,15 @@ pub struct Localization {
 
 impl Localization {
     /// 创建新的本地化实例
+    ///
+    /// 资源查找顺序：可执行文件旁 `resources/` → 当前工作目录 `resources/`
+    /// → 编译期内嵌副本兑底（保证从任意目录启动都不失败）。
+    /// 文件优先于内嵌：改磁盘上的 JSON 后重启即可看到新文案（验收点）。
     pub fn new(language: Language) -> Result<Self, String> {
-        // 从 resources 目录加载 zh-CN.json
         let resources = match language {
             Language::ZhCn => {
-                let path = std::path::Path::new("resources/zh-CN.json");
-                if !path.exists() {
-                    return Err(format!("zh-CN.json not found at {:?}", path));
-                }
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| format!("Failed to read zh-CN.json: {}", e))?;
+                let content = Self::read_resource_file("zh-CN.json")
+                    .unwrap_or_else(|| EMBEDDED_ZH_CN.to_string());
                 let bundle: ResourceBundle = serde_json::from_str(&content)
                     .map_err(|e| format!("Failed to parse zh-CN.json: {}", e))?;
                 bundle.flatten()
@@ -152,6 +151,27 @@ impl Localization {
             language,
             resources: Mutex::new(resources),
         })
+    }
+
+    /// 依次尝试可执行文件旁与当前目录的 resources/，都不存在则返回 None
+    fn read_resource_file(file_name: &str) -> Option<String> {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join("resources").join(file_name));
+            }
+        }
+        candidates.push(std::path::Path::new("resources").join(file_name));
+
+        for path in candidates {
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => return Some(content),
+                    Err(e) => log::warn!("Failed to read {:?}: {}", path, e),
+                }
+            }
+        }
+        None
     }
 
     /// 获取当前语种
@@ -166,7 +186,10 @@ impl Localization {
 
     /// 翻译文本键并替换占位符（如 `{count}`, `{name}`）
     pub fn t_with_args(&self, key: &str, args: serde_json::Value) -> String {
-        let resources = self.resources.lock().unwrap();
+        let resources = self
+            .resources
+            .lock()
+            .expect("localization resources mutex poisoned");
 
         // 查找文本键
         let template = match resources.get(key) {
@@ -203,10 +226,19 @@ impl Localization {
         }
     }
 
-    /// 批量翻译辅助方法（支持数组参数）
+    /// 批量翻译辅助方法（支持位置参数 `{0}` `{1}`）
     pub fn t_with_array(&self, key: &str, args: &[&str]) -> String {
-        let resources = self.resources.lock().unwrap();
-        let template = resources.get(key).map(|s| s.as_str()).unwrap_or(key);
+        let resources = self
+            .resources
+            .lock()
+            .expect("localization resources mutex poisoned");
+        let template = match resources.get(key) {
+            Some(s) => s.as_str(),
+            None => {
+                log::warn!("Localization key not found: {}", key);
+                key
+            }
+        };
 
         if !args.is_empty() {
             let mut result = template.to_string();
@@ -221,12 +253,17 @@ impl Localization {
     }
 }
 
+/// 编译期内嵌的中文资源副本（磁盘文件缺失时的兑底，保证从任意目录启动可用）
+const EMBEDDED_ZH_CN: &str = include_str!("../resources/zh-CN.json");
+
 /// 全局翻译器单例（懒加载）
 pub static GLOBAL_LOCALIZATION: Lazy<Mutex<Option<Localization>>> = Lazy::new(|| Mutex::new(None));
 
 /// 初始化全局翻译器（必须在 UI 线程调用一次）
 pub fn init_global(localization: Localization) {
-    let mut global = GLOBAL_LOCALIZATION.lock().unwrap();
+    let mut global = GLOBAL_LOCALIZATION
+        .lock()
+        .expect("global localization mutex poisoned");
     *global = Some(localization);
 }
 
@@ -234,7 +271,7 @@ pub fn init_global(localization: Localization) {
 pub fn t(key: &str) -> String {
     GLOBAL_LOCALIZATION
         .lock()
-        .unwrap()
+        .expect("global localization mutex poisoned")
         .as_ref()
         .expect("Global localization not initialized. Call init_global() first.")
         .t(key)
@@ -244,9 +281,9 @@ pub fn t(key: &str) -> String {
 pub fn t_with(key: &str, args: serde_json::Value) -> String {
     GLOBAL_LOCALIZATION
         .lock()
-        .unwrap()
+        .expect("global localization mutex poisoned")
         .as_ref()
-        .expect("Global translation not initialized. Call init_global() first.")
+        .expect("Global localization not initialized. Call init_global() first.")
         .t_with_args(key, args)
 }
 

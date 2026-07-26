@@ -3,6 +3,8 @@
 //! - **边界**：在地图上圈画的方案范围（将来扩展为几何多边形）
 //! - **朝向**：在高德地图上画两点参考线确定，没有默认值、不可跳过
 
+use serde::{Deserialize, Serialize};
+
 /// 方案边界 —— 暂用 JSON 字符串承载 GeoJSON Polygon/MultiPolygon
 ///
 /// 将来可扩展为专用几何类型，但目前先用标准 GeoJSON 格式存储。
@@ -46,7 +48,7 @@ impl Default for Boundary {
 /// 朝向：由高德地图两点参考线计算出的方位角（0~360 度）
 ///
 /// 单位：度，北为 0°/360°，顺时针增加。**无默认值**，必须由用户在地图上明确设定。
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize)]
 pub struct Orientation(f32);
 
 impl Orientation {
@@ -94,5 +96,17 @@ impl Orientation {
 impl std::fmt::Display for Orientation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}° ({})", self.0, self.cardinal_direction())
+    }
+}
+
+impl<'de> Deserialize<'de> for Orientation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = f32::deserialize(deserializer)?;
+        Self::new(value).ok_or_else(|| {
+            serde::de::Error::custom(format!("Orientation out of range 0..=360: {}", value))
+        })
     }
 }
