@@ -24,11 +24,11 @@ description = "F2 新手教程：跟练式气泡引导 + 四条规矩（ADR-0020
 
 [dependencies]
 # B2 数据持久化（引导状态只经 AppSettingsApi 公开 trait，不触碰 SQL）
-data-persistence = { path = "../data-persistence" }
+data-persistence = { workspace = true }
 # B6 国际化（文本键 → 成品文案，气泡文字禁止硬编码）
 localization = { workspace = true }
 # B7 通知中心（一键全跳后 info 级留底"设置里可重看"，不打扰）
-notification-center = { path = "../notification-center" }
+notification-center = { workspace = true }
 # 引导完成时刻的 RFC3339 时间戳
 chrono = { workspace = true }
 # 引导进度 JSON 序列化

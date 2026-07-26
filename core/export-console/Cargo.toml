@@ -27,13 +27,13 @@ description = "F9 导出控制台：封账确认弹窗 + 非阻塞进度条 + �
 # B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
 shared-domain-types = { workspace = true }
 # B4 Sponge 导出引擎（缝 6：.schem 落盘，只调公开 API）
-sponge-export = { path = "../sponge-export" }
+sponge-export = { workspace = true }
 # B6 国际化（文本键 → 成品文字，递给 B7 呈现）
 localization = { workspace = true }
 # B7 通知中心（弹窗铁律三级分派：error 模态弹窗 / warn toast）
-notification-center = { path = "../notification-center" }
+notification-center = { workspace = true }
 # B18 生成引擎（缝 6：接收纯内存方块模型，只调公开 API）
-generation-engine = { path = "../generation-engine" }
+generation-engine = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 
@@ -42,8 +42,8 @@ workspace = true
 
 [dev-dependencies]
 # F5 评审台 + B2 持久化（仅集成测试：验证封账写回与失败回滚语义）
-review-workbench = { path = "../review-workbench" }
-data-persistence = { path = "../data-persistence" }
+review-workbench = { workspace = true }
+data-persistence = { workspace = true }
 # 测试夹具的 source_data JSON
 serde_json = { workspace = true }
 # .schem 落盘测试的临时目录

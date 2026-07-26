@@ -22,7 +22,7 @@ description = "F5 候选审核工作台：三态评审、三栏布局 ViewModel�
 # B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（缝 4：进台一次性读入 + 封账批量写回）
-data-persistence = { path = "../data-persistence" }
+data-persistence = { workspace = true }
 # 暂停/恢复会话快照的序列化（临时文件为 JSON）
 serde = { workspace = true }
 serde_json = { workspace = true }

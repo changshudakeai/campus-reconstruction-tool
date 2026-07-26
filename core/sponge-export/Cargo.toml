@@ -17,8 +17,7 @@ publish = false
 description = "B4 Sponge 导出引擎：.schem 文件格式 (.NBT/Gzip) 读写器"
 
 [dependencies]
-# serde JSON 序列化（往返校验的稳定哈希输入）
-serde = { workspace = true, features = ["derive"] }
+# serde_json JSON 序列化（往返校验的稳定哈希输入）
 serde_json = { workspace = true }
 # fastnbt NBT 编解码（v1.x campus-export 已验证）
 fastnbt = { workspace = true }

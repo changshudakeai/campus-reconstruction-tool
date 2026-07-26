@@ -20,11 +20,9 @@ description = "F3 项目方案管理：校区/方案 CRUD、卡片三件套、�
 # B1 共享领域类型（基础层唯一合法内部依赖）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（校园级 CRUD + 回收站）
-data-persistence = { path = "../data-persistence" }
-# B6 国际化模块（文本外置；本 crate 只产出文本键，由 UI 层解析）
-localization = { workspace = true }
+data-persistence = { workspace = true }
 # ISO8601 时间戳的生成与解析（回收站时间视图）
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 

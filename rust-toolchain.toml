@@ -1,0 +1,11 @@
+# MCRebuild V2 —— 工具链单点固定（执法文件）
+#
+# 固定精确版本而非 channel = "stable"：CI 拉"最新 stable"会随 Rust 发版
+# 引入新 clippy lint，导致本地全绿、CI 红灯（版本漂移）。此处与本地开发机
+# 保持同一版本，CI 各 job 由 rustup 自动读取本文件安装，结果永远可复现。
+#
+# 升级纪律（见 docs/developer-guide/enforcement.md）：工具链升级须专门提交，
+# 升级时统一清理新版本引入的新 lint，不与功能改动混在一起。
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

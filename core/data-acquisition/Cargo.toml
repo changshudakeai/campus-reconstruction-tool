@@ -24,11 +24,11 @@ description = "F4 数据采集：可插拔数据源 + 增量刷新检测 + 原�
 # B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（缝 3：原始观测当场落库，数据粮仓铁律）
-data-persistence = { path = "../data-persistence" }
+data-persistence = { workspace = true }
 # B3 高德地图客户端（缝 7：POI 搜索响应解析复用，默认数据源）
-gaode-client = { path = "../gaode-client" }
+gaode-client = { workspace = true }
 # B13 数据转换器（缝 3：标签映射归类引擎复用，不重定义归类逻辑）
-data-transformers = { path = "../data-transformers" }
+data-transformers = { workspace = true }
 # 原始对象 source_data JSON 的承载
 serde_json = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）

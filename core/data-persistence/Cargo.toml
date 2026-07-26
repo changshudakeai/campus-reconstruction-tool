@@ -22,13 +22,12 @@ shared-domain-types = { workspace = true }
 # SQLite 驱动（全 workspace 唯一合法使用者，deny.toml bans 白名单）
 rusqlite = { version = "0.31", features = ["bundled"] }
 # ISO8601 时间戳的生成与解析
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { workspace = true }
 # SHA256 内容指纹（增量刷新检测）
-sha2 = "0.10"
+sha2 = { workspace = true }
 # 观测记录 ID 生成
 uuid = { workspace = true }
 # source_data 原始标签 JSON 的承载与类别名编解码
-serde = { workspace = true }
 serde_json = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }

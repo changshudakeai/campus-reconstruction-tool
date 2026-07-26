@@ -20,7 +20,7 @@ description = "F1 应用全局设置：语言/MC 版本全局配置、首次设�
 # B1 共享领域类型（CampusId 复用，T02）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（只经 AppSettingsApi / CampusCrudApi 公开 trait 使用存储）
-data-persistence = { path = "../data-persistence" }
+data-persistence = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 

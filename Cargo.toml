@@ -87,6 +87,16 @@ sha2 = "0.10"
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# path 依赖（workspace-dependencies bans 需要）
+data-persistence = { path = "core/data-persistence" }
+notification-center = { path = "core/notification-center" }
+sponge-export = { path = "core/sponge-export" }
+review-workbench = { path = "core/review-workbench" }
+generation-engine = { path = "core/generation-engine" }
+data-transformers = { path = "core/data-transformers" }
+gaode-client = { path = "core/gaode-client" }
+# 构建自动化（xtask is not a regular crate）
+xtask = { path = "xtask" }
 # public-api snapshot testing
 public-api = "0.52"
 # 路径依赖

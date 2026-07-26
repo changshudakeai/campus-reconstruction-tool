@@ -23,6 +23,7 @@ allow = [
     "Unicode-3.0",
     "BSD-3-Clause",
     "Zlib",
+    "ISC",  # geo → earcutr (B5 地基模式)
 ]
 confidence-threshold = 0.93
 # workspace 成员均为内部 crate（publish = false），不参与许可证审查
@@ -32,6 +33,10 @@ private = { ignore = true }
 [bans]
 multiple-versions = "warn"
 wildcards = "deny" # 禁 version = "*"
+# 豁免内部路径依赖：cargo-deny 把无版本号的 path 依赖视为 wildcard，
+# 会被上面的 wildcards = "deny" 误伤。此豁免只作用于 path 依赖，
+# 外部依赖写 version = "*" 仍被禁止，原有意图不变。
+allow-wildcard-paths = true
 deny = [
     # SQLite 只准 B2 data-persistence 直接依赖（ADR-0002/0017 红线表）；
     # 其余 crate 想碰数据库，必须走 B2 的存储接口。

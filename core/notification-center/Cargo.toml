@@ -23,8 +23,8 @@ description = "B7 通知中心：弹窗铁律三级分派、公告栏留底、�
 serde = { workspace = true }
 # 消息唯一标识（UUID v4）
 uuid = { workspace = true }
-# created_at 时间戳与留存规则判断（与 B2 同款直接声明，未入 workspace 单点）
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# created_at 时间戳与留存规则判断（与 B2 同款直接声明）
+chrono = { workspace = true, features = ["serde"] }
 # 全局单例（NotificationCenter::init 一次性初始化）
 once_cell = { workspace = true }
 # Info 级留底与调度器运行日志

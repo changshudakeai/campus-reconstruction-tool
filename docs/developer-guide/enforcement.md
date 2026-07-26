@@ -39,6 +39,19 @@ cargo xtask dev-shortcut     # 构建并更新桌面"校园复刻工具 - 开发
 
 ## 公开 API 快照测试（执法清单 2.5）
 
+---
+
+### 工具链升级纪律
+
+`rust-toolchain.toml`是工具链的单点控制（见根目录）：指定精确版本而非 `channel = "stable"`，防止 CI 拉"最新 stable"后引入新 clippy lint 导致本地全绿、CI 红灯的版本漂移。
+
+**工具链升级必须走专门提交**，且升级提交中统一清理新版本引入的新 lint，不得与功能改动混在一起。升级步骤：
+
+1. 改 `rust-toolchain.toml` 为新版号
+2. 在 CI 环境运行完整门禁，清理所有新 lint 告警
+3. 提 PR，标题格式：`chore: bump Rust toolchain to X.Y.Z`
+4. 守门人验收时确认没有遗漏功能修改
+
 每个基础 crate（B1-B18）立户时**必须**带公开 API 快照测试；xtask 架构测试
 会检查 `tests/public_api.rs` 与 `tests/snapshots/public-api.txt` 的存在，
 缺了 CI 红灯。模板（T02 第一次使用时把版本号提入 `[workspace.dependencies]`）：

@@ -229,7 +229,6 @@ dependencies = [
  "chrono",
  "public-api",
  "rusqlite",
- "serde",
  "serde_json",
  "sha2",
  "shared-domain-types",
@@ -740,7 +739,6 @@ version = "2.0.0-dev"
 dependencies = [
  "chrono",
  "data-persistence",
- "localization",
  "public-api",
  "shared-domain-types",
  "thiserror",
@@ -1003,7 +1001,6 @@ dependencies = [
  "fastnbt",
  "flate2",
  "public-api",
- "serde",
  "serde_json",
  "sha2",
  "tempfile",

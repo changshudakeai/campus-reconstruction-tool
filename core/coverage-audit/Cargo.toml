@@ -26,11 +26,11 @@ description = "F7 覆盖率审计：安静哨兵体检 + 两条疑点规则 + �
 # B1 共享领域类型（六类别、方案 ID）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（裁决记忆只经 AppSettingsApi 公开 trait，不触碰 SQL）
-data-persistence = { path = "../data-persistence" }
+data-persistence = { workspace = true }
 # B6 国际化（文本键 → 成品问句，递给 B7 呈现）
 localization = { workspace = true }
 # B7 通知中心（弹窗铁律：疑点关乎数据质量 → error 模态弹窗，禁横幅）
-notification-center = { path = "../notification-center" }
+notification-center = { workspace = true }
 # 裁决记忆 JSON 序列化
 serde_json = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
