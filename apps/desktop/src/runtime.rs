@@ -4,13 +4,16 @@
 //! 老用户且记有上次校区 → 直达该校区；否则 → 校区选择页。
 //! 判定逻辑委托 F1 `SettingsManager`（校区被删返回 `None` 的兜底在 F1 内），
 //! 壳只把结果翻译成 l10n 文案填进窗口——零业务逻辑。
+//! 装配自 T19B-1 起经 [`ViewModelInjector`] 完成（VM 注入见 `injector` 模块）。
 
 use anyhow::Result;
 use data_persistence::Database;
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
+use notification_center::{NotificationCenter, PresenterRegistry};
 use slint::ComponentHandle;
 
+use crate::injector::{ShellDatabases, ViewModelInjector};
 use crate::AppWindow;
 
 /// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
@@ -32,7 +35,11 @@ pub fn landing_decision(db: Option<Database>) -> LandingDecision {
     let Some(db) = db else {
         return LandingDecision::FirstRunSetup;
     };
-    let settings = SettingsManager::new(db);
+    decide(&SettingsManager::new(db))
+}
+
+/// 着陆判定本体（独立入口与 VM 注入器共用，逻辑全部委托 F1）。
+pub(crate) fn decide(settings: &SettingsManager) -> LandingDecision {
     match settings.is_first_run() {
         Ok(false) => match settings.landing_campus() {
             Ok(Some(campus)) => LandingDecision::LastUsedCampus { name: campus.name },
@@ -45,7 +52,7 @@ pub fn landing_decision(db: Option<Database>) -> LandingDecision {
 }
 
 /// 着陆去向 → 状态栏文案（文本键见 zh-CN.json `app.*`）。
-fn status_text(l10n: &Localization, decision: &LandingDecision) -> String {
+pub(crate) fn status_text(l10n: &Localization, decision: &LandingDecision) -> String {
     match decision {
         LandingDecision::FirstRunSetup => l10n.t("app.shell_status_first_run"),
         LandingDecision::CampusSelect => l10n.t("app.shell_status_campus_select"),
@@ -57,12 +64,25 @@ fn status_text(l10n: &Localization, decision: &LandingDecision) -> String {
 
 /// 开发版桌面应用入口：装配主窗口并进入事件循环。
 pub fn run_dev() -> Result<()> {
-    let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
-    let decision = landing_decision(Database::open(DEV_DB_FILE).ok());
+    // B7 一本账先于任何回调可用（弹窗铁律 ADR-0021）；Slint
+    // Presenter（弹窗/toast 声明）随后续 T19B 工单注册，注册前消息照常留底。
+    NotificationCenter::init(PresenterRegistry::new());
 
     let window = AppWindow::new()?;
-    window.set_app_title(l10n.t("app.welcome_title").into());
-    window.set_status_text(status_text(&l10n, &decision).into());
+    // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
+    let injector = match ShellDatabases::open(DEV_DB_FILE) {
+        Ok(databases) => Some(ViewModelInjector::new(databases)?),
+        Err(_) => None,
+    };
+    match &injector {
+        Some(injector) => injector.inject(&window),
+        None => {
+            let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
+            window.set_app_title(l10n.t("app.welcome_title").into());
+            window.set_status_text(status_text(&l10n, &landing_decision(None)).into());
+        }
+    }
+    // 注入器在事件循环全程存活（后续工单的回调绑定依赖它持有的 VM）
     window.run()?;
     Ok(())
 }

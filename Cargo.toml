@@ -111,6 +111,12 @@ shared-domain-types = { path = "core/shared-domain-types" }
 localization = { path = "core/localization" }
 foundation-mode = { path = "core/foundation-mode" }
 global-settings = { path = "core/global-settings" }
+# T19B-1：壳 VM 注入器持有的 F 模块（apps/desktop 依赖段引用）
+onboarding-tutorial = { path = "core/onboarding-tutorial" }
+project-management = { path = "core/project-management" }
+data-acquisition = { path = "core/data-acquisition" }
+coverage-audit = { path = "core/coverage-audit" }
+export-console = { path = "core/export-console" }
 
 # ── lint 门禁（执法清单 1.3 / 1.6，抄 zed / rust-analyzer / bevy 并集）──
 # 成员 crate 写 `[lints] workspace = true` 继承。
