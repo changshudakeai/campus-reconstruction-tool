@@ -44,6 +44,8 @@ members = [
     "core/gaode-client",
     # S2 构建与自动化（三层锁执法地基，T01）
     "xtask", "core/manifest-generator",
+    # T10: B18 初始校园生成引擎 (刚刚创建)
+    "core/generation-engine",
 ]
 
 [workspace.package]

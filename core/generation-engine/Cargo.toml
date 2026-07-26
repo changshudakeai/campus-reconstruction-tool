@@ -1,0 +1,34 @@
+# MCRebuild V2 —— B18 初始校园生成引擎
+#
+# 职责：输入评审保留数据，输出纯内存方块模型；承载全部生成规则
+# （Arnis 建筑规则：height 优先 / 层数×4+2 估高 / 屋顶形状；六类生成规则）。
+# 用料查询走 B17 用料表并与 MC 版本强绑定：查不到目标版本的方块直接报错，
+# 禁止静默替换（ADR-0024）。
+#
+# 窗口契约：缝 6（F9 → B18 → B4）。B18 只算"哪些方块摆在哪"，
+# 零文件 IO、零数据库、零 UI；与 B4 sponge-export 互不依赖（F9 居中适配）。
+# ⚖️ 本依赖段即白名单：B18 只依赖 B1（共享类型）与 B17（用料表只读调用），
+# 不得依赖 B4/B2 或任何 F* 功能模块（xtask arch 断言 4 强制）。
+
+[package]
+name = "generation-engine"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "B18 初始校园生成引擎：Arnis 建筑规则 + 六类生成规则 + 用料表版本绑定"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
+shared-domain-types = { workspace = true }
+# B17 用料表（只读调用：按 MC 版本取方块并验证）
+manifest-generator = { path = "../manifest-generator" }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true

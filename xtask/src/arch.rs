@@ -81,10 +81,12 @@ const SHELL_ALLOWED_MEMBER_DEPS: &[&str] = &[
     "manifest-generator",
 ];
 
-/// 基础层内部允许的横向边：人人可依 B1；B13→B14→B15 单向链。
+/// 基础层内部允许的横向边：人人可依 B1；B13→B14→B15 单向链；
+/// B18→B17（ADR-0024 缝 6：生成引擎只读调用用料表按 MC 版本取方块）。
 const BASE_ALLOWED_EDGES: &[(&str, &str)] = &[
     ("data-transformers", "geometry-validator"),
     ("geometry-validator", "topology-rules"),
+    ("generation-engine", "manifest-generator"),
 ];
 
 fn is_feature(name: &str) -> bool {
@@ -311,9 +313,10 @@ mod tests {
         let violations = check_edges(&[], &[edge("notification-center", "data-persistence")]);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("基础层横向零依赖"));
-        // 例外：人人可依 B1；B13→B14→B15。
+        // 例外：人人可依 B1；B13→B14→B15；B18→B17（ADR-0024）。
         assert!(check_edges(&[], &[edge("notification-center", "shared-domain-types")]).is_empty());
         assert!(check_edges(&[], &[edge("data-transformers", "geometry-validator")]).is_empty());
+        assert!(check_edges(&[], &[edge("generation-engine", "manifest-generator")]).is_empty());
     }
 
     #[test]

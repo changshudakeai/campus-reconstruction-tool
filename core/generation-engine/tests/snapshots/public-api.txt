@@ -1,0 +1,116 @@
+---
+# generation-engine Public API Snapshot
+#
+# 本文件记录 B18 生成引擎的公开 API 结构（执法清单 2.5）
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新：2026-07-26 (T10 实施)
+
+## Structs
+
+pub struct GenerationEngine { /* private: adapter */ }
+pub struct MaterialsAdapter { /* private: table */ }
+pub struct BuildingCandidate { pub id: String, pub height_m: Option<f64>, pub levels: Option<u32>, pub roof_shape: Option<String>, pub width_blocks: i32, pub length_blocks: i32 }
+pub struct OtherCandidate { pub id: String, pub tags: HashMap<String, String> }
+pub struct AreaInput { pub width_blocks: i32, pub length_blocks: i32 }
+pub struct Block { pub position: BlockPosition, pub block_id: String }
+pub struct BlockPosition { pub x: i32, pub y: i32, pub z: i32 }
+pub struct BlockModel { /* private: blocks */ }
+pub struct BoundingBox { pub min_x: i32, pub min_y: i32, pub min_z: i32, pub max_x: i32, pub max_y: i32, pub max_z: i32 }
+pub struct BuildingGenerator;
+pub struct RoadGenerator;
+pub struct WaterGenerator;
+pub struct VegetationGenerator;
+pub struct SportsGenerator;
+pub struct OtherGenerator;
+
+## Enums
+
+pub enum MaterialRole { BuildingFoundation, BuildingWall, BuildingWindow, BuildingFloor, BuildingRoof, BuildingEntrance, BuildingAccent, Road, Water, TreeTrunk, TreeLeaves, SportsCourt, SportsLine, OtherRail }
+pub enum MaterialError { MaterialUnavailable(String) }
+pub enum GenerationError { MaterialNotAvailable(String), InvalidParameter(String), UnsupportedTagFamily(String) }
+impl From<MaterialError> for GenerationError
+
+## Traits
+
+pub trait Generator {
+    type Input;
+    fn category(&self) -> shared_domain_types::CandidateCategory;
+    fn generate(&self, input: &Self::Input, materials: &MaterialsAdapter) -> Result<BlockModel, GenerationError>;
+}
+impl Generator for BuildingGenerator (Input = BuildingCandidate, category = Building)
+impl Generator for RoadGenerator (Input = AreaInput, category = Road)
+impl Generator for WaterGenerator (Input = AreaInput, category = Water)
+impl Generator for VegetationGenerator (Input = (), category = Vegetation)
+impl Generator for SportsGenerator (Input = AreaInput, category = Sports)
+impl Generator for OtherGenerator (Input = OtherCandidate, category = Other)
+
+## Functions
+
+pub fn estimate_height(candidate: &BuildingCandidate) -> i32
+pub fn normalize_roof_shape(shape: Option<&str>) -> &'static str
+pub fn build_model(candidate: &BuildingCandidate, materials: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_road(w: i32, l: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_water(w: i32, l: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_vegetation(mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_sports_court(w: i32, l: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_other_rail(length: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_other(candidate: &OtherCandidate, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+
+## Impl blocks
+
+impl GenerationEngine {
+    pub fn new(table: manifest_generator::MaterialTable) -> Self
+    pub fn version(&self) -> manifest_generator::MinecraftVersion
+    pub fn materials(&self) -> &MaterialsAdapter
+    pub fn generate_building(&self, candidate: &BuildingCandidate) -> Result<BlockModel, GenerationError>
+}
+
+impl MaterialsAdapter {
+    pub fn new(table: manifest_generator::MaterialTable) -> Self
+    pub fn version(&self) -> manifest_generator::MinecraftVersion
+    pub fn block_for(&self, role: MaterialRole) -> Result<String, MaterialError>
+    pub fn validate_block(&self, block_id: impl Into<String>) -> Result<String, MaterialError>
+}
+
+impl BuildingCandidate {
+    pub fn new(id: impl Into<String>, width_blocks: i32, length_blocks: i32) -> Self
+    pub fn with_height_m(self, height_m: f64) -> Self
+    pub fn with_levels(self, levels: u32) -> Self
+    pub fn with_roof_shape(self, shape: impl Into<String>) -> Self
+}
+
+impl OtherCandidate {
+    pub fn new(id: impl Into<String>) -> Self
+    pub fn has_tag(&self, key: &str) -> bool
+}
+
+impl BlockPosition {
+    pub fn new(x: i32, y: i32, z: i32) -> Self
+}
+
+impl Block {
+    pub fn new(position: BlockPosition, block_id: impl Into<String>) -> Self
+}
+
+impl BlockModel {
+    pub fn new() -> Self
+    pub fn set_block(&mut self, position: BlockPosition, block_id: impl Into<String>)
+    pub fn block_count(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    pub fn blocks(&self) -> impl Iterator<Item = Block> + '_
+    pub fn palette(&self) -> Vec<String>
+    pub fn bounding_box(&self) -> Option<BoundingBox>
+    pub fn contains_block_id(&self, block_id: &str) -> bool
+}
+impl Default for BlockModel
+
+impl BoundingBox {
+    pub fn width(&self) -> u32
+    pub fn height(&self) -> u32
+    pub fn length(&self) -> u32
+}
+
+---
+END OF PUBLIC API SNAPSHOT
+---
