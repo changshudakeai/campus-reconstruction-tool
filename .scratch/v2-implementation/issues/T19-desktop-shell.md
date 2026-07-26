@@ -8,17 +8,17 @@
 
 **Blocked by:** T01/T02/T03（三层锁 + 共享类型 + 文本外置先行完成）、T04-T18（功能模块全部就绪）
 
-**Status**: phase1-complete (架构框架已落地，详见 apps/desktop/STATUS.md)
-**Phase2-pending**: [待办任务清单](#待办接线债务-t19b)（4 项 UI 细节接线）
+**Status**: phase1-complete（CI 修复后重新核实，见 apps/desktop/STATUS.md；原 Phase1 提交 f2b7b47 从未过编译，已重写为可运行最小壳）
+**Phase2-pending**: [待办任务清单](#待办接线债务-t19b)
 
 - [x] desktop-shell crate 立项并定义根 .slint 入口文件 ✅ Phase1
-- [x] Slint 项目集成所有功能模块的 ViewModel（通过 trait 接口注入）✅ Phase1
-- [x] 首次打开流程逻辑：检查首次运行标志 → 设置页 → 校区搜索 → 方案列表 ✅ Phase1
-- [ ] 老用户二次启动逻辑：读取 app_settings.last_campus_id → 直达该校区方案列表 ⏳ T19B
-- [x] 开发版快捷方式自动化脚本（build.rs: create/update shortcut, backup previous version）✅ Phase1
+- [ ] Slint 项目集成所有功能模块的 ViewModel ⏳ T19B（Phase1 仅接 F1 着陆判定）
+- [x] 首次打开流程逻辑：着陆判定（首次向导 / 老用户直达 / 校区选择）✅ Phase1
+- [x] 老用户二次启动逻辑：经 F1 landing_campus 判定去向 ✅ Phase1（页面导航待 T19B）
+- [ ] 开发版快捷方式端到端验收 ⏳ T19B（build.rs 方案不可行——链接前拿不到 exe，改用 cargo xtask dev-shortcut）
 - [ ] CODEOWNERS 配置守卫 .desktop/.lnk 相关文件 ⏳ T19B
 - [ ] public-api 快照测试 + 初始快照入库 ⏳ T19B
-- [ ] 架构测试断言验证：desktop-shell 不依赖 B12-B16 ⏳ T19B
+- [x] 架构测试断言验证：desktop-shell 不依赖 B12-B16 ✅ xtask arch 已覆盖并通过
 
 ---
 

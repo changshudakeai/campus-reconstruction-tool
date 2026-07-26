@@ -1,24 +1,9 @@
-// 主进程入口 - 开发版桌面应用
+//! campus-tool-dev —— 开发版桌面应用入口（ADR-0014 开发版形态）。
 //!
-//! 功能：
-//! - 显示主界面框架（Slint 渲染）
-//! - 集成所有 ViewModel
-//! - 开发版快捷方式自动更新
+//! 薄壳原则：入口只调 `run_dev`，全部装配逻辑在 `desktop_shell::runtime`。
 
 use anyhow::Result;
-use desktop_shell::{run_dev, run_service};
 
 fn main() -> Result<()> {
-    // 默认启动开发版模式
-    let args: Vec<String> = std::env::args().collect();
-    
-    if args.len() > 1 && args[1] == "--service" {
-        // 服务进程模式（后台运行）
-        println!("Starting service mode...");
-        run_service()
-    } else {
-        // 开发版桌面应用
-        println!("Starting campus-rebuild tool (development)...");
-        run_dev()
-    }
+    desktop_shell::run_dev()
 }

@@ -13,6 +13,17 @@ all-features = true
 # ── 漏洞与维护公告 ─────────────────────────────────────────────
 [advisories]
 yanked = "deny"
+# 逐条留痕豁免（非关检查项）：以下均为 slint UI 栈的传递依赖的
+# “停维护公告”（非漏洞），壳之外无人引用；等 slint 上游切换替代品
+# 后随版本升级自然消失，届时删除对应条目。
+ignore = [
+    # paste 停维护：slint 宏栈传递依赖，等上游迁移 pastey
+    { id = "RUSTSEC-2024-0436", reason = "slint 传递依赖，非漏洞；等上游迁移" },
+    # ttf-parser 停维护：slint 字体栈传递依赖，上游计划切 skrifa
+    { id = "RUSTSEC-2026-0192", reason = "slint 传递依赖，非漏洞；等上游切 skrifa" },
+    # rustybuzz 停维护：slint→resvg 传递依赖，上游计划切 harfrust
+    { id = "RUSTSEC-2026-0206", reason = "slint 传递依赖，非漏洞；等上游切 harfrust" },
+]
 
 # ── 许可证白名单（新依赖带新许可证 = CI 红灯，仿 rust-analyzer）──
 [licenses]
@@ -24,10 +35,33 @@ allow = [
     "BSD-3-Clause",
     "Zlib",
     "ISC",  # geo → earcutr (B5 地基模式)
+    # ── 以下四条皆由 T19 slint UI 栈的传递依赖引入，均为 OSI 宽松许可 ──
+    "BSD-2-Clause", # slint → winit/rav1e 系（arrayref、av1-grain、rav1e、v_frame）
+    "BSL-1.0",      # slint → winit → clipboard-win、error-code
+    "Unlicense",    # slint → ksni（Linux 托盘，公共领域式许可）
+    "NCSA",         # slint → rav1e → libfuzzer-sys（(MIT OR Apache-2.0) AND NCSA）
 ]
 confidence-threshold = 0.93
 # workspace 成员均为内部 crate（publish = false），不参与许可证审查
 private = { ignore = true }
+# Slint 三重许可（GPL-3.0-only OR Royalty-Free OR 商业）：本工程选
+# Royalty-Free 路线——Slint Royalty-Free License 允许桌面应用免费商用，
+# 见 https://slint.dev/terms-and-conditions 。豁免仅限 slint 家族 crate，
+# 不把 GPL/LicenseRef 加入全局白名单；新依赖带 GPL 仍然红灯。
+exceptions = [
+    { crate = "slint", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "slint-build", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "slint-macros", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-backend-selector", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-backend-winit", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-common", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-compiler", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-core", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-core-macros", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-renderer-femtovg", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-renderer-skia", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+    { crate = "i-slint-renderer-software", allow = ["LicenseRef-Slint-Royalty-free-2.0"] },
+]
 
 # ── 依赖关系禁令（重依赖越级直呼 = CI 红灯）───────────────────
 [bans]

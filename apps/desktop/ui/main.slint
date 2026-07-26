@@ -1,56 +1,27 @@
-// T19 - 主程序应用 Shell (Slint UI) 模板
-// 薄壳原则：零业务逻辑，只负责展示和事件分发
+// T19 — S1 薄壳主窗口（Phase1 最小壳）。
+// 薄壳原则（ADR-0017）：此处零业务逻辑，只声明属性与布局；
+// 全部文案由 Rust 侧经 B6 l10n 注入（文本外置铁律 ADR-0005），
+// .slint 内不得出现硬编码的用户可见文字。
 
-import { MainWindow } from "slint-templates";
+export component AppWindow inherits Window {
+    // 窗口标题与着陆状态文案，均由壳的 Rust 侧填充
+    in property <string> app-title;
+    in property <string> status-text;
 
-export component App inherits MainWindow {
-    width: 800px;
-    height: 600px;
-    
-    title: "校园复刻工具 - 开发版";
-    
-    in-out property<string> app_title: "MCRebuild V2";
-    
-    // Callbacks for navigation (to be wired to VMs)
-    callback navigate_to_plan_list();
-    callback start_collection();
-    callback start_review();
-    callback export_diy();
-    
-    Component root := MainWindow {
-        title: root.app_title;
-        
-        // Top menu bar (placeholder)
-        MenuBar {
-            Menu { text: l10n.t("app.menu_file"); }
-            Menu { text: l10n.t("app.menu_campus"); }
-            Menu { text: l10n.t("app.menu_help"); }
-        }
-        
-        // Main content area - to be populated by ViewModels
-        ContentArea {}
-    }
-}
+    title: root.app-title;
+    preferred-width: 800px;
+    preferred-height: 600px;
+    min-width: 480px;
+    min-height: 320px;
 
-component MainWindow {
-    width: 800px;
-    height: 600px;
-    
-    in-out property<string> title;
-    
-    Template {
-        Rectangle {
-            color: lightgray;
-            width: parent.width;
-            height: parent.height;
-            
-            // TODO: Add status bar, navigation panel
+    VerticalLayout {
+        alignment: center;
+
+        Text {
+            text: root.status-text;
+            horizontal-alignment: center;
+            font-size: 16px;
+            wrap: word-wrap;
         }
     }
-}
-
-// Placeholder components - implement per module VMs
-component ContentArea {
-    width: parent.width;
-    height: parent.height;
 }

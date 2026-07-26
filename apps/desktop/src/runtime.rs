@@ -1,135 +1,100 @@
-//! T19 — Slint UI 薄壳层初始化
+//! S1 运行时：首开着陆判定 + Slint 主窗口装配。
 //!
-//! 功能：
-//! - 首次打开流程判断（首次运行→设置向导 / 老用户→直达校区列表）
-//! - ViewModel 集成与事件分发
-//! - 开发版快捷方式自动化 (build.rs 处理)
-//! - SealGate 接线到 F5/F9 评审台与导出控制台
-//! - 前序接线债务：F4→F7 报告入口、F2 教程钩子、气泡位置调整
+//! 着陆规则（ADR-0006）：首次运行（或数据库尚不可用）→ 设置向导；
+//! 老用户且记有上次校区 → 直达该校区；否则 → 校区选择页。
+//! 判定逻辑委托 F1 `SettingsManager`（校区被删返回 `None` 的兜底在 F1 内），
+//! 壳只把结果翻译成 l10n 文案填进窗口——零业务逻辑。
 
 use anyhow::Result;
-use desktop_shell::*;
-use std::sync::{Arc, Mutex};
+use data_persistence::Database;
+use global_settings::SettingsManager;
+use localization::{Language, Localization};
+use slint::ComponentHandle;
 
-/// 应用状态管理（零业务逻辑，仅数据持有）
-pub struct AppShell {
-    pub l10n: Arc<Localization>,
-    pub db: Option<Arc<Mutex<Database>>>,
-    pub current_view: CurrentView,
-}
+use crate::AppWindow;
 
-#[derive(Debug, Clone, Default)]
-pub enum CurrentView {
-    #[default]
+/// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
+const DEV_DB_FILE: &str = "campus-rebuild.db";
+
+/// 首开着陆去向（壳据此决定第一屏）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LandingDecision {
+    /// 首次运行（或本地库尚不可用）→ F1 设置向导
     FirstRunSetup,
-    CampusSearch,
-    PlanList { campus_id: String },
-    FoundationMode { plan_id: String },
-    Collection { plan_id: String },
-    Review { plan_id: String },
-    Export { plan_id: String },
-    AuditReport { plan_id: String },
-    Settings,
-    TutorialComplete,
+    /// 老用户但无可用的上次校区 → 校区选择页
+    CampusSelect,
+    /// 老用户直达上次使用的校区
+    LastUsedCampus { name: String },
 }
 
-impl AppShell {
-    pub fn new() -> Result<Self> {
-        let l10n = Localization::load_default();
-        
-        // 尝试加载数据库
-        let db = Database::open("campus-rebuild.db")
-            .ok()
-            .map(Arc::new)
-            .map(Mutex::new);
-
-        Ok(Self {
-            l10n: Arc::new(l10n),
-            db,
-            current_view: CurrentView::default(),
-        })
+/// 由 F1 设置接口判定着陆去向；`db` 为 `None` 视同首次运行。
+pub fn landing_decision(db: Option<Database>) -> LandingDecision {
+    let Some(db) = db else {
+        return LandingDecision::FirstRunSetup;
+    };
+    let settings = SettingsManager::new(db);
+    match settings.is_first_run() {
+        Ok(false) => match settings.landing_campus() {
+            Ok(Some(campus)) => LandingDecision::LastUsedCampus { name: campus.name },
+            // 未设置过或校区已被删（F1 兜底为 None）→ 回校区选择页
+            Ok(None) | Err(_) => LandingDecision::CampusSelect,
+        },
+        // 首次运行；读取失败也按首次运行兜底，向导会重建设置
+        Ok(true) | Err(_) => LandingDecision::FirstRunSetup,
     }
+}
 
-    /// 首次打开流程判断
-    pub fn should_show_first_run(&self) -> bool {
-        match &self.db {
-            Some(db) => {
-                let result = db.lock().unwrap();
-                matches!(
-                    result.get_setting(AppSettingKey::FirstRunComplete).ok(),
-                    Some(None)
-                )
-            }
-            None => true,
-        }
-    }
-
-    /// 老用户着陆逻辑
-    pub fn landing_campus(&self) -> Result<Option<CampusView>> {
-        let db = self.db.as_ref().expect("DB not initialized");
-        let mut db = db.lock().unwrap();
-        
-        let last_id: Option<String> = 
-            db.get_setting(AppSettingKey::LastUsedCampus)?;
-            
-        match last_id {
-            Some(id) => {
-                // 尝试找到该校区
-                let plan_manager = ProjectManager::new(db.clone());
-                let campus = plan_manager.find_campus_by_id(&id)?;
-                
-                match campus {
-                    Some(_) => Ok(Some(campus)), // 校区存在，直达该校区
-                    None => Ok(None), // 校区已被删除，退回选择页
-                }
-            }
-            None => Ok(None),
+/// 着陆去向 → 状态栏文案（文本键见 zh-CN.json `app.*`）。
+fn status_text(l10n: &Localization, decision: &LandingDecision) -> String {
+    match decision {
+        LandingDecision::FirstRunSetup => l10n.t("app.shell_status_first_run"),
+        LandingDecision::CampusSelect => l10n.t("app.shell_status_campus_select"),
+        LandingDecision::LastUsedCampus { name } => {
+            l10n.t_with_array("app.shell_status_last_campus", &[name])
         }
     }
 }
 
-/// 主进程入口（开发版桌面应用）
+/// 开发版桌面应用入口：装配主窗口并进入事件循环。
 pub fn run_dev() -> Result<()> {
-    println!("🚀 校园复刻工具 - 开发版启动...");
-    
-    let shell = AppShell::new()?;
-    
-    // 判断是否需要显示首次运行向导
-    if shell.should_show_first_run() {
-        println!("🎓 检测到首次使用，启动设置向导");
-        // TODO: 展示 F1 设置页面
-    } else if let Ok(Some(campus)) = shell.landing_campus() {
-        println!("🏫 老用户着陆：上次使用的校区 - {}", campus.name);
-        // TODO: 导航到该校区方案列表页
-    } else {
-        println!("👋 欢迎回来！请选择或新建方案");
-        // TODO: 显示空状态引导新建方案
-    }
-    
-    // 初始化 Slint UI 根组件
-    // 注意：这里的 Slint UI 代码由 build.rs 生成
-    // 由于这是占位实现，我们先打印提示而非真正运行 UI
-    
-    println!("⚙️  UI 薄壳层初始化完成");
-    println!("✅ ViewModel 集成就绪 (F1-F9)");
-    println!("🔌 接口接线: SealGate(F5→F9)、采集报告(F4→F7)、教程钩子(F2)");
-    println!();
-    println!("📝 运行环境：Windows + Rust + Slint");
-    println!("💡 按 Ctrl+C 退出");
-    
-    // 模拟保持运行（真实 UI 应用中这里会进入 event loop）
-    std::thread::park();
-    
+    let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
+    let decision = landing_decision(Database::open(DEV_DB_FILE).ok());
+
+    let window = AppWindow::new()?;
+    window.set_app_title(l10n.t("app.welcome_title").into());
+    window.set_status_text(status_text(&l10n, &decision).into());
+    window.run()?;
     Ok(())
 }
 
-/// 服务进程入口（后台模式）
-pub fn run_service() -> Result<()> {
-    println!("🛠️ 服务进程模式启动...");
-    println!("⚠️ 无界面模式，仅用于自动化/CI 场景");
-    
-    // TODO: 实现无头模式的服务逻辑
-    
-    std::thread::park();
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_database_means_first_run() {
+        assert_eq!(landing_decision(None), LandingDecision::FirstRunSetup);
+    }
+
+    #[test]
+    fn fresh_database_means_first_run() {
+        let db = Database::open_in_memory().expect("内存库");
+        assert_eq!(landing_decision(Some(db)), LandingDecision::FirstRunSetup);
+    }
+
+    #[test]
+    fn status_text_is_localized_not_hardcoded() {
+        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+        for decision in [
+            LandingDecision::FirstRunSetup,
+            LandingDecision::CampusSelect,
+            LandingDecision::LastUsedCampus {
+                name: "示例大学".to_owned(),
+            },
+        ] {
+            let text = status_text(&l10n, &decision);
+            // 文本键缺失时 l10n 会原样返回键名——断言键都已入 zh-CN.json
+            assert!(!text.starts_with("app."), "文本键未入库: {text}");
+        }
+    }
 }

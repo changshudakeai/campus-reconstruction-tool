@@ -1,49 +1,40 @@
-# T19 — S1 主程序应用壳（薄壳 UI + 开发版快捷方式）
+# MCRebuild V2 —— S1 主程序应用壳（T19 Phase1）
+#
+# 职责：零业务逻辑的 Slint 薄壳——声明主窗口、判定首开着陆去向
+# （首次向导 / 老用户直达 / 校区选择），文案全部经 B6 注入（ADR-0005）。
+# Phase1 只落地"能启动的最小壳 + 着陆判定"；ViewModel 全量接线、
+# 开发版快捷方式（xtask dev-shortcut 已具备）等接线债务见 T19B 工单。
+#
+# ⚖️ 本依赖段即白名单：壳只准依赖 F1-F9、B1-B7、B9-B11、B17 与 slint
+# （ADR-0017 + ADR-0025，xtask arch 断言 2 强制）。slint 仅本 crate 可依
+# （deny.toml bans wrappers）。
 
 [package]
 name = "desktop-shell"
 version.workspace = true
 edition.workspace = true
-description = "S1: Main application shell with Slint UI and zero business logic"
-license.workspace = true
+publish = false
+description = "S1 主程序应用壳：Slint 薄壳 UI + 首开着陆判定，零业务逻辑（ADR-0017）"
 
 [[bin]]
 name = "campus-tool-dev"
 path = "src/main.rs"
 
-[[bin]]
-name = "campus-tool-service"  
-path = "src/service.rs"
-
 [build-dependencies]
-slint-build.workspace = true
-anyhow.workspace = true
+# ui/main.slint → 生成 Rust 绑定（slint::include_modules! 引入）
+slint-build = { workspace = true }
 
 [dependencies]
-# UI framework (only S1 can depend on this, ADR-0017)
-slint.workspace = true
+# UI 框架（唯一合法使用者，ADR-0017 三层锁）
+slint = { workspace = true }
+# B6 国际化（窗口标题与状态文案，文本外置铁律 ADR-0005）
+localization = { workspace = true }
+# F1 全局设置（首次运行判定 + 老用户着陆校区）
+global-settings = { workspace = true }
+# B2 数据持久化（仅用于打开数据库并交给 F1，不直接碰 SQL）
+data-persistence = { workspace = true }
+# 错误链路
+anyhow = { workspace = true }
 
-# F1-F9 功能模块
-global-settings = { path = "../../core/global-settings" }
-onboarding-tutorial = { path = "../../core/onboarding-tutorial" }
-project-management = { path = "../../core/project-management" }
-data-acquisition = { path = "../../core/data-acquisition" }
-review-workbench = { path = "../../core/review-workbench" }
-coverage-audit = { path = "../../core/coverage-audit" }
-export-console = { path = "../../core/export-console" }
-
-# B1-B7 + B9-B11 + B17 基础模块
-shared-domain-types = { path = "../../core/shared-domain-types" }
-data-persistence = { path = "../../core/data-persistence" }
-gaode-client = { path = "../../core/gaode-client" }
-localization = { path = "../../core/localization" }
-foundation-mode = { path = "../../core/foundation-mode" }
-notification-center = { path = "../../core/notification-center" }
-theming = { path = "../../core/theming" }
-sponge-export = { path = "../../core/sponge-export" }
-manifest-generator = { path = "../../core/manifest-generator" }
-
-# 工具库
-anyhow.workspace = true
-log.workspace = true
-chrono.workspace = true
+[lints]
+workspace = true
