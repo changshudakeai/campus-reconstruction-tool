@@ -1,0 +1,40 @@
+# MCRebuild V2 —— B7 通知中心 crate 清单
+#
+# 职责：弹窗铁律（ADR-0021）——错误分级 API（error/warn/info 三级分派）、
+# 消息留底（内存表 + 留存规则）、自动清理调度器、公告栏数据契约。
+#
+# ⚖️ 本依赖段即白名单（ADR-0017）：B7 是基础模块，当前零内部依赖
+# （按 DAG 允许 B7→B1，需要共享类型时再申报）；禁止依赖 B2/B6 等
+# 其他基础模块与任何功能模块（xtask arch 强制：基础层横向零依赖）。
+# UI 呈现（Slint 弹窗/toast/铃铛）由壳实现 Presenter trait 接入——
+# slint 只准壳依赖（deny.toml bans）。
+# 持久化暂用内存表（SQLite 属 B2/T11 地盘，rusqlite 禁入本 crate）。
+
+[package]
+name = "notification-center"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "B7 通知中心：弹窗铁律三级分派、公告栏留底、自动清理调度器"
+
+[dependencies]
+# 消息结构 JSON 序列化（留底快照/未来迁移 SQLite）
+serde = { workspace = true }
+# 消息唯一标识（UUID v4）
+uuid = { workspace = true }
+# created_at 时间戳与留存规则判断（与 B2 同款直接声明，未入 workspace 单点）
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# 全局单例（NotificationCenter::init 一次性初始化）
+once_cell = { workspace = true }
+# Info 级留底与调度器运行日志
+log = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true
+# 消息 serde 往返测试
+serde_json = { workspace = true }

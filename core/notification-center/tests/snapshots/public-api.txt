@@ -1,0 +1,115 @@
+---
+# notification-center Public API Snapshot
+# 
+# 本文件记录 B7 通知中心的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新：2026-07-26（T15 实施）
+
+## Free Functions（弹窗铁律三级分派入口）
+
+pub fn error(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>)
+pub fn warn(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>)
+pub fn info(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>)
+
+## Constants
+
+pub const MAX_RETAINED_MESSAGES: usize = 200          (storage，留存规则 ADR-0021)
+pub const MAX_RETAINED_DAYS: i64 = 30                 (storage，留存规则 ADR-0021)
+pub const CLEANUP_INTERVAL: Duration = 5 分钟          (cleanup，扫描间隔)
+
+## Enums #[non_exhaustive]
+
+pub enum NotificationLevel { Error, Warn, Info }
+
+## Structures
+
+pub struct Notification { pub id: Uuid, pub level: NotificationLevel, pub title: String, pub body: String, pub source_tag: String, pub created_at: DateTime<Utc> }
+pub struct InMemoryStorage { .. }
+pub struct DummyPresenter
+pub struct PresenterRegistry { .. }
+pub struct NotificationCenter { .. }
+pub struct CleanupScheduler { .. }
+
+## Traits
+
+pub trait Storage: Send + Sync {
+    fn append(&self, notification: Notification)
+    fn all_notifications(&self) -> Vec<Notification>
+    fn snapshot(&self) -> Vec<Notification>
+    fn remove_by_id(&self, id: &Uuid)
+}
+
+pub trait Presenter: Send + Sync {
+    fn show_error_dialog(&self, notification: &Notification)   // 必须模态阻塞
+    fn show_toast(&self, notification: &Notification)          // 不得阻塞
+    fn update_unread_count(&self, count: usize)
+}
+
+## Implementations
+
+impl NotificationLevel {
+    pub fn as_str(&self) -> &'static str
+    pub fn is_error(&self) -> bool
+    pub fn is_warn(&self) -> bool
+    pub fn is_info(&self) -> bool
+}
+
+impl Notification {
+    pub fn error(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self
+    pub fn warn(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self
+    pub fn info(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self
+    pub fn is_expired(&self) -> bool
+    pub fn clipboard_text(&self) -> String
+}
+
+impl InMemoryStorage {
+    pub fn new() -> Self
+}
+impl Storage for InMemoryStorage
+
+impl Presenter for DummyPresenter
+
+impl PresenterRegistry {
+    pub fn new() -> Self
+    pub fn set_presenter(&self, presenter: Arc<dyn Presenter>)
+    pub fn clear_presenter(&self)
+    pub fn show_error(&self, notification: &Notification)
+    pub fn show_toast(&self, notification: &Notification)
+    pub fn update_unread_count(&self, count: usize)
+    pub fn storage(&self) -> &InMemoryStorage
+}
+
+impl NotificationCenter {
+    pub fn new(registry: PresenterRegistry) -> Self
+    pub fn init(registry: PresenterRegistry) -> Arc<Self>
+    pub fn global() -> Option<Arc<Self>>
+    pub fn publish(&self, notification: Notification)
+    pub fn board_snapshot(&self) -> Vec<Notification>
+    pub fn mark_board_opened(&self)
+    pub fn unread_count(&self) -> usize
+    pub fn registry(&self) -> &PresenterRegistry
+    pub fn cleanup(&self) -> &CleanupScheduler
+}
+
+impl CleanupScheduler {
+    pub fn new(storage: Arc<dyn Storage>) -> Self
+    pub fn start(&self)
+    pub fn start_with_interval(&self, interval: Duration)
+    pub fn stop(&self)
+    pub fn is_running(&self) -> bool
+    pub fn run_once(&self)
+}
+impl Drop for CleanupScheduler
+
+## Derives
+
+NotificationLevel: Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize
+Notification: Debug, Clone, PartialEq, Serialize, Deserialize
+InMemoryStorage: Debug, Default, Clone
+DummyPresenter: Debug, Default, Clone, Copy
+PresenterRegistry: Clone, Default
+
+---
+END OF PUBLIC API SNAPSHOT
+---
