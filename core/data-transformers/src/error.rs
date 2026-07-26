@@ -13,6 +13,9 @@ pub enum TransformError {
     /// 映射表引用了六类别之外的未知类别名（禁止静默丢弃规则）
     #[error("标签映射表引用了未知类别 '{0}'——规则不得被静默丢弃，请修正类别名")]
     UnknownCategory(String),
+    /// 映射表引用了未知的类别文本键（国际化迁移后）
+    #[error("标签映射表引用了未知的类别文本键 '{0}'，请补充到 zh-CN.json")]
+    UnknownCategoryKey(String),
     /// 映射表没有任何规则
     #[error("标签映射表为空：所有对象都将归入'其他'，请先定义规则")]
     EmptyRuleSet,

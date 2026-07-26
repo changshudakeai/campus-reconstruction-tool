@@ -1,0 +1,62 @@
+//! F3 公开 API 快照测试（执法清单 2.5）
+//!
+//! 任何公开类型的增删都会反映在本测试中，PR diff 可见。
+//! 简单方式：检查所有公开类型可实例化、ViewModel 的关键行为可调用。
+
+use data_persistence::Database;
+use project_management::{
+    CampusView, Error, PlanCardView, PlanProgress, ProjectManager, TrashItemView,
+    DUPLICATE_SUFFIX_KEY,
+};
+use shared_domain_types::{CampusId, PlanId};
+
+#[test]
+fn public_api_types_exist() {
+    // 常量：副本后缀文本键（文案外置，ADR-0005）
+    assert_eq!(DUPLICATE_SUFFIX_KEY, "plan.duplicate_suffix");
+
+    // ProjectManager：用 B2 内存库创建
+    let db = Database::open_in_memory().expect("内存库可打开");
+    let mut manager = ProjectManager::new(db);
+    assert!(format!("{manager:?}").contains("ProjectManager"));
+
+    // 校区 CRUD
+    let campus: CampusView = manager.create_campus("测试大学").unwrap();
+    assert_eq!(campus.name, "测试大学");
+    assert_eq!(manager.list_campuses().unwrap().len(), 1);
+
+    // 着陆流程（ADR-0006）：记住/读取上次使用的校区
+    let campus_id = CampusId::parse(&campus.id).unwrap();
+    assert!(manager.landing_campus().unwrap().is_none());
+    manager.remember_campus(&campus_id).unwrap();
+    assert_eq!(
+        manager.landing_campus().unwrap().map(|c| c.id),
+        Some(campus.id.clone())
+    );
+
+    // 方案轻创建（ADR-0010）与卡片三件套（ADR-0018）
+    let plan_id: PlanId = manager.create_plan(&campus_id, "方案 1").unwrap();
+    let cards: Vec<PlanCardView> = manager.list_plan_cards(&campus_id).unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "方案 1");
+    assert_eq!(cards[0].progress, PlanProgress::BoundaryNotSet);
+    assert_eq!(cards[0].progress.text_key(), "plan.boundary_not_set");
+    assert!(!cards[0].last_modified_at.is_empty());
+
+    // 改名 + 复制 + 删除进回收站
+    manager.rename_plan(&plan_id, "方案 1 - 全景复刻").unwrap();
+    let copy_id = manager.duplicate_plan(&plan_id, "副本").unwrap();
+    assert_ne!(copy_id, plan_id);
+    let trash: TrashItemView = manager.delete_plan(&campus_id, &copy_id).unwrap();
+    assert_eq!(trash.plan_id, copy_id.to_string());
+
+    // 回收站查询 / 恢复 / 到期清理框架
+    assert_eq!(manager.list_trash(&campus_id).unwrap().len(), 1);
+    manager.restore_plan(&campus_id, &trash.trash_id).unwrap();
+    assert_eq!(manager.purge_expired_trash().unwrap(), 0);
+
+    // Error #[non_exhaustive]：带类型错误可匹配，同名冲突可判别
+    let err: Error = manager.create_plan(&campus_id, "方案 1 - 全景复刻").unwrap_err();
+    assert!(err.is_duplicate_name());
+    assert!(!err.to_string().is_empty());
+}

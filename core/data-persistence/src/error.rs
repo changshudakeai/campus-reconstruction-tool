@@ -41,6 +41,18 @@ pub enum Error {
     /// 回收站条目不存在或状态不允许该操作（如恢复已永久删除的条目）
     #[error("回收站操作被拒：{0}")]
     TrashOperationRejected(String),
+
+    /// 校区不存在
+    #[error("校区不存在：{0}")]
+    CampusNotFound(String),
+
+    /// 计划不存在
+    #[error("计划不存在：{0}")]
+    PlanNotFound(String),
+
+    /// 同校区内计划名重复
+    #[error("同名计划冲突：{0}")]
+    DuplicatePlanName(String),
 }
 
 /// B2 持久化层结果别名

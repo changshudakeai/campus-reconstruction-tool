@@ -18,9 +18,12 @@ fn public_api_types_exist() {
     assert!(TagPattern::new("highway=*").matches("highway", "footway"));
     assert!(TagPattern::new("building=dorm*").matches("building", "dormitory"));
 
-    // TagRuleEntry / ClassifyConfig：构造与 JSON 解析
-    let entry = TagRuleEntry::new("建筑", vec![TagPattern::new("building=yes")]);
-    assert_eq!(entry.category, "建筑");
+    // TagRuleEntry / ClassifyConfig：构造与 JSON 解析（类别用文本键，B6 国际化迁移）
+    let entry = TagRuleEntry::new(
+        "collection.category_building",
+        vec![TagPattern::new("building=yes")],
+    );
+    assert_eq!(entry.category_tkey, "collection.category_building");
     let config = ClassifyConfig::new(vec![entry]);
     assert_eq!(config.version, "1.0");
     assert!(ClassifyConfig::from_json("{ bad json").is_err());

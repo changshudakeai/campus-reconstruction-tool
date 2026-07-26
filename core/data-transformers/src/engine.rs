@@ -52,7 +52,7 @@ impl ClassifyEngine {
         }
         let mut rules = Vec::new();
         for entry in &config.rules {
-            let category = parse_category(&entry.category)?;
+            let category = parse_category_from_key(&entry.category_tkey)?;
             for pattern in &entry.tags {
                 rules.push((category, pattern.clone()));
             }
@@ -106,16 +106,16 @@ impl ClassifyEngine {
     }
 }
 
-/// 中文类别名 → `CandidateCategory`（与 B1 `display_name()` 一一对应）。
-pub(crate) fn parse_category(name: &str) -> Result<CandidateCategory, TransformError> {
-    match name {
-        "建筑" => Ok(CandidateCategory::Building),
-        "道路" => Ok(CandidateCategory::Road),
-        "水域" => Ok(CandidateCategory::Water),
-        "植被" => Ok(CandidateCategory::Vegetation),
-        "体育" => Ok(CandidateCategory::Sports),
-        "其他" => Ok(CandidateCategory::Other),
-        unknown => Err(TransformError::UnknownCategory(unknown.to_owned())),
+/// 从文本键解析类别（如"collection.category_building" → Building）。
+pub(crate) fn parse_category_from_key(tkey: &str) -> Result<CandidateCategory, TransformError> {
+    match tkey {
+        "collection.category_building" => Ok(CandidateCategory::Building),
+        "collection.category_road" => Ok(CandidateCategory::Road),
+        "collection.category_water" => Ok(CandidateCategory::Water),
+        "collection.category_vegetation" => Ok(CandidateCategory::Vegetation),
+        "collection.category_sports" => Ok(CandidateCategory::Sports),
+        "collection.category_other" => Ok(CandidateCategory::Other),
+        unknown => Err(TransformError::UnknownCategoryKey(unknown.to_owned())),
     }
 }
 
@@ -136,12 +136,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_category_name_is_rejected() {
+    fn unknown_category_key_is_rejected() {
         let config = ClassifyConfig::new(vec![crate::config::TagRuleEntry::new(
-            "神秘类",
+            "collection.category_unknown",
             vec![TagPattern::new("building=yes")],
         )]);
         let error = ClassifyEngine::new(config).unwrap_err();
-        assert!(matches!(error, TransformError::UnknownCategory(name) if name == "神秘类"));
+        assert!(matches!(error, TransformError::UnknownCategoryKey(key) if key == "collection.category_unknown"));
     }
 }

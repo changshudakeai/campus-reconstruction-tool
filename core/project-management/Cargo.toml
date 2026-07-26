@@ -1,0 +1,36 @@
+# MCRebuild V2 —— F3 项目方案管理模块
+#
+# 职责：校区/方案的增删改查、卡片三件套、复制方案、回收站集成。
+# 依据 ADR-0006（落在方案列表）+ ADR-0010（轻创建）+ ADR-0018（卡片三件套）。
+# ⚖️ 本依赖段即白名单：F3 依赖 B1/B2/B6，不得依赖其他 F* 功能模块。
+#
+# 公开接口：
+# - `ProjectManagementApi`：方案 CRUD ViewModel（列表、创建、改名、复制、删除）
+# - `CampusCrudApi`：校区 CRUD（列表、创建、删除）
+# - `AppSettingsApi`：上次使用的校区读写（app_settings 表）
+
+[package]
+name = "project-management"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F3 项目方案管理：校区/方案 CRUD、卡片三件套、复制方案、回收站集成"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖）
+shared-domain-types = { workspace = true }
+# B2 数据持久化（校园级 CRUD + 回收站）
+data-persistence = { path = "../data-persistence" }
+# B6 国际化模块（文本外置；本 crate 只产出文本键，由 UI 层解析）
+localization = { workspace = true }
+# ISO8601 时间戳的生成与解析（回收站时间视图）
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing
+public-api.workspace = true

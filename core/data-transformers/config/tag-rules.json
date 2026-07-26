@@ -2,7 +2,7 @@
   "version": "1.0",
   "rules": [
     {
-      "category": "建筑",
+      "category_tkey": "collection.category_building",
       "tags": [
         "building=school",
         "building=university",
@@ -19,7 +19,7 @@
       ]
     },
     {
-      "category": "体育",
+      "category_tkey": "collection.category_sports",
       "tags": [
         "leisure=pitch",
         "leisure=track",
@@ -29,7 +29,7 @@
       ]
     },
     {
-      "category": "水域",
+      "category_tkey": "collection.category_water",
       "tags": [
         "natural=water",
         "water=*",
@@ -38,13 +38,13 @@
       ]
     },
     {
-      "category": "道路",
+      "category_tkey": "collection.category_road",
       "tags": [
         "highway=*"
       ]
     },
     {
-      "category": "植被",
+      "category_tkey": "collection.category_vegetation",
       "tags": [
         "natural=tree",
         "natural=tree_row",
@@ -57,7 +57,7 @@
       ]
     },
     {
-      "category": "其他",
+      "category_tkey": "collection.category_other",
       "tags": [
         "railway=*",
         "barrier=wall",

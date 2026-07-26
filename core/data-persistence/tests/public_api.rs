@@ -5,8 +5,9 @@
 //! 简单方式：检查所有公开类型可实例化、三组 trait 的关键行为可调用。
 
 use data_persistence::{
-    Database, Error, RawObservation, RawObservationsApi, ReviewDecision, ReviewDecisionsApi,
-    TrashApi, TrashItem, LATEST_SCHEMA_VERSION, TRASH_RETENTION_DAYS,
+    AppSettingKey, AppSettingsApi, CampusCrudApi, Database, Error, PlanCrudApi, RawObservation,
+    RawObservationsApi, ReviewDecision, ReviewDecisionsApi, TrashApi, TrashItem,
+    LATEST_SCHEMA_VERSION, TRASH_RETENTION_DAYS,
 };
 use shared_domain_types::{CandidateCategory, ReviewState};
 
@@ -72,6 +73,32 @@ fn public_api_types_exist() {
     let err = db.permanently_delete(&item.id).unwrap_err();
     assert!(matches!(err, Error::TrashOperationRejected(_)));
     assert!(!err.to_string().is_empty());
+
+    // CampusCrudApi / PlanCrudApi / AppSettingsApi（缝 2，T04）
+    let campus = db.create_campus("测试大学").unwrap();
+    assert_eq!(db.list_campuses().unwrap().len(), 1);
+    assert!(db.find_campus_by_id(&campus.id).unwrap().is_some());
+
+    let plan = db.create_plan(&campus.id, "方案 1").unwrap();
+    assert_eq!(db.list_plans(&campus.id).unwrap().len(), 1);
+    assert!(db.find_plan_by_id(&plan.id).unwrap().is_some());
+    db.rename_plan(&plan.id, "方案 1 改").unwrap();
+    db.touch_plan(&plan.id).unwrap();
+    let dup = db.create_plan(&campus.id, "方案 1 改").unwrap_err();
+    assert!(matches!(dup, Error::DuplicatePlanName(_)));
+
+    db.set_setting(AppSettingKey::LastUsedCampus, &campus.id).unwrap();
+    assert_eq!(
+        db.get_setting(AppSettingKey::LastUsedCampus).unwrap(),
+        Some(campus.id.clone())
+    );
+
+    // 回收站集成：删除进站 → 确认后永久删除（方案行一并清理）
+    let trashed = db.delete_plan_to_trash(&campus.id, &plan.id).unwrap();
+    assert!(db.list_plans(&campus.id).unwrap().is_empty());
+    db.purge_plan_permanently(&trashed.id).unwrap();
+    assert!(db.find_plan_by_id(&plan.id).unwrap().is_none());
+    assert_eq!(db.purge_expired_plans().unwrap(), 0);
 }
 
 /// 测试内取当前时刻（避免直接依赖 chrono 的版本细节）

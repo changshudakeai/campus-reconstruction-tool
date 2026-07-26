@@ -18,6 +18,8 @@
 [workspace]
 resolver = "2"
 members = [
+    # T04: F3 项目方案管理（方案 CRUD + ViewModel）
+    "core/project-management",
     # T11：B2 数据持久化核心（原始观测表 + 评审终态 + 回收站）
     "core/data-persistence",
     # T12：B13 数据转换器（标签映射表 + 六类别归类）
@@ -31,7 +33,7 @@ members = [
     # T15：B7 通知中心（弹窗铁律 + 公告栏铃铛）
     "core/notification-center",
     # S2 构建与自动化（三层锁执法地基，T01）
-    "xtask",
+    "xtask", "core/manifest-generator",
 ]
 
 [workspace.package]

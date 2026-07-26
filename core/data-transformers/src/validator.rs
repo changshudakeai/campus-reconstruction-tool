@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use shared_domain_types::CandidateCategory;
 
 use crate::config::ClassifyConfig;
-use crate::engine::parse_category;
+use crate::engine::parse_category_from_key;
 use crate::error::TransformError;
 
 /// 五大类（"其他"由引擎兜底，不强制显式规则）。
@@ -39,10 +39,10 @@ impl TagMappingValidator {
 
         let mut covered: HashSet<CandidateCategory> = HashSet::new();
         for entry in &config.rules {
-            match parse_category(&entry.category) {
+            match parse_category_from_key(&entry.category_tkey) {
                 Ok(category) => {
                     if entry.tags.is_empty() {
-                        errors.push(TransformError::EmptyTagList(entry.category.clone()));
+                        errors.push(TransformError::EmptyTagList(entry.category_tkey.clone()));
                     } else {
                         covered.insert(category);
                     }
@@ -72,17 +72,17 @@ mod tests {
     use super::*;
     use crate::config::{TagPattern, TagRuleEntry};
 
-    fn entry(category: &str, pattern: &str) -> TagRuleEntry {
-        TagRuleEntry::new(category, vec![TagPattern::new(pattern)])
+    fn entry(category_tkey: &str, pattern: &str) -> TagRuleEntry {
+        TagRuleEntry::new(category_tkey, vec![TagPattern::new(pattern)])
     }
 
     fn five_category_config() -> ClassifyConfig {
         ClassifyConfig::new(vec![
-            entry("建筑", "building=school"),
-            entry("体育", "leisure=pitch"),
-            entry("水域", "water=*"),
-            entry("道路", "highway=*"),
-            entry("植被", "natural=tree"),
+            entry("collection.category_building", "building=school"),
+            entry("collection.category_sports", "leisure=pitch"),
+            entry("collection.category_water", "water=*"),
+            entry("collection.category_road", "highway=*"),
+            entry("collection.category_vegetation", "natural=tree"),
         ])
     }
 
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn missing_building_rules_is_reported() {
         let mut config = five_category_config();
-        config.rules.retain(|rule| rule.category != "建筑");
+        config.rules.retain(|rule| rule.category_tkey != "collection.category_building");
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert!(matches!(&errors[0], TransformError::MissingCategoryRules(name) if name == "建筑"));
@@ -116,18 +116,18 @@ mod tests {
     #[test]
     fn unknown_category_is_not_silently_dropped() {
         let mut config = five_category_config();
-        config.rules.push(entry("建筑物", "building=hut"));
+        config.rules.push(entry("collection.category_unknown", "building=hut"));
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
-        assert!(matches!(&errors[0], TransformError::UnknownCategory(name) if name == "建筑物"));
+        assert!(matches!(&errors[0], TransformError::UnknownCategoryKey(name) if name == "collection.category_unknown"));
     }
 
     #[test]
     fn empty_tag_list_is_reported() {
         let mut config = five_category_config();
-        config.rules.push(TagRuleEntry::new("其他", Vec::new()));
+        config.rules.push(TagRuleEntry::new("collection.category_other", Vec::new()));
         let errors = TagMappingValidator::validate(&config).unwrap_err();
         assert_eq!(errors.len(), 1);
-        assert!(matches!(&errors[0], TransformError::EmptyTagList(name) if name == "其他"));
+        assert!(matches!(&errors[0], TransformError::EmptyTagList(name) if name == "collection.category_other"));
     }
 }

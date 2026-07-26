@@ -1,6 +1,7 @@
 //! 标签映射表配置（tag_rules）——全工程集中定义的唯一一处（ADR-0009/0011）。
 //!
-//! 配置为 JSON 格式：`{ "version": "1.0", "rules": [{ "category": "建筑", "tags": [...] }] }`。
+//! 配置为 JSON 格式：`{ "version": "1.0", "rules": [{ "category_tkey": "collection.category_building", "tags": [...] }] }`。
+//! 类别字段是 B6 文本键（ADR-0005：配置不硬编码中文，显示名由 zh-CN.json 提供）。
 //! 标签模式三种写法：
 //! - `"building=school"`：key=value 精确匹配；
 //! - `"highway=*"`：key 通配（该 key 任意值都命中）；
@@ -59,17 +60,18 @@ impl TagPattern {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TagRuleEntry {
-    /// 目标类别（`CandidateCategory` 的中文显示名：建筑/道路/水域/植被/体育/其他）
-    pub category: String,
+    /// 目标类别文本键（如"collection.category_building"）
+    #[serde(rename = "category_tkey")]
+    pub category_tkey: String,
     /// 命中即归入该类别的标签模式数组
     pub tags: Vec<TagPattern>,
 }
 
 impl TagRuleEntry {
     /// 创建规则条目。
-    pub fn new(category: impl Into<String>, tags: Vec<TagPattern>) -> Self {
+    pub fn new(category_tkey: impl Into<String>, tags: Vec<TagPattern>) -> Self {
         Self {
-            category: category.into(),
+            category_tkey: category_tkey.into(),
             tags,
         }
     }
