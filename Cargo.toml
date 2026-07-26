@@ -28,6 +28,8 @@ members = [
     "core/review-workbench",
     # T12：B13 数据转换器（标签映射表 + 六类别归类）
     "core/data-transformers",
+    # T13：F4 数据采集（可插拔数据源 + 增量刷新检测 + 原始观测落库）
+    "core/data-acquisition",
     # T03: B6 国际化模块
     "core/localization",
     # T02：B1 共享领域类型

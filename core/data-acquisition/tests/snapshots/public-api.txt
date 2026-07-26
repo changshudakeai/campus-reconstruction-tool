@@ -1,0 +1,115 @@
+---
+# data-acquisition Public API Snapshot
+#
+# 本文件记录 F4 数据采集流水线的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+#
+# 最后更新: 2026-07-26 (T13 实施)
+
+## Structures
+
+pub struct RawEntity { pub entity_id: String, pub name: String, pub tags: TagMap, pub source_payload: serde_json::Value }
+pub struct GaodeDataSource { .. }
+pub struct AcquisitionPipeline { .. }
+pub struct CollectionReport { pub plan_id: String, pub source_tag: String, pub total: usize, pub written: usize, pub category_counts: BTreeMap<CandidateCategory, usize>, pub fallback_count: usize, pub diff: RefreshDiff }
+pub struct DiffEntry { pub category: CandidateCategory, pub entity_id: String, pub kind: DiffKind }
+pub struct RefreshDiff { .. }
+pub struct CategoryProgress { pub category: CandidateCategory, pub label_key: &'static str, pub collected: usize, pub status: CollectionJobStatus }
+pub struct CollectionProgressView { pub title_key: &'static str, pub status_key: &'static str, pub percent: u8, pub collected_total: usize, pub categories: Vec<CategoryProgress> }
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, AcquisitionError>
+pub type BridgeTransport = Box<dyn Fn(&Boundary) -> std::result::Result<String, String> + Send + Sync>
+
+## Constants
+
+pub const ALL_CATEGORIES: [CandidateCategory; 6]
+GaodeDataSource::SOURCE_TAG = "gaode"
+
+## Text Keys (pub mod text_keys)
+
+PROGRESS_TITLE = "collection.progress_title"
+PROGRESS_FETCHING = "collection.progress_fetching"
+PROGRESS_DONE = "collection.progress_done"
+DIFF_ADDED = "collection.diff_added"
+DIFF_UPDATED = "collection.diff_updated"
+DIFF_UNCHANGED = "collection.diff_unchanged"
+DIFF_SUMMARY = "collection.diff_summary"
+SOURCE_GAODE = "collection.source_gaode"
+
+## Enums
+
+pub enum DiffKind { Added, Updated, Unchanged }
+pub enum AcquisitionError {                                #[non_exhaustive]
+    EmptyBoundary,
+    SourceUnreachable { source_tag: String, message: String },
+    Source(gaode_client::Error),
+    Transform(data_transformers::TransformError),
+    Persistence(data_persistence::Error),
+}
+
+## Traits & Implementations
+
+pub trait DataSource {
+    fn source_tag(&self) -> &str
+    fn fetch_raw_entities(&self, boundary: &Boundary) -> Result<Vec<RawEntity>>
+}
+
+impl RawEntity {
+    pub fn new(entity_id: impl Into<String>, name: impl Into<String>, tags: TagMap, source_payload: serde_json::Value) -> Self
+    pub fn to_source_data(&self) -> serde_json::Value
+}
+
+impl GaodeDataSource {
+    pub const SOURCE_TAG: &'static str
+    pub fn new(transport: BridgeTransport) -> Self
+}
+impl DataSource for GaodeDataSource
+
+impl AcquisitionPipeline {
+    pub fn new() -> Result<Self>
+    pub fn with_engine(engine: ClassifyEngine) -> Self
+    pub fn engine(&self) -> &ClassifyEngine
+    pub fn collect(&self, db: &mut Database, plan_id: &PlanId, boundary: &Boundary, source: &dyn DataSource) -> Result<CollectionReport>
+}
+
+impl DiffKind {
+    pub fn text_key(&self) -> &'static str
+}
+
+impl RefreshDiff {
+    pub fn new(entries: Vec<DiffEntry>) -> Self
+    pub fn entries(&self) -> &[DiffEntry]
+    pub fn added_count(&self) -> usize
+    pub fn updated_count(&self) -> usize
+    pub fn unchanged_count(&self) -> usize
+    pub fn has_changes(&self) -> bool
+    pub fn summary_key(&self) -> &'static str
+}
+
+impl CollectionProgressView {
+    pub fn fetching() -> Self
+    pub fn completed(report: &CollectionReport) -> Self
+}
+
+## Free Functions
+
+pub fn category_text_key(category: CandidateCategory) -> &'static str
+
+## Derives
+
+RawEntity: Debug, Clone, PartialEq
+CollectionReport: Debug, Clone, PartialEq
+AcquisitionPipeline: Debug, Clone
+DiffKind: Debug, Clone, Copy, PartialEq, Eq
+DiffEntry: Debug, Clone, PartialEq, Eq
+RefreshDiff: Debug, Clone, PartialEq, Eq
+CategoryProgress: Debug, Clone, PartialEq, Eq
+CollectionProgressView: Debug, Clone, PartialEq, Eq
+GaodeDataSource: Debug (manual, finish_non_exhaustive)
+AcquisitionError: Debug, thiserror::Error
+
+---
+END OF PUBLIC API SNAPSHOT
+---

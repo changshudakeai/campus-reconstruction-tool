@@ -1,0 +1,44 @@
+# MCRebuild V2 —— F4 数据采集流水线
+#
+# 职责：数据源适配器接口（DataSource trait，ADR-0013 可插拔）、
+# 采集流水线（边界 → B12/B3 原始对象 → B13 归类 → B2 原始观测落库）、
+# 增量刷新检测（digest 对比展示 新增/更新/未变）、采集进度视图占位。
+# 依据 ADR-0012（采集非强制）+ ADR-0013（数据源可插拔）+ ADR-0011（标签映射）。
+# ⚖️ 本依赖段即白名单：F4 依赖 B1/B2/B3/B13，不得依赖其他 F* 功能模块
+# （xtask arch 断言 1 强制）。文案只产出 B6 文本键，由 UI 层解析（ADR-0005）。
+#
+# 公开接口：
+# - `DataSource` / `RawEntity` / `GaodeDataSource`：可插拔数据源适配器缝
+# - `AcquisitionPipeline` / `CollectionReport`：采集流水线（窗口契约缝 3）
+# - `RefreshDiff` / `DiffEntry` / `DiffKind`：增量刷新检测框架
+# - `CollectionProgressView` / `text_keys`：进度反馈 UI 占位（文本键外置）
+
+[package]
+name = "data-acquisition"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F4 数据采集：可插拔数据源 + 增量刷新检测 + 原始观测落库（缝 3）"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
+shared-domain-types = { workspace = true }
+# B2 数据持久化（缝 3：原始观测当场落库，数据粮仓铁律）
+data-persistence = { path = "../data-persistence" }
+# B3 高德地图客户端（缝 7：POI 搜索响应解析复用，默认数据源）
+gaode-client = { path = "../gaode-client" }
+# B13 数据转换器（缝 3：标签映射归类引擎复用，不重定义归类逻辑）
+data-transformers = { path = "../data-transformers" }
+# 原始对象 source_data JSON 的承载
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# B6 国际化（仅测试用：断言本 crate 产出的全部文本键在 zh-CN.json 可解析）
+localization = { workspace = true }
+# public-api snapshot testing
+public-api.workspace = true
