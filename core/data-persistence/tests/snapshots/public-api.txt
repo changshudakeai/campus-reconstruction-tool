@@ -1,0 +1,126 @@
+---
+# data-persistence Public API Snapshot
+# 
+# 本文件记录 B2 数据持久化的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新: 2026-07-26 (T11 实施)
+
+## Constants
+
+pub const LATEST_SCHEMA_VERSION: u32 = 2
+pub const TRASH_RETENTION_DAYS: i64 = 30
+
+## Structures
+
+pub struct Database { .. }                       (内部持有 rusqlite::Connection，不外泄)
+pub struct RawObservation {
+    pub id: String,
+    pub plan_id: String,
+    pub entity_type: CandidateCategory,
+    pub entity_id: String,
+    pub source_data: serde_json::Value,
+    pub data_source_tag: String,
+    pub digest: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+pub struct ReviewDecision {
+    pub plan_id: String,
+    pub entity_type: CandidateCategory,
+    pub entity_id: String,
+    pub review_state: ReviewState,
+    pub reviewer_id: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+pub struct TrashItem {
+    pub id: String,
+    pub campus_id: String,
+    pub plan_id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub deleted_at: DateTime<Utc>,
+    pub deleted_by: Option<String>,
+    pub restored_at: Option<DateTime<Utc>>,
+    pub permanently_deleted_at: Option<DateTime<Utc>>,
+}
+
+## Enums #[non_exhaustive]
+
+pub enum Error {
+    Database(rusqlite::Error),
+    MigrationFailed { version: u32, message: String },
+    Serialization(serde_json::Error),
+    InvalidCategory(String),
+    InvalidReviewState(String),
+    InvalidTimestamp(String),
+    TrashOperationRejected(String),
+}
+
+## Type Aliases
+
+pub type Result<T> = std::result::Result<T, Error>
+
+## Traits & Implementations
+
+impl Database {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self>
+    pub fn open_in_memory() -> Result<Self>
+    pub fn schema_version(&self) -> Result<Option<u32>>
+}
+
+impl RawObservation {
+    pub fn new(plan_id, entity_type, entity_id, source_data, data_source_tag) -> Self
+    pub fn compute_digest(source_data: &serde_json::Value) -> String
+}
+
+impl ReviewDecision {
+    pub fn new(plan_id, entity_type, entity_id, review_state) -> Self
+}
+
+impl TrashItem {
+    pub fn new_plan(campus_id, plan_id, deleted_by: Option<String>) -> Self
+    pub fn is_restorable(&self, now: DateTime<Utc>) -> bool
+}
+
+pub trait RawObservationsApi {                   (impl for Database)
+    fn write_raw_observations(&mut self, observations: &[RawObservation]) -> Result<usize>
+    fn list_raw_observations(&self, plan_id: &str) -> Result<Vec<RawObservation>>
+    fn list_raw_observations_by_category(&self, plan_id: &str, category: CandidateCategory) -> Result<Vec<RawObservation>>
+    fn find_raw_observation(&self, plan_id: &str, category: CandidateCategory, entity_id: &str) -> Result<Option<RawObservation>>
+}
+
+pub trait ReviewDecisionsApi {                   (impl for Database)
+    fn batch_update_review_decisions(&mut self, decisions: &[ReviewDecision]) -> Result<()>
+    fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>>
+    fn count_review_states(&self, plan_id: &str) -> Result<(usize, usize, usize)>
+}
+
+pub trait TrashApi {                             (impl for Database)
+    fn insert_to_trash(&mut self, item: &TrashItem) -> Result<()>
+    fn list_restorable_trash(&self, campus_id: &str) -> Result<Vec<TrashItem>>
+    fn restore_from_trash(&mut self, id: &str) -> Result<TrashItem>
+    fn permanently_delete(&mut self, id: &str) -> Result<()>
+    fn purge_expired(&mut self) -> Result<usize>
+}
+
+impl std::error::Error for Error                 (thiserror)
+impl std::fmt::Display for Error                 (thiserror)
+
+## Derives
+
+Database: Debug (finish_non_exhaustive)
+RawObservation: Debug, Clone, PartialEq
+ReviewDecision: Debug, Clone, PartialEq, Eq
+TrashItem: Debug, Clone, PartialEq, Eq
+Error: Debug, thiserror::Error
+
+## 铁律备注
+
+- 数据粮仓：本 crate 不存在、也永不提供删除 raw_observations 的 API
+- 批量写回一律单事务原子提交（失败整批回滚）
+- 回收站到期清理只提供框架（purge_expired），调用时机由功能层决定
+
+---
+END OF PUBLIC API SNAPSHOT
+---

@@ -1,0 +1,98 @@
+//! 数据库迁移执行器
+//!
+//! 迁移脚本编译期嵌入（`include_str!`），按版本号顺序执行；
+//! 每个版本在一个事务内完成（脚本 + schema_migrations 记账原子提交）。
+//! 已应用的版本跳过，重复打开数据库是幂等操作。
+
+use rusqlite::Connection;
+
+use crate::error::{Error, Result};
+
+/// 单个迁移：版本号 + 描述 + 嵌入的 SQL 脚本
+struct Migration {
+    version: u32,
+    description: &'static str,
+    sql: &'static str,
+}
+
+/// 全部迁移，按版本号升序排列
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "初始 schema：全局设置、校区、方案",
+        sql: include_str!("../migrations/001_initial_schema.sql"),
+    },
+    Migration {
+        version: 2,
+        description: "原始观测表 + 评审终态表 + 回收站",
+        sql: include_str!("../migrations/002_add_persistence_tables.sql"),
+    },
+];
+
+/// 当前最新 schema 版本号
+pub const LATEST_SCHEMA_VERSION: u32 = 2;
+
+/// 把数据库迁移到最新版本（幂等）
+pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     INTEGER PRIMARY KEY,
+            applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            description TEXT
+        )",
+        [],
+    )?;
+
+    for migration in MIGRATIONS {
+        let applied: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            [migration.version],
+            |row| row.get(0),
+        )?;
+        if applied {
+            continue;
+        }
+
+        let tx = conn.transaction()?;
+        tx.execute_batch(migration.sql)
+            .map_err(|err| Error::MigrationFailed {
+                version: migration.version,
+                message: err.to_string(),
+            })?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, description) VALUES (?1, ?2)",
+            rusqlite::params![migration.version, migration.description],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+/// 查询当前已应用的最高版本号（空库返回 None）
+pub(crate) fn current_version(conn: &Connection) -> Result<Option<u32>> {
+    let version: Option<u32> =
+        conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    Ok(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrations_are_ordered_and_match_latest() {
+        let versions: Vec<u32> = MIGRATIONS.iter().map(|m| m.version).collect();
+        assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(*versions.last().unwrap(), LATEST_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn run_migrations_is_idempotent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
+    }
+}

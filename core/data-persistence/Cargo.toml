@@ -1,0 +1,41 @@
+# MCRebuild V2 —— B2 数据持久化 crate 清单
+#
+# 职责：SQLite 数据库唯一入口——迁移脚本、原始观测表（数据粮仓）、
+# 评审终态批量写回、校园级回收站。
+#
+# 依据 ADR-0002（SQLite 存储）+ ADR-0017（模块化十戒）。
+# ⚖️ 本依赖段即白名单：B2 只依赖 B1（共享类型），不得依赖任何 F* 功能模块
+# （xtask arch 断言 4 强制）。
+# rusqlite 只准本 crate 依赖（deny.toml bans + clippy.toml 禁用表的唯一豁免方）。
+
+[package]
+name = "data-persistence"
+version.workspace = true
+edition.workspace = true
+# 内部 crate，不发布；deny.toml 的 private.ignore 据此跳过许可证审查
+publish = false
+description = "B2 数据持久化：迁移、原始观测表（数据粮仓）、评审终态批量写回、回收站"
+
+[dependencies]
+# B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
+shared-domain-types = { workspace = true }
+# SQLite 驱动（全 workspace 唯一合法使用者，deny.toml bans 白名单）
+rusqlite = { version = "0.31", features = ["bundled"] }
+# ISO8601 时间戳的生成与解析
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# SHA256 内容指纹（增量刷新检测）
+sha2 = "0.10"
+# 观测记录 ID 生成
+uuid = { workspace = true }
+# source_data 原始标签 JSON 的承载与类别名编解码
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true
