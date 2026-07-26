@@ -45,6 +45,8 @@ log = "0.4"
 # B1 共享领域类型
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
+# public-api snapshot testing
+public-api = "0.52"
 # 路径依赖
 shared-domain-types = { path = "core/shared-domain-types" }
 localization = { path = "core/localization" }

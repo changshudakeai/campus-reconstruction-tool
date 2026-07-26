@@ -27,3 +27,7 @@ thiserror = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true
