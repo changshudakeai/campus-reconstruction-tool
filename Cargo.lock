@@ -1214,6 +1214,7 @@ dependencies = [
  "shared-domain-types",
  "slint",
  "slint-build",
+ "tempfile",
 ]
 
 [[package]]

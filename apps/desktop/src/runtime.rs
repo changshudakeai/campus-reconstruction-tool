@@ -6,6 +6,9 @@
 //! 壳只把结果翻译成 l10n 文案填进窗口——零业务逻辑。
 //! 装配自 T19B-1 起经 [`ViewModelInjector`] 完成（VM 注入见 `injector` 模块）。
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use anyhow::Result;
 use data_persistence::Database;
 use global_settings::SettingsManager;
@@ -14,6 +17,7 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
+use crate::presenter::ShellPresenter;
 use crate::AppWindow;
 
 /// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
@@ -64,26 +68,36 @@ pub(crate) fn status_text(l10n: &Localization, decision: &LandingDecision) -> St
 
 /// 开发版桌面应用入口：装配主窗口并进入事件循环。
 pub fn run_dev() -> Result<()> {
-    // B7 一本账先于任何回调可用（弹窗铁律 ADR-0021）；Slint
-    // Presenter（弹窗/toast 声明）随后续 T19B 工单注册，注册前消息照常留底。
-    NotificationCenter::init(PresenterRegistry::new());
+    // B7 一本账先于任何回调可用（弹窗铁律 ADR-0021）。
+    let center = NotificationCenter::init(PresenterRegistry::new());
 
     let window = AppWindow::new()?;
+    // T19B-2 装喇叭：Slint 弹窗 Presenter 就位——无论数据库是否可用
+    // 都注册（要紧错误从此真正可见，不再只留底）。
+    center
+        .registry()
+        .set_presenter(ShellPresenter::install(&window));
+
     // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
     let injector = match ShellDatabases::open(DEV_DB_FILE) {
         Ok(databases) => Some(ViewModelInjector::new(databases)?),
         Err(_) => None,
     };
-    match &injector {
-        Some(injector) => injector.inject(&window),
+    match injector {
+        Some(injector) => {
+            // 回调闭包共享注入器（Slint 单线程 UI），事件循环全程存活
+            let injector = Rc::new(RefCell::new(injector));
+            injector.borrow().inject(&window);
+            ViewModelInjector::bind(&injector, &window);
+            window.run()?;
+        }
         None => {
             let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
             window.set_app_title(l10n.t("app.welcome_title").into());
             window.set_status_text(status_text(&l10n, &landing_decision(None)).into());
+            window.run()?;
         }
     }
-    // 注入器在事件循环全程存活（后续工单的回调绑定依赖它持有的 VM）
-    window.run()?;
     Ok(())
 }
 

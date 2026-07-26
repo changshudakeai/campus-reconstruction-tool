@@ -1,27 +1,186 @@
-// T19 — S1 薄壳主窗口（Phase1 最小壳）。
+// T19 — S1 薄壳主窗口。
 // 薄壳原则（ADR-0017）：此处零业务逻辑，只声明属性与布局；
 // 全部文案由 Rust 侧经 B6 l10n 注入（文本外置铁律 ADR-0005），
 // .slint 内不得出现硬编码的用户可见文字。
+// T19B-2：首跑向导屏 + 着陆占位屏 + 设置页（债务②）+ B7 错误模态遮罩。
+// 完整五步步骤条导航骨架（ADR-0027）随 T19B-3..8 逐单落地。
+
+import { Button } from "std-widgets.slint";
+import { SettingsWizard } from "settings_wizard.slint";
 
 export component AppWindow inherits Window {
+    // 路由屏号：0 = 首跑向导，1 = 着陆占位（校区选择/方案列表占位），2 = 设置页
+    in-out property <int> active-screen: 1;
+
     // 窗口标题与着陆状态文案，均由壳的 Rust 侧填充
     in property <string> app-title;
     in property <string> status-text;
+
+    // ── 首跑向导（属性直通 SettingsWizard，值全部来自 Rust 侧）──
+    in property <string> wizard-title;
+    in property <string> wizard-language-label;
+    in property <string> wizard-version-label;
+    in property <string> wizard-notice-text;
+    in property <string> wizard-continue-label;
+    in property <[string]> wizard-language-options;
+    in property <[string]> wizard-version-options;
+    in-out property <string> wizard-language;
+    in-out property <string> wizard-version;
+    in-out property <bool> wizard-acknowledged;
+
+    // ── 设置页（债务②：F2 规矩④“重新查看教程”入口）──
+    in property <string> settings-title;
+    in property <string> settings-back-label;
+    in property <string> tutorial-replay-label;
+
+    // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
+    in-out property <bool> error-dialog-visible;
+    in property <string> error-dialog-title;
+    in property <string> error-dialog-source;
+    in property <string> error-dialog-body;
+    in property <string> error-dialog-ok-label;
+
+    callback wizard-continue-clicked();
+    callback replay-tutorial-clicked();
+    callback error-dialog-dismissed();
 
     title: root.app-title;
     preferred-width: 800px;
     preferred-height: 600px;
     min-width: 480px;
-    min-height: 320px;
+    min-height: 360px;
 
-    VerticalLayout {
+    // 屏 0：首跑向导（ADR-0004：即使下拉各只有一个选项也照常显示）
+    if root.active-screen == 0: SettingsWizard {
+        wizard-title: root.wizard-title;
+        language-label: root.wizard-language-label;
+        version-label: root.wizard-version-label;
+        notice-text: root.wizard-notice-text;
+        continue-label: root.wizard-continue-label;
+        language-options: root.wizard-language-options;
+        version-options: root.wizard-version-options;
+        selected-language <=> root.wizard-language;
+        selected-version <=> root.wizard-version;
+        acknowledged <=> root.wizard-acknowledged;
+        continue-clicked => {
+            root.wizard-continue-clicked();
+        }
+    }
+
+    // 屏 1：着陆占位（校区选择页/方案列表页归 T19B-3/4）+ 设置入口
+    if root.active-screen == 1: VerticalLayout {
         alignment: center;
+        spacing: 16px;
 
         Text {
             text: root.status-text;
             horizontal-alignment: center;
             font-size: 16px;
             wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.settings-title;
+                clicked => {
+                    root.active-screen = 2;
+                }
+            }
+        }
+    }
+
+    // 屏 2：常规设置页（T19B-2 只负责摆入“重新查看教程”按钮，
+    // 语言/版本改动入口随后续工单完善）
+    if root.active-screen == 2: VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        padding: 32px;
+
+        Text {
+            text: root.settings-title;
+            horizontal-alignment: center;
+            font-size: 20px;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.tutorial-replay-label;
+                clicked => {
+                    root.replay-tutorial-clicked();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.settings-back-label;
+                clicked => {
+                    root.active-screen = 1;
+                }
+            }
+        }
+    }
+
+    // B7 错误模态遮罩：盖住全窗吞掉全部输入，点“知道了”前界面不可操作
+    // （弹窗铁律 ADR-0021“点掉才能继续”；声明在最后 = 渲染在最顶层）
+    if root.error-dialog-visible: Rectangle {
+        background: rgba(0, 0, 0, 0.45);
+
+        // 空 TouchArea 拦截遮罩区域的所有点击/滚动
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 64px, 440px);
+            height: dialog-content.preferred-height + 48px;
+            background: #ffffff;
+            border-radius: 8px;
+
+            dialog-content := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 12px;
+
+                Text {
+                    text: root.error-dialog-title;
+                    font-size: 18px;
+                    color: #c62828;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.error-dialog-source;
+                    font-size: 12px;
+                    color: #666666;
+                }
+
+                Text {
+                    text: root.error-dialog-body;
+                    font-size: 14px;
+                    color: #222222;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        text: root.error-dialog-ok-label;
+                        primary: true;
+                        clicked => {
+                            root.error-dialog-dismissed();
+                        }
+                    }
+                }
+            }
         }
     }
 }

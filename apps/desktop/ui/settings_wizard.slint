@@ -1,0 +1,90 @@
+// T19B-2 — 首次运行向导（F1 设置页，ADR-0004）。
+// 薄壳原则（ADR-0017）：零业务逻辑，选项与文案全部由 Rust 侧经 B6 注入
+// （文本外置铁律 ADR-0005，.slint 内不得出现硬编码的用户可见文字）。
+// 下拉菜单从第一版起就存在（首版语言仅 zh-CN、版本仅 26.1.2），为扩充留位置。
+
+import { Button, CheckBox, ComboBox } from "std-widgets.slint";
+
+export component SettingsWizard {
+    // 文案（Rust 侧以 settings.* 文本键解析后注入）
+    in property <string> wizard-title;
+    in property <string> language-label;
+    in property <string> version-label;
+    in property <string> notice-text;
+    in property <string> continue-label;
+    // 下拉选项（来自 F1 SUPPORTED_LANGUAGES / SUPPORTED_MINECRAFT_VERSIONS）
+    in property <[string]> language-options;
+    in property <[string]> version-options;
+    // 用户当前选择（Rust 侧读取后提交 F1 complete_first_run）
+    in-out property <string> selected-language;
+    in-out property <string> selected-version;
+    in-out property <bool> acknowledged;
+
+    callback continue-clicked();
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 20px;
+        padding: 40px;
+
+        Text {
+            text: root.wizard-title;
+            font-size: 22px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 12px;
+
+            Text {
+                text: root.language-label;
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                model: root.language-options;
+                current-value <=> root.selected-language;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 12px;
+
+            Text {
+                text: root.version-label;
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                model: root.version-options;
+                current-value <=> root.selected-version;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            CheckBox {
+                text: root.notice-text;
+                checked <=> root.acknowledged;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.continue-label;
+                // ADR-0004 强制：知情告知未勾选时禁用（F1 侧另有二次校验兜底）
+                enabled: root.acknowledged;
+                primary: true;
+                clicked => {
+                    root.continue-clicked();
+                }
+            }
+        }
+    }
+}

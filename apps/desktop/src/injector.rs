@@ -10,20 +10,24 @@
 //! 本模块不发明任何页面或导航 UI。回调错误的统一出口见
 //! [`crate::report_callback_error`]（弹窗铁律 ADR-0021，经 B7 分派）。
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::Result;
 use coverage_audit::QuietSentinel;
 use data_acquisition::AcquisitionPipeline;
 use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
-use global_settings::SettingsManager;
+use global_settings::{FirstRunSetup, SettingsManager};
 use localization::{Language, Localization};
 use onboarding_tutorial::OnboardingTutorial;
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
 use shared_domain_types::PlanId;
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
+use crate::dispatch::report_callback_error;
 use crate::runtime::{decide, status_text, LandingDecision};
 use crate::AppWindow;
 
@@ -101,11 +105,77 @@ impl ViewModelInjector {
 
     /// 把 VM 视图状态注入 Slint 窗口（只设 in property）。
     ///
-    /// Phase1 最小窗口只有标题与着陆状态两个属性；页面级属性与回调
-    /// 随 T19B-2..8 逐单接线（导航骨架法源 ADR-0027）。
+    /// T19B-2 起覆盖：首开文案 + 首跑向导（屏 0）+ 设置页文案（屏 2）+
+    /// B7 弹窗静态文案；其余页面属性随 T19B-3..8 逐单接线（ADR-0027）。
     pub fn inject(&self, window: &AppWindow) {
-        window.set_app_title(self.l10n.t("app.welcome_title").into());
-        window.set_status_text(status_text(&self.l10n, &self.landing()).into());
+        let l10n = &self.l10n;
+        window.set_app_title(l10n.t("app.welcome_title").into());
+        window.set_status_text(status_text(l10n, &self.landing()).into());
+
+        // 首跑向导（ADR-0004：选项与默认值全部来自 F1，壳零业务逻辑）
+        window.set_active_screen(match self.landing() {
+            LandingDecision::FirstRunSetup => 0,
+            _ => 1,
+        });
+        window.set_wizard_title(l10n.t("settings.wizard_title").into());
+        window.set_wizard_language_label(l10n.t("settings.language_label").into());
+        window.set_wizard_version_label(l10n.t("settings.minecraft_version_label").into());
+        window.set_wizard_notice_text(l10n.t("settings.notice_checkbox").into());
+        window.set_wizard_continue_label(l10n.t("settings.continue_button").into());
+        window.set_wizard_language_options(string_model(global_settings::SUPPORTED_LANGUAGES));
+        window.set_wizard_version_options(string_model(
+            global_settings::SUPPORTED_MINECRAFT_VERSIONS,
+        ));
+        let settings = self.settings.settings().unwrap_or_default();
+        window.set_wizard_language(settings.language.into());
+        window.set_wizard_version(settings.minecraft_version.into());
+        window.set_wizard_acknowledged(false);
+
+        // 设置页（债务②：按钮文案取自 F2 settings_entry，规矩④）
+        window.set_settings_title(l10n.t("app.settings_title").into());
+        window.set_settings_back_label(l10n.t("app.back_button").into());
+        window.set_tutorial_replay_label(self.tutorial.settings_entry(l10n).replay_label.into());
+
+        // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
+        window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
+    }
+
+    /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程）。
+    ///
+    /// 回调闭包持 `Rc<RefCell<Self>>` 共享可变访问（Slint 单线程 UI）；
+    /// 回调错误一律递 [`report_callback_error`]（弹窗铁律 ADR-0021）。
+    pub fn bind(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        // 完成设置：读窗口选项 → F1 complete_first_run → 重判着陆跳下一屏
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_wizard_continue_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let setup = FirstRunSetup {
+                language: window.get_wizard_language().to_string(),
+                minecraft_version: window.get_wizard_version().to_string(),
+                acknowledged: window.get_wizard_acknowledged(),
+            };
+            let mut injector = shared.borrow_mut();
+            match injector.settings_mut().complete_first_run(&setup) {
+                Ok(()) => {
+                    // 向导完成 → 重新判定着陆（无上次校区 → 校区选择占位；
+                    // 有 → 该校区方案列表占位），判定仍全权委托 F1
+                    window
+                        .set_status_text(status_text(injector.l10n(), &injector.landing()).into());
+                    window.set_active_screen(1);
+                }
+                Err(error) => report_callback_error(injector.l10n(), &error),
+            }
+        });
+
+        // 设置页“重新查看教程”：F2 规矩④，进度清零落库
+        let shared = Rc::clone(injector);
+        window.on_replay_tutorial_clicked(move || {
+            let mut injector = shared.borrow_mut();
+            if let Err(error) = injector.restart_tutorial() {
+                report_callback_error(injector.l10n(), &error);
+            }
+        });
     }
 
     /// 首开着陆判定（委托 F1，壳只消费结果）
@@ -147,6 +217,17 @@ impl ViewModelInjector {
         &self.tutorial
     }
 
+    /// 债务②：设置页“重新查看教程”→ F2 进度清零（规矩④）。
+    ///
+    /// F2 落库借道 F3 连接（与装载时同库），壳只做转接不碰业务。
+    pub fn restart_tutorial(&mut self) -> Result<()> {
+        let Self {
+            tutorial, projects, ..
+        } = self;
+        tutorial.restart(projects.database_mut())?;
+        Ok(())
+    }
+
     /// F3 方案管理（只读）
     pub fn projects(&self) -> &ProjectManager {
         &self.projects
@@ -178,12 +259,26 @@ impl ViewModelInjector {
     }
 }
 
+/// 把 F1 的静态选项表转成 Slint 下拉菜单 model（纯数据搬运）。
+fn string_model(items: &[&str]) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        items
+            .iter()
+            .map(|item| SharedString::from(*item))
+            .collect::<Vec<_>>(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use onboarding_tutorial::TutorialStatus;
     use shared_domain_types::CampusId;
 
     use super::*;
+
+    // 注意：凡需要创建 AppWindow 的测试一律放 tests/ui_bindings.rs（独立
+    // 进程内单个 #[test] 串行）——Slint 平台只能在一个线程初始化一次，
+    // 单元测试并行多线程创窗口必炸。
 
     fn injector() -> ViewModelInjector {
         let db = ShellDatabases::open_in_memory().expect("内存库连接组");
@@ -220,16 +315,13 @@ mod tests {
     }
 
     #[test]
-    fn test_vm_state_injected_to_slint() {
-        let injector = injector();
-        let window = AppWindow::new().expect("创建 Slint 窗口");
-        injector.inject(&window);
-
-        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
-        let title = l10n.t("app.welcome_title");
-        assert_eq!(window.get_app_title().as_str(), title.as_str());
-        // 全新库 → 首次运行状态文案
-        let status = l10n.t("app.shell_status_first_run");
-        assert_eq!(window.get_status_text().as_str(), status.as_str());
+    fn restart_tutorial_resets_progress_in_db() {
+        // F2 借道 F3 连接落库；内存库即可（同一条 projects 连接）
+        let mut injector = injector();
+        injector.restart_tutorial().expect("重看教程");
+        assert_eq!(injector.tutorial().status(), TutorialStatus::NotStarted);
+        let reloaded = OnboardingTutorial::load(injector.projects_mut().database_mut())
+            .expect("重新装载引导进度");
+        assert_eq!(reloaded.status(), TutorialStatus::NotStarted);
     }
 }

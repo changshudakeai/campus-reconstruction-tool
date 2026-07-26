@@ -52,5 +52,9 @@ notification-center = { workspace = true }
 # 错误链路
 anyhow = { workspace = true }
 
+[dev-dependencies]
+# 跨模块落库断言用同一临时文件连接组（内存库两连接各自独立）
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
