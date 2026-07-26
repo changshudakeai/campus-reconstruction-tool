@@ -31,7 +31,12 @@
     "campus_deleted_notice": "上次使用的校区已被删除，请重新选择校区",
     "shell_status_first_run": "检测到首次使用，即将进入设置向导",
     "shell_status_campus_select": "欢迎回来！请选择或新建校区",
-    "shell_status_last_campus": "上次使用的校区：{0}"
+    "shell_status_last_campus": "上次使用的校区：{0}",
+    "campus_select_title": "校区选择",
+    "campus_select_placeholder": "校区列表（待完善）",
+    "campus_select_example_a": "示例校区 A",
+    "campus_select_example_b": "示例校区 B",
+    "settings_button": "设置"
   },
   "settings": {
     "wizard_title": "欢迎使用校园复刻工具",
@@ -56,7 +61,9 @@
     "card_progress": "已完成：{done} → 下一步：{next}",
     "last_modified": "最后修改：{time}",
     "recycle_bin_notice": "删除的方案在回收站保留 30 天",
-    "purge_confirm": "确定要立即永久删除吗？此操作不可恢复。"
+    "purge_confirm": "确定要立即永久删除吗？此操作不可恢复。",
+    "empty_list": "还没有方案——点上方“新建方案”开始你的第一个方案",
+    "delete_confirm": "确定要删除吗？方案将在回收站保留 30 天"
   },
   "review": {
     "workbench_title": "评审工作台",
