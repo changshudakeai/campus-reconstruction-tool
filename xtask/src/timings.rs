@@ -68,7 +68,16 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
         reason = "xtask 是构建自动化工具本身，调用 cargo 属其本职（clippy.toml 禁令针对业务模块）"
     )]
     let status = std::process::Command::new("cargo")
-        .args(["build", "--workspace", "--all-targets", "--timings"])
+        // 排除 xtask 自身：Windows 下无法重建正在运行的 xtask.exe（文件锁，
+        // os error 5）；预算哨兵针对业务 crate，xtask 本体不在预算范围内。
+        .args([
+            "build",
+            "--workspace",
+            "--exclude",
+            "xtask",
+            "--all-targets",
+            "--timings",
+        ])
         .current_dir(root)
         .status()?;
     anyhow::ensure!(status.success(), "cargo build --timings 失败");
