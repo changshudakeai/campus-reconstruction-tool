@@ -1,0 +1,75 @@
+---
+# data-transformers Public API Snapshot
+# 
+# 本文件记录 B13 数据转换器的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新: 2026-07-26 (T12 实施)
+
+## Structures
+
+pub struct TagPattern(String)                              #[serde(transparent)]
+pub struct TagRuleEntry { pub category: String, pub tags: Vec<TagPattern> }   #[non_exhaustive]
+pub struct ClassifyConfig { pub version: String, pub rules: Vec<TagRuleEntry> }   #[non_exhaustive]
+pub struct Classification { pub category: CandidateCategory, pub is_fallback: bool, pub matched_patterns: Vec<String> }   #[non_exhaustive]
+pub struct ClassifyEngine { .. }
+pub struct TagMappingValidator
+
+## Type Aliases
+
+pub type TagMap = BTreeMap<String, String>
+
+## Enums #[non_exhaustive]
+
+pub enum TransformError {
+    InvalidConfigJson(String),
+    UnknownCategory(String),
+    EmptyRuleSet,
+    EmptyTagList(String),
+    MissingCategoryRules(String),
+}
+
+## Traits & Implementations
+
+impl TagPattern {
+    pub fn new(pattern: impl Into<String>) -> Self
+    pub fn as_str(&self) -> &str
+    pub fn matches(&self, key: &str, value: &str) -> bool
+}
+
+impl TagRuleEntry {
+    pub fn new(category: impl Into<String>, tags: Vec<TagPattern>) -> Self
+}
+
+impl ClassifyConfig {
+    pub fn new(rules: Vec<TagRuleEntry>) -> Self
+    pub fn from_json(json: &str) -> Result<Self, TransformError>
+    pub fn default_mapping() -> Self
+}
+
+impl ClassifyEngine {
+    pub fn new(config: ClassifyConfig) -> Result<Self, TransformError>
+    pub fn with_default_mapping() -> Result<Self, TransformError>
+    pub fn classify(&self, tags: &TagMap) -> Classification
+    pub fn config(&self) -> &ClassifyConfig
+}
+
+impl TagMappingValidator {
+    pub fn validate(config: &ClassifyConfig) -> Result<(), Vec<TransformError>>
+}
+
+impl std::error::Error for TransformError            (thiserror)
+impl std::fmt::Display for TransformError            (thiserror)
+
+## Derives
+
+TagPattern: Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize
+TagRuleEntry: Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize
+ClassifyConfig: Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize
+Classification: Debug, Clone, PartialEq, Eq
+ClassifyEngine: Debug, Clone
+TransformError: Debug, thiserror::Error
+
+---
+END OF PUBLIC API SNAPSHOT
+---

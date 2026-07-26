@@ -1,0 +1,30 @@
+# MCRebuild V2 —— B13 数据转换器 crate 清单
+#
+# 原始对象 → 已归类候选：标签映射表 + 优先级归类引擎（ADR-0011）。
+#
+# ⚖️ 本依赖段即白名单（ADR-0017）：B13 只准依赖 B1 shared-domain-types
+# （未来按 DAG 可加 B14 geometry-validator）；禁止依赖 B12 数据源适配器
+# 与任何功能模块（xtask arch 强制）。
+
+[package]
+name = "data-transformers"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "B13 数据转换器：标签映射表驱动的六类别归类引擎（ADR-0011）"
+
+[dependencies]
+# B1 共享领域类型（唯一的 workspace 成员依赖）
+shared-domain-types = { workspace = true }
+# 映射表 JSON 反序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true

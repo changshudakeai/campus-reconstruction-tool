@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "category": "建筑",
+      "tags": [
+        "building=school",
+        "building=university",
+        "building=college",
+        "building=kindergarten",
+        "building=dormitory",
+        "building=apartments",
+        "building=canteen",
+        "building=office",
+        "building=library",
+        "building=gymnasium",
+        "building=sports_hall",
+        "building=yes"
+      ]
+    },
+    {
+      "category": "体育",
+      "tags": [
+        "leisure=pitch",
+        "leisure=track",
+        "leisure=stadium",
+        "leisure=sports_centre",
+        "sport=*"
+      ]
+    },
+    {
+      "category": "水域",
+      "tags": [
+        "natural=water",
+        "water=*",
+        "waterway=*",
+        "leisure=swimming_pool"
+      ]
+    },
+    {
+      "category": "道路",
+      "tags": [
+        "highway=*"
+      ]
+    },
+    {
+      "category": "植被",
+      "tags": [
+        "natural=tree",
+        "natural=tree_row",
+        "natural=wood",
+        "natural=scrub",
+        "landuse=grass",
+        "landuse=forest",
+        "landuse=meadow",
+        "leisure=garden"
+      ]
+    },
+    {
+      "category": "其他",
+      "tags": [
+        "railway=*",
+        "barrier=wall",
+        "barrier=fence",
+        "barrier=gate",
+        "amenity=fountain",
+        "historic=*",
+        "power=*",
+        "man_made=*"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "description": "典型校园对象归类夹具（T12）：tags → 期望类别（CandidateCategory 中文显示名）",
+  "cases": [
+    {
+      "name": "带球场标签的超市——体育优先于未入表的 building 值",
+      "tags": { "building": "supermarket", "leisure": "pitch" },
+      "expected": "体育",
+      "fallback": false
+    },
+    {
+      "name": "围墙——显式'其他'规则",
+      "tags": { "barrier": "wall" },
+      "expected": "其他",
+      "fallback": false
+    },
+    {
+      "name": "喷泉 + 纪念碑——显式'其他'规则",
+      "tags": { "amenity": "fountain", "historic": "monument" },
+      "expected": "其他",
+      "fallback": false
+    },
+    {
+      "name": "树列——植被",
+      "tags": { "natural": "tree_row" },
+      "expected": "植被",
+      "fallback": false
+    },
+    {
+      "name": "露天泳池（无 building 标签）——水域",
+      "tags": { "leisure": "swimming_pool" },
+      "expected": "水域",
+      "fallback": false
+    },
+    {
+      "name": "室内体育馆（building=yes + leisure=pitch）——建筑优先级最高（ADR-0011）",
+      "tags": { "building": "yes", "leisure": "pitch" },
+      "expected": "建筑",
+      "fallback": false
+    },
+    {
+      "name": "步道——道路（key 通配 highway=*）",
+      "tags": { "highway": "footway" },
+      "expected": "道路",
+      "fallback": false
+    },
+    {
+      "name": "湖泊——水域",
+      "tags": { "natural": "water" },
+      "expected": "水域",
+      "fallback": false
+    },
+    {
+      "name": "校内铁路——显式'其他'规则（railway=*）",
+      "tags": { "railway": "rail" },
+      "expected": "其他",
+      "fallback": false
+    },
+    {
+      "name": "草坪——植被",
+      "tags": { "landuse": "grass" },
+      "expected": "植被",
+      "fallback": false
+    },
+    {
+      "name": "水面上的步道（highway + natural=water）——水域优先级高于道路",
+      "tags": { "highway": "path", "natural": "water" },
+      "expected": "水域",
+      "fallback": false
+    },
+    {
+      "name": "完全未知标签——兜底进'其他'，不猜测不丢弃",
+      "tags": { "xyz": "abc" },
+      "expected": "其他",
+      "fallback": true
+    }
+  ]
+}
