@@ -1,0 +1,31 @@
+# MCRebuild V2 —— B5 地基模式 crate 清单
+#
+# 核心功能：边界绘制 UI + 朝向参考线设定 + 坐标系转换引擎
+#
+# ⚖️ 本依赖段即白名单（ADR-0017）：B5 只准依赖 B1 shared-domain-types
+# （UI 交互相关的 Slint 由壳层管理，不直接出现在此 crate）；禁止依赖
+# data-persistence、data-transformers 等上层模块（xtask arch 强制）。
+
+[package]
+name = "foundation-mode"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "B5 地基模式：边界绘制与朝向设定引擎（T14 工单）"
+
+[dependencies]
+# B1 共享领域类型（唯一 workspace 成员依赖）
+shared-domain-types = { workspace = true }
+# 几何计算与坐标转换
+geo = { workspace = true }
+# 序列化支持（内部数据传输）
+serde = { workspace = true }
+# 带类型错误
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# public-api snapshot testing (public API surface monitoring)
+public-api.workspace = true

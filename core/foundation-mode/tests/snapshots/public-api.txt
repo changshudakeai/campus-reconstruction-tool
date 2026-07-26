@@ -1,0 +1,123 @@
+---
+# foundation-mode Public API Snapshot
+# 
+# 本文件记录 B5 地基模式的公开 API 结构
+# 任何增删都会在此文件中体现，PR diff 可见
+# 
+# 最后更新：2026-07-26 (T14 实施)
+
+## Structures
+
+pub struct Vertex { pub x: f64, pub y: f64 }
+pub struct Point2D { pub x: f64, pub y: f64 }
+pub struct OrientationLine { pub start_point: Point2D, pub end_point: Point2D }
+pub struct OrientationCalculator
+pub struct MercatorCoord { pub x: f64, pub y: f64 }
+pub struct PlaneMileUnit { pub x: f64, pub y: f64 }
+pub struct McBlockCoord { pub block_x: i32, pub block_z: i32 }
+pub struct CoordinateConverter { /* private: center_mercator, blocks_per_meter */ }
+pub struct BoundaryDrawer { /* private: vertices, state, max_vertices */ }
+pub struct ValidationResult { pub is_valid: bool, pub errors: Vec<BoundaryValidationError>, pub area: Option<f64> }
+pub struct ImpactItem { pub category: CandidateCategory, pub count: usize, pub requires_confirmation: bool }
+pub struct OrientationImpactReport { pub items: Vec<ImpactItem>, pub all_safe_to_skip: bool, pub title: String, pub details: String }
+
+## Enums
+
+pub enum BoundaryState { Idle, Drawing, Determined, Editing { selected_vertex: usize } }  // #[derive(Default)] Idle
+pub enum BoundaryUiEvent { ClickAt { x: f64, y: f64 }, DragTo { x: f64, y: f64 }, Confirm, Cancel, ClickVertex { index: usize } }
+pub enum EventResult { Accepted, Rejected(String), Ignored }
+pub enum BoundaryValidationError #[non_exhaustive] { InsufficientVertices(usize), AreaTooSmall { area: f64, min: f64 } }
+
+## Functions
+
+pub fn validate_polygon_closure(vertices: &[Vertex]) -> ValidationResult
+pub fn check_orientation_change_impact(existing_data: &HashMap<CandidateCategory, usize>, old_orientation: Option<Orientation>, new_orientation: Orientation) -> OrientationImpactReport
+pub fn should_show_confirmation_dialog(report: &OrientationImpactReport) -> bool
+pub fn format_impact_details(report: &OrientationImpactReport) -> String
+
+## Re-exports（B1 共享类型透传）
+
+pub use shared_domain_types::Boundary
+pub use shared_domain_types::Orientation
+
+## Traits & Implementations
+
+impl Vertex {
+    pub fn new(x: f64, y: f64) -> Self
+}
+
+impl Point2D {
+    pub fn new(x: f64, y: f64) -> Self
+}
+
+impl OrientationLine {
+    pub fn new(start: Point2D, end: Point2D) -> Option<Self>   // 重合两点返回 None
+    pub fn length(&self) -> f64
+}
+
+impl OrientationCalculator {
+    pub fn calculate(line: &OrientationLine) -> Option<Orientation>   // 产出 B1 类型
+    pub fn normalize_angle(angle: f32) -> Option<Orientation>          // -90°→270°, 400°→40°
+}
+
+impl MercatorCoord {
+    pub fn from_lat_lon(lat: f64, lon: f64) -> Self
+    pub fn to_lat_lon(&self) -> (f64, f64)
+}
+
+impl PlaneMileUnit {
+    pub fn new(x: f64, y: f64) -> Self
+    pub fn distance_to(&self, other: &Self) -> f64
+}
+
+impl McBlockCoord {
+    pub fn new(block_x: i32, block_z: i32) -> Self
+    pub fn from_plane(plane: &PlaneMileUnit, blocks_per_meter: f64) -> Self
+}
+
+impl CoordinateConverter {
+    pub fn set_center(&mut self, mercator: MercatorCoord)
+    pub fn blocks_per_meter(&self) -> f64
+    pub fn set_blocks_per_meter(&mut self, ratio: f64)
+    pub fn mercator_to_plane(&self, mercator: MercatorCoord) -> Option<PlaneMileUnit>
+    pub fn plane_to_mc(&self, plane: &PlaneMileUnit) -> McBlockCoord
+    pub fn convert(&self, mercator: MercatorCoord) -> Option<(PlaneMileUnit, McBlockCoord)>
+}
+
+impl Default for CoordinateConverter
+
+impl BoundaryDrawer {
+    pub fn new() -> Self
+    pub fn set_max_vertices(&mut self, count: usize)
+    pub fn vertices(&self) -> &[Vertex]
+    pub fn state(&self) -> BoundaryState
+    pub fn handle_event(&mut self, event: BoundaryUiEvent) -> EventResult
+    pub fn reset(&mut self)
+}
+
+impl Default for BoundaryDrawer
+
+impl std::error::Error for BoundaryValidationError (thiserror)
+impl std::fmt::Display for BoundaryValidationError
+
+## Derives
+
+Vertex: Debug, Clone, Copy, PartialEq
+Point2D: Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize
+OrientationLine: Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize
+MercatorCoord: Debug, Clone, Copy, PartialEq
+PlaneMileUnit: Debug, Clone, Copy, PartialEq
+McBlockCoord: Debug, Clone, Copy, PartialEq
+CoordinateConverter: Debug
+BoundaryState: Debug, Clone, Copy, PartialEq, Default
+BoundaryUiEvent: Debug, Clone, Copy, PartialEq
+EventResult: Debug, Clone, PartialEq
+BoundaryDrawer: Debug
+BoundaryValidationError: Debug, Clone, PartialEq, thiserror::Error
+ValidationResult: Debug, Clone, PartialEq
+ImpactItem: Debug, Clone, PartialEq
+OrientationImpactReport: Debug, Clone, PartialEq
+
+---
+END OF PUBLIC API SNAPSHOT
+---
