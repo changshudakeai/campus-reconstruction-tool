@@ -63,6 +63,8 @@
     "duplicate_suffix": "副本",
     "delete": "删除",
     "card_progress": "已完成：{done} → 下一步：{next}",
+    "progress_boundary_done": "已完成：边界",
+    "progress_next_collection": "下一步：采集",
     "last_modified": "最后修改：{time}",
     "recycle_bin_notice": "删除的方案在回收站保留 30 天",
     "purge_confirm": "确定要立即永久删除吗？此操作不可恢复。",
