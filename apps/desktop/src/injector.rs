@@ -10,6 +10,8 @@
 //! 本模块不发明任何页面或导航 UI。回调错误的统一出口见
 //! [`crate::report_callback_error`]（弹窗铁律 ADR-0021，经 B7 分派）。
 
+// ignore-tidy-filelength: 核心注入器，承载全部 F 模块接线与 B5 边界编辑器状态同步，拆分会增加跨模块耦合
+
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -19,6 +21,9 @@ use coverage_audit::QuietSentinel;
 use data_acquisition::AcquisitionPipeline;
 use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
+use foundation_mode::{
+    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex,
+};
 use global_settings::{FirstRunSetup, SettingsManager};
 use localization::{Language, Localization};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
@@ -30,7 +35,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::dispatch::report_callback_error;
 use crate::runtime::{decide, status_text, LandingDecision};
 use crate::theme::format_relative_time;
-use crate::{generated::CampusData, AppWindow};
+use crate::{generated::CampusData, AppWindow, BoundaryPointData};
 
 /// 壳持有的 B2 连接组。
 ///
@@ -84,6 +89,8 @@ pub struct ViewModelInjector {
     /// F9 导出控制台。门控暂用 `MockSealGate` 占位——真门控（壳实现
     /// `SealGate`、内部调 F5 `seal`）随 T19B-8 导出接线落地。
     export: ExportConsole<MockSealGate>,
+    // T19B-5B: B5 地基模式 (边界绘制状态机)
+    boundary_drawer: BoundaryDrawer,
 }
 
 impl ViewModelInjector {
@@ -101,6 +108,7 @@ impl ViewModelInjector {
             review: None,
             sentinel: QuietSentinel::new(),
             export: ExportConsole::new(MockSealGate::new()),
+            boundary_drawer: BoundaryDrawer::new(),
         })
     }
 
@@ -140,6 +148,7 @@ impl ViewModelInjector {
         // 屏 4：方案工作区占位文案（T19B-5B）
         window.set_workspace_placeholder_title(l10n.t("workspace.placeholder_title").into());
         window.set_workspace_placeholder_subtitle(l10n.t("workspace.placeholder_subtitle").into());
+        window.set_workspace_step_pending_notice(l10n.t("workspace.step_pending_notice").into());
 
         // 步骤条文案
         window.set_workspace_stepper_title_label(l10n.t("collection.title").into());
@@ -155,6 +164,19 @@ impl ViewModelInjector {
         window.set_workspace_tutorial_text(SharedString::new());
         window.set_workspace_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
         window.set_workspace_tutorial_skip_all_label(SharedString::new());
+
+        // 屏 4 步骤①：圈边界编辑器文案（T19B-5B Phase 2 Step A）
+        window.set_workspace_boundary_points(ModelRc::new(VecModel::default()));
+        window.set_workspace_boundary_path_commands(SharedString::new());
+        window.set_workspace_boundary_title(l10n.t("boundary.step_title").into());
+        window.set_workspace_boundary_hint(l10n.t("boundary.hint").into());
+        window.set_workspace_boundary_undo_label(l10n.t("boundary.undo_button").into());
+        window.set_workspace_boundary_confirm_label(l10n.t("boundary.confirm_button").into());
+        window.set_workspace_boundary_reset_label(l10n.t("boundary.reset_button").into());
+        window.set_workspace_boundary_status(l10n.t("boundary.status_idle").into());
+        window.set_workspace_boundary_map_placeholder(l10n.t("boundary.map_placeholder").into());
+        window.set_workspace_boundary_is_determined(false);
+        window.set_workspace_boundary_point_count(0);
 
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
@@ -205,6 +227,58 @@ impl ViewModelInjector {
         window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
         window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + "：").into());
         window.set_trash_page_date_today(l10n.t("notice.date_today").into());
+    }
+
+    /// 同步边界绘制器状态到 Slint 显示模型
+    fn sync_boundary_display(&self, window: &AppWindow) {
+        let vertices = self.boundary_drawer.vertices();
+        let is_closed = matches!(self.boundary_drawer.state(), BoundaryState::Determined);
+
+        // 计算点显示数据（每个点偏移 -5 以居中渲染 10px 圆点）
+        let points: Vec<BoundaryPointData> = vertices
+            .iter()
+            .map(|v| BoundaryPointData {
+                x: v.x as f32 - 5.0,
+                y: v.y as f32 - 5.0,
+            })
+            .collect();
+
+        // 构建 SVG path 命令字符串（连接连续顶点，闭合时加 Z 闭合）
+        let path_commands = Self::build_path_commands(vertices, is_closed);
+
+        window.set_workspace_boundary_points(ModelRc::new(VecModel::from(points)));
+        window.set_workspace_boundary_path_commands(path_commands.into());
+        window.set_workspace_boundary_point_count(vertices.len() as i32);
+        window.set_workspace_boundary_is_determined(is_closed);
+
+        // 更新状态文案
+        let status = match self.boundary_drawer.state() {
+            BoundaryState::Idle => self.l10n.t("boundary.status_idle").into(),
+            BoundaryState::Drawing => {
+                let count_str = vertices.len().to_string();
+                self.l10n
+                    .t_with_array("boundary.status_drawing", &[&count_str])
+                    .into()
+            }
+            BoundaryState::Determined => self.l10n.t("boundary.status_determined").into(),
+            BoundaryState::Editing { .. } => self.l10n.t("boundary.status_editing").into(),
+        };
+        window.set_workspace_boundary_status(status);
+    }
+
+    /// 构建 SVG path 命令字符串（用于 Slint Path 元素渲染连线）
+    fn build_path_commands(vertices: &[Vertex], is_closed: bool) -> String {
+        if vertices.is_empty() {
+            return String::new();
+        }
+        let mut commands = format!("M {} {}", vertices[0].x, vertices[0].y);
+        for v in &vertices[1..] {
+            commands.push_str(&format!(" L {} {}", v.x, v.y));
+        }
+        if is_closed && vertices.len() >= 3 {
+            commands.push_str(" Z");
+        }
+        commands
     }
 
     /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程；T19B-3：校区选择；
@@ -618,6 +692,87 @@ impl ViewModelInjector {
             }
             window.set_workspace_tutorial_visible(false);
         });
+
+        // ── 屏 4 步骤①：圈边界编辑器回调（T19B-5B Phase 2 Step A）────────
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_boundary_canvas_clicked(move |x, y| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            // B5 handle_event: ClickAt → 添加顶点 (Slint f32 → B5 f64)
+            match injector
+                .boundary_drawer_mut()
+                .handle_event(BoundaryUiEvent::ClickAt {
+                    x: x as f64,
+                    y: y as f64,
+                }) {
+                EventResult::Accepted => {}
+                EventResult::Rejected(msg) => report_callback_error(injector.l10n(), &msg),
+                EventResult::Ignored => {}
+            }
+            injector.sync_boundary_display(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_boundary_undo_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            // B5 handle_event: Cancel → 撤销最后一点
+            if let EventResult::Rejected(msg) = injector
+                .boundary_drawer_mut()
+                .handle_event(BoundaryUiEvent::Cancel)
+            {
+                report_callback_error(injector.l10n(), &msg);
+            }
+            injector.sync_boundary_display(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_boundary_confirm_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let vertices = injector.boundary_drawer().vertices().to_vec();
+
+            // 先验证再确认 (ADR-0021 + B7 弹窗铁律)
+            let validation_result = validate_polygon_closure(&vertices);
+            if !validation_result.is_valid {
+                // 不合法：报错但不消耗 Confirm 事件 (drawer 保持 Drawing 状态)
+                let error_detail: String = validation_result
+                    .errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                report_callback_error(injector.l10n(), &error_detail);
+                return;
+            }
+
+            // 合法：调用 B5 Confirm 设置状态为 Determined
+            match injector
+                .boundary_drawer_mut()
+                .handle_event(BoundaryUiEvent::Confirm)
+            {
+                EventResult::Accepted => {}
+                EventResult::Rejected(msg) => report_callback_error(injector.l10n(), &msg),
+                EventResult::Ignored => {}
+            }
+            injector.sync_boundary_display(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_boundary_reset_clicked(move || {
+            let mut injector = shared.borrow_mut();
+            // Reset → 清空所有顶点
+            injector.boundary_drawer_mut().reset();
+            // 同步 UI
+            {
+                let Some(window) = weak.upgrade() else { return };
+                injector.sync_boundary_display(&window);
+            }
+        });
     }
 
     /// 首开着陆判定（委托 F1，壳只消费结果）
@@ -724,6 +879,16 @@ impl ViewModelInjector {
     /// F9 导出控制台
     pub fn export(&self) -> &ExportConsole<MockSealGate> {
         &self.export
+    }
+
+    /// B5 边界绘制器（只读）
+    pub fn boundary_drawer(&self) -> &BoundaryDrawer {
+        &self.boundary_drawer
+    }
+
+    /// B5 边界绘制器（可变：事件处理与重置）
+    pub fn boundary_drawer_mut(&mut self) -> &mut BoundaryDrawer {
+        &mut self.boundary_drawer
     }
 
     // ── T19B-4/T19B-5 辅助方法：校区列表与方案列表数据流转 ────────────────

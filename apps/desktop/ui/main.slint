@@ -17,6 +17,7 @@ import { ConfirmDialog, InputDialog } from "dialogs.slint";
 import { NoticeBoard, NoticeData } from "notice_board.slint";
 import { Trash, TrashItemData } from "trash.slint";
 import { Stepper } from "stepper.slint";
+import { BoundaryEditor, BoundaryPointData } from "boundary_edit.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -84,13 +85,14 @@ export component AppWindow inherits Window {
     in-out property <int> workspace-completed-steps: 0;  // 已完成步数
     in property <string> workspace-placeholder-title;
     in property <string> workspace-placeholder-subtitle;
+    in property <string> workspace-step-pending-notice;
     in property <string> workspace-stepper-title-label;
     in property <string> workspace-stepper-boundary-label;
     in property <string> workspace-stepper-orientation-label;
     in property <string> workspace-stepper-collection-label;
     in property <string> workspace-stepper-review-label;
     in property <string> workspace-stepper-export-label;
-    // 步骤条教程气泡（F2 钩子，ADR-0028 三泡之二）
+    // 步骤条教程气泡 (F2 钩子，ADR-0028 三泡之二)
     in property <bool> workspace-tutorial-visible;
     in property <string> workspace-tutorial-text;
     in property <string> workspace-tutorial-dismiss-label;
@@ -98,6 +100,23 @@ export component AppWindow inherits Window {
     callback workspace-step-clicked(step-index: int);
     callback workspace-tutorial-dismiss-clicked();
     callback workspace-tutorial-skip-all-clicked();
+        
+    // ── 屏 4 步骤①：圈边界编辑器属性（T19B-5B Phase 2 Step A）────────
+    in property <[BoundaryPointData]> workspace-boundary-points;
+    in property <string> workspace-boundary-path-commands;
+    in property <string> workspace-boundary-title;
+    in property <string> workspace-boundary-hint;
+    in property <string> workspace-boundary-undo-label;
+    in property <string> workspace-boundary-confirm-label;
+    in property <string> workspace-boundary-reset-label;
+    in property <string> workspace-boundary-status;
+    in property <string> workspace-boundary-map-placeholder;
+    in property <bool> workspace-boundary-is-determined;
+    in property <int> workspace-boundary-point-count;
+    callback workspace-boundary-canvas-clicked(x: float, y: float);
+    callback workspace-boundary-undo-clicked();
+    callback workspace-boundary-confirm-clicked();
+    callback workspace-boundary-reset-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -473,14 +492,12 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         background: Theme.surface;
-
-        VerticalLayout {
-            alignment: center;
-            spacing: 0;
-
-            // 顶部步骤条
-            Stepper {
-                active-step: root.workspace-active-step;
+    
+        // 顶部步骤条
+        Stepper {
+            x: 16px;
+            y: 8px;
+            active-step: root.workspace-active-step;
                 completed-steps: root.workspace-completed-steps;
                 stepper-title-label: root.workspace-stepper-title-label;
                 stepper-boundary-label: root.workspace-stepper-boundary-label;
@@ -492,20 +509,59 @@ export component AppWindow inherits Window {
                     root.workspace-step-clicked(index);
                 }
             }
-
-            // 主内容区域（占位，Phase 2/3 实现）
-            Rectangle {
-                width: parent.width;
-                preferred-height: 200px;
+    
+            // 步骤①：圈边界编辑器 (Phase 2 Step A)
+            if root.workspace-active-step == 0: BoundaryEditor {
+                x: 16px;
+                y: 72px;
+                boundary-points: root.workspace-boundary-points;
+                boundary-path-commands: root.workspace-boundary-path-commands;
+                boundary-title: root.workspace-boundary-title;
+                boundary-hint: root.workspace-boundary-hint;
+                boundary-undo-label: root.workspace-boundary-undo-label;
+                boundary-confirm-label: root.workspace-boundary-confirm-label;
+                boundary-reset-label: root.workspace-boundary-reset-label;
+                boundary-status: root.workspace-boundary-status;
+                boundary-map-placeholder: root.workspace-boundary-map-placeholder;
+                boundary-is-determined: root.workspace-boundary-is-determined;
+                boundary-point-count: root.workspace-boundary-point-count;
+                    
+                boundary-canvas-clicked(x, y) => {
+                    root.workspace-boundary-canvas-clicked(x, y);
+                }
+                boundary-undo-clicked => {
+                    root.workspace-boundary-undo-clicked();
+                }
+                boundary-confirm-clicked => {
+                    root.workspace-boundary-confirm-clicked();
+                }
+                boundary-reset-clicked => {
+                    root.workspace-boundary-reset-clicked();
+                }
+            }
+                
+            // 步骤②+: 占位 (Phase 2 Step B/C 后续实现)
+            if root.workspace-active-step >= 1 && root.workspace-active-step <= 4: Rectangle {
+                x: 16px;
+                y: 120px;
+                width: parent.width - 32px;
+                preferred-height: 340px;
                 background: Theme.surface;
-
+                border-color: Theme.separator;
+                border-width: 1px;
+                border-radius: 4px;
+                clip: true;
+                    
                 VerticalLayout {
                     alignment: center;
                     spacing: 16px;
                     padding: 32px;
-
+                        
                     Text {
-                        text: root.workspace-placeholder-title;
+                        text: root.workspace-active-step == 1 ? root.workspace-stepper-orientation-label :
+                              root.workspace-active-step == 2 ? root.workspace-stepper-collection-label :
+                              root.workspace-active-step == 3 ? root.workspace-stepper-review-label :
+                              root.workspace-stepper-export-label;
                         font-size: 18px;
                         color: Theme.text-primary;
                         horizontal-alignment: center;
@@ -513,17 +569,51 @@ export component AppWindow inherits Window {
                     }
 
                     Text {
-                        text: root.workspace-placeholder-subtitle;
+                        text: root.workspace-step-pending-notice;
                         font-size: 12px;
-                        color: Theme.text-tertiary;
+                        color: Theme.text-secondary;
                         horizontal-alignment: center;
-                        wrap: word-wrap;
                     }
                 }
             }
-        }
+                
+            // 状态文字
+            Text {
+                text: root.workspace-boundary-status;
+                font-size: 13px;
+                color: Theme.text-tertiary;
+                x: 16px;
+                y: 470px;
+            }
+                
+            // 按钮区域 (仅步骤①显示)
+            if root.workspace-active-step == 0: HorizontalLayout {
+                x: 16px;
+                y: 500px;
+                spacing: 16px;
+                alignment: start;
+                    
+                Button {
+                    text: root.workspace-boundary-undo-label;
+                    enabled: !root.workspace-boundary-is-determined && root.workspace-boundary-point-count > 0;
+                    clicked => { root.workspace-boundary-undo-clicked(); }
+                }
+                    
+                Button {
+                    text: root.workspace-boundary-reset-label;
+                    enabled: root.workspace-boundary-point-count > 0;
+                    clicked => { root.workspace-boundary-reset-clicked(); }
+                }
+                    
+                Button {
+                    text: root.workspace-boundary-confirm-label;
+                    primary: true;
+                    enabled: root.workspace-boundary-point-count >= 3 && !root.workspace-boundary-is-determined;
+                    clicked => { root.workspace-boundary-confirm-clicked(); }
+                }
+            }
 
-        // 步骤条教程气泡（F2 钩子，ADR-0028：右上角，步骤条下方）
+        // 步骤条教程气泡 (F2 钩子，ADR-0028)——只在首次进入时显示
         if root.workspace-tutorial-visible: Rectangle {
             x: parent.width - 316px;
             y: 72px;
@@ -533,28 +623,28 @@ export component AppWindow inherits Window {
             border-radius: 8px;
             border-color: Theme.bubble-border;
             border-width: 1px;
-
+    
             workspace-bubble-layout := VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
-
+    
                 Text {
                     text: root.workspace-tutorial-text;
                     font-size: 14px;
                     color: Theme.text-primary;
                     wrap: word-wrap;
                 }
-
+    
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: end;
-
+    
                     Button {
                         text: root.workspace-tutorial-dismiss-label;
                         primary: true;
                         clicked => { root.workspace-tutorial-dismiss-clicked(); }
                     }
-
+    
                     if root.workspace-tutorial-skip-all-label != "": Button {
                         text: root.workspace-tutorial-skip-all-label;
                         clicked => { root.workspace-tutorial-skip-all-clicked(); }

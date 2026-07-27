@@ -43,24 +43,39 @@
   本单建完仍留列表页
 - 暗色卡与设置页切换开关延后（ADR-0023 §二），机制已就绪
 
-### T19B-5B（方案工作区 UI 骨架占位，2026-07-27）
+### T19B-5B（方案工作区 Phase 1 完成，2026-07-27）
 
-- `ui/main.slint`：新增屏 4（`if root.active-screen == 4` 分支）
-  —— 最小化占位实现，仅显示五步流程文字与待完善提示
-- zh-CN.json 新增 `workspace.placeholder_title` / `workspace.placeholder_subtitle`
-  文本键（国际化铁律 ADR-0005）
-- `src/injector.rs`：注入屏 4 文案属性（`workspace-placeholder-title` + 
-  `workspace-placeholder-subtitle`）
-- 预留接线：`stepper.slint` / `boundary_edit.slint` / `orientation.slint`
-  三个组件文件已存在（语法需简化适配 Slint 基础版本）
-- 诚实声明：步骤条完整交互逻辑（跳转规则/锁定/回跳确认窗）
-  及圈边界/定朝向页面归后续完整实现
-- 本单交付：编译绿灯 ✅ + 测试通过 ✅ + 手动可跳转屏 4 查看占位界面
+**Phase 1（三步法落地）：屏 4 步骤条 + 单击即开 + stepper_intro 气泡**
 
-> ⚠️ **已知技术债**：
-> - StepperIntro 气泡钩子位置未埋设（原计划绑定到步骤条亮相时机）
+- `ui/stepper.slint`（新建）：五格步骤条组件（ADR-0027）——StepButton
+  子组件 + Stepper 导出组件，绝对定位布局（绕开 HorizontalLayout
+  max-width binding loop）；当前高亮 / 已完成打勾 / 锁定置灰半透明；
+  文案全部经属性注入，颜色全部 Theme 角色名
+- `ui/main.slint`：屏 4 = Stepper + 占位内容区（平铺 if-block，组件只做
+  展示不做计算）；新增 workspace-* 属性组（当前步/已完成步数/六段文案/
+  气泡四属性）与三个回调；**Step B 成功采用条件渲染（if-block），
+  未启用 visible 兑底模式**
+- 单击即开（ADR-0027 第 6 轮）：`plan_list.slint` 卡片新增 TouchArea
+  热区 + `card-clicked` 回调 → 跳屏 4；`campus_select.slint` 校区行
+  补接单击（老用户进已有校区的入口，此前只有新建演示校区一条路）
+- 工具栏可见性改为 .slint 侧按 `active-screen` 派生（屏 2/4/5/6 显示，
+  0/1/3 隐藏）——Slint Rust API 无属性变化监听回调，且覆盖 .slint
+  内部返回跳转（设置页返回按钮）
+- 步骤点击守卫（Rust 侧）：锁定步骤忽略点击（前跳上锁，第①格永远解锁）；
+  回跳转屏逻辑归 Phase 2/3
+- Step C：`injector.rs` 进屏 4 时向 F2 索泡 `bubble_for(StepperIntro)`
+  ——首次弹出右上角气泡（步骤条下方），dismiss 记已见落库（只教一次），
+  skip_all 转 Completed 经 B7 留底；气泡 UI 复用 Theme.bubble-* 色卡
+- zh-CN.json 零改动（`tutorial.step_stepper_intro` 已于 b8b4294 在库）
+- 三步 commit：Step A `14a16a9`（占位）→ Step B `6362720`（步骤条+路由）
+  → Step C `a703cef`（气泡钩子），每步独立全门禁绿
+
+> ⚠️ **已知技术债（归 Phase 2/3 与后续接线单）**：
+> - 圈边界/定朝向步骤页未实现（占位文字区，归 Phase 2/3）
 > - B5 foundation-mode 的 BoundaryDrawer/OrientationCalculator 尚未接入
-> - stepper/boundary_edit/orientation 三个 .slint 文件需简化语法后重新集成
+> - 回跳“改动需确认窗”未实现（Phase 1 无数据可改，直接自由回跳）
+> - 气泡位置为占位坐标（右上角，定稿归 T19 界面审核）
+> - 步骤条为固定像素布局（x 坐标绝对定位），窗口拉宽时不自适应
 
 ### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
 

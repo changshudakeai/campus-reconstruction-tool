@@ -1,0 +1,156 @@
+// T19B-5B Phase 2 Step A — 圈边界编辑器 (ADR-0027 第①步)
+//
+// 薄壳原则 (ADR-0017): 零业务逻辑，几何计算全部在 B5 foundation-mode。
+// 颜色一律引用 Theme 角色名 (ADR-0023)，零硬编码颜色号。
+// 文案全部由 Rust 侧经 B6 l10n 注入 (ADR-0005)，.slint 零硬编码中文。
+//
+// 诚实妥协：无地图底图 (workspace 无网络/WebView 零件),纯坐标画布版。
+// 地图底图待后续决策。
+
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// 边界顶点显示数据 (像素坐标，已偏移以居中渲染 10px 圆点)
+export struct BoundaryPointData {
+    x: float,
+    y: float,
+}
+
+/// 圈边界编辑器：点击画布加点、撤销最后一点、确认闭合
+export component BoundaryEditor inherits Rectangle {
+    in property <[BoundaryPointData]> boundary-points;
+    in property <string> boundary-path-commands;
+    in property <string> boundary-title;
+    in property <string> boundary-hint;
+    in property <string> boundary-undo-label;
+    in property <string> boundary-confirm-label;
+    in property <string> boundary-reset-label;
+    in property <string> boundary-status;
+    in property <string> boundary-map-placeholder;
+    in property <bool> boundary-is-determined;
+    in property <int> boundary-point-count;
+    
+    callback boundary-canvas-clicked(x: float, y: float);
+    callback boundary-undo-clicked();
+    callback boundary-confirm-clicked();
+    callback boundary-reset-clicked();
+    
+    background: Theme.surface;
+    
+    // 标题
+    Text {
+        text: root.boundary-title;
+        font-size: 16px;
+        font-weight: 700;
+        color: Theme.text-primary;
+        x: 16px;
+        y: 8px;
+    }
+    
+    // 提示文字
+    Text {
+        text: root.boundary-hint;
+        font-size: 12px;
+        color: Theme.text-secondary;
+        x: 16px;
+        y: 32px;
+    }
+    
+    // 画布区域 (纯坐标画布，无地图底图)
+    Rectangle {
+        x: 16px;
+        y: 56px;
+        width: parent.width - 32px;
+        height: 340px;
+        background: Theme.surface;
+        border-color: Theme.separator;
+        border-width: 1px;
+        border-radius: 4px;
+        clip: true;
+        
+        // 地图底图占位说明
+        Text {
+            text: root.boundary-map-placeholder;
+            font-size: 12px;
+            color: Theme.text-faint;
+            horizontal-alignment: center;
+            x: 0px;
+            y: 8px;
+            width: parent.width;
+        }
+        
+        // 线段 (用 Path 画所有连线，先渲染在点下方)
+        Path {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            stroke: Theme.separator;
+            stroke-width: 2px;
+            fill: transparent;
+            commands: root.boundary-path-commands;
+        }
+        
+        // 顶点圆点
+        for point[i] in root.boundary-points: Rectangle {
+            x: point.x * 1px;
+            y: point.y * 1px;
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: {
+                if i == 0 && root.boundary-point-count > 0 {
+                    Theme.error  // 第一个点用不同颜色标识起点
+                } else {
+                    Theme.text-primary
+                }
+            };
+            border-color: Theme.surface;
+            border-width: 1px;
+        }
+
+        // 触摸区域 (捕获画布点击)
+        TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => {
+                root.boundary-canvas-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
+            }
+        }
+    }
+    
+    // 状态文字
+    Text {
+        text: root.boundary-status;
+        font-size: 13px;
+        color: Theme.text-tertiary;
+        x: 16px;
+        y: 408px;
+    }
+    
+    // 按钮区域 (绝对定位)
+    Button {
+        text: root.boundary-undo-label;
+        x: 16px;
+        y: 440px;
+        enabled: !root.boundary-is-determined && root.boundary-point-count > 0;
+        clicked => { root.boundary-undo-clicked(); }
+    }
+    
+    Button {
+        text: root.boundary-reset-label;
+        x: 120px;
+        y: 440px;
+        enabled: root.boundary-point-count > 0;
+        clicked => { root.boundary-reset-clicked(); }
+    }
+    
+    Button {
+        text: root.boundary-confirm-label;
+        primary: true;
+        x: parent.width - self.width - 16px;
+        y: 440px;
+        enabled: root.boundary-point-count >= 3 && !root.boundary-is-determined;
+        clicked => { root.boundary-confirm-clicked(); }
+    }
+}
