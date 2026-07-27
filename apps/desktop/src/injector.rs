@@ -92,12 +92,29 @@ pub struct ViewModelInjector {
     export: ExportConsole<MockSealGate>,
     // T19B-5B: B5 地基模式 (边界绘制状态机)
     boundary_drawer: BoundaryDrawer,
-    // T19B-5B Step B: 朝向交互状态 (壳只存 UI 状态，计算全委 B5)
+    // T19B-5B Step B/C: 按方案隔离的进度状态内存模型（不落 DB）
+    plan_progress_states: std::collections::HashMap<String, PlanProgressState>,
+    // 当前激活方案的 plan_id（用于多方案切换时查进度）
+    active_plan_id: Option<String>,
+    // T19B-5B Step B: 朝向交互状态（UI 局部状态）
     orientation_points: Vec<(f64, f64)>,
     orientation_angle: Option<f32>,
-    orientation_is_determined: bool,
     // P0-3: 等待确认的朝向值（用于 recalc 确认窗）
     pending_orientation_angle: Option<f32>,
+}
+
+/// 单方案进度状态（内存模型，Step C 新增）
+#[derive(Debug, Clone, Default)]
+struct PlanProgressState {
+    has_boundary: bool,
+    has_orientation: bool,
+}
+
+impl PlanProgressState {
+    /// 派生 completed_steps = has_boundary as u8 + has_orientation as u8
+    fn completed_steps(&self) -> u8 {
+        self.has_boundary as u8 + self.has_orientation as u8
+    }
 }
 
 impl ViewModelInjector {
@@ -116,9 +133,10 @@ impl ViewModelInjector {
             sentinel: QuietSentinel::new(),
             export: ExportConsole::new(MockSealGate::new()),
             boundary_drawer: BoundaryDrawer::new(),
+            plan_progress_states: std::collections::HashMap::new(),
+            active_plan_id: None,
             orientation_points: Vec::new(),
             orientation_angle: None,
-            orientation_is_determined: false,
             pending_orientation_angle: None,
         })
     }
@@ -247,6 +265,11 @@ impl ViewModelInjector {
         window.set_input_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
         window.set_input_dialog_label(l10n.t("dialog.name_label").into());
 
+        // ── T19B-5B Step C: 方案工作区初始值（内存进度） ────────────────
+        // completed-steps 由 active_plan 的派生状态决定，此处占位
+        let current_progress = self.current_plan_completed_steps();
+        window.set_workspace_completed_steps(current_progress.into());
+
         // ── T19B-9: 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────
         // 工具栏可见性由 .slint 侧按 active-screen 派生（屏 2/4/5/6 显示）
         window.set_toolbar_title(l10n.t("app.welcome_title").into());
@@ -372,7 +395,8 @@ impl ViewModelInjector {
         // 角度值
         let angle = self.orientation_angle.unwrap_or(-1.0);
         window.set_workspace_orientation_angle(angle);
-        window.set_workspace_orientation_is_determined(self.orientation_is_determined);
+        // Step C: is_determined 由方案进度状态派生
+        window.set_workspace_orientation_is_determined(self.current_plan_has_orientation());
 
         // 角度显示文案
         let angle_display = if angle >= 0.0 {
@@ -391,7 +415,7 @@ impl ViewModelInjector {
         window.set_workspace_orientation_arrow_commands(arrow_commands.into());
 
         // 状态文案
-        let status = if self.orientation_is_determined {
+        let status = if self.current_plan_has_orientation() {
             self.l10n.t("orientation.status_determined").into()
         } else if self.orientation_points.is_empty() {
             self.l10n.t("orientation.status_idle").into()
@@ -542,12 +566,16 @@ impl ViewModelInjector {
         let shared = Rc::clone(injector);
         window.on_plan_list_card_clicked(move |plan_id| {
             let Some(window) = weak.upgrade() else { return };
-            let injector = shared.borrow();
-            // 记录当前方案 ID 供后续接线单使用；Phase 1 从第①步开始
-            window.set_active_plan_id(plan_id);
+            let mut injector = shared.borrow_mut();
+            // Step C: 设置当前激活方案 ID，隔离多方案进度状态
+            injector.set_active_plan(Some(&plan_id));
+            // 记录当前方案 ID 供后续接线单使用
+            window.set_active_plan_id(plan_id.clone());
             window.set_workspace_active_step(0);
             window.set_active_screen(4);
-            // F2 步骤条气泡钩子（规矩③“只教一次”：已见过则返回 None）
+            // Step C: 同步当前方案的进度到步骤条
+            injector.sync_workspace_progress(&window);
+            // F2 步骤条气泡钩子（规矩③"只教一次"：已见过则返回 None）
             if let Some(bubble) = injector
                 .tutorial()
                 .bubble_for(TutorialStep::StepperIntro, injector.l10n())
@@ -641,9 +669,11 @@ impl ViewModelInjector {
             if let Some(pending_angle) = injector.pending_orientation_angle.take() {
                 // 应用新朝向值
                 injector.orientation_angle = Some(pending_angle);
-                injector.orientation_is_determined = true;
-                // P1-6: 更新步骤门控状态
-                window.set_workspace_completed_steps(2);
+                // Step C: 更新当前方案的进度状态（has_orientation = true）
+                if let Some(plan_id) = injector.active_plan_id.clone() {
+                    injector.update_plan_progress(&plan_id, true, true);
+                }
+                injector.sync_workspace_progress(&window);
                 return;
             }
 
@@ -893,7 +923,14 @@ impl ViewModelInjector {
                 .boundary_drawer_mut()
                 .handle_event(BoundaryUiEvent::Confirm)
             {
-                EventResult::Accepted => {}
+                EventResult::Accepted => {
+                    // Step C: 边界确认成功 → 更新方案进度 has_boundary = true
+                    if let Some(plan_id) = injector.active_plan_id.clone() {
+                        let has_orientation = injector.current_plan_has_orientation();
+                        injector.update_plan_progress(&plan_id, true, has_orientation);
+                    }
+                    injector.sync_workspace_progress(&window);
+                }
                 EventResult::Rejected(msg) => report_callback_error(injector.l10n(), &msg),
                 EventResult::Ignored => {}
             }
@@ -906,10 +943,16 @@ impl ViewModelInjector {
             let mut injector = shared.borrow_mut();
             // Reset → 清空所有顶点
             injector.boundary_drawer_mut().reset();
+            // Step C: 边界重置 → 更新方案进度 has_boundary = false
+            if let Some(plan_id) = injector.active_plan_id.clone() {
+                let has_orientation = injector.current_plan_has_orientation();
+                injector.update_plan_progress(&plan_id, false, has_orientation);
+            }
             // 同步 UI
             {
                 let Some(window) = weak.upgrade() else { return };
                 injector.sync_boundary_display(&window);
+                injector.sync_workspace_progress(&window);
             }
         });
 
@@ -922,7 +965,7 @@ impl ViewModelInjector {
             let mut injector = shared.borrow_mut();
 
             // 已有朝向值时重新设定 → 弹确认窗 (collection.orientation_recalc_notice) + store pending state
-            if injector.orientation_is_determined {
+            if injector.current_plan_has_orientation() {
                 // P0-3: 保存待应用的朝向值供 confirm dialog 使用
                 injector.pending_orientation_angle = injector.orientation_angle;
                 window
@@ -998,7 +1041,7 @@ impl ViewModelInjector {
                 match OrientationCalculator::normalize_angle(angle) {
                     Some(orientation) => {
                         // 已有朝向值时弹确认窗
-                        if injector.orientation_is_determined {
+                        if injector.current_plan_has_orientation() {
                             // P0-3: 保存待应用的朝向值供 confirm dialog 使用
                             injector.pending_orientation_angle = Some(orientation.degree());
                             window.set_confirm_dialog_title(
@@ -1014,9 +1057,12 @@ impl ViewModelInjector {
                             return;
                         }
                         injector.orientation_angle = Some(orientation.degree());
-                        injector.orientation_is_determined = true;
-                        // P1-6: 更新步骤门控状态
-                        window.set_workspace_completed_steps(2);
+                        // Step C: 更新方案进度状态
+                        if let Some(plan_id) = injector.active_plan_id.clone() {
+                            let has_boundary = injector.current_plan_has_boundary();
+                            injector.update_plan_progress(&plan_id, has_boundary, true);
+                        }
+                        injector.sync_workspace_progress(&window);
                     }
                     None => {
                         // P0-1/2: 硬编码英文 → i18n + B7 弹窗（非 toast）
@@ -1036,9 +1082,12 @@ impl ViewModelInjector {
             } else if mode == "two-points" {
                 // 两点模式：两个点就位且角度已算出 → 确定朝向
                 if injector.orientation_points.len() == 2 && injector.orientation_angle.is_some() {
-                    injector.orientation_is_determined = true;
-                    // P1-6: 更新步骤门控状态（completed-steps）
-                    window.set_workspace_completed_steps(2);
+                    // Step C: 更新方案进度状态
+                    if let Some(plan_id) = injector.active_plan_id.clone() {
+                        let has_boundary = injector.current_plan_has_boundary();
+                        injector.update_plan_progress(&plan_id, has_boundary, true);
+                    }
+                    injector.sync_workspace_progress(&window);
                 }
             }
             injector.sync_orientation_display(&window);
@@ -1051,11 +1100,16 @@ impl ViewModelInjector {
             let mut injector = shared.borrow_mut();
             injector.orientation_points.clear();
             injector.orientation_angle = None;
-            injector.orientation_is_determined = false;
+            // Step C: 重置当前方案的朝向进度
+            if let Some(plan_id) = injector.active_plan_id.clone() {
+                let has_boundary = injector.current_plan_has_boundary();
+                injector.update_plan_progress(&plan_id, has_boundary, false);
+            }
             {
                 let Some(window) = weak.upgrade() else { return };
                 window.set_workspace_orientation_input_text("".into());
                 injector.sync_orientation_display(&window);
+                injector.sync_workspace_progress(&window);
             }
         });
     }
@@ -1176,6 +1230,56 @@ impl ViewModelInjector {
         &mut self.boundary_drawer
     }
 
+    // ── T19B-5B Step C: 方案进度内存模型访问器 ───────────────────────
+    /// 获取当前激活方案的 completed_steps（派生值）
+    fn current_plan_completed_steps(&self) -> u8 {
+        self.active_plan_id
+            .as_ref()
+            .and_then(|id| self.plan_progress_states.get(id))
+            .map(|state| state.completed_steps())
+            .unwrap_or(0)
+    }
+
+    /// 当前激活方案是否已完成边界步骤
+    fn current_plan_has_boundary(&self) -> bool {
+        self.active_plan_id
+            .as_ref()
+            .and_then(|id| self.plan_progress_states.get(id))
+            .map(|state| state.has_boundary)
+            .unwrap_or(false)
+    }
+
+    /// 当前激活方案是否已完成朝向步骤
+    fn current_plan_has_orientation(&self) -> bool {
+        self.active_plan_id
+            .as_ref()
+            .and_then(|id| self.plan_progress_states.get(id))
+            .map(|state| state.has_orientation)
+            .unwrap_or(false)
+    }
+
+    /// 更新指定方案的进度状态
+    fn update_plan_progress(&mut self, plan_id: &str, has_boundary: bool, has_orientation: bool) {
+        let state = self
+            .plan_progress_states
+            .entry(plan_id.to_string())
+            .or_default();
+        state.has_boundary = has_boundary;
+        state.has_orientation = has_orientation;
+    }
+
+    /// 设置当前激活方案 ID（用于多方案切换时隔离进度）
+    fn set_active_plan(&mut self, plan_id: Option<&str>) {
+        self.active_plan_id = plan_id.map(|s| s.to_string());
+    }
+
+    /// 同步工作区进度到 Slint 窗口（completed-steps + is_determined）
+    fn sync_workspace_progress(&self, window: &AppWindow) {
+        let steps = self.current_plan_completed_steps();
+        window.set_workspace_completed_steps(steps.into());
+        window.set_workspace_orientation_is_determined(self.current_plan_has_orientation());
+    }
+
     // ── T19B-4/T19B-5 辅助方法：校区列表与方案列表数据流转 ────────────────
 
     /// 当前校区 ID（读 B2 app_settings 中的“上次使用的校区”）
@@ -1226,12 +1330,24 @@ impl ViewModelInjector {
         let cards = self.projects.list_plan_cards(campus_id).unwrap_or_default();
         let model: Vec<crate::PlanCardData> = cards
             .iter()
-            .map(|card| crate::PlanCardData {
-                plan_id: card.plan_id.clone().into(),
-                name: card.name.clone().into(),
-                progress_desc: l10n.t(card.progress.text_key()).into(),
-                // ADR-0018 §一第 3 条：相对表述（“刚刚/X 分钟前/X 小时前/X 天前”）
-                last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
+            .map(|card| {
+                // Step C: 按内存进度派生卡片状态文案（ADR-0027 单一事实来源）
+                let progress_desc = match self.plan_progress_states.get(&card.plan_id) {
+                    Some(state) if state.has_boundary && state.has_orientation => {
+                        l10n.t("plan.progress_next_collection").into()
+                    }
+                    Some(state) if state.has_boundary => {
+                        l10n.t("plan.progress_boundary_done").into()
+                    }
+                    _ => l10n.t(card.progress.text_key()).into(),
+                };
+                crate::PlanCardData {
+                    plan_id: card.plan_id.clone().into(),
+                    name: card.name.clone().into(),
+                    progress_desc,
+                    // ADR-0018 §一第 3 条：相对表述（"刚刚/X 分钟前/X 小时前/X 天前"）
+                    last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
+                }
             })
             .collect();
         window.set_plan_list_model(ModelRc::new(VecModel::from(model)));
