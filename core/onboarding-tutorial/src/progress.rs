@@ -143,8 +143,8 @@ mod tests {
         assert_eq!(progress.status(), TutorialStatus::InProgress);
         assert!(progress.completed_at().is_none());
 
-        progress.mark_seen(TutorialStep::CollectionCompleted);
-        progress.mark_seen(TutorialStep::ExportCompleted);
+        progress.mark_seen(TutorialStep::StepperIntro);
+        progress.mark_seen(TutorialStep::ReviewIntro);
         assert_eq!(progress.status(), TutorialStatus::Completed);
         assert!(progress.completed_at().is_some(), "看完最后一泡即盖完成章");
     }

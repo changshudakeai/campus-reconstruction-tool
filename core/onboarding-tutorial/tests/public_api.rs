@@ -19,8 +19,8 @@ fn public_api_types_exist() {
     // TutorialStep：稳定 ID + tutorial.* 文本键
     assert_eq!(TutorialStep::PlanListIntro.id(), "plan_list_intro");
     assert_eq!(
-        TutorialStep::CollectionCompleted.message_key(),
-        "tutorial.step_collection_done"
+        TutorialStep::StepperIntro.message_key(),
+        "tutorial.step_stepper_intro"
     );
 
     // BubblePlacement：占位值（定稿归 T19 界面审核）

@@ -38,7 +38,7 @@ fn rule_1_dismiss_closes_bubble_and_persists() {
         .bubble_for(TutorialStep::PlanListIntro, &l10n)
         .is_none());
     assert!(reloaded
-        .bubble_for(TutorialStep::CollectionCompleted, &l10n)
+        .bubble_for(TutorialStep::StepperIntro, &l10n)
         .is_some());
 }
 
@@ -80,7 +80,7 @@ fn rule_2_skip_all_option_only_on_first_bubble() {
         .dismiss(&mut db, TutorialStep::PlanListIntro)
         .unwrap();
     let second = tutorial
-        .bubble_for(TutorialStep::CollectionCompleted, &l10n)
+        .bubble_for(TutorialStep::StepperIntro, &l10n)
         .unwrap();
     assert!(second.skip_all_label.is_none());
 }
@@ -137,13 +137,13 @@ fn rule_4_replay_from_settings_is_reversible() {
 
 #[test]
 fn milestone_hooks_cover_ticket_reserved_points() {
-    // T17 预留钩子：首进方案列表 / 采集完成 / 导出完成
+    // T19B-5A 改造：三泡清单（首进列表·步骤条亮相·评审亮相）
     assert_eq!(
         ALL_STEPS,
         [
             TutorialStep::PlanListIntro,
-            TutorialStep::CollectionCompleted,
-            TutorialStep::ExportCompleted,
+            TutorialStep::StepperIntro,
+            TutorialStep::ReviewIntro,
         ]
     );
 }

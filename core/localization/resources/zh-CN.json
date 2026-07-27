@@ -147,8 +147,8 @@
     "skip_notice_title": "已跳过全部新手引导",
     "skip_notice_body": "想再看时，到设置里点“重新查看教程”即可。",
     "step_plan_list": "点这里新建你的第一个方案",
-    "step_collection_done": "采集完成了——去评审工作台把候选过目一遍",
-    "step_export_done": "导出完成了——去导出清单看看你的成果"
+    "step_stepper_intro": "顶上这五格就是全部流程，跟着走就行",
+    "step_review_intro": "每条候选给个态度：要、不要、再想想"
   },
   "dialog": {
     "error_title": "错误",

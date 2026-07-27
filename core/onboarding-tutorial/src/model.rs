@@ -3,19 +3,18 @@
 //! 状态机：`NotStarted → InProgress → Completed`；"重新查看教程"把状态
 //! 拨回 `NotStarted`（跳过可逆，规矩④）。
 //!
-//! 提示点清单**不在本阶段固化**（ADR-0020 后果条：避免对着还不存在的
-//! 界面空谈位置）——此处只预留 T17 工单指定的三个里程碑钩子，
-//! 完整清单待界面成型后的开发版审核时扩容（T19）。
+//! 提示点清单已按 ADR-0028 拍板为三泡（首进列表·步骤条亮相·评审亮相）——
+//! F2 `TutorialStep` 枚举对应改造完成。
 
-/// 里程碑提示点（预留钩子，界面审核后扩容）
+/// 里程碑提示点（ADR-0028：三泡清单——拆除旧两泡 + 新增两泡）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TutorialStep {
-    /// 首次进入方案列表页（气泡：点这里新建方案）
+    /// 首次进入方案列表页（气泡：点这里新建方案）【保留现有】
     PlanListIntro,
-    /// 首次完成数据采集（气泡：下一步去评审工作台）
-    CollectionCompleted,
-    /// 首次完成导出（气泡：去导出清单看成果）
-    ExportCompleted,
+    /// 步骤条首次亮相时的气泡（ADR-0028：顶上这五格就是全部流程）【新增】
+    StepperIntro,
+    /// 评审步骤页首次亮相时的气泡（ADR-0028：每条候选给个态度）【新增】
+    ReviewIntro,
 }
 
 impl TutorialStep {
@@ -23,8 +22,8 @@ impl TutorialStep {
     pub fn id(&self) -> &'static str {
         match self {
             Self::PlanListIntro => "plan_list_intro",
-            Self::CollectionCompleted => "collection_completed",
-            Self::ExportCompleted => "export_completed",
+            Self::StepperIntro => "stepper_intro",
+            Self::ReviewIntro => "review_intro",
         }
     }
 
@@ -32,17 +31,17 @@ impl TutorialStep {
     pub fn message_key(&self) -> &'static str {
         match self {
             Self::PlanListIntro => "tutorial.step_plan_list",
-            Self::CollectionCompleted => "tutorial.step_collection_done",
-            Self::ExportCompleted => "tutorial.step_export_done",
+            Self::StepperIntro => "tutorial.step_stepper_intro",
+            Self::ReviewIntro => "tutorial.step_review_intro",
         }
     }
 }
 
-/// 全部提示点，顺序即任务链先后（首进方案列表 → 采集完成 → 导出完成）
+/// 全部提示点，顺序即任务链先后（ADR-0028：三泡清单）
 pub const ALL_STEPS: [TutorialStep; 3] = [
     TutorialStep::PlanListIntro,
-    TutorialStep::CollectionCompleted,
-    TutorialStep::ExportCompleted,
+    TutorialStep::StepperIntro,
+    TutorialStep::ReviewIntro,
 ];
 
 /// 教程状态机
