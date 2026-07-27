@@ -168,6 +168,25 @@ impl ViewModelInjector {
         window.set_input_dialog_confirm_label(l10n.t("dialog.confirm_button").into());
         window.set_input_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
         window.set_input_dialog_label(l10n.t("dialog.name_label").into());
+
+        // ── T19B-9: 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────
+        window.set_toolbar_visible(false); // 动态根据 active-screen 控制
+
+        // 公告栏页（Screen 5）文案
+        window.set_notice_board_title(l10n.t("notice.page_title").into());
+        window.set_notice_board_empty_list_text(l10n.t("notice.empty_list").into());
+        window.set_notice_board_archive_button_text(l10n.t("notice.archive_button").into());
+        window.set_notice_board_date_today(l10n.t("notice.date_today").into());
+        window.set_notice_board_date_yesterday(l10n.t("notice.date_yesterday").into());
+        window.set_notice_board_importance_high_label(l10n.t("notice.importance_high").into());
+
+        // 回收站页（Screen 6）文案
+        window.set_trash_page_title(l10n.t("trash.page_title").into());
+        window.set_trash_page_empty_list_text(l10n.t("trash.empty_list").into());
+        window.set_trash_page_restore_button_text(l10n.t("trash.restore_button").into());
+        window.set_trash_page_purge_button_text(l10n.t("trash.purge_button").into());
+        window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
+        window.set_trash_page_date_today(l10n.t("notice.date_today").into());
     }
 
     /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程；T19B-3：校区选择；
@@ -212,6 +231,8 @@ impl ViewModelInjector {
         Self::bind_campus_select(injector, window);
         // ── T19B-4：方案列表页回调 ────────────────────────────
         Self::bind_plan_list(injector, window);
+        // ── T19B-9: 右上角工具栏回调 ─────────────────────
+        Self::bind_toolbar(injector, window);
     }
 
     /// T19B-3/T19B-5：校区选择页回调绑定。
@@ -454,6 +475,43 @@ impl ViewModelInjector {
                 report_callback_error(injector.l10n(), &error);
             }
             window.set_plan_list_tutorial_visible(false);
+        });
+    }
+
+    // ── T19B-9: 右上角工具栏回调绑定 ────────────────────────
+    fn bind_toolbar(_injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak = window.as_weak();
+
+        // 公告栏入口：跳屏 5
+        let weak_clone = weak.clone();
+        window.on_notice_toolbar_button_clicked(move || {
+            if let Some(window) = weak_clone.upgrade() {
+                window.set_active_screen(5);
+            }
+        });
+
+        // 切换校区入口：跳屏 1
+        let weak_clone = weak.clone();
+        window.on_switch_campus_toolbar_button_clicked(move || {
+            if let Some(window) = weak_clone.upgrade() {
+                window.set_active_screen(1);
+            }
+        });
+
+        // 回收站入口：跳屏 6
+        let weak_clone = weak.clone();
+        window.on_trash_toolbar_button_clicked(move || {
+            if let Some(window) = weak_clone.upgrade() {
+                window.set_active_screen(6);
+            }
+        });
+
+        // 设置入口：跳屏 3
+        let weak_clone = weak.clone();
+        window.on_settings_toolbar_button_clicked(move || {
+            if let Some(window) = weak_clone.upgrade() {
+                window.set_active_screen(3);
+            }
         });
     }
 

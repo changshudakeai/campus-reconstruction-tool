@@ -62,6 +62,27 @@
 > - B5 foundation-mode 的 BoundaryDrawer/OrientationCalculator 尚未接入
 > - stepper/boundary_edit/orientation 三个 .slint 文件需简化语法后重新集成
 
+### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
+
+- `ui/notice_board.slint`（新建）：公告栏页组件（屏 5）——ListView 公告列表 +
+  重要性标识（high/normal 两级）+ 已读/未读状态 + empty-state + 归档按钮；
+  全部文案由 Rust 侧 l10n 注入，零硬编码中文
+- `ui/trash.slint`（新建）：回收站页组件（屏 6）——ListView 回收项列表 +
+  方案名/原校区/删除时间/过期时间 + 恢复/永久删除双按钮 + empty-state；
+  全部文案由 Rust 侧 l10n 注入，零硬编码中文
+- `ui/main.slint`：右上角四入口工具栏（公告栏📢 / 切换校区🔄 / 回收站🗑️ / 设置⚙️）
+  固定右上角，图标 + 文字标签（ADR-0027 §决定）；屏 5/6 路由分支
+- `ui/theme.slint`：新增 `text-inverse` 角色（白色，用于深色背景上的文字）
+- `src/injector.rs`：`bind_toolbar` 接线四个工具栏回调（屏切换）；
+  `inject` 注入 notice.*/trash.* 全部文案属性
+- zh-CN.json 新增 `notice.*`（8 键）+ `trash.*`（13 键）
+- 诚实声明：
+  - 工具栏默认可见性 = false，待 T19B-5B 装配步骤条容器后激活
+  - 公告栏数据源待 F3 通知中心 API；回收站恢复/永久删除回调待 F3 接线
+  - toast/铃铛 Presenter 空壳延后（ADR-0028 后果节，优先级低）
+  - F3 restore_plan 重名逻辑与既有决策不符（应自动加“（恢复 1）”后缀，
+    现为拒绝并报 RestoreNameConflict），待回收站 API 接线单修正
+
 ### T19B-1（Shell 基础框架与 VM 注入，2026-07-26）
 
 - `src/injector.rs`：`ViewModelInjector::new(ShellDatabases)` 构造并持有

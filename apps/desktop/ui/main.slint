@@ -14,6 +14,8 @@ import { SettingsWizard } from "settings_wizard.slint";
 import { CampusSelect, CampusData } from "campus_select.slint";
 import { PlanList, PlanCardData } from "plan_list.slint";
 import { ConfirmDialog, InputDialog } from "dialogs.slint";
+import { NoticeBoard, NoticeData } from "notice_board.slint";
+import { Trash, TrashItemData } from "trash.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -43,7 +45,35 @@ export component AppWindow inherits Window {
     in property <string> settings-back-label;
     in property <string> tutorial-replay-label;
 
-    // ── 屏 4：方案工作区占位文案（T19B-5B）────────────
+    // ── 右上角工具栏（ADR-0027 §决定 - 四入口固定）───────────────
+    in property <bool> toolbar-visible;
+    // 四个图标按钮：公告栏 / 切换校区 / 回收站 / 设置
+    in property <bool> notice-toolbar-button-visible;
+    in property <string> notice-toolbar-label;
+    in property <bool> switch-campus-toolbar-button-visible;
+    in property <string> switch-campus-toolbar-label;
+    in property <bool> trash-toolbar-button-visible;
+    in property <string> trash-toolbar-label;
+    in property <bool> settings-toolbar-button-visible;
+    in property <string> settings-toolbar-label;
+    
+    // ── 屏 5：公告栏页属性（T19B-9 新增）────────────
+    in property <string> notice-board-title;
+    in property <string> notice-board-empty-list-text;
+    in property <string> notice-board-archive-button-text;
+    in property <string> notice-board-date-today;
+    in property <string> notice-board-date-yesterday;
+    in property <string> notice-board-importance-high-label;
+    in property <[NoticeData]> notice-board-model;
+
+    // ── 屏 6：回收站页属性（T19B-9 新增）────────────
+    in property <string> trash-page-title;
+    in property <string> trash-page-empty-list-text;
+    in property <string> trash-page-restore-button-text;
+    in property <string> trash-page-purge-button-text;
+    in property <string> trash-page-retention-notice-text;
+    in property <string> trash-page-date-today;
+    in property <[TrashItemData]> trash-page-model;
     in property <string> workspace-placeholder-title;
     in property <string> workspace-placeholder-subtitle;
 
@@ -117,6 +147,12 @@ export component AppWindow inherits Window {
     callback replay-tutorial-clicked();
     callback error-dialog-dismissed();
     callback settings-clicked();
+    
+    // ── T19B-9: 右上角工具栏回调 ─────────────────────
+    callback notice-toolbar-button-clicked();
+    callback switch-campus-toolbar-button-clicked();
+    callback trash-toolbar-button-clicked();
+    callback settings-toolbar-button-clicked();
 
     title: root.app-title;
     // femtovg 渲染器的默认字体缺部分中文字形（显示方块），显式指定
@@ -126,7 +162,113 @@ export component AppWindow inherits Window {
     preferred-height: 600px;
     min-width: 480px;
     min-height: 360px;
-
+    
+    // ── 顶部工具栏 (ADR-0027)───────────────────────────────
+    if root.toolbar-visible: Rectangle {
+        y: 0;
+        height: 56px;
+        width: parent.width;
+        background: Theme.surface;
+        border-color: Theme.separator;
+        
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            
+            Text {
+                text: "校园复刻工具";
+                font-size: 16px;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            
+            Rectangle { 
+                // 弹性间隔
+            }
+            
+            // 公告栏图标 + 文字标签 (ADR-0027)
+            if root.notice-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 60px;
+                alignment: center;
+                
+                Button {
+                    text: "📢";
+                    clicked => { root.notice-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.notice-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 切换校区图标 + 文字标签
+            if root.switch-campus-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 70px;
+                alignment: center;
+                
+                Button {
+                    text: "🔄";
+                    clicked => { root.switch-campus-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.switch-campus-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 回收站图标 + 文字标签
+            if root.trash-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 65px;
+                alignment: center;
+                
+                Button {
+                    text: "🗑️";
+                    clicked => { root.trash-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.trash-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 设置图标 + 文字标签
+            if root.settings-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 55px;
+                alignment: center;
+                
+                Button {
+                    text: "⚙️";
+                    clicked => { root.settings-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.settings-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    
     // 屏 0：首跑向导（ADR-0004：即使下拉各只有一个选项也照常显示）
     if root.active-screen == 0: SettingsWizard {
         wizard-title: root.wizard-title;
@@ -325,4 +467,34 @@ export component AppWindow inherits Window {
             }
         }
     }
+    
+    // ── 屏 5：公告栏页（T19B-9）────────────────────────────
+    if root.active-screen == 5: NoticeBoard {
+        title <=> root.notice-board-title;
+        empty-list-text <=> root.notice-board-empty-list-text;
+        archive-button-text <=> root.notice-board-archive-button-text;
+        date-today <=> root.notice-board-date-today;
+        date-yesterday <=> root.notice-board-date-yesterday;
+        importance-high-label <=> root.notice-board-importance-high-label;
+        notice-model <=> root.notice-board-model;
+        
+        archive-all-clicked => { /* 归档逻辑待 F3 实现 */ }
+        notice-clicked(notice-id) => { /* 详情查看待 T20 */ }
+    }
+    
+    // ── 屏 6：回收站页（T19B-9）────────────────────────────
+    if root.active-screen == 6: Trash {
+        title <=> root.trash-page-title;
+        empty-list-text <=> root.trash-page-empty-list-text;
+        restore-button-text <=> root.trash-page-restore-button-text;
+        purge-button-text <=> root.trash-page-purge-button-text;
+        retention-notice-text <=> root.trash-page-retention-notice-text;
+        date-today <=> root.trash-page-date-today;
+        trash-model <=> root.trash-page-model;
+        
+        restore-clicked(plan-id) => { /* 恢复逻辑待 F3 */ }
+        purge-clicked(plan-id) => { /* 二次确认 + 永久删除待 F3 */ }
+        purge-all-clicked() => { /* 清空回收站需二次确认 */ }
+    }
 }
+
