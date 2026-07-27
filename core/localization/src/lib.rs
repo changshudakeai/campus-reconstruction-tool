@@ -106,6 +106,9 @@ struct ResourceBundle {
     /// 公告栏与通知消息
     #[serde(default)]
     pub messages: HashMap<String, String>,
+    /// 相对时间表述（ADR-0018 §一第 3 条，T19B-5A）
+    #[serde(default)]
+    pub time: HashMap<String, String>,
     /// 共同语言章名词定义（用于验证覆盖完整性）
     #[serde(default)]
     pub domain: HashMap<String, String>,
@@ -128,6 +131,7 @@ impl ResourceBundle {
             ("dialog", self.dialog),
             ("error", self.error),
             ("messages", self.messages),
+            ("time", self.time),
         ];
         for (prefix, table) in categories {
             for (key, value) in table {

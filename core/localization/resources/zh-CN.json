@@ -156,7 +156,13 @@
     "info_title": "提示",
     "ok_button": "知道了",
     "yes_button": "是",
-    "no_button": "否"
+    "no_button": "否",
+    "confirm_button": "确认",
+    "cancel_button": "取消",
+    "delete_title": "删除方案",
+    "create_title": "新建方案",
+    "rename_title": "改名方案",
+    "name_label": "方案名称"
   },
   "error": {
     "campus_not_found": "校区不存在",
@@ -171,5 +177,12 @@
     "source_tag": "来源：{source}",
     "copy": "复制",
     "retention_notice": "保留最近 200 条或 30 天，先到为准"
+  },
+  "time": {
+    "just_now": "刚刚",
+    "minutes_ago": "{0} 分钟前",
+    "hours_ago": "{0} 小时前",
+    "days_ago": "{0} 天前",
+    "date_display": "{0}"
   }
 }
