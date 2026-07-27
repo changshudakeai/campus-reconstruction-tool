@@ -150,6 +150,12 @@ impl ViewModelInjector {
         window.set_workspace_stepper_review_label(l10n.t("review.workbench_title").into());
         window.set_workspace_stepper_export_label(l10n.t("export.confirm_title").into());
 
+        // 屏 4：步骤条教程气泡（F2 钩子，ADR-0028）——初始隐藏，进屏 4 时索泡
+        window.set_workspace_tutorial_visible(false);
+        window.set_workspace_tutorial_text(SharedString::new());
+        window.set_workspace_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
+        window.set_workspace_tutorial_skip_all_label(SharedString::new());
+
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
@@ -337,12 +343,28 @@ impl ViewModelInjector {
 
         // 单击方案卡片（ADR-0027 第 6 轮：单击即开，无概览层）→ 跳屏 4 工作区
         let weak = window.as_weak();
+        let shared = Rc::clone(injector);
         window.on_plan_list_card_clicked(move |plan_id| {
             let Some(window) = weak.upgrade() else { return };
+            let injector = shared.borrow();
             // 记录当前方案 ID 供后续接线单使用；Phase 1 从第①步开始
             window.set_active_plan_id(plan_id);
             window.set_workspace_active_step(0);
             window.set_active_screen(4);
+            // F2 步骤条气泡钩子（规矩③“只教一次”：已见过则返回 None）
+            if let Some(bubble) = injector
+                .tutorial()
+                .bubble_for(TutorialStep::StepperIntro, injector.l10n())
+            {
+                window.set_workspace_tutorial_text(bubble.message.into());
+                window.set_workspace_tutorial_dismiss_label(bubble.dismiss_label.into());
+                window.set_workspace_tutorial_skip_all_label(
+                    bubble.skip_all_label.unwrap_or_default().into(),
+                );
+                window.set_workspace_tutorial_visible(true);
+            } else {
+                window.set_workspace_tutorial_visible(false);
+            }
         });
 
         // 改名（ADR-0018 §三）：···菜单 → 输入窗（预填现名）→ F3 rename_plan
@@ -561,7 +583,7 @@ impl ViewModelInjector {
     }
 
     // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────────
-    fn bind_workspace(_injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    fn bind_workspace(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
         // 步骤点击：上锁步骤不可点击（ADR-0027：前跳上锁，回跳自由，第①格永远解锁）
         let weak = window.as_weak();
         window.on_workspace_step_clicked(move |step_index| {
@@ -571,6 +593,30 @@ impl ViewModelInjector {
                 return; // 锁定步骤忽略点击
             }
             window.set_workspace_active_step(step_index);
+        });
+
+        // 步骤条教程气泡“知道了”（F2 规矩①：记已见并落库，此后不再显示）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_tutorial_dismiss_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            if let Err(error) = injector.dismiss_tutorial_step(TutorialStep::StepperIntro) {
+                report_callback_error(injector.l10n(), &error);
+            }
+            window.set_workspace_tutorial_visible(false);
+        });
+
+        // 步骤条教程气泡“跳过全部引导”（F2 规矩②）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_tutorial_skip_all_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            if let Err(error) = injector.skip_all_tutorial() {
+                report_callback_error(injector.l10n(), &error);
+            }
+            window.set_workspace_tutorial_visible(false);
         });
     }
 

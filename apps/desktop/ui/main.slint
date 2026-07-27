@@ -90,7 +90,14 @@ export component AppWindow inherits Window {
     in property <string> workspace-stepper-collection-label;
     in property <string> workspace-stepper-review-label;
     in property <string> workspace-stepper-export-label;
+    // 步骤条教程气泡（F2 钩子，ADR-0028 三泡之二）
+    in property <bool> workspace-tutorial-visible;
+    in property <string> workspace-tutorial-text;
+    in property <string> workspace-tutorial-dismiss-label;
+    in property <string> workspace-tutorial-skip-all-label;
     callback workspace-step-clicked(step-index: int);
+    callback workspace-tutorial-dismiss-clicked();
+    callback workspace-tutorial-skip-all-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -511,6 +518,46 @@ export component AppWindow inherits Window {
                         color: Theme.text-tertiary;
                         horizontal-alignment: center;
                         wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // 步骤条教程气泡（F2 钩子，ADR-0028：右上角，步骤条下方）
+        if root.workspace-tutorial-visible: Rectangle {
+            x: parent.width - 316px;
+            y: 72px;
+            width: 300px;
+            height: workspace-bubble-layout.preferred-height + 24px;
+            background: Theme.bubble-background;
+            border-radius: 8px;
+            border-color: Theme.bubble-border;
+            border-width: 1px;
+
+            workspace-bubble-layout := VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                Text {
+                    text: root.workspace-tutorial-text;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Button {
+                        text: root.workspace-tutorial-dismiss-label;
+                        primary: true;
+                        clicked => { root.workspace-tutorial-dismiss-clicked(); }
+                    }
+
+                    if root.workspace-tutorial-skip-all-label != "": Button {
+                        text: root.workspace-tutorial-skip-all-label;
+                        clicked => { root.workspace-tutorial-skip-all-clicked(); }
                     }
                 }
             }
