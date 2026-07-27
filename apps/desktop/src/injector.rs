@@ -96,6 +96,8 @@ pub struct ViewModelInjector {
     orientation_points: Vec<(f64, f64)>,
     orientation_angle: Option<f32>,
     orientation_is_determined: bool,
+    // P0-3: 等待确认的朝向值（用于 recalc 确认窗）
+    pending_orientation_angle: Option<f32>,
 }
 
 impl ViewModelInjector {
@@ -117,6 +119,7 @@ impl ViewModelInjector {
             orientation_points: Vec::new(),
             orientation_angle: None,
             orientation_is_determined: false,
+            pending_orientation_angle: None,
         })
     }
 
@@ -189,6 +192,7 @@ impl ViewModelInjector {
         // 屏 4 步骤②：定朝向交互页文案（T19B-5B Phase 2 Step B）
         window.set_workspace_orientation_points(ModelRc::new(VecModel::default()));
         window.set_workspace_orientation_path_commands(SharedString::new());
+        window.set_workspace_orientation_arrow_commands(SharedString::new());
         window.set_workspace_orientation_mode("two-points".into());
         window.set_workspace_orientation_angle(-1.0);
         window.set_workspace_orientation_is_determined(false);
@@ -207,6 +211,13 @@ impl ViewModelInjector {
         window.set_workspace_orientation_submit_label(l10n.t("orientation.submit_button").into());
         window.set_workspace_orientation_reset_label(l10n.t("orientation.reset_button").into());
         window.set_workspace_orientation_status(l10n.t("orientation.status_idle").into());
+        // P1-4: 模式切换按钮文案
+        window.set_workspace_orientation_mode_two_points_label(
+            l10n.t("orientation.mode_two_points").into(),
+        );
+        window.set_workspace_orientation_mode_bearing_angle_label(
+            l10n.t("orientation.mode_bearing_angle").into(),
+        );
 
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
@@ -311,6 +322,30 @@ impl ViewModelInjector {
         commands
     }
 
+    /// P1-5: 构建方向箭头 Path commands (三角形，按角度旋转)
+    ///
+    /// 罗盘中心 (50, 50)，箭头从中心向外指，角度 0°=正北(上)，顺时针增加。
+    fn build_arrow_commands(angle: f32) -> String {
+        let rad = angle.to_radians();
+        let cx = 50.0_f32;
+        let cy = 50.0_f32;
+        let r = 40.0_f32; // 箭头长度
+        let base_r = 25.0_f32; // 箭头基底距离
+        let half_w = 8.0_f32; // 箭头基底半宽
+
+        // 箭头尖端
+        let tip_x = cx + r * rad.sin();
+        let tip_y = cy - r * rad.cos();
+
+        // 箭头基底左右两点 (垂直于箭头方向)
+        let base_left_x = cx + base_r * rad.sin() + half_w * rad.cos();
+        let base_left_y = cy - base_r * rad.cos() + half_w * rad.sin();
+        let base_right_x = cx + base_r * rad.sin() - half_w * rad.cos();
+        let base_right_y = cy - base_r * rad.cos() - half_w * rad.sin();
+
+        format!("M {tip_x:.1} {tip_y:.1} L {base_left_x:.1} {base_left_y:.1} L {base_right_x:.1} {base_right_y:.1} Z")
+    }
+
     /// 同步朝向交互状态到 Slint 显示模型 (T19B-5B Step B)
     fn sync_orientation_display(&self, window: &AppWindow) {
         // 点显示数据 (偏移 -6 以居中渲染 12px 圆点)
@@ -346,6 +381,14 @@ impl ViewModelInjector {
             String::new()
         };
         window.set_workspace_orientation_angle_display(angle_display.into());
+
+        // P1-5: 方向箭头 Path commands (按角度计算三角形)
+        let arrow_commands = if angle >= 0.0 {
+            Self::build_arrow_commands(angle)
+        } else {
+            String::new()
+        };
+        window.set_workspace_orientation_arrow_commands(arrow_commands.into());
 
         // 状态文案
         let status = if self.orientation_is_determined {
@@ -574,6 +617,8 @@ impl ViewModelInjector {
         // 删除（ADR-0018 §三）：先弹确认窗，确认后进回收站
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let shared_confirmed = Rc::clone(injector);
+        let shared_cancel = Rc::clone(injector);
         window.on_plan_list_delete_clicked(move |plan_id_str| {
             let Some(window) = weak.upgrade() else { return };
             let injector = shared.borrow();
@@ -584,14 +629,25 @@ impl ViewModelInjector {
             window.set_confirm_dialog_visible(true);
         });
 
-        // ── 确认窗回调（T19B-5A）───────────────────────────
-        // 确认删除：调 F3 delete_plan（保留 30 天）
+        // ── 确认窗回调（T19B-5A + P0-3 朝向重算）───────────────────
+        // 确认删除：调 F3 delete_plan（保留 30 天），或应用朝向重算值
         let weak = window.as_weak();
-        let shared = Rc::clone(injector);
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
-            let mut injector = shared.borrow_mut();
+            let mut injector = shared_confirmed.borrow_mut();
+
+            // P0-3: 如果有待应用的朝向值，优先处理
+            if let Some(pending_angle) = injector.pending_orientation_angle.take() {
+                // 应用新朝向值
+                injector.orientation_angle = Some(pending_angle);
+                injector.orientation_is_determined = true;
+                // P1-6: 更新步骤门控状态
+                window.set_workspace_completed_steps(2);
+                return;
+            }
+
+            // 无 pending state → 删除计划
             let plan_id_str = window.get_active_plan_id().to_string();
             let plan_id = match PlanId::parse(&plan_id_str) {
                 Ok(id) => id,
@@ -610,11 +666,15 @@ impl ViewModelInjector {
             }
         });
 
-        // 取消删除
+        // 取消删除 / 取消朝向重算
         let weak = window.as_weak();
         window.on_confirm_dialog_cancelled(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
+            // P0-3: 重置 pending state（如果已设置）
+            if let Ok(mut injector) = shared_cancel.try_borrow_mut() {
+                injector.pending_orientation_angle = None;
+            }
         });
 
         // ── 输入窗回调（T19B-5A）───────────────────────────
@@ -861,8 +921,10 @@ impl ViewModelInjector {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
 
-            // 已有朝向值时重新设定 → 弹确认窗 (collection.orientation_recalc_notice)
+            // 已有朝向值时重新设定 → 弹确认窗 (collection.orientation_recalc_notice) + store pending state
             if injector.orientation_is_determined {
+                // P0-3: 保存待应用的朝向值供 confirm dialog 使用
+                injector.pending_orientation_angle = injector.orientation_angle;
                 window
                     .set_confirm_dialog_title(injector.l10n().t("orientation.recalc_title").into());
                 window.set_confirm_dialog_body(
@@ -890,10 +952,17 @@ impl ViewModelInjector {
                         injector.orientation_angle = Some(orientation.degree());
                     }
                     None => {
-                        report_callback_error(
-                            injector.l10n(),
-                            &"two points coincide, cannot determine orientation",
+                        // P0-1/2: 硬编码英文 → i18n + B7 弹窗（非 toast）
+                        window
+                            .set_error_dialog_title(injector.l10n().t("dialog.error_title").into());
+                        window.set_error_dialog_source(injector.l10n().t("app.source_tag").into());
+                        window.set_error_dialog_body(
+                            injector
+                                .l10n()
+                                .t("orientation.error_coincident_points")
+                                .into(),
                         );
+                        window.set_error_dialog_visible(true);
                         injector.orientation_points.clear();
                     }
                 }
@@ -915,10 +984,14 @@ impl ViewModelInjector {
                 let angle: f32 = match text.trim().parse() {
                     Ok(v) => v,
                     Err(_) => {
-                        report_callback_error(
-                            injector.l10n(),
-                            &"invalid angle input, please enter a number",
+                        // P0-1/2: 硬编码英文 → i18n + B7 弹窗（非 toast）
+                        window
+                            .set_error_dialog_title(injector.l10n().t("dialog.error_title").into());
+                        window.set_error_dialog_source(injector.l10n().t("app.source_tag").into());
+                        window.set_error_dialog_body(
+                            injector.l10n().t("orientation.error_invalid_angle").into(),
                         );
+                        window.set_error_dialog_visible(true);
                         return;
                     }
                 };
@@ -926,6 +999,8 @@ impl ViewModelInjector {
                     Some(orientation) => {
                         // 已有朝向值时弹确认窗
                         if injector.orientation_is_determined {
+                            // P0-3: 保存待应用的朝向值供 confirm dialog 使用
+                            injector.pending_orientation_angle = Some(orientation.degree());
                             window.set_confirm_dialog_title(
                                 injector.l10n().t("orientation.recalc_title").into(),
                             );
@@ -940,12 +1015,21 @@ impl ViewModelInjector {
                         }
                         injector.orientation_angle = Some(orientation.degree());
                         injector.orientation_is_determined = true;
+                        // P1-6: 更新步骤门控状态
+                        window.set_workspace_completed_steps(2);
                     }
                     None => {
-                        report_callback_error(
-                            injector.l10n(),
-                            &"angle out of range, please enter a value in [0, 360)",
+                        // P0-1/2: 硬编码英文 → i18n + B7 弹窗（非 toast）
+                        window
+                            .set_error_dialog_title(injector.l10n().t("dialog.error_title").into());
+                        window.set_error_dialog_source(injector.l10n().t("app.source_tag").into());
+                        window.set_error_dialog_body(
+                            injector
+                                .l10n()
+                                .t("orientation.error_angle_out_of_range")
+                                .into(),
                         );
+                        window.set_error_dialog_visible(true);
                         return;
                     }
                 }
@@ -953,6 +1037,8 @@ impl ViewModelInjector {
                 // 两点模式：两个点就位且角度已算出 → 确定朝向
                 if injector.orientation_points.len() == 2 && injector.orientation_angle.is_some() {
                     injector.orientation_is_determined = true;
+                    // P1-6: 更新步骤门控状态（completed-steps）
+                    window.set_workspace_completed_steps(2);
                 }
             }
             injector.sync_orientation_display(&window);

@@ -123,7 +123,10 @@ export component AppWindow inherits Window {
     // ── 屏 4 步骤②：定朝向交互页属性（T19B-5B Phase 2 Step B）────────
         in property <[OrientationPointData]> workspace-orientation-points;
     in property <string> workspace-orientation-path-commands;
-    in property <string> workspace-orientation-mode: "two-points";
+    // P1-5: 方向箭头 Path commands
+    in property <string> workspace-orientation-arrow-commands;
+    // P1-4: 朝向模式改 in-out 供 Shell 切换
+    in-out property <string> workspace-orientation-mode: "two-points";
     in property <float> workspace-orientation-angle: -1.0;
     in property <bool> workspace-orientation-is-determined;
     in property <string> workspace-orientation-title;
@@ -135,8 +138,13 @@ export component AppWindow inherits Window {
     in property <string> workspace-orientation-submit-label;
     in property <string> workspace-orientation-reset-label;
     in property <string> workspace-orientation-status;
+    // P1-4: 模式切换按钮文案
+    in property <string> workspace-orientation-mode-two-points-label;
+    in property <string> workspace-orientation-mode-bearing-angle-label;
+    // P1-4: 模式变更回调（从 OrientationView → main）
+    callback workspace-orientation-mode-changed(mode: string);
     callback workspace-orientation-canvas-clicked(x: float, y: float);
-    callback workspace-orientation-angle-submitted(angle: float);
+    // P2-7: 删除死回调
     callback workspace-orientation-submit-clicked();
     callback workspace-orientation-reset-clicked();
 
@@ -214,7 +222,6 @@ export component AppWindow inherits Window {
     callback replay-tutorial-clicked();
     callback error-dialog-dismissed();
     callback settings-clicked();
-    
     // ── T19B-9: 右上角工具栏回调 ─────────────────────
     callback notice-toolbar-button-clicked();
     callback switch-campus-toolbar-button-clicked();
@@ -571,6 +578,7 @@ export component AppWindow inherits Window {
                 orientation-is-determined: root.workspace-orientation-is-determined;
                 workspace-orientation-points: root.workspace-orientation-points;
                 workspace-orientation-path-commands: root.workspace-orientation-path-commands;
+                workspace-orientation-arrow-commands: root.workspace-orientation-arrow-commands;
                 orientation-title: root.workspace-orientation-title;
                 orientation-two-points-hint: root.workspace-orientation-two-points-hint;
                 orientation-bearing-angle-hint: root.workspace-orientation-bearing-angle-hint;
@@ -580,6 +588,9 @@ export component AppWindow inherits Window {
                 orientation-submit-button: root.workspace-orientation-submit-label;
                 orientation-reset-button: root.workspace-orientation-reset-label;
                 orientation-status: root.workspace-orientation-status;
+                // P1-4: 模式切换按钮文案
+                orientation-mode-two-points-label: root.workspace-orientation-mode-two-points-label;
+                orientation-mode-bearing-angle-label: root.workspace-orientation-mode-bearing-angle-label;
                     
                 orientation-canvas-clicked(x, y) => {
                     root.workspace-orientation-canvas-clicked(x, y);
@@ -589,6 +600,9 @@ export component AppWindow inherits Window {
                 }
                 orientation-reset-clicked => {
                     root.workspace-orientation-reset-clicked();
+                }
+                mode-changed(mode) => {
+                    root.workspace-orientation-mode = mode;
                 }
             }
                 

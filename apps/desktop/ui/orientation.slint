@@ -18,6 +18,8 @@ component OrientationIndicator inherits Rectangle {
     in property <float> angle: 0.0;
     in property <string> angle-display;
     in property <length> indicator-size: 100px;
+    // P1-5: 方向箭头 Path commands (由 Rust 侧按角度计算)
+    in property <string> arrow-commands;
 
     background: transparent;
     width: root.indicator-size;
@@ -62,13 +64,11 @@ component OrientationIndicator inherits Rectangle {
         y: root.indicator-size - 16px;
     }
 
-    Text {
-        text: "W";
-        font-size: 12px;
-        color: Theme.text-secondary;
-        horizontal-alignment: center;
-        x: 4px;
-        y: root.indicator-size / 2 - self.height / 2;
+    // P1-5: 方向箭头 (Path commands 由 Rust 按角度计算)
+    Path {
+        visible: root.angle >= 0.0 && root.arrow-commands != "";
+        fill: Theme.error;
+        commands: root.arrow-commands;
     }
 
     // 角度数值显示 (中心位置)
@@ -94,16 +94,24 @@ export component OrientationView inherits Rectangle {
     in property <string> orientation-status;
     in property <string> orientation-angle-display;
     in-out property <string> orientation-input-text;
+    // P1-4: 模式切换按钮文案
+    in property <string> orientation-mode-two-points-label;
+    in property <string> orientation-mode-bearing-angle-label;
 
-    in property <string> workspace-orientation-mode: "two-points";
+    // P1-4: 朝向模式（in-out 供 Shell 切换）
+    in-out property <string> workspace-orientation-mode: "two-points";
     in property <float> workspace-orientation-angle: -1.0;
     in property <bool> orientation-is-determined;
     in property <[OrientationPointData]> workspace-orientation-points;
     in property <string> workspace-orientation-path-commands;
+    // P1-5: 方向箭头 Path commands
+    in property <string> workspace-orientation-arrow-commands;
 
     callback orientation-canvas-clicked(x: float, y: float);
     callback orientation-submit-clicked();
     callback orientation-reset-clicked();
+    // P1-4: 模式切换回调
+    callback mode-changed(mode: string);
 
     background: Theme.surface;
 
@@ -117,6 +125,32 @@ export component OrientationView inherits Rectangle {
         y: 8px;
     }
 
+    // P1-4: 模式切换控件（两个按钮）
+    HorizontalLayout {
+        x: 16px;
+        y: 32px;
+        width: parent.width - 32px;
+        spacing: 8px;
+
+        Button {
+            text: root.orientation-mode-two-points-label;
+            checked: root.workspace-orientation-mode == "two-points";
+            clicked => {
+                root.workspace-orientation-mode = "two-points";
+                root.mode-changed("two-points");
+            }
+        }
+
+        Button {
+            text: root.orientation-mode-bearing-angle-label;
+            checked: root.workspace-orientation-mode == "bearing-angle";
+            clicked => {
+                root.workspace-orientation-mode = "bearing-angle";
+                root.mode-changed("bearing-angle");
+            }
+        }
+    }
+
     // 提示文字
     Text {
         text: root.workspace-orientation-mode == "two-points"
@@ -125,7 +159,7 @@ export component OrientationView inherits Rectangle {
         font-size: 12px;
         color: Theme.text-secondary;
         x: 16px;
-        y: 32px;
+        y: 64px;
     }
 
     // 主画布区域 (绝对定位布局，延续 boundary_edit 风格)
@@ -174,6 +208,7 @@ export component OrientationView inherits Rectangle {
             visible: root.workspace-orientation-mode == "bearing-angle";
             angle: root.workspace-orientation-angle;
             angle-display: root.orientation-angle-display;
+            arrow-commands: root.workspace-orientation-arrow-commands;
             x: parent.width / 2 - self.width / 2;
             y: 80px;
         }
