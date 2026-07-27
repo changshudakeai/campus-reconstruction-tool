@@ -102,6 +102,18 @@
     "included_categories": "包含的类别",
     "missing_categories": "缺失的类别"
   },
+  "boundary": {
+    "step_title": "① 圈边界",
+    "hint": "点击画布加点，绘制方案范围多边形",
+    "undo_button": "撤销上一点",
+    "confirm_button": "确认边界",
+    "reset_button": "重置",
+    "status_idle": "点击画布添加第一个点",
+    "status_drawing": "已添加 {0} 个点，继续点击或点'确认边界'闭合",
+    "status_determined": "边界已确认，可点'重置'重新绘制",
+    "status_editing": "拖动顶点调整位置",
+    "map_placeholder": "地图底图待后续决策"
+  },
   "collection": {
     "title": "数据采集",
     "boundary_step": "圈画边界",
@@ -187,7 +199,8 @@
   },
   "workspace": {
     "placeholder_title": "① 圈边界 → ② 定朝向 → ③ 采集 → ④ 评审 → ⑤ 导出",
-    "placeholder_subtitle": "（步骤条骨架待 T19B-5B 完整实现）"
+    "placeholder_subtitle": "（步骤条骨架待 T19B-5B 完整实现）",
+    "step_pending_notice": "（待 Phase 2 Step B/C 实现）"
   },
   "notice": {
     "page_title": "公告栏",
