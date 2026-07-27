@@ -141,8 +141,7 @@ impl ViewModelInjector {
 
         // 校区选择页（T19B-3/T19B-5）
         window.set_campus_select_title(l10n.t("app.campus_select_title").into());
-        window
-            .set_campus_select_new_demo_campus_button_text(l10n.t("app.new_demo_button").into());
+        window.set_campus_select_new_demo_campus_button_text(l10n.t("app.new_demo_button").into());
         window.set_campus_select_settings_button_text(l10n.t("app.settings_button").into());
 
         // 方案列表页（T19B-4）
@@ -214,7 +213,7 @@ impl ViewModelInjector {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
             let campus_name = injector.l10n().t("campus.demo_name").to_string();
-            
+
             match injector.projects_mut().create_campus(&campus_name) {
                 Ok(campus) => {
                     // 创建成功后立即选中该校区
