@@ -1,0 +1,13 @@
+{
+  "surface": "#ffffff",
+  "overlay": "#00000073",
+  "text-primary": "#222222",
+  "text-secondary": "#666666",
+  "text-tertiary": "#888888",
+  "text-quaternary": "#999999",
+  "text-faint": "#aaaaaa",
+  "separator": "#e0e0e0",
+  "bubble-background": "#fffde7",
+  "bubble-border": "#fbc02d",
+  "error": "#c62828"
+}

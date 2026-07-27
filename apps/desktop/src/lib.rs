@@ -17,6 +17,7 @@ mod dispatch;
 mod injector;
 mod presenter;
 mod runtime;
+mod theme;
 
 pub use dispatch::report_callback_error;
 pub use injector::{ShellDatabases, ViewModelInjector};
@@ -37,4 +38,4 @@ mod generated {
     slint::include_modules!();
 }
 
-pub use generated::{AppWindow, PlanCardData};
+pub use generated::{AppWindow, PlanCardData, Theme};

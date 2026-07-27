@@ -5,11 +5,18 @@
 // T19B-2：首跑向导屏 + 着陆占位屏 + 设置页（债务②）+ B7 错误模态遮罩。
 // 完整五步步骤条导航骨架（ADR-0027）随 T19B-3..8 逐单落地。
 // T19B-3：校区选择页（campus_select.slint）接入，五屏路由（0 向导/1 选择/2 列表占位/3 设置）
+// T19B-5A：色卡角色名替换（ADR-0023）+ 通用对话框基建 + ADR-0010/0018 还债。
+// 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
 
 import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 import { SettingsWizard } from "settings_wizard.slint";
 import { CampusSelect, CampusData } from "campus_select.slint";
 import { PlanList, PlanCardData } from "plan_list.slint";
+import { ConfirmDialog, InputDialog } from "dialogs.slint";
+
+// 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
+export { Theme }
 
 export component AppWindow inherits Window {
     // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表占位，3 = 设置页
@@ -31,7 +38,7 @@ export component AppWindow inherits Window {
     in-out property <string> wizard-version;
     in-out property <bool> wizard-acknowledged;
 
-    // ── 设置页（债务②：F2 规矩④“重新查看教程”入口）──
+    // ── 设置页（债务②：F2 规矩④"重新查看教程"入口）──
     in property <string> settings-title;
     in property <string> settings-back-label;
     in property <string> tutorial-replay-label;
@@ -42,15 +49,34 @@ export component AppWindow inherits Window {
     in property <string> error-dialog-source;
     in property <string> error-dialog-body;
     in property <string> error-dialog-ok-label;
-    
+
+    // ── 通用确认窗（T19B-5A 对话框基建）──────────────────────
+    in-out property <bool> confirm-dialog-visible;
+    in property <string> confirm-dialog-title;
+    in property <string> confirm-dialog-body;
+    in property <string> confirm-dialog-confirm-label;
+    in property <string> confirm-dialog-cancel-label;
+
+    // ── 通用输入窗（T19B-5A 对话框基建）──────────────────────
+    in-out property <bool> input-dialog-visible;
+    in property <string> input-dialog-title;
+    in property <string> input-dialog-label;
+    in-out property <string> input-dialog-text;
+    in property <string> input-dialog-confirm-label;
+    in property <string> input-dialog-cancel-label;
+    // 输入窗模式：0 = 新建方案，1 = 改名（Rust 侧据此分派回调逻辑）
+    in-out property <int> input-dialog-mode;
+    // 当前操作的方案 ID（改名/删除时由 Rust 侧填入）
+    in-out property <string> active-plan-id;
+
     // ── 校区选择页属性（T19B-3 新增，T19B-5 第 0 号前置修改）───────────────
     in property <string> campus-select-title;
-    in property <string> campus-select-empty-list-text;  // T19B-5 新增
-    in property <string> campus-select-new-demo-campus-button-text;  // T19B-5 新增
-    in property <string> campus-select-settings-button-text;  // 改名为新命名
-    in property <[CampusData]> campus-select-model;  // T19B-5 新增：动态列表
+    in property <string> campus-select-empty-list-text;
+    in property <string> campus-select-new-demo-campus-button-text;
+    in property <string> campus-select-settings-button-text;
+    in property <[CampusData]> campus-select-model;
 
-    callback campus-select-new-demo-campus-clicked();  // T19B-5 新增回调
+    callback campus-select-new-demo-campus-clicked();
     callback campus-select-settings-clicked();
 
     // ── 方案列表页属性（T19B-4 新增）────────────────────
@@ -76,6 +102,12 @@ export component AppWindow inherits Window {
     callback plan-list-delete-clicked(plan-id: string);
     callback plan-list-tutorial-dismiss-clicked();
     callback plan-list-tutorial-skip-all-clicked();
+
+    // ── 对话框回调（T19B-5A）────────────────────────────
+    callback confirm-dialog-confirmed();
+    callback confirm-dialog-cancelled();
+    callback input-dialog-confirmed();
+    callback input-dialog-cancelled();
 
     callback wizard-continue-clicked();
     callback replay-tutorial-clicked();
@@ -145,10 +177,33 @@ export component AppWindow inherits Window {
         tutorial-skip-all-clicked => { root.plan-list-tutorial-skip-all-clicked() }
     }
 
-    // B7 错误模态遮罩：盖住全窗吞掉全部输入，点“知道了”前界面不可操作
-    // （弹窗铁律 ADR-0021“点掉才能继续”；声明在最后 = 渲染在最顶层）
+    // ── 通用确认窗（T19B-5A 对话框基建，声明在屏之后 = 渲染在上层）──
+    ConfirmDialog {
+        dialog-visible: root.confirm-dialog-visible;
+        title: root.confirm-dialog-title;
+        body: root.confirm-dialog-body;
+        confirm-label: root.confirm-dialog-confirm-label;
+        cancel-label: root.confirm-dialog-cancel-label;
+        confirmed => { root.confirm-dialog-confirmed() }
+        cancelled => { root.confirm-dialog-cancelled() }
+    }
+
+    // ── 通用输入窗（T19B-5A 对话框基建）──────────────────────
+    InputDialog {
+        dialog-visible: root.input-dialog-visible;
+        title: root.input-dialog-title;
+        label: root.input-dialog-label;
+        input-text <=> root.input-dialog-text;
+        confirm-label: root.input-dialog-confirm-label;
+        cancel-label: root.input-dialog-cancel-label;
+        confirmed => { root.input-dialog-confirmed() }
+        cancelled => { root.input-dialog-cancelled() }
+    }
+
+    // B7 错误模态遮罩：盖住全窗吞掉全部输入，点"知道了"前界面不可操作
+    // （弹窗铁律 ADR-0021"点掉才能继续"；声明在最后 = 渲染在最顶层）
     if root.error-dialog-visible: Rectangle {
-        background: rgba(0, 0, 0, 0.45);
+        background: Theme.overlay;
 
         // 空 TouchArea 拦截遮罩区域的所有点击/滚动
         TouchArea { }
@@ -158,7 +213,7 @@ export component AppWindow inherits Window {
             y: (parent.height - self.height) / 2;
             width: min(parent.width - 64px, 440px);
             height: dialog-content.preferred-height + 48px;
-            background: #ffffff;
+            background: Theme.surface;
             border-radius: 8px;
 
             dialog-content := VerticalLayout {
@@ -170,20 +225,20 @@ export component AppWindow inherits Window {
                 Text {
                     text: root.error-dialog-title;
                     font-size: 18px;
-                    color: #c62828;
+                    color: Theme.error;
                     wrap: word-wrap;
                 }
 
                 Text {
                     text: root.error-dialog-source;
                     font-size: 12px;
-                    color: #666666;
+                    color: Theme.text-secondary;
                 }
 
                 Text {
                     text: root.error-dialog-body;
                     font-size: 14px;
-                    color: #222222;
+                    color: Theme.text-primary;
                     wrap: word-wrap;
                 }
 
@@ -212,6 +267,7 @@ export component AppWindow inherits Window {
             text: root.settings-title;
             horizontal-alignment: center;
             font-size: 20px;
+            color: Theme.text-primary;
         }
 
         HorizontalLayout {

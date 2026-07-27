@@ -18,6 +18,7 @@ use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
 use crate::presenter::ShellPresenter;
+use crate::theme::apply_theme;
 use crate::AppWindow;
 
 /// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
@@ -72,6 +73,8 @@ pub fn run_dev() -> Result<()> {
     let center = NotificationCenter::init(PresenterRegistry::new());
 
     let window = AppWindow::new()?;
+    // T19B-5A 色卡机制（ADR-0023）：启动时加载亮色卡设置 Theme global
+    apply_theme(&window);
     // T19B-2 装喇叭：Slint 弹窗 Presenter 就位——无论数据库是否可用
     // 都注册（要紧错误从此真正可见，不再只留底）。
     center

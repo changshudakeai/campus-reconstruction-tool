@@ -29,6 +29,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::dispatch::report_callback_error;
 use crate::runtime::{decide, status_text, LandingDecision};
+use crate::theme::format_relative_time;
 use crate::{generated::CampusData, AppWindow};
 
 /// 壳持有的 B2 连接组。
@@ -156,6 +157,13 @@ impl ViewModelInjector {
         window.set_plan_list_tutorial_text(SharedString::new());
         window.set_plan_list_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
         window.set_plan_list_tutorial_skip_all_label(SharedString::new());
+
+        // 通用对话框文案（T19B-5A 对话框基建）
+        window.set_confirm_dialog_confirm_label(l10n.t("dialog.confirm_button").into());
+        window.set_confirm_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
+        window.set_input_dialog_confirm_label(l10n.t("dialog.confirm_button").into());
+        window.set_input_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
+        window.set_input_dialog_label(l10n.t("dialog.name_label").into());
     }
 
     /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程；T19B-3：校区选择；
@@ -236,27 +244,28 @@ impl ViewModelInjector {
         });
     }
 
-    /// T19B-4：方案列表页回调绑定。
+    /// T19B-4/T19B-5A：方案列表页回调绑定。
     ///
-    /// 新建方案（自动命名）/ 返回校区选择 / 改名、复制、删除占位 /
-    /// 教程气泡钩子（F2 规矩①②）。
+    /// 新建方案（ADR-0010 轻创建对话框）/ 返回校区选择 / ···菜单操作
+    /// （改名/复制/删除，ADR-0018 §三）/ 教程气泡钩子（F2 规矩①②）。
     fn bind_plan_list(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
-        // 新建方案：自动生成不冲突的名称（“新方案 1”“新方案 2”……）
+        // 新建方案（ADR-0010）：弹输入窗，预填可修改的默认名
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
         window.on_plan_list_create_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
+            let injector = shared.borrow();
             let Some(campus_id) = injector.current_campus_id() else {
                 report_callback_error(injector.l10n(), &"cannot create plan: no campus selected");
                 return;
             };
             let base_name = injector.l10n().t("plan.default_name");
-            let name = injector.next_plan_name(&campus_id, &base_name);
-            match injector.projects_mut().create_plan(&campus_id, &name) {
-                Ok(_) => injector.refresh_plan_list(&window, &campus_id),
-                Err(error) => report_callback_error(injector.l10n(), &error),
-            }
+            let default_name = injector.next_plan_name(&campus_id, &base_name);
+            // 设置输入窗为“新建方案”模式（mode=0）
+            window.set_input_dialog_mode(0);
+            window.set_input_dialog_title(injector.l10n().t("dialog.create_title").into());
+            window.set_input_dialog_text(default_name.into());
+            window.set_input_dialog_visible(true);
         });
 
         // 返回校区选择页
@@ -266,14 +275,31 @@ impl ViewModelInjector {
             window.set_active_screen(1);
         });
 
-        // 改名（占位：待对话框基础设施落地后接入 F3 rename_plan）
+        // 改名（ADR-0018 §三）：···菜单 → 输入窗（预填现名）→ F3 rename_plan
+        let weak = window.as_weak();
         let shared = Rc::clone(injector);
-        window.on_plan_list_rename_clicked(move |_plan_id| {
+        window.on_plan_list_rename_clicked(move |plan_id| {
+            let Some(window) = weak.upgrade() else { return };
             let injector = shared.borrow();
-            report_callback_error(
-                injector.l10n(),
-                &"rename dialog not yet implemented (T19B-4 placeholder)",
-            );
+            // 查找当前方案名作为预填值
+            let current_name = if let Some(campus_id) = injector.current_campus_id() {
+                injector
+                    .projects()
+                    .list_plan_cards(&campus_id)
+                    .unwrap_or_default()
+                    .iter()
+                    .find(|c| c.plan_id.as_str() == plan_id.as_str())
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            // 设置输入窗为“改名”模式（mode=1）
+            window.set_input_dialog_mode(1);
+            window.set_input_dialog_title(injector.l10n().t("dialog.rename_title").into());
+            window.set_input_dialog_text(current_name.into());
+            window.set_active_plan_id(plan_id);
+            window.set_input_dialog_visible(true);
         });
 
         // 复制方案：调 F3 duplicate_plan，后缀取 l10n “副本”
@@ -300,12 +326,28 @@ impl ViewModelInjector {
             }
         });
 
-        // 删除到回收站：调 F3 delete_plan（保留 30 天）
+        // 删除（ADR-0018 §三）：先弹确认窗，确认后进回收站
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
         window.on_plan_list_delete_clicked(move |plan_id_str| {
             let Some(window) = weak.upgrade() else { return };
+            let injector = shared.borrow();
+            // 设置确认窗文案
+            window.set_confirm_dialog_title(injector.l10n().t("dialog.delete_title").into());
+            window.set_confirm_dialog_body(injector.l10n().t("plan.delete_confirm").into());
+            window.set_active_plan_id(plan_id_str);
+            window.set_confirm_dialog_visible(true);
+        });
+
+        // ── 确认窗回调（T19B-5A）───────────────────────────
+        // 确认删除：调 F3 delete_plan（保留 30 天）
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_confirm_dialog_confirmed(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_confirm_dialog_visible(false);
             let mut injector = shared.borrow_mut();
+            let plan_id_str = window.get_active_plan_id().to_string();
             let plan_id = match PlanId::parse(&plan_id_str) {
                 Ok(id) => id,
                 Err(e) => {
@@ -321,6 +363,69 @@ impl ViewModelInjector {
                 Ok(_) => injector.refresh_plan_list(&window, &campus_id),
                 Err(error) => report_callback_error(injector.l10n(), &error),
             }
+        });
+
+        // 取消删除
+        let weak = window.as_weak();
+        window.on_confirm_dialog_cancelled(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_confirm_dialog_visible(false);
+        });
+
+        // ── 输入窗回调（T19B-5A）───────────────────────────
+        // 确认输入：根据 mode 分派新建/改名
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_input_dialog_confirmed(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let mode = window.get_input_dialog_mode();
+            let name = window.get_input_dialog_text().to_string();
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return; // 空名不提交，窗保持打开
+            }
+            let Some(campus_id) = injector.current_campus_id() else {
+                report_callback_error(injector.l10n(), &"no campus selected");
+                return;
+            };
+            match mode {
+                0 => {
+                    // 新建方案（ADR-0010）
+                    match injector.projects_mut().create_plan(&campus_id, &name) {
+                        Ok(_) => {
+                            window.set_input_dialog_visible(false);
+                            injector.refresh_plan_list(&window, &campus_id);
+                        }
+                        Err(error) => report_callback_error(injector.l10n(), &error),
+                    }
+                }
+                _ => {
+                    // 改名（ADR-0018 §三）
+                    let plan_id_str = window.get_active_plan_id().to_string();
+                    let plan_id = match PlanId::parse(&plan_id_str) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            report_callback_error(injector.l10n(), &e);
+                            return;
+                        }
+                    };
+                    match injector.projects_mut().rename_plan(&plan_id, &name) {
+                        Ok(_) => {
+                            window.set_input_dialog_visible(false);
+                            injector.refresh_plan_list(&window, &campus_id);
+                        }
+                        Err(error) => report_callback_error(injector.l10n(), &error),
+                    }
+                }
+            }
+        });
+
+        // 取消输入
+        let weak = window.as_weak();
+        window.on_input_dialog_cancelled(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_input_dialog_visible(false);
         });
 
         // 教程气泡“知道了”（F2 规矩①）
@@ -508,9 +613,8 @@ impl ViewModelInjector {
                 plan_id: card.plan_id.clone().into(),
                 name: card.name.clone().into(),
                 progress_desc: l10n.t(card.progress.text_key()).into(),
-                last_modified: l10n
-                    .t_with_array("plan.last_modified", &[&card.last_modified_at])
-                    .into(),
+                // ADR-0018 §一第 3 条：相对表述（“刚刚/X 分钟前/X 小时前/X 天前”）
+                last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
             })
             .collect();
         window.set_plan_list_model(ModelRc::new(VecModel::from(model)));

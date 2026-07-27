@@ -1,4 +1,4 @@
-# T19 — S1 薄壳实现状态（T19B-4 后）
+# T19 — S1 薄壳实现状态（T19B-5A 后）
 
 > 本文件随 T19B 系列子工单逐单更新，反映仓库真实状态。
 
@@ -17,7 +17,31 @@
 - deny.toml：slint 家族 Royalty-Free 许可豁免（见 deny.toml 内注释）
 
 > ⚠️ **T19B-5 已拆分为 5A + 5B**：见 `.scratch/v2-implementation/issues/` 新工单；
-本文件后续按新顺序补充文档（5A 还债与基建、5B 方案工作区）。
+> 本文件后续按新顺序补充文档（5A 还债与基建、5B 方案工作区）。
+
+### T19B-5A（还债与基建：色卡 + 对话框 + ADR-0010/0018，2026-07-27）
+
+- `ui/theme.slint`（新建）：Theme global 单例——11 个颜色角色名属性
+  （surface/overlay/text-primary/text-secondary/text-tertiary/text-quaternary/
+  text-faint/separator/bubble-background/bubble-border/error），
+  代码永不写颜色号，只写角色名（ADR-0023 §一）
+- `resources/themes/light.json`（新建）：亮色卡资源文件，键为角色名、值为 hex；
+  切主题 = 换色卡 JSON，代码零改动
+- `src/theme.rs`（新建）：色卡加载器（磁盘优先 + 内嵌兜底，参考 B6 模式）+
+  相对时间格式化（ADR-0018 §一第 3 条：刚刚/X 分钟前/X 小时前/X 天前，超 7 天显示日期）
+- `ui/dialogs.slint`（新建）：通用确认窗（ConfirmDialog）+ 通用输入窗（InputDialog），
+  文案全部注入，后续所有危险操作与输入场景复用
+- `ui/plan_list.slint`：三个平铺按钮收进 ··· PopupWindow 菜单（ADR-0018 §三）；
+  全部硬编码颜色号替换为 Theme 角色名
+- `ui/campus_select.slint`、`ui/main.slint`：硬编码颜色号全部替换为 Theme 角色名
+- `ui/main.slint`：新增确认窗/输入窗属性组 + 回调声明 + ConfirmDialog/InputDialog 实例
+- `src/injector.rs`：新建方案改为弹输入窗（ADR-0010 轻创建，预填默认名）；
+  改名接通 F3 rename_plan；删除加二次确认；相对时间格式化
+- zh-CN.json 新增 `dialog.confirm_button/cancel_button/delete_title/create_title/
+  rename_title/name_label` + `time.just_now/minutes_ago/hours_ago/days_ago/date_display`
+- 诚实妥协：ADR-0010"确认后进入方案工作区"这半条不在本单（工作区屏归 T19B-5B），
+  本单建完仍留列表页
+- 暗色卡与设置页切换开关延后（ADR-0023 §二），机制已就绪
 
 ### T19B-1（Shell 基础框架与 VM 注入，2026-07-26）
 
@@ -90,14 +114,14 @@
 - 手动验收已过（删库→向导→校区选择→点示例校区→方案列表页
   →新建方案→卡片出现→复制→删除→设置页可进）
 
-## 🚧 剩余接线债务（归 T19B-5..8，勿当已完成）
+## 🚧 剩余接线债务（归 T19B-5B..9，勿当已完成）
 
 1. 五步步骤条导航骨架（ADR-0027）与各步骤页属性/回调绑定；
-   校区选择与方案列表已于 T19B-3/4 落地，剩余步骤页归 T19B-5..8
+   校区选择与方案列表已于 T19B-3/4 落地，剩余步骤页归 T19B-5B..8
 2. F4→F7 采集报告入口【债务①】与 F2 剩余两个里程碑钩子【债务③，
    ADR-0028 三泡】（首进方案列表已于 T19B-4 落地；步骤条总介绍归
-   T19B-5，首进评审页归 T19B-7）
-3. 改名对话框基础设施（T19B-4 改名回调为占位，待对话框落地后接入）
+   T19B-5B，首进评审页归 T19B-7）
+3. 暗色卡文件（`resources/themes/dark.json`）与设置页主题切换开关（ADR-0023 §二）
 4. F9 真封账门控（壳实现 SealGate 调 F5 seal）；B7 warn 级 toast 与
    铃铛角标的 Slint 呈现（随公告栏界面）
 5. 开发版快捷方式端到端验收（`cargo xtask dev-shortcut` 已有实现）

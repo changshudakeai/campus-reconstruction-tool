@@ -1,0 +1,146 @@
+// T19B-5A — 通用对话框基建（确认窗 + 输入窗）。
+//
+// 薄壳原则（ADR-0017）：零业务逻辑，文案全部由 Rust 侧注入。
+// 后续所有危险操作与输入场景复用这两个组件。
+// 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
+
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// 通用确认窗：标题 + 正文 + 确认/取消两钮。
+/// 调用方给文本键解析后的成品文案，零硬编码。
+export component ConfirmDialog inherits Rectangle {
+    in property <bool> dialog-visible;
+    in property <string> title;
+    in property <string> body;
+    in property <string> confirm-label;
+    in property <string> cancel-label;
+
+    callback confirmed();
+    callback cancelled();
+
+    if root.dialog-visible: Rectangle {
+        background: Theme.overlay;
+
+        // 拦截遮罩区域的所有点击
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 64px, 400px);
+            height: dialog-body.preferred-height + 48px;
+            background: Theme.surface;
+            border-radius: 8px;
+
+            dialog-body := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 12px;
+
+                Text {
+                    text: root.title;
+                    font-size: 18px;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.body;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Button {
+                        text: root.cancel-label;
+                        clicked => { root.cancelled(); }
+                    }
+
+                    Button {
+                        text: root.confirm-label;
+                        primary: true;
+                        clicked => { root.confirmed(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 通用输入窗：标题 + 单行文本框（支持预填值）+ 确认/取消。
+/// 调用方给文本键解析后的成品文案，零硬编码。
+export component InputDialog inherits Rectangle {
+    in property <bool> dialog-visible;
+    in property <string> title;
+    in property <string> label;
+    in-out property <string> input-text;
+    in property <string> confirm-label;
+    in property <string> cancel-label;
+
+    callback confirmed();
+    callback cancelled();
+
+    if root.dialog-visible: Rectangle {
+        background: Theme.overlay;
+
+        // 拦截遮罩区域的所有点击
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 64px, 400px);
+            height: input-body.preferred-height + 48px;
+            background: Theme.surface;
+            border-radius: 8px;
+
+            input-body := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 12px;
+
+                Text {
+                    text: root.title;
+                    font-size: 18px;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.label;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                }
+
+                TextInput {
+                    text <=> root.input-text;
+                    font-size: 14px;
+                    height: 32px;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Button {
+                        text: root.cancel-label;
+                        clicked => { root.cancelled(); }
+                    }
+
+                    Button {
+                        text: root.confirm-label;
+                        primary: true;
+                        clicked => { root.confirmed(); }
+                    }
+                }
+            }
+        }
+    }
+}

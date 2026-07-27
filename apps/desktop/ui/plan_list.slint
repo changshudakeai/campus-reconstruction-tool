@@ -1,10 +1,13 @@
 // T19B-4 — 方案列表页（Screen 2）。
+// T19B-5A — 色卡角色名替换（ADR-0023）+ ···菜单（ADR-0018 §三）。
 //
 // 薄壳原则（ADR-0017）：零业务逻辑，全部文案由 Rust 侧经 B6 l10n 注入。
-// 卡片三件套（ADR-0018）：方案名 / 进度描述 / 最后修改时间。
-// 右键菜单操作（重命名/复制/删除）由回调递 Rust 侧执行。
+// 卡片三件套（ADR-0018）：方案名 / 进度描述 / 最后修改时间（相对表述）。
+// ···菜单操作（改名/复制/删除）由回调递 Rust 侧执行。
+// 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
 
-import { Button, ListView, StandardButton } from "std-widgets.slint";
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 /// 方案卡片视图数据（由 Rust 侧 F3 list_plan_cards 产出）
 export struct PlanCardData {
@@ -14,7 +17,7 @@ export struct PlanCardData {
     name: string,
     /// 进度描述（B6 解析后的成品文案）
     progress-desc: string,
-    /// 最后修改时间（格式化后的成品文案）
+    /// 最后修改时间（相对表述成品文案，ADR-0018 §一第 3 条）
     last-modified: string,
 }
 
@@ -25,7 +28,7 @@ export component PlanList inherits Rectangle {
     in property <string> create-button-text;
     in property <string> back-button-text;
     in property <string> empty-list-text;
-    // 右键菜单项文案
+    // ···菜单项文案（ADR-0018 §三）
     in property <string> rename-label;
     in property <string> duplicate-label;
     in property <string> delete-label;
@@ -61,6 +64,7 @@ export component PlanList inherits Rectangle {
             Text {
                 text: root.title;
                 font-size: 22px;
+                color: Theme.text-primary;
                 vertical-alignment: center;
             }
 
@@ -78,7 +82,7 @@ export component PlanList inherits Rectangle {
         Text {
             text: root.campus-name;
             font-size: 13px;
-            color: #666;
+            color: Theme.text-secondary;
         }
 
         // 卡片列表区域
@@ -88,7 +92,7 @@ export component PlanList inherits Rectangle {
             Text {
                 text: root.empty-list-text;
                 font-size: 15px;
-                color: #999;
+                color: Theme.text-quaternary;
                 horizontal-alignment: center;
             }
         }
@@ -109,12 +113,13 @@ export component PlanList inherits Rectangle {
                         Text {
                             text: card.name;
                             font-size: 16px;
+                            color: Theme.text-primary;
                         }
 
                         Text {
                             text: card.progress-desc;
                             font-size: 12px;
-                            color: #888;
+                            color: Theme.text-tertiary;
                         }
                     }
 
@@ -126,33 +131,51 @@ export component PlanList inherits Rectangle {
                         Text {
                             text: card.last-modified;
                             font-size: 12px;
-                            color: #aaa;
+                            color: Theme.text-faint;
                             horizontal-alignment: right;
                         }
                     }
 
-                    // 操作菜单按钮（···）
+                    // ···菜单按钮（ADR-0018 §三：一个按钮，点开浮层菜单）
                     VerticalLayout {
                         alignment: center;
-                        width: 80px;
+                        width: 40px;
 
-                        HorizontalLayout {
-                            spacing: 4px;
-                            alignment: end;
+                        Button {
+                            text: "···";
+                            width: 36px;
+                            height: 28px;
+                            clicked => { card-menu.show(); }
+                        }
+                    }
+                }
+
+                // ···浮层菜单（ADR-0018 §三：改名/复制/删除）
+                card-menu := PopupWindow {
+                    width: 120px;
+                    height: menu-layout.preferred-height + 8px;
+
+                    Rectangle {
+                        background: Theme.surface;
+                        border-radius: 4px;
+
+                        menu-layout := VerticalLayout {
+                            padding: 4px;
+                            spacing: 2px;
 
                             Button {
                                 text: root.rename-label;
-                                clicked => { root.rename-plan-clicked(card.plan-id); }
+                                clicked => { card-menu.close(); root.rename-plan-clicked(card.plan-id); }
                             }
 
                             Button {
                                 text: root.duplicate-label;
-                                clicked => { root.duplicate-plan-clicked(card.plan-id); }
+                                clicked => { card-menu.close(); root.duplicate-plan-clicked(card.plan-id); }
                             }
 
                             Button {
                                 text: root.delete-label;
-                                clicked => { root.delete-plan-clicked(card.plan-id); }
+                                clicked => { card-menu.close(); root.delete-plan-clicked(card.plan-id); }
                             }
                         }
                     }
@@ -162,7 +185,7 @@ export component PlanList inherits Rectangle {
                 Rectangle {
                     y: parent.height - 1px;
                     height: 1px;
-                    background: #e0e0e0;
+                    background: Theme.separator;
                 }
             }
         }
@@ -184,9 +207,9 @@ export component PlanList inherits Rectangle {
         y: 80px;
         width: 300px;
         height: bubble-layout.preferred-height + 24px;
-        background: #fffde7;
+        background: Theme.bubble-background;
         border-radius: 8px;
-        border-color: #fbc02d;
+        border-color: Theme.bubble-border;
         border-width: 1px;
 
         bubble-layout := VerticalLayout {
@@ -196,6 +219,7 @@ export component PlanList inherits Rectangle {
             Text {
                 text: root.tutorial-bubble-text;
                 font-size: 14px;
+                color: Theme.text-primary;
                 wrap: word-wrap;
             }
 

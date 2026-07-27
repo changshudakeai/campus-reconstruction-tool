@@ -1,8 +1,10 @@
 // T19B-3 — 校区选择页。
+// T19B-5A — 色卡角色名替换（ADR-0023），零硬编码颜色号。
 //
-// T19B-5 第 0 号前置：删除伪 ID 示例按钮，改为动态列表 + “新建演示校区”
+// T19B-5 第 0 号前置：删除伪 ID 示例按钮，改为动态列表 + "新建演示校区"
 
 import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 /// 校区视图数据（由 Rust 侧 F3 list_campuses 产出）
 export struct CampusData {
@@ -45,7 +47,7 @@ export component CampusSelect inherits Rectangle {
             Text {
                 text: root.empty_list_text;
                 font-size: 15px;
-                color: #999;
+                color: Theme.text-quaternary;
                 horizontal-alignment: center;
             }
         }
@@ -67,7 +69,7 @@ export component CampusSelect inherits Rectangle {
                 Rectangle {
                     y: parent.height - 1px;
                     height: 1px;
-                    background: #e0e0e0;
+                    background: Theme.separator;
                 }
             }
         }

@@ -1,0 +1,42 @@
+// T19B-5A — 色卡机制（ADR-0023 §一 硬性架构约束）。
+//
+// 代码永远不写颜色号，只写颜色角色名（Theme.background / Theme.text-primary …）。
+// 每套主题是一张独立的色卡资源文件（resources/themes/*.json）；
+// 切主题 = 换色卡，代码零改动（Rust 侧读 JSON 设置本 global 属性）。
+//
+// 本单只落亮色卡；暗色卡与设置页切换开关为后续债务（T19B-ui-connection.md 索引）。
+// 色卡文件的存放与加载方式参考 core/localization/ 的 B6 资源加载模式。
+
+export global Theme {
+    // ── 表面与背景 ──────────────────────────────────────
+    /// 对话框/卡片表面底色
+    in-out property <color> surface: #ffffff;
+    /// 模态遮罩半透明底色
+    in-out property <color> overlay: rgba(0, 0, 0, 0.45);
+
+    // ── 文字层级 ──────────────────────────────────────
+    /// 主要文字（标题、正文）
+    in-out property <color> text-primary: #222222;
+    /// 次要文字（校区名副标题、弹窗来源行）
+    in-out property <color> text-secondary: #666666;
+    /// 进度描述
+    in-out property <color> text-tertiary: #888888;
+    /// 弱文字（空列表占位）
+    in-out property <color> text-quaternary: #999999;
+    /// 最弱文字（时间戳）
+    in-out property <color> text-faint: #aaaaaa;
+
+    // ── 线条与分隔 ──────────────────────────────────────
+    /// 列表分隔线
+    in-out property <color> separator: #e0e0e0;
+
+    // ── 教程气泡（F2）──────────────────────────────────
+    /// 气泡背景
+    in-out property <color> bubble-background: #fffde7;
+    /// 气泡边框
+    in-out property <color> bubble-border: #fbc02d;
+
+    // ── 语义色 ──────────────────────────────────────
+    /// 错误/警示
+    in-out property <color> error: #c62828;
+}

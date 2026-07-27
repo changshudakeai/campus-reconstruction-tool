@@ -51,6 +51,12 @@ data-persistence = { workspace = true }
 notification-center = { workspace = true }
 # 错误链路
 anyhow = { workspace = true }
+# 色卡 JSON 解析（ADR-0023 色卡资源文件加载，workspace 已有依赖）
+serde_json = { workspace = true }
+# 相对时间格式化（ADR-0018 §一第 3 条，解析 RFC3339 时间戳，workspace 已有依赖）
+chrono = { workspace = true }
+# 日志（色卡加载警告）
+log = { workspace = true }
 
 [dev-dependencies]
 # 跨模块落库断言用同一临时文件连接组（内存库两连接各自独立）
