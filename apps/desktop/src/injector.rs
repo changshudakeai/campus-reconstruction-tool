@@ -171,6 +171,7 @@ impl ViewModelInjector {
 
         // ── T19B-9: 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────
         window.set_toolbar_visible(false); // 动态根据 active-screen 控制
+        window.set_toolbar_title(l10n.t("app.welcome_title").into());
 
         // 公告栏页（Screen 5）文案
         window.set_notice_board_title(l10n.t("notice.page_title").into());
@@ -179,6 +180,7 @@ impl ViewModelInjector {
         window.set_notice_board_date_today(l10n.t("notice.date_today").into());
         window.set_notice_board_date_yesterday(l10n.t("notice.date_yesterday").into());
         window.set_notice_board_importance_high_label(l10n.t("notice.importance_high").into());
+        window.set_notice_board_unread_marker(l10n.t("notice.unread_marker").into());
 
         // 回收站页（Screen 6）文案
         window.set_trash_page_title(l10n.t("trash.page_title").into());
@@ -186,6 +188,7 @@ impl ViewModelInjector {
         window.set_trash_page_restore_button_text(l10n.t("trash.restore_button").into());
         window.set_trash_page_purge_button_text(l10n.t("trash.purge_button").into());
         window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
+        window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + "：").into());
         window.set_trash_page_date_today(l10n.t("notice.date_today").into());
     }
 

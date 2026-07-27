@@ -34,6 +34,8 @@ export component Trash inherits Rectangle {
     in property <string> purge_button_text;
     // 提示信息
     in property <string> retention_notice_text;
+    // 校区前缀（Rust 侧注入，如"校区："）
+    in property <string> campus-prefix;
     // 日期显示
     in property <string> date_today;
     in property <string> date_yesterday;
@@ -112,7 +114,7 @@ export component Trash inherits Rectangle {
                         }
 
                         Text {
-                            text: "校区：" + item.campus-name;
+                            text: root.campus-prefix + item.campus-name;
                             font-size: 13px;
                             color: Theme.text-secondary;
                         }

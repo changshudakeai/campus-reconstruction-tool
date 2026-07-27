@@ -35,6 +35,8 @@ export component NoticeBoard inherits Rectangle {
     // 重要性标签
     in property <string> importance_normal_label;
     in property <string> importance_high_label;
+    // 未读标记
+    in property <string> unread-marker;
 
     // ── 数据模型 ──────────────────────────────────────
     in property <[NoticeData]> notice-model;
@@ -147,7 +149,7 @@ export component NoticeBoard inherits Rectangle {
                             }
 
                             if !notice.read: Text {
-                                text: "(未读)";
+                                text: root.unread-marker;
                                 font-size: 11px;
                                 color: Theme.error;
                             }
