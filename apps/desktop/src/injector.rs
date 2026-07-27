@@ -295,9 +295,7 @@ impl ViewModelInjector {
         window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + ":").into());
         window.set_trash_page_date_today(l10n.t("notice.date_today").into());
 
-        // ── T22: 高德地图密钥设置（T22 REDO 前注释）──────────────────────
-        // 注释掉所有 T22 相关的 setter/getter 调用
-        /*
+        // ── T22: 高德地图密钥设置──────────────────────
         window.set_gaode_group_title(l10n.t("settings.gaode_group_title").into());
         window.set_gaode_api_key_label(l10n.t("settings.gaode_api_key_label").into());
         window.set_gaode_api_key_placeholder(l10n.t("settings.gaode_api_key_placeholder").into());
@@ -309,11 +307,18 @@ impl ViewModelInjector {
         window.set_gaode_test_button_label(l10n.t("settings.gaode_test_button").into());
         window.set_gaode_status_message(SharedString::new());
 
-        let api_key = self.settings.gaode_api_key().unwrap_or(None).unwrap_or_default();
-        let security_key = self.settings.gaode_security_key().unwrap_or(None).unwrap_or_default();
+        let api_key = self
+            .settings
+            .gaode_api_key()
+            .unwrap_or(None)
+            .unwrap_or_default();
+        let security_key = self
+            .settings
+            .gaode_security_key()
+            .unwrap_or(None)
+            .unwrap_or_default();
         window.set_gaode_api_key(api_key.into());
         window.set_gaode_security_key(security_key.into());
-        */
 
         // T21: 高德地图嵌入探针初始化 (直接读文件)
         let _t21_probe_info = "T21 REDO: gaode-demo-keys.txt 路径：%LOCALAPPDATA%\\MCRebuildV2\\dev\\gaode-demo-keys.txt";
@@ -491,8 +496,7 @@ impl ViewModelInjector {
             }
         });
 
-        // ── T22: 高德地图密钥保存与测试（T22 REDO 前注释）──────────────────
-        /*
+        // ── T22: 高德地图密钥保存与测试──────────────────
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
         window.on_gaode_save_clicked(move || {
@@ -507,7 +511,10 @@ impl ViewModelInjector {
                     return;
                 }
             }
-            match injector.settings_mut().set_gaode_security_key(&security_key) {
+            match injector
+                .settings_mut()
+                .set_gaode_security_key(&security_key)
+            {
                 Ok(()) => {
                     notification_center::info(
                         "应用",
@@ -526,7 +533,10 @@ impl ViewModelInjector {
             let api_key = window.get_gaode_api_key().to_string();
             let security_key = window.get_gaode_security_key().to_string();
             let mut injector = shared.borrow_mut();
-            match injector.settings_mut().test_gaode_connection(&api_key, &security_key) {
+            match injector
+                .settings_mut()
+                .test_gaode_connection(&api_key, &security_key)
+            {
                 Ok(()) => {
                     notification_center::info(
                         "高德地图密钥验证",
@@ -539,7 +549,6 @@ impl ViewModelInjector {
                 }
             }
         });
-        */
 
         // T21: 高德地图嵌入探针初始化 (placeholder，待 Slint 1.17+ 升级)
         // TODO: 后续集成到 notification-center

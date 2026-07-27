@@ -8,7 +8,7 @@
 // T19B-5A：色卡角色名替换（ADR-0023）+ 通用对话框基建 + ADR-0010/0018 还债。
 // 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
 
-import { Button } from "std-widgets.slint";
+import { Button, GroupBox, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SettingsWizard } from "settings_wizard.slint";
 import { CampusSelect, CampusData } from "campus_select.slint";
@@ -48,6 +48,20 @@ export component AppWindow inherits Window {
     in property <string> settings-title;
     in property <string> settings-back-label;
     in property <string> tutorial-replay-label;
+
+    // ── T22: 高德地图密钥设置属性─────────────────────
+    in property <string> gaode-group-title;
+    in property <string> gaode-api-key-label;
+    in property <string> gaode-api-key-placeholder;
+    in-out property <string> gaode-api-key;
+    in property <string> gaode-security-key-label;
+    in property <string> gaode-security-key-placeholder;
+    in-out property <string> gaode-security-key;
+    in property <string> gaode-save-button-label;
+    in property <string> gaode-test-button-label;
+    in property <string> gaode-status-message;
+    callback gaode-save-clicked();
+    callback gaode-test-clicked();
 
     // ── 右上角工具栏（ADR-0027 §决定 - 四入口固定）───────────────
     // 可见性由 active-screen 派生（屏 2/4/5/6 显示，0/1/3 隐藏），无需 Rust 注入
@@ -511,6 +525,87 @@ export component AppWindow inherits Window {
                 text: root.settings-back-label;
                 clicked => {
                     root.active-screen = 1; // 回校区选择页
+                }
+            }
+        }
+
+        // T22: 高德地图密钥配置卡片
+        GroupBox {
+            title: root.gaode-group-title;
+            preferred-width: 450px;
+
+            VerticalLayout {
+                spacing: 16px;
+
+                // API Key 输入行
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.gaode-api-key-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    LineEdit {
+                        text <=> root.gaode-api-key;
+                        placeholder-text: root.gaode-api-key-placeholder;
+                        preferred-width: 240px;
+                    }
+                }
+
+                // 安全密钥输入行（Slint 1.17.1 不支持 echo-mode: Password）
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.gaode-security-key-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    LineEdit {
+                        text <=> root.gaode-security-key;
+                        placeholder-text: root.gaode-security-key-placeholder;
+                        preferred-width: 240px;
+                    }
+                }
+
+                // 保存/测试按钮行
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+
+                    Button {
+                        text: root.gaode-save-button-label;
+                        primary: true;
+                        enabled: root.gaode-api-key != "" && root.gaode-security-key != "";
+                        clicked => { 
+                            root.gaode-save-clicked(); 
+                        }
+                    }
+
+                    Button {
+                        text: root.gaode-test-button-label;
+                        enabled: root.gaode-api-key != "" && root.gaode-security-key != "";
+                        clicked => { 
+                            root.gaode-test-clicked(); 
+                        }
+                    }
+                }
+
+                // 状态提示
+                Text {
+                    text: root.gaode-status-message;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    preferred-height: 20px;
                 }
             }
         }
