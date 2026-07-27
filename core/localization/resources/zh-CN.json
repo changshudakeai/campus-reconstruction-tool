@@ -102,7 +102,7 @@
     "included_categories": "包含的类别",
     "missing_categories": "缺失的类别"
   },
-  "boundary": {
+    "boundary": {
     "step_title": "① 圈边界",
     "hint": "点击画布加点，绘制方案范围多边形",
     "undo_button": "撤销上一点",
@@ -113,6 +113,19 @@
     "status_determined": "边界已确认，可点'重置'重新绘制",
     "status_editing": "拖动顶点调整位置",
     "map_placeholder": "地图底图待后续决策"
+  },
+  "orientation": {
+    "step_title": "② 定朝向",
+    "two_points_hint": "点击画布选择两点，连线方向即为朝向",
+    "bearing_angle_hint": "输入方位角（0°=正北，顺时针增加）",
+    "angle_input_placeholder": "输入角度 (0-360)",
+    "submit_button": "确认朝向",
+    "reset_button": "重置",
+    "status_idle": "点击画布选择第一个点",
+    "status_first_point": "已选第一个点，再点一个点确定方向",
+    "status_calculated": "朝向已计算，点'确认朝向'确定",
+    "status_determined": "朝向已确认，可点'重置'重新设定",
+    "recalc_title": "修改朝向确认"
   },
   "collection": {
     "title": "数据采集",
