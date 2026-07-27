@@ -1,0 +1,163 @@
+// T19B-9 — 回收站页（Screen 6）。
+//
+// 薄壳原则（ADR-0017）：零业务逻辑，全部文案由 Rust 侧经 B6 l10n 注入。
+// 校园级共享回收站（ADR-0018 §三：删除行为规则；v1.x 决策沿用）。
+// 恢复重名冲突处理（v1.x 决策约束：具体 UI 与文案走负责人拍板）——本单占位。
+// 立即永久删除需二次确认（用 ConfirmDialog，ADR-0018）。
+// 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
+
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// 回收站项视图数据（由 F3 recycle_bin_api 产出）
+export struct TrashItemData {
+    /// 方案 ID
+    plan-id: string,
+    /// 方案名
+    name: string,
+    /// 原校区名
+    campus-name: string,
+    /// 删除时间
+    deleted-at: string,
+    /// 过期时间（相对表述如"剩余 27 天"）
+    expires-in: string,
+}
+
+// ADR-0018 §一第 3 条：格式化逻辑放 Rust 侧，这里只消费成品文案
+
+export component Trash inherits Rectangle {
+    // ── 文案属性（全部由 Rust 侧 l10n 注入）────────────
+    in property <string> title;
+    in property <string> empty_list_text;
+    // 操作按钮
+    in property <string> restore_button_text;
+    in property <string> purge_button_text;
+    // 提示信息
+    in property <string> retention_notice_text;
+    // 日期显示
+    in property <string> date_today;
+    in property <string> date_yesterday;
+
+    // ── 数据模型 ──────────────────────────────────────
+    in property <[TrashItemData]> trash-model;
+
+    callback restore-clicked(plan-id: string);
+    callback purge-clicked(plan-id: string);
+    callback purge-all-clicked();
+
+    width: 800px;
+    height: 600px;
+
+    VerticalLayout {
+        spacing: 16px;
+        padding: 24px;
+
+        // 顶部标题行
+        HorizontalLayout {
+            spacing: 12px;
+
+            Text {
+                text: root.title;
+                font-size: 22px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                // 弹性间隔
+            }
+
+            Button {
+                text: root.purge_button_text;
+                clicked => { root.purge-all-clicked(); }
+            }
+        }
+
+        // 回收站说明
+        Text {
+            text: root.retention_notice_text;
+            font-size: 12px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        // 回收站列表
+        if root.trash-model.length == 0: VerticalLayout {
+            alignment: center;
+
+            Text {
+                text: root.empty_list_text;
+                font-size: 15px;
+                color: Theme.text-quaternary;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.trash-model.length > 0: ListView {
+            for item in root.trash-model: Rectangle {
+                height: 88px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    padding: 16px;
+
+                    // 主要内容区
+                    VerticalLayout {
+
+                        Text {
+                            text: item.name;
+                            font-size: 15px;
+                            color: Theme.text-primary;
+                            font-weight: 200;
+                        }
+
+                        Text {
+                            text: "校区：" + item.campus-name;
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            Text {
+                                text: root.date_today; // 根据实际日期判断
+                                font-size: 11px;
+                                color: Theme.text-faint;
+                            }
+
+                            Text {
+                                text: item.expires-in;
+                                font-size: 11px;
+                                color: Theme.text-tertiary;
+                            }
+                        }
+                    }
+
+                    // 右侧操作按钮组
+                    VerticalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        Button {
+                            text: root.restore_button_text;
+                            clicked => { root.restore-clicked(item.plan-id); }
+                        }
+
+                        Button {
+                            text: root.purge_button_text;
+                            clicked => { root.purge-clicked(item.plan-id); }
+                        }
+                    }
+                }
+
+                // 分隔线
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.separator;
+                }
+            }
+        }
+    }
+}

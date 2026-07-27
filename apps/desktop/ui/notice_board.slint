@@ -1,0 +1,167 @@
+// T19B-9 — 公告栏页（Screen 5）。
+//
+// 薄壳原则（ADR-0017）：零业务逻辑，全部文案由 Rust 侧经 B6 l10n 注入。
+// 非紧急消息集中地（ADR-0027 §决定 - 右上角四入口）；紧急事走弹窗铁律 ADR-0021。
+// 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
+
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// 公告视图数据（由 F3 Future API 产出，当前占位）
+export struct NoticeData {
+    /// 公告 ID
+    id: string,
+    /// 标题
+    title: string,
+    /// 正文
+    body: string,
+    /// 发布日期
+    date: string,
+    /// 重要性（normal/high）
+    importance: string,
+    /// 是否已读
+    read: bool,
+}
+
+export component NoticeBoard inherits Rectangle {
+    // ── 文案属性（全部由 Rust 侧 l10n 注入）────────────
+    in property <string> title;
+    in property <string> empty_list_text;
+    // 按钮文案
+    in property <string> archive_button_text;
+    // 日期显示文案
+    in property <string> date_today;
+    in property <string> date_yesterday;
+    // 重要性标签
+    in property <string> importance_normal_label;
+    in property <string> importance_high_label;
+
+    // ── 数据模型 ──────────────────────────────────────
+    in property <[NoticeData]> notice-model;
+
+    callback archive-all-clicked();
+    callback notice-clicked(notice-id: string);
+
+    width: 800px;
+    height: 600px;
+
+    VerticalLayout {
+        spacing: 16px;
+        padding: 24px;
+
+        // 顶部标题行
+        HorizontalLayout {
+            spacing: 12px;
+
+            Text {
+                text: root.title;
+                font-size: 22px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                // 弹性间隔
+            }
+
+            Button {
+                text: root.archive_button_text;
+                clicked => { root.archive-all-clicked(); }
+            }
+        }
+
+        // 公告列表
+        if root.notice-model.length == 0: VerticalLayout {
+            alignment: center;
+
+            Text {
+                text: root.empty_list_text;
+                font-size: 15px;
+                color: Theme.text-quaternary;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.notice-model.length > 0: ListView {
+            for notice in root.notice-model: Rectangle {
+                height: 96px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    padding: 16px;
+
+                    // 左侧重要性标识
+                    Rectangle {
+                        width: 4px;
+                        height: parent.height;
+                        background: (notice.importance == "high") ? Theme.error : Theme.separator;
+                        border-radius: 2px;
+                    }
+
+                    // 主要内容区
+                    VerticalLayout {
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: notice.title;
+                                font-size: 15px;
+                                color: Theme.text-primary;
+                                font-weight: 200;
+                                wrap: word-wrap;
+                            }
+
+                            // 重要性标签
+                            if notice.importance == "high": Rectangle {
+                                background: Theme.error;
+                                border-radius: 2px;
+                                preferred-width: 50px;
+                                height: 16px;
+
+                                Text {
+                                    text: root.importance_high_label;
+                                    font-size: 10px;
+                                    color: Theme.text-inverse;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: notice.body;
+                            font-size: 13px;
+                            color: notice.read ? Theme.text-secondary : Theme.text-primary;
+                            wrap: word-wrap;
+                            max-height: 40px;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            Text {
+                                text: root.date_today;
+                                font-size: 11px;
+                                color: Theme.text-faint;
+                            }
+
+                            if !notice.read: Text {
+                                text: "(未读)";
+                                font-size: 11px;
+                                color: Theme.error;
+                            }
+                        }
+                    }
+                }
+
+                // 分隔线
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.separator;
+                }
+            }
+        }
+    }
+}
