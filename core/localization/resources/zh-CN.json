@@ -1,4 +1,7 @@
 {
+  "campus": {
+    "demo_name": "演示大学"
+  },
   "domain": {
     "campus": "校区",
     "plan": "方案",
@@ -33,7 +36,8 @@
     "shell_status_campus_select": "欢迎回来！请选择或新建校区",
     "shell_status_last_campus": "上次使用的校区：{0}",
     "campus_select_title": "校区选择",
-    "campus_select_placeholder": "校区列表（待完善）",
+    "campus_select_no_campus": "还没有校区——点击下方“新建演示校区”开始",
+    "new_demo_button": "新建演示校区",
     "campus_select_example_a": "示例校区 A",
     "campus_select_example_b": "示例校区 B",
     "settings_button": "设置"
