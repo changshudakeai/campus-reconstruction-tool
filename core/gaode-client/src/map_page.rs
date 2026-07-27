@@ -7,12 +7,14 @@
 //! 本模块只生成静态 HTML 文本；由壳层 WebView 加载渲染。JS 侧通过
 //! `window.mcrebuildBridge.postMessage(json)` 把地点搜索结果回传宿主，
 //! 宿主再交 [`crate::parse_place_search_response`] 解析。
+//!
+//! T21: 升级为 JS API 2.0 + securityJsCode（高德 2.0 强制要求）。
 
 use crate::error::{Error, Result};
 
-/// 官方 CDN 地址模板（`{key}` 处填入高德 Web API key）
+/// 官方 CDN 地址模板（{key}处填入高德 Web API key，T21 起 v1.2→v2.0）
 pub const GAODE_CDN_URL_TEMPLATE: &str =
-    "https://webapi.amap.com/maps?v=1.2&key={key}&plugin=AMap.PlaceSearch";
+    "https://webapi.amap.com/maps?v=2.0&key={key}&plugin=AMap.PlaceSearch";
 
 /// 地图容器最小高度（像素；所有嵌入式地图场景硬约束）
 pub const MAP_MIN_HEIGHT_PX: u32 = 300;

@@ -57,7 +57,6 @@ members = [
     # T19: S1 主程序应用壳（Slint UI 薄壳）
     "apps/desktop",
 ]
-
 [workspace.package]
 version = "2.0.0-dev"
 edition = "2021"
@@ -90,6 +89,9 @@ sha2 = "0.10"
 # 关掉默认 features 会没有窗口后端，桌面应用无法启动。
 slint = "1.9"
 slint-build = "1.9"
+# B3 + S1: wry WebView + raw-window-handle（高德地图嵌入）
+wry = "0.55"
+raw-window-handle = "0.6"
 # 测试临时目录
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）

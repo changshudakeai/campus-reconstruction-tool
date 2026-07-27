@@ -42,7 +42,7 @@ pub struct PlanEntity {
     pub updated_at: String,
 }
 
-/// 应用设置键（app_settings 表，ADR-0004/0006）
+/// 应用设置键（app_settings 表，ADR-0004/0006/0022）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppSettingKey {
     /// 上次使用的校区 ID（ADR-0006 着陆流程）
@@ -59,6 +59,10 @@ pub enum AppSettingKey {
     OnboardingProgress,
     /// 新手引导完成时刻（F2，RFC3339；空字符串表示未完成）
     OnboardingCompletedAt,
+    /// 高德地图 API key（T22，经 F1 存储于本机明文）
+    GaodeApiKey,
+    /// 高德地图安全密钥（T22，经 F1 存储于本机明文）
+    GaodeSecurityKey,
 }
 
 impl AppSettingKey {
@@ -72,6 +76,8 @@ impl AppSettingKey {
             AppSettingKey::CoverageAuditDecisions => "coverage_audit_decisions",
             AppSettingKey::OnboardingProgress => "onboarding_progress",
             AppSettingKey::OnboardingCompletedAt => "onboarding_completed_at",
+            AppSettingKey::GaodeApiKey => "gaode_api_key",
+            AppSettingKey::GaodeSecurityKey => "gaode_security_key",
         }
     }
 }

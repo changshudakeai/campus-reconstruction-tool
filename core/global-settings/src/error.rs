@@ -25,4 +25,16 @@ pub enum Error {
     /// 首次设置未勾选知情告知（ADR-0004：设置页兼任知情告知）
     #[error("请先确认已阅读版本提示")]
     NoticeNotAcknowledged,
+
+    /// 高德 API key 格式无效（T22）
+    #[error("高德 API key 格式无效，只能包含字母或数字")]
+    InvalidGaodeApiKey,
+
+    /// 高德安全密钥格式无效（T22）
+    #[error("高德安全密钥格式无效，只能包含字母或数字")]
+    InvalidGaodeSecurityKey,
+
+    /// 高德地图连通性测试失败（T22）
+    #[error("高德地图连通性测试失败：{0}")]
+    GaodeConnectionFailed(String),
 }

@@ -5,6 +5,7 @@
 //! 判定逻辑委托 F1 `SettingsManager`（校区被删返回 `None` 的兜底在 F1 内），
 //! 壳只把结果翻译成 l10n 文案填进窗口——零业务逻辑。
 //! 装配自 T19B-1 起经 [`ViewModelInjector`] 完成（VM 注入见 `injector` 模块）。
+//! T21: 高德地图嵌入探针（screen 4 WebView 子窗口）。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,6 +18,7 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
+use crate::map_embed::GaodeMapView;
 use crate::presenter::ShellPresenter;
 use crate::theme::apply_theme;
 use crate::AppWindow;
@@ -81,6 +83,25 @@ pub fn run_dev() -> Result<()> {
         .registry()
         .set_presenter(ShellPresenter::install(&window));
 
+    // T21: 高德地图嵌入探针（screen 4 WebView 子窗口）
+    // 使用 Slint 1.17+ winit 桥接 API 获取原生窗口句柄，创建嵌入式 WebView2
+    let _map_view = {
+        match GaodeMapView::render_into(
+            &window.window(),
+            400,               // 屏 4 工作区高度限制
+            (116.397, 39.916), // 北京天安门作为默认中心点
+        ) {
+            Ok(view) => {
+                eprintln!("✅ 高德地图 WebView 嵌入成功");
+                Some(view)
+            }
+            Err(e) => {
+                eprintln!("⚠️ 高德地图嵌入失败：{}", e);
+                None
+            }
+        }
+    };
+
     // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
     let injector = match ShellDatabases::open(DEV_DB_FILE) {
         Ok(databases) => Some(ViewModelInjector::new(databases)?),
@@ -131,7 +152,7 @@ mod tests {
         ] {
             let text = status_text(&l10n, &decision);
             // 文本键缺失时 l10n 会原样返回键名——断言键都已入 zh-CN.json
-            assert!(!text.starts_with("app."), "文本键未入库: {text}");
+            assert!(!text.starts_with("app."), "文本键未入库：{text}");
         }
     }
 }

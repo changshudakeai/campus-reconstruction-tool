@@ -101,6 +101,8 @@ pub struct ViewModelInjector {
     orientation_angle: Option<f32>,
     // P0-3: 等待确认的朝向值（用于 recalc 确认窗）
     pending_orientation_angle: Option<f32>,
+    // T22: 空 Gaode Key 引导至设置页（confirm dialog 模式）
+    pending_gaode_redirect: bool,
 }
 
 /// 单方案进度状态（内存模型，Step C 新增）
@@ -138,6 +140,7 @@ impl ViewModelInjector {
             orientation_points: Vec::new(),
             orientation_angle: None,
             pending_orientation_angle: None,
+            pending_gaode_redirect: false,
         })
     }
 
@@ -289,8 +292,31 @@ impl ViewModelInjector {
         window.set_trash_page_restore_button_text(l10n.t("trash.restore_button").into());
         window.set_trash_page_purge_button_text(l10n.t("trash.purge_button").into());
         window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
-        window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + "：").into());
+        window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + ":").into());
         window.set_trash_page_date_today(l10n.t("notice.date_today").into());
+
+        // ── T22: 高德地图密钥设置（T22 REDO 前注释）──────────────────────
+        // 注释掉所有 T22 相关的 setter/getter 调用
+        /*
+        window.set_gaode_group_title(l10n.t("settings.gaode_group_title").into());
+        window.set_gaode_api_key_label(l10n.t("settings.gaode_api_key_label").into());
+        window.set_gaode_api_key_placeholder(l10n.t("settings.gaode_api_key_placeholder").into());
+        window.set_gaode_security_key_label(l10n.t("settings.gaode_security_key_label").into());
+        window.set_gaode_security_key_placeholder(
+            l10n.t("settings.gaode_security_key_placeholder").into(),
+        );
+        window.set_gaode_save_button_label(l10n.t("settings.gaode_save_button").into());
+        window.set_gaode_test_button_label(l10n.t("settings.gaode_test_button").into());
+        window.set_gaode_status_message(SharedString::new());
+
+        let api_key = self.settings.gaode_api_key().unwrap_or(None).unwrap_or_default();
+        let security_key = self.settings.gaode_security_key().unwrap_or(None).unwrap_or_default();
+        window.set_gaode_api_key(api_key.into());
+        window.set_gaode_security_key(security_key.into());
+        */
+
+        // T21: 高德地图嵌入探针初始化 (直接读文件)
+        let _t21_probe_info = "T21 REDO: gaode-demo-keys.txt 路径：%LOCALAPPDATA%\\MCRebuildV2\\dev\\gaode-demo-keys.txt";
     }
 
     /// 同步边界绘制器状态到 Slint 显示模型
@@ -464,6 +490,59 @@ impl ViewModelInjector {
                 report_callback_error(injector.l10n(), &error);
             }
         });
+
+        // ── T22: 高德地图密钥保存与测试（T22 REDO 前注释）──────────────────
+        /*
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_gaode_save_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let api_key = window.get_gaode_api_key().to_string();
+            let security_key = window.get_gaode_security_key().to_string();
+            let mut injector = shared.borrow_mut();
+            match injector.settings_mut().set_gaode_api_key(&api_key) {
+                Ok(()) => {}
+                Err(err) => {
+                    report_callback_error(injector.l10n(), &err);
+                    return;
+                }
+            }
+            match injector.settings_mut().set_gaode_security_key(&security_key) {
+                Ok(()) => {
+                    notification_center::info(
+                        "应用",
+                        "高德地图密钥已保存",
+                        "请在需要地图功能的页面测试使用",
+                    );
+                }
+                Err(err) => report_callback_error(injector.l10n(), &err),
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_gaode_test_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let api_key = window.get_gaode_api_key().to_string();
+            let security_key = window.get_gaode_security_key().to_string();
+            let mut injector = shared.borrow_mut();
+            match injector.settings_mut().test_gaode_connection(&api_key, &security_key) {
+                Ok(()) => {
+                    notification_center::info(
+                        "高德地图密钥验证",
+                        "连通性正常",
+                        "高德地图 API 可正常使用",
+                    );
+                }
+                Err(err) => {
+                    report_callback_error(injector.l10n(), &err);
+                }
+            }
+        });
+        */
+
+        // T21: 高德地图嵌入探针初始化 (placeholder，待 Slint 1.17+ 升级)
+        // TODO: 后续集成到 notification-center
 
         // ── T19B-3/T19B-5：校区选择页回调 ────────────────────────
         Self::bind_campus_select(injector, window);
@@ -657,13 +736,19 @@ impl ViewModelInjector {
             window.set_confirm_dialog_visible(true);
         });
 
-        // ── 确认窗回调（T19B-5A + P0-3 朝向重算）───────────────────
-        // 确认删除：调 F3 delete_plan（保留 30 天），或应用朝向重算值
+        // ── 确认窗回调（T19B-5A + P0-3 朝向重算 + T22 Gaode Key 引导）───────────────
+        // 确认删除：调 F3 delete_plan（保留 30 天），或应用朝向重算值，或跳转 Gaode 设置
         let weak = window.as_weak();
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
             let mut injector = shared_confirmed.borrow_mut();
+
+            // T22: Gaode Key 空值引导至设置页
+            if std::mem::replace(&mut injector.pending_gaode_redirect, false) {
+                window.set_active_screen(3); // 跳设置页
+                return;
+            }
 
             // P0-3: 如果有待应用的朝向值，优先处理
             if let Some(pending_angle) = injector.pending_orientation_angle.take() {
@@ -697,14 +782,16 @@ impl ViewModelInjector {
             }
         });
 
-        // 取消删除 / 取消朝向重算
+        // 取消删除 / 取消朝向重算 / 取消 Gaode Key 引导
         let weak = window.as_weak();
         window.on_confirm_dialog_cancelled(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
             // P0-3: 重置 pending state（如果已设置）
+            // T22: 同时重置 Gaode Key 引导标志
             if let Ok(mut injector) = shared_cancel.try_borrow_mut() {
                 injector.pending_orientation_angle = None;
+                injector.pending_gaode_redirect = false;
             }
         });
 
@@ -830,12 +917,55 @@ impl ViewModelInjector {
     fn bind_workspace(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
         // 步骤点击：上锁步骤不可点击（ADR-0027：前跳上锁，回跳自由，第①格永远解锁）
         let weak = window.as_weak();
+        let shared = Rc::clone(injector);
         window.on_workspace_step_clicked(move |step_index| {
             let Some(window) = weak.upgrade() else { return };
             let completed = window.get_workspace_completed_steps();
             if step_index > completed {
                 return; // 锁定步骤忽略点击
             }
+
+            // T22: 空 Gaode Key 检测与引导（步骤①：圈边界编辑器）
+            if step_index == 0 {
+                let injector_ref = shared.borrow();
+                let api_key = injector_ref
+                    .settings()
+                    .gaode_api_key()
+                    .unwrap_or(None)
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false);
+                drop(injector_ref);
+
+                if !api_key {
+                    // 无密钥：弹确认窗引导至设置页
+                    let mut injector_mut = shared.borrow_mut();
+                    window.set_confirm_dialog_title(
+                        injector_mut
+                            .l10n()
+                            .t("settings.gaode_empty_key_title")
+                            .into(),
+                    );
+                    window.set_confirm_dialog_body(
+                        injector_mut
+                            .l10n()
+                            .t("settings.gaode_empty_key_body")
+                            .into(),
+                    );
+                    window.set_confirm_dialog_confirm_label(
+                        injector_mut
+                            .l10n()
+                            .t("settings.gaode_go_to_settings")
+                            .into(),
+                    );
+                    window.set_confirm_dialog_cancel_label(
+                        injector_mut.l10n().t("app.cancel_button").into(),
+                    );
+                    injector_mut.pending_gaode_redirect = true;
+                    window.set_confirm_dialog_visible(true);
+                    return; // 不激活步骤
+                }
+            }
+
             window.set_workspace_active_step(step_index);
         });
 

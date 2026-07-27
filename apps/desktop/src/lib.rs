@@ -15,6 +15,7 @@
 
 mod dispatch;
 mod injector;
+mod map_embed;
 mod presenter;
 mod runtime;
 mod theme;

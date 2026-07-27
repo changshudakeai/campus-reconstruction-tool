@@ -77,6 +77,8 @@ deny = [
     { crate = "rusqlite", wrappers = ["data-persistence"] },
     # UI 框架只准 S1 薄壳直接依赖（ADR-0017：功能/基础模块不碰 UI）。
     { crate = "slint", wrappers = ["desktop-shell"] },
+    # 高德地图 WebView 壳只准 S1 薄壳直接依赖（ADR-0017：B3 零 shell 依赖）。
+    { crate = "wry", wrappers = ["desktop-shell"] },
 ]
 
 # 版本单点管理兜底（执法清单 1.2）：

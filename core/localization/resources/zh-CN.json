@@ -48,7 +48,22 @@
     "minecraft_version_label": "Minecraft 版本",
     "notice_checkbox": "请确认你的 Minecraft 游戏版本与此一致，否则导入可能失败",
     "continue_button": "继续",
-    "save_success": "设置已保存"
+    "save_success": "设置已保存",
+    "gaode_group_title": "高德地图密钥",
+    "gaode_api_key_label": "API Key",
+    "gaode_security_key_label": "安全密钥",
+    "gaode_api_key_placeholder": "输入高德地图 API Key",
+    "gaode_security_key_placeholder": "输入高德地图安全密钥",
+    "gaode_save_button": "保存密钥",
+    "gaode_test_button": "测试连通性",
+    "gaode_test_success_title": "连通性测试成功",
+    "gaode_test_success_body": "高德地图密钥配置正确，地图功能可正常使用。",
+    "gaode_test_fail_title": "连通性测试失败",
+    "gaode_test_fail_body": "无法连接高德地图服务，请检查密钥是否正确。{0}",
+    "gaode_save_fail_title": "密钥保存失败",
+    "gaode_empty_key_title": "需要配置高德地图密钥",
+    "gaode_empty_key_body": "使用地图功能前，请先在设置页面配置高德地图 API Key 和安全密钥。",
+    "gaode_go_to_settings": "去设置页"
   },
   "plan": {
     "list_header": "方案列表",

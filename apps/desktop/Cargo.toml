@@ -27,6 +27,9 @@ slint-build = { workspace = true }
 [dependencies]
 # UI 框架（唯一合法使用者，ADR-0017 三层锁）
 slint = { workspace = true }
+# B3 + S1: 高德地图 WebView 嵌入（winit 版本差经 raw-window-handle 桥接）
+wry = { workspace = true }
+raw-window-handle = { workspace = true }
 # B6 国际化（窗口标题与状态文案，文本外置铁律 ADR-0005）
 localization = { workspace = true }
 # T19B-5B: B5 地基模式 (边界绘制与朝向设定)
@@ -63,6 +66,10 @@ log = { workspace = true }
 [dev-dependencies]
 # 跨模块落库断言用同一临时文件连接组（内存库两连接各自独立）
 tempfile = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["wry", "raw-window-handle"]
+# T21 slint 1.9 暂存实现，slint 1.17+ 升级后正式启用 WebView 嵌入
 
 [lints]
 workspace = true

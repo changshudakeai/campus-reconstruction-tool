@@ -14,6 +14,9 @@ pub(crate) const SHORTCUT_NAME: &str = "校园复刻工具 - 开发版.lnk";
 /// 壳 crate 名（ADR-0017 S1）。
 const SHELL_CRATE: &str = "desktop-shell";
 
+/// 壳可执行文件名（apps/desktop/Cargo.toml 的 [[bin]] 名；与 crate 名不同，构建产物以此为准）。
+const SHELL_BIN: &str = "campus-tool-dev";
+
 /// 计算安装位：`<local_app_data>\MCRebuildV2\dev\` 下的当前版与兜底版路径。
 pub(crate) fn install_paths(local_app_data: &Path) -> (PathBuf, PathBuf) {
     let dev_dir = local_app_data.join("MCRebuildV2").join("dev");
@@ -64,7 +67,7 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
     let built_exe = metadata
         .target_directory
         .join("release")
-        .join(format!("{SHELL_CRATE}.exe"));
+        .join(format!("{SHELL_BIN}.exe"));
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("未找到 %LOCALAPPDATA%"))?;
@@ -76,6 +79,14 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
         std::fs::copy(&current, &previous)?;
     }
     std::fs::copy(built_exe.as_std_path(), &current)?;
+
+    // 资源目录随 exe 走：exe 旁 resources/ 是 l10n/主题的第一查找位。
+    // 文案有编译期内嵌兜底，但磁盘文件优先——带上它，改文案重启即可预览。
+    let shell_resources = root.join("apps").join("desktop").join("resources");
+    if shell_resources.exists() {
+        let dev_dir = current.parent().expect("current 必有父目录");
+        copy_dir_recursive(&shell_resources, &dev_dir.join("resources"))?;
+    }
 
     #[allow(
         clippy::disallowed_methods,
@@ -89,6 +100,22 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
     println!(
         "dev-shortcut: 桌面快捷方式\"校园复刻工具 - 开发版\"已更新，上一版本保留在 previous\\"
     );
+    Ok(())
+}
+
+/// 递归复制目录（std 无现成 API；安装位资源同步用，全量覆盖式拷贝）。
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 

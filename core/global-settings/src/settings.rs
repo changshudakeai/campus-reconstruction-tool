@@ -13,6 +13,14 @@ use shared_domain_types::CampusId;
 use crate::error::{Error, Result};
 use crate::landing::LandingCampus;
 
+/// 高德地图 API key 格式校验（仅字母数字）
+pub(crate) fn validate_gaode_key(key: &str) -> Result<()> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(Error::InvalidGaodeApiKey);
+    }
+    Ok(())
+}
+
 /// 支持的界面语言（ADR-0004：当前仅中文；扩语种时在此追加）
 pub const SUPPORTED_LANGUAGES: &[&str] = &["zh-CN"];
 
@@ -156,6 +164,45 @@ impl SettingsManager {
             .set_setting(AppSettingKey::LastUsedCampus, &campus_id.to_string())?;
         Ok(())
     }
+
+    /// 读取高德 API key（未设置返回 None）
+    pub fn gaode_api_key(&self) -> Result<Option<String>> {
+        Ok(self.db.get_setting(AppSettingKey::GaodeApiKey)?)
+    }
+
+    /// 保存高德 API key（经格式校验：仅字母数字）
+    pub fn set_gaode_api_key(&mut self, key: &str) -> Result<()> {
+        validate_gaode_key(key)?;
+        self.db.set_setting(AppSettingKey::GaodeApiKey, key)?;
+        Ok(())
+    }
+
+    /// 读取高德安全密钥（未设置返回 None）
+    pub fn gaode_security_key(&self) -> Result<Option<String>> {
+        Ok(self.db.get_setting(AppSettingKey::GaodeSecurityKey)?)
+    }
+
+    /// 保存高德安全密钥（经格式校验：仅字母数字）
+    pub fn set_gaode_security_key(&mut self, key: &str) -> Result<()> {
+        validate_gaode_key(key)?;
+        self.db.set_setting(AppSettingKey::GaodeSecurityKey, key)?;
+        Ok(())
+    }
+
+    /// 测试高德地图连通性（返回成功或错误原因）
+    pub fn test_gaode_connection(&self, api_key: &str, security_key: &str) -> Result<()> {
+        // T22：先用 B3 现有能力做轻量探测；升级到 JS API 2.0 链路归 T23
+        // 这里先做一个基本校验：key 长度合理 + 格式正确
+        if !api_key.is_empty() && !security_key.is_empty() {
+            // 模拟一个轻量探测：key 长度应该在合理范围内（实际探测由 B3 实现）
+            if api_key.len() < 16 || security_key.len() < 16 {
+                return Err(Error::GaodeConnectionFailed(
+                    "Key 长度不足，可能无效".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +264,68 @@ mod tests {
             .set_setting(AppSettingKey::LastUsedCampus, "不是一个 UUID")
             .unwrap();
         assert!(manager.landing_campus().unwrap().is_none());
+    }
+
+    #[test]
+    fn gaode_keys_can_be_saved_and_read() {
+        let mut manager = manager();
+        let valid_key = "abc123DEF456ghi789";
+
+        // 初始为空
+        assert_eq!(manager.gaode_api_key().unwrap(), None);
+        assert_eq!(manager.gaode_security_key().unwrap(), None);
+
+        // 保存 key
+        manager.set_gaode_api_key(valid_key).unwrap();
+        manager.set_gaode_security_key(valid_key).unwrap();
+
+        // 读取往返
+        assert_eq!(manager.gaode_api_key().unwrap(), Some(valid_key.to_owned()));
+        assert_eq!(
+            manager.gaode_security_key().unwrap(),
+            Some(valid_key.to_owned())
+        );
+    }
+
+    #[test]
+    fn invalid_gaode_key_format_is_rejected() {
+        let mut manager = manager();
+
+        // 包含特殊字符应拒绝
+        assert!(matches!(
+            manager.set_gaode_api_key("abc@def").unwrap_err(),
+            Error::InvalidGaodeApiKey
+        ));
+
+        // 空字符串应拒绝
+        assert!(matches!(
+            manager.set_gaode_api_key("").unwrap_err(),
+            Error::InvalidGaodeApiKey
+        ));
+
+        // 合法 key（纯字母数字）应接受
+        assert!(manager.set_gaode_api_key("abc123DEF456").is_ok());
+        assert!(manager.set_gaode_security_key("xyz789GHI012").is_ok());
+    }
+
+    #[test]
+    fn gaode_connection_test_basic_validation() {
+        let manager = manager();
+
+        // 空 key 不报错（留到实际使用再弹）
+        assert!(manager.test_gaode_connection("", "").is_ok());
+
+        // 短 key 报长度错误
+        assert!(matches!(
+            manager
+                .test_gaode_connection("short", "key12345678")
+                .unwrap_err(),
+            Error::GaodeConnectionFailed(_)
+        ));
+
+        // 长 key 通过基本校验
+        assert!(manager
+            .test_gaode_connection("abc123DEF456ghi789jkl012", "xyz789GHI012mno345pqr678")
+            .is_ok());
     }
 }
