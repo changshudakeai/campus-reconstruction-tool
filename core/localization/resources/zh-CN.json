@@ -125,7 +125,12 @@
     "status_first_point": "已选第一个点，再点一个点确定方向",
     "status_calculated": "朝向已计算，点'确认朝向'确定",
     "status_determined": "朝向已确认，可点'重置'重新设定",
-    "recalc_title": "修改朝向确认"
+    "recalc_title": "修改朝向确认",
+    "error_coincident_points": "两点重合，无法确定朝向",
+    "error_invalid_angle": "请输入有效的数字",
+    "error_angle_out_of_range": "角度超出范围，请输入 0-360 之间的值",
+    "mode_two_points": "两点定朝向",
+    "mode_bearing_angle": "方位角输入"
   },
   "collection": {
     "title": "数据采集",
