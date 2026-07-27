@@ -184,5 +184,9 @@
     "hours_ago": "{0} 小时前",
     "days_ago": "{0} 天前",
     "date_display": "{0}"
+  },
+  "workspace": {
+    "placeholder_title": "① 圈边界 → ② 定朝向 → ③ 采集 → ④ 评审 → ⑤ 导出",
+    "placeholder_subtitle": "（步骤条骨架待 T19B-5B 完整实现）"
   }
 }

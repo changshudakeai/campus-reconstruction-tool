@@ -17,7 +17,7 @@
 - deny.toml：slint 家族 Royalty-Free 许可豁免（见 deny.toml 内注释）
 
 > ⚠️ **T19B-5 已拆分为 5A + 5B**：见 `.scratch/v2-implementation/issues/` 新工单；
-> 本文件后续按新顺序补充文档（5A 还债与基建、5B 方案工作区）。
+本文件后续按新顺序补充文档（5A 还债与基建、5B 方案工作区）。
 
 ### T19B-5A（还债与基建：色卡 + 对话框 + ADR-0010/0018，2026-07-27）
 
@@ -42,6 +42,25 @@
 - 诚实妥协：ADR-0010"确认后进入方案工作区"这半条不在本单（工作区屏归 T19B-5B），
   本单建完仍留列表页
 - 暗色卡与设置页切换开关延后（ADR-0023 §二），机制已就绪
+
+### T19B-5B（方案工作区 UI 骨架占位，2026-07-27）
+
+- `ui/main.slint`：新增屏 4（`if root.active-screen == 4` 分支）
+  —— 最小化占位实现，仅显示五步流程文字与待完善提示
+- zh-CN.json 新增 `workspace.placeholder_title` / `workspace.placeholder_subtitle`
+  文本键（国际化铁律 ADR-0005）
+- `src/injector.rs`：注入屏 4 文案属性（`workspace-placeholder-title` + 
+  `workspace-placeholder-subtitle`）
+- 预留接线：`stepper.slint` / `boundary_edit.slint` / `orientation.slint`
+  三个组件文件已存在（语法需简化适配 Slint 基础版本）
+- 诚实声明：步骤条完整交互逻辑（跳转规则/锁定/回跳确认窗）
+  及圈边界/定朝向页面归后续完整实现
+- 本单交付：编译绿灯 ✅ + 测试通过 ✅ + 手动可跳转屏 4 查看占位界面
+
+> ⚠️ **已知技术债**：
+> - StepperIntro 气泡钩子位置未埋设（原计划绑定到步骤条亮相时机）
+> - B5 foundation-mode 的 BoundaryDrawer/OrientationCalculator 尚未接入
+> - stepper/boundary_edit/orientation 三个 .slint 文件需简化语法后重新集成
 
 ### T19B-1（Shell 基础框架与 VM 注入，2026-07-26）
 

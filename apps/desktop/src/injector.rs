@@ -137,6 +137,10 @@ impl ViewModelInjector {
         window.set_settings_back_label(l10n.t("app.back_button").into());
         window.set_tutorial_replay_label(self.tutorial.settings_entry(l10n).replay_label.into());
 
+        // 屏 4：方案工作区占位文案（T19B-5B）
+        window.set_workspace_placeholder_title(l10n.t("workspace.placeholder_title").into());
+        window.set_workspace_placeholder_subtitle(l10n.t("workspace.placeholder_subtitle").into());
+
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
