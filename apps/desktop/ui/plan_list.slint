@@ -44,6 +44,8 @@ export component PlanList inherits Rectangle {
     // ── 回调（Rust 侧绑定业务逻辑）──────────────────────────
     callback create-plan-clicked();
     callback back-to-campus-clicked();
+    // 卡片单击打开方案工作区（ADR-0027 第 6 轮：单击即开，无概览层）
+    callback card-clicked(plan-id: string);
     callback rename-plan-clicked(plan-id: string);
     callback duplicate-plan-clicked(plan-id: string);
     callback delete-plan-clicked(plan-id: string);
@@ -100,6 +102,11 @@ export component PlanList inherits Rectangle {
         if root.plan-model.length > 0: ListView {
             for card in root.plan-model: Rectangle {
                 height: 72px;
+
+                // 卡片单击热区（置于底层，···菜单按钮优先捕获自身点击）
+                TouchArea {
+                    clicked => { root.card-clicked(card.plan-id); }
+                }
 
                 HorizontalLayout {
                     spacing: 8px;

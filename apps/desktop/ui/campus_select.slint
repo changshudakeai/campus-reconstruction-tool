@@ -27,6 +27,8 @@ export component CampusSelect inherits Rectangle {
 
     callback new-demo-campus-clicked();
     callback settings-clicked();
+    // 单击已有校区行 → 进入该校区方案列表（T19B-5B 补接）
+    callback campus-clicked(campus-id: string);
     
     width: 800px;
     height: 600px;
@@ -55,7 +57,12 @@ export component CampusSelect inherits Rectangle {
         if root.campus-model.length > 0: ListView {
             for campus in root.campus-model: Rectangle {
                 height: 56px;
-                
+
+                // 校区行单击热区（置于底层）
+                TouchArea {
+                    clicked => { root.campus-clicked(campus.id); }
+                }
+
                 HorizontalLayout {
                     spacing: 8px;
                     padding: 12px;

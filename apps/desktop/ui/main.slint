@@ -16,6 +16,7 @@ import { PlanList, PlanCardData } from "plan_list.slint";
 import { ConfirmDialog, InputDialog } from "dialogs.slint";
 import { NoticeBoard, NoticeData } from "notice_board.slint";
 import { Trash, TrashItemData } from "trash.slint";
+import { Stepper } from "stepper.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -46,7 +47,7 @@ export component AppWindow inherits Window {
     in property <string> tutorial-replay-label;
 
     // ── 右上角工具栏（ADR-0027 §决定 - 四入口固定）───────────────
-    in property <bool> toolbar-visible;
+    // 可见性由 active-screen 派生（屏 2/4/5/6 显示，0/1/3 隐藏），无需 Rust 注入
     in property <string> toolbar-title;
     // 四个图标按钮：公告栏 / 切换校区 / 回收站 / 设置
     in property <bool> notice-toolbar-button-visible;
@@ -77,8 +78,19 @@ export component AppWindow inherits Window {
     in property <string> trash-page-campus-prefix;
     in property <string> trash-page-date-today;
     in property <[TrashItemData]> trash-page-model;
+    
+    // ── 屏 4：方案工作区属性（T19B-5B）──────────────────────
+    in-out property <int> workspace-active-step: 0;  // 当前步骤索引
+    in-out property <int> workspace-completed-steps: 0;  // 已完成步数
     in property <string> workspace-placeholder-title;
     in property <string> workspace-placeholder-subtitle;
+    in property <string> workspace-stepper-title-label;
+    in property <string> workspace-stepper-boundary-label;
+    in property <string> workspace-stepper-orientation-label;
+    in property <string> workspace-stepper-collection-label;
+    in property <string> workspace-stepper-review-label;
+    in property <string> workspace-stepper-export-label;
+    callback workspace-step-clicked(step-index: int);
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -115,6 +127,8 @@ export component AppWindow inherits Window {
 
     callback campus-select-new-demo-campus-clicked();
     callback campus-select-settings-clicked();
+    // 单击已有校区行 → 进入该校区方案列表（T19B-5B 补接）
+    callback campus-select-campus-clicked(campus-id: string);
 
     // ── 方案列表页属性（T19B-4 新增）────────────────────
     in property <string> plan-list-title;
@@ -134,6 +148,8 @@ export component AppWindow inherits Window {
 
     callback plan-list-create-clicked();
     callback plan-list-back-clicked();
+    // 单击方案卡片 → 直接打开工作区（ADR-0027 第 6 轮：单击即开，无概览层）
+    callback plan-list-card-clicked(plan-id: string);
     callback plan-list-rename-clicked(plan-id: string);
     callback plan-list-duplicate-clicked(plan-id: string);
     callback plan-list-delete-clicked(plan-id: string);
@@ -167,7 +183,8 @@ export component AppWindow inherits Window {
     min-height: 360px;
     
     // ── 顶部工具栏 (ADR-0027)───────────────────────────────
-    if root.toolbar-visible: Rectangle {
+    // 校区上下文内的屏才显示（方案列表/工作区/公告栏/回收站）
+    if root.active-screen == 2 || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: Rectangle {
         y: 0;
         height: 56px;
         width: parent.width;
@@ -299,6 +316,7 @@ export component AppWindow inherits Window {
 
         new-demo-campus-clicked => { root.campus-select-new-demo-campus-clicked() }
         settings-clicked => { root.campus-select-settings-clicked() }
+        campus-clicked(id) => { root.campus-select-campus-clicked(id) }
     }
 
     // ── 屏 2：方案列表页（T19B-4）────────────────────────
@@ -319,6 +337,7 @@ export component AppWindow inherits Window {
 
         create-plan-clicked => { root.plan-list-create-clicked() }
         back-to-campus-clicked => { root.plan-list-back-clicked() }
+        card-clicked(id) => { root.plan-list-card-clicked(id) }
         rename-plan-clicked(id) => { root.plan-list-rename-clicked(id) }
         duplicate-plan-clicked(id) => { root.plan-list-duplicate-clicked(id) }
         delete-plan-clicked(id) => { root.plan-list-delete-clicked(id) }
@@ -442,7 +461,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── 屏 4：方案工作区（T19B-5B 占位）──────────────────────
+    // ── 屏 4：方案工作区（T19B-5B）──────────────────────
     if root.active-screen == 4: Rectangle {
         width: parent.width;
         height: parent.height;
@@ -450,23 +469,50 @@ export component AppWindow inherits Window {
 
         VerticalLayout {
             alignment: center;
-            spacing: 16px;
-            padding: 32px;
+            spacing: 0;
 
-            Text {
-                text: root.workspace-placeholder-title;
-                font-size: 18px;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+            // 顶部步骤条
+            Stepper {
+                active-step: root.workspace-active-step;
+                completed-steps: root.workspace-completed-steps;
+                stepper-title-label: root.workspace-stepper-title-label;
+                stepper-boundary-label: root.workspace-stepper-boundary-label;
+                stepper-orientation-label: root.workspace-stepper-orientation-label;
+                stepper-collection-label: root.workspace-stepper-collection-label;
+                stepper-review-label: root.workspace-stepper-review-label;
+                stepper-export-label: root.workspace-stepper-export-label;
+                step-clicked(index) => { 
+                    root.workspace-step-clicked(index);
+                }
             }
 
-            Text {
-                text: root.workspace-placeholder-subtitle;
-                font-size: 12px;
-                color: Theme.text-tertiary;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+            // 主内容区域（占位，Phase 2/3 实现）
+            Rectangle {
+                width: parent.width;
+                preferred-height: 200px;
+                background: Theme.surface;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 16px;
+                    padding: 32px;
+
+                    Text {
+                        text: root.workspace-placeholder-title;
+                        font-size: 18px;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: root.workspace-placeholder-subtitle;
+                        font-size: 12px;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
             }
         }
     }

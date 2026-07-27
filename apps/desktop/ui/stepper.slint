@@ -1,0 +1,177 @@
+// T19B-5B — 五格步骤条组件（ADR-0027）
+//
+// 薄壳原则：零业务逻辑，文案全部由 Rust 侧注入。
+// 颜色一律引用 Theme 角色名，零硬编码颜色号（ADR-0023）。
+
+import { Theme } from "theme.slint";
+
+/// 单个步骤按钮子组件
+component StepButton inherits Rectangle {
+    in property <int> step-index;
+    in property <string> step-label;
+    in property <bool> is-current;
+    in property <bool> is-completed;
+    in property <bool> is-locked;
+    
+    callback clicked();
+    
+    width: 80px;
+    height: 48px;
+    border-radius: 8px;
+    
+    background: {
+        if root.is-locked {
+            Theme.surface
+        } else if root.is-current {
+            Theme.text-primary
+        } else if root.is-completed {
+            Theme.separator
+        } else {
+            Theme.surface
+        }
+    };
+    
+    opacity: {
+        if root.is-locked { 0.5 }
+        else { 1.0 }
+    };
+    
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+    
+    Text {
+        text: root.step-index + 1;
+        font-size: 14px;
+        x: 8px;
+        y: 6px;
+        color: {
+            if root.is-locked { Theme.text-faint }
+            else if root.is-current { Theme.surface }
+            else if root.is-completed { Theme.text-secondary }
+            else { Theme.text-primary }
+        };
+    }
+    
+    Text {
+        text: root.step-label;
+        font-size: 12px;
+        x: 8px;
+        y: 24px;
+        color: {
+            if root.is-locked { Theme.text-faint }
+            else if root.is-current { Theme.surface }
+            else if root.is-completed { Theme.text-secondary }
+            else { Theme.text-primary }
+        };
+    }
+    
+    if root.is-completed: Text {
+        text: "✓";
+        font-size: 14px;
+        x: 56px;
+        y: 6px;
+        color: {
+            if root.is-locked { Theme.text-faint }
+            else if root.is-current { Theme.surface }
+            else { Theme.text-secondary }
+        };
+    }
+}
+
+/// 五步步骤条：①圈边界 → ②定朝向 → ③采集 → ④评审 → ⑤导出
+/// 状态：当前高亮 / 已完成打勾 / 未锁定置灰不可点
+export component Stepper inherits Rectangle {
+    in property <int> active-step: 0;
+    in property <int> completed-steps: 0;
+    in property <string> stepper-title-label;
+    in property <string> stepper-boundary-label;
+    in property <string> stepper-orientation-label;
+    in property <string> stepper-collection-label;
+    in property <string> stepper-review-label;
+    in property <string> stepper-export-label;
+    
+    callback step-clicked(step-index: int);
+
+    height: 64px;
+    background: Theme.surface;
+    border-color: Theme.separator;
+    border-width: 1px;
+    
+    Text {
+        text: root.stepper-title-label;
+        font-size: 14px;
+        font-weight: 700;
+        color: Theme.text-primary;
+        x: 16px;
+        y: 20px;
+    }
+    
+    // 步骤①：圈边界 - 永远解锁
+    StepButton {
+        step-index: 0;
+        step-label: root.stepper-boundary-label;
+        is-current: (root.active-step == 0);
+        is-completed: (root.completed-steps > 0);
+        is-locked: false;
+        clicked => { root.step-clicked(0); }
+        x: 200px;
+        y: 8px;
+    }
+    
+    Rectangle { width: 1px; height: 32px; background: Theme.separator; x: 290px; y: 16px; }
+    
+    // 步骤②：定朝向 - 依赖步骤①完成
+    StepButton {
+        step-index: 1;
+        step-label: root.stepper-orientation-label;
+        is-current: (root.active-step == 1);
+        is-completed: (root.completed-steps > 1);
+        is-locked: (root.completed-steps <= 0);
+        clicked => { root.step-clicked(1); }
+        x: 300px;
+        y: 8px;
+    }
+    
+    Rectangle { width: 1px; height: 32px; background: Theme.separator; x: 390px; y: 16px; }
+    
+    // 步骤③：采集 - 依赖步骤①、②完成
+    StepButton {
+        step-index: 2;
+        step-label: root.stepper-collection-label;
+        is-current: (root.active-step == 2);
+        is-completed: (root.completed-steps > 2);
+        is-locked: (root.completed-steps <= 1);
+        clicked => { root.step-clicked(2); }
+        x: 400px;
+        y: 8px;
+    }
+    
+    Rectangle { width: 1px; height: 32px; background: Theme.separator; x: 490px; y: 16px; }
+    
+    // 步骤④：评审 - 依赖步骤①、②、③完成
+    StepButton {
+        step-index: 3;
+        step-label: root.stepper-review-label;
+        is-current: (root.active-step == 3);
+        is-completed: (root.completed-steps > 3);
+        is-locked: (root.completed-steps <= 2);
+        clicked => { root.step-clicked(3); }
+        x: 500px;
+        y: 8px;
+    }
+    
+    Rectangle { width: 1px; height: 32px; background: Theme.separator; x: 590px; y: 16px; }
+    
+    // 步骤⑤：导出 - 依赖所有前置完成
+    StepButton {
+        step-index: 4;
+        step-label: root.stepper-export-label;
+        is-current: (root.active-step == 4);
+        is-completed: (root.completed-steps >= 5);
+        is-locked: (root.completed-steps <= 3);
+        clicked => { root.step-clicked(4); }
+        x: 600px;
+        y: 8px;
+    }
+}

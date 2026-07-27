@@ -141,6 +141,15 @@ impl ViewModelInjector {
         window.set_workspace_placeholder_title(l10n.t("workspace.placeholder_title").into());
         window.set_workspace_placeholder_subtitle(l10n.t("workspace.placeholder_subtitle").into());
 
+        // 步骤条文案
+        window.set_workspace_stepper_title_label(l10n.t("collection.title").into());
+        window.set_workspace_stepper_boundary_label(l10n.t("collection.boundary_step").into());
+        window
+            .set_workspace_stepper_orientation_label(l10n.t("collection.orientation_step").into());
+        window.set_workspace_stepper_collection_label(l10n.t("collection.collect_button").into());
+        window.set_workspace_stepper_review_label(l10n.t("review.workbench_title").into());
+        window.set_workspace_stepper_export_label(l10n.t("export.confirm_title").into());
+
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
@@ -170,7 +179,7 @@ impl ViewModelInjector {
         window.set_input_dialog_label(l10n.t("dialog.name_label").into());
 
         // ── T19B-9: 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────
-        window.set_toolbar_visible(false); // 动态根据 active-screen 控制
+        // 工具栏可见性由 .slint 侧按 active-screen 派生（屏 2/4/5/6 显示）
         window.set_toolbar_title(l10n.t("app.welcome_title").into());
 
         // 公告栏页（Screen 5）文案
@@ -236,6 +245,8 @@ impl ViewModelInjector {
         Self::bind_plan_list(injector, window);
         // ── T19B-9: 右上角工具栏回调 ─────────────────────
         Self::bind_toolbar(injector, window);
+        // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────
+        Self::bind_workspace(injector, window);
     }
 
     /// T19B-3/T19B-5：校区选择页回调绑定。
@@ -270,6 +281,27 @@ impl ViewModelInjector {
             let Some(window) = weak.upgrade() else { return };
             window.set_active_screen(3);
         });
+
+        // 单击已有校区行（T19B-5B 补接）：remember_campus → 刷新方案列表 → 跳屏 2
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_campus_select_campus_clicked(move |campus_id_str| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let campus_id = match CampusId::parse(&campus_id_str) {
+                Ok(id) => id,
+                Err(error) => {
+                    report_callback_error(injector.l10n(), &error);
+                    return;
+                }
+            };
+            if let Err(error) = injector.projects_mut().remember_campus(&campus_id) {
+                report_callback_error(injector.l10n(), &error);
+                return;
+            }
+            injector.refresh_plan_list(&window, &campus_id);
+            window.set_active_screen(2);
+        });
     }
 
     /// T19B-4/T19B-5A：方案列表页回调绑定。
@@ -301,6 +333,16 @@ impl ViewModelInjector {
         window.on_plan_list_back_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_active_screen(1);
+        });
+
+        // 单击方案卡片（ADR-0027 第 6 轮：单击即开，无概览层）→ 跳屏 4 工作区
+        let weak = window.as_weak();
+        window.on_plan_list_card_clicked(move |plan_id| {
+            let Some(window) = weak.upgrade() else { return };
+            // 记录当前方案 ID 供后续接线单使用；Phase 1 从第①步开始
+            window.set_active_plan_id(plan_id);
+            window.set_workspace_active_step(0);
+            window.set_active_screen(4);
         });
 
         // 改名（ADR-0018 §三）：···菜单 → 输入窗（预填现名）→ F3 rename_plan
@@ -515,6 +557,20 @@ impl ViewModelInjector {
             if let Some(window) = weak_clone.upgrade() {
                 window.set_active_screen(3);
             }
+        });
+    }
+
+    // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────────
+    fn bind_workspace(_injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        // 步骤点击：上锁步骤不可点击（ADR-0027：前跳上锁，回跳自由，第①格永远解锁）
+        let weak = window.as_weak();
+        window.on_workspace_step_clicked(move |step_index| {
+            let Some(window) = weak.upgrade() else { return };
+            let completed = window.get_workspace_completed_steps();
+            if step_index > completed {
+                return; // 锁定步骤忽略点击
+            }
+            window.set_workspace_active_step(step_index);
         });
     }
 
