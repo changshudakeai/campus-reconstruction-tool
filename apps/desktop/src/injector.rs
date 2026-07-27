@@ -22,7 +22,8 @@ use data_acquisition::AcquisitionPipeline;
 use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
 use foundation_mode::{
-    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex,
+    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult,
+    OrientationCalculator, OrientationLine, Point2D, Vertex,
 };
 use global_settings::{FirstRunSetup, SettingsManager};
 use localization::{Language, Localization};
@@ -35,7 +36,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::dispatch::report_callback_error;
 use crate::runtime::{decide, status_text, LandingDecision};
 use crate::theme::format_relative_time;
-use crate::{generated::CampusData, AppWindow, BoundaryPointData};
+use crate::{generated::CampusData, AppWindow, BoundaryPointData, OrientationPointData};
 
 /// 壳持有的 B2 连接组。
 ///
@@ -91,6 +92,10 @@ pub struct ViewModelInjector {
     export: ExportConsole<MockSealGate>,
     // T19B-5B: B5 地基模式 (边界绘制状态机)
     boundary_drawer: BoundaryDrawer,
+    // T19B-5B Step B: 朝向交互状态 (壳只存 UI 状态，计算全委 B5)
+    orientation_points: Vec<(f64, f64)>,
+    orientation_angle: Option<f32>,
+    orientation_is_determined: bool,
 }
 
 impl ViewModelInjector {
@@ -109,6 +114,9 @@ impl ViewModelInjector {
             sentinel: QuietSentinel::new(),
             export: ExportConsole::new(MockSealGate::new()),
             boundary_drawer: BoundaryDrawer::new(),
+            orientation_points: Vec::new(),
+            orientation_angle: None,
+            orientation_is_determined: false,
         })
     }
 
@@ -177,6 +185,28 @@ impl ViewModelInjector {
         window.set_workspace_boundary_map_placeholder(l10n.t("boundary.map_placeholder").into());
         window.set_workspace_boundary_is_determined(false);
         window.set_workspace_boundary_point_count(0);
+
+        // 屏 4 步骤②：定朝向交互页文案（T19B-5B Phase 2 Step B）
+        window.set_workspace_orientation_points(ModelRc::new(VecModel::default()));
+        window.set_workspace_orientation_path_commands(SharedString::new());
+        window.set_workspace_orientation_mode("two-points".into());
+        window.set_workspace_orientation_angle(-1.0);
+        window.set_workspace_orientation_is_determined(false);
+        window.set_workspace_orientation_title(l10n.t("orientation.step_title").into());
+        window.set_workspace_orientation_two_points_hint(
+            l10n.t("orientation.two_points_hint").into(),
+        );
+        window.set_workspace_orientation_bearing_angle_hint(
+            l10n.t("orientation.bearing_angle_hint").into(),
+        );
+        window.set_workspace_orientation_angle_input_placeholder(
+            l10n.t("orientation.angle_input_placeholder").into(),
+        );
+        window.set_workspace_orientation_angle_display(SharedString::new());
+        window.set_workspace_orientation_input_text("".into());
+        window.set_workspace_orientation_submit_label(l10n.t("orientation.submit_button").into());
+        window.set_workspace_orientation_reset_label(l10n.t("orientation.reset_button").into());
+        window.set_workspace_orientation_status(l10n.t("orientation.status_idle").into());
 
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
@@ -279,6 +309,55 @@ impl ViewModelInjector {
             commands.push_str(" Z");
         }
         commands
+    }
+
+    /// 同步朝向交互状态到 Slint 显示模型 (T19B-5B Step B)
+    fn sync_orientation_display(&self, window: &AppWindow) {
+        // 点显示数据 (偏移 -6 以居中渲染 12px 圆点)
+        let points: Vec<OrientationPointData> = self
+            .orientation_points
+            .iter()
+            .map(|(x, y)| OrientationPointData {
+                x: *x as f32 - 6.0,
+                y: *y as f32 - 6.0,
+            })
+            .collect();
+        window.set_workspace_orientation_points(ModelRc::new(VecModel::from(points)));
+
+        // 连线 path (两点之间)
+        let path = if self.orientation_points.len() >= 2 {
+            let (x0, y0) = self.orientation_points[0];
+            let (x1, y1) = self.orientation_points[1];
+            format!("M {x0} {y0} L {x1} {y1}")
+        } else {
+            String::new()
+        };
+        window.set_workspace_orientation_path_commands(path.into());
+
+        // 角度值
+        let angle = self.orientation_angle.unwrap_or(-1.0);
+        window.set_workspace_orientation_angle(angle);
+        window.set_workspace_orientation_is_determined(self.orientation_is_determined);
+
+        // 角度显示文案
+        let angle_display = if angle >= 0.0 {
+            format!("{:.1}\u{00b0}", angle)
+        } else {
+            String::new()
+        };
+        window.set_workspace_orientation_angle_display(angle_display.into());
+
+        // 状态文案
+        let status = if self.orientation_is_determined {
+            self.l10n.t("orientation.status_determined").into()
+        } else if self.orientation_points.is_empty() {
+            self.l10n.t("orientation.status_idle").into()
+        } else if self.orientation_points.len() == 1 {
+            self.l10n.t("orientation.status_first_point").into()
+        } else {
+            self.l10n.t("orientation.status_calculated").into()
+        };
+        window.set_workspace_orientation_status(status);
     }
 
     /// 把页面回调绑到 VM（T19B-2：向导完成 + 重看教程；T19B-3：校区选择；
@@ -771,6 +850,126 @@ impl ViewModelInjector {
             {
                 let Some(window) = weak.upgrade() else { return };
                 injector.sync_boundary_display(&window);
+            }
+        });
+
+        // ── 屏 4 步骤②：定朝向回调（T19B-5B Phase 2 Step B）────────────
+        // 两点模式：画布点击 → 存点 → 第二次点击时调 B5 calculate
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_orientation_canvas_clicked(move |x, y| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+
+            // 已有朝向值时重新设定 → 弹确认窗 (collection.orientation_recalc_notice)
+            if injector.orientation_is_determined {
+                window
+                    .set_confirm_dialog_title(injector.l10n().t("orientation.recalc_title").into());
+                window.set_confirm_dialog_body(
+                    injector
+                        .l10n()
+                        .t("collection.orientation_recalc_notice")
+                        .into(),
+                );
+                window.set_confirm_dialog_visible(true);
+                return;
+            }
+
+            // 存点 (Slint f32 → B5 f64)
+            if injector.orientation_points.len() < 2 {
+                injector.orientation_points.push((x as f64, y as f64));
+            }
+
+            // 第二个点就位 → 调 B5 OrientationCalculator::calculate
+            if injector.orientation_points.len() == 2 {
+                let (x0, y0) = injector.orientation_points[0];
+                let (x1, y1) = injector.orientation_points[1];
+                let line = OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1));
+                match line.and_then(|l| OrientationCalculator::calculate(&l)) {
+                    Some(orientation) => {
+                        injector.orientation_angle = Some(orientation.degree());
+                    }
+                    None => {
+                        report_callback_error(
+                            injector.l10n(),
+                            &"two points coincide, cannot determine orientation",
+                        );
+                        injector.orientation_points.clear();
+                    }
+                }
+            }
+            injector.sync_orientation_display(&window);
+        });
+
+        // 提交按钮：角度输入模式下校验并设定朝向
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_orientation_submit_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+
+            let mode = window.get_workspace_orientation_mode().to_string();
+            if mode == "bearing-angle" {
+                // 角度输入模式：从 LineEdit 读取文本 → B5 normalize_angle 校验
+                let text = window.get_workspace_orientation_input_text().to_string();
+                let angle: f32 = match text.trim().parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        report_callback_error(
+                            injector.l10n(),
+                            &"invalid angle input, please enter a number",
+                        );
+                        return;
+                    }
+                };
+                match OrientationCalculator::normalize_angle(angle) {
+                    Some(orientation) => {
+                        // 已有朝向值时弹确认窗
+                        if injector.orientation_is_determined {
+                            window.set_confirm_dialog_title(
+                                injector.l10n().t("orientation.recalc_title").into(),
+                            );
+                            window.set_confirm_dialog_body(
+                                injector
+                                    .l10n()
+                                    .t("collection.orientation_recalc_notice")
+                                    .into(),
+                            );
+                            window.set_confirm_dialog_visible(true);
+                            return;
+                        }
+                        injector.orientation_angle = Some(orientation.degree());
+                        injector.orientation_is_determined = true;
+                    }
+                    None => {
+                        report_callback_error(
+                            injector.l10n(),
+                            &"angle out of range, please enter a value in [0, 360)",
+                        );
+                        return;
+                    }
+                }
+            } else if mode == "two-points" {
+                // 两点模式：两个点就位且角度已算出 → 确定朝向
+                if injector.orientation_points.len() == 2 && injector.orientation_angle.is_some() {
+                    injector.orientation_is_determined = true;
+                }
+            }
+            injector.sync_orientation_display(&window);
+        });
+
+        // 重置按钮：清空所有朝向状态
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        window.on_workspace_orientation_reset_clicked(move || {
+            let mut injector = shared.borrow_mut();
+            injector.orientation_points.clear();
+            injector.orientation_angle = None;
+            injector.orientation_is_determined = false;
+            {
+                let Some(window) = weak.upgrade() else { return };
+                window.set_workspace_orientation_input_text("".into());
+                injector.sync_orientation_display(&window);
             }
         });
     }

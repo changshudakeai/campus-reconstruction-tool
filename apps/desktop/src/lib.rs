@@ -38,4 +38,4 @@ mod generated {
     slint::include_modules!();
 }
 
-pub use generated::{AppWindow, BoundaryPointData, PlanCardData, Theme};
+pub use generated::{AppWindow, BoundaryPointData, OrientationPointData, PlanCardData, Theme};

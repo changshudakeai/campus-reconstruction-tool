@@ -18,9 +18,11 @@ import { NoticeBoard, NoticeData } from "notice_board.slint";
 import { Trash, TrashItemData } from "trash.slint";
 import { Stepper } from "stepper.slint";
 import { BoundaryEditor, BoundaryPointData } from "boundary_edit.slint";
+import { OrientationView, OrientationPointData } from "orientation.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
+export { OrientationPointData }
 
 export component AppWindow inherits Window {
     // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表占位，3 = 设置页
@@ -113,10 +115,30 @@ export component AppWindow inherits Window {
     in property <string> workspace-boundary-map-placeholder;
     in property <bool> workspace-boundary-is-determined;
     in property <int> workspace-boundary-point-count;
-    callback workspace-boundary-canvas-clicked(x: float, y: float);
+        callback workspace-boundary-canvas-clicked(x: float, y: float);
     callback workspace-boundary-undo-clicked();
     callback workspace-boundary-confirm-clicked();
     callback workspace-boundary-reset-clicked();
+
+    // ── 屏 4 步骤②：定朝向交互页属性（T19B-5B Phase 2 Step B）────────
+        in property <[OrientationPointData]> workspace-orientation-points;
+    in property <string> workspace-orientation-path-commands;
+    in property <string> workspace-orientation-mode: "two-points";
+    in property <float> workspace-orientation-angle: -1.0;
+    in property <bool> workspace-orientation-is-determined;
+    in property <string> workspace-orientation-title;
+    in property <string> workspace-orientation-two-points-hint;
+    in property <string> workspace-orientation-bearing-angle-hint;
+    in property <string> workspace-orientation-angle-input-placeholder;
+        in property <string> workspace-orientation-angle-display;
+        in-out property <string> workspace-orientation-input-text;
+    in property <string> workspace-orientation-submit-label;
+    in property <string> workspace-orientation-reset-label;
+    in property <string> workspace-orientation-status;
+    callback workspace-orientation-canvas-clicked(x: float, y: float);
+    callback workspace-orientation-angle-submitted(angle: float);
+    callback workspace-orientation-submit-clicked();
+    callback workspace-orientation-reset-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -540,8 +562,38 @@ export component AppWindow inherits Window {
                 }
             }
                 
-            // 步骤②+: 占位 (Phase 2 Step B/C 后续实现)
-            if root.workspace-active-step >= 1 && root.workspace-active-step <= 4: Rectangle {
+                        // 步骤②：定朝向交互页 (Phase 2 Step B)
+                        if root.workspace-active-step == 1: OrientationView {
+                x: 16px;
+                y: 72px;
+                workspace-orientation-mode: root.workspace-orientation-mode;
+                workspace-orientation-angle: root.workspace-orientation-angle;
+                orientation-is-determined: root.workspace-orientation-is-determined;
+                workspace-orientation-points: root.workspace-orientation-points;
+                workspace-orientation-path-commands: root.workspace-orientation-path-commands;
+                orientation-title: root.workspace-orientation-title;
+                orientation-two-points-hint: root.workspace-orientation-two-points-hint;
+                orientation-bearing-angle-hint: root.workspace-orientation-bearing-angle-hint;
+                orientation-angle-input-placeholder: root.workspace-orientation-angle-input-placeholder;
+                                orientation-angle-display: root.workspace-orientation-angle-display;
+                                orientation-input-text <=> root.workspace-orientation-input-text;
+                orientation-submit-button: root.workspace-orientation-submit-label;
+                orientation-reset-button: root.workspace-orientation-reset-label;
+                orientation-status: root.workspace-orientation-status;
+                    
+                orientation-canvas-clicked(x, y) => {
+                    root.workspace-orientation-canvas-clicked(x, y);
+                }
+                orientation-submit-clicked => {
+                    root.workspace-orientation-submit-clicked();
+                }
+                orientation-reset-clicked => {
+                    root.workspace-orientation-reset-clicked();
+                }
+            }
+                
+            // 步骤③+: 占位 (Phase 2 Step C 后续实现)
+            if root.workspace-active-step >= 2 && root.workspace-active-step <= 4: Rectangle {
                 x: 16px;
                 y: 120px;
                 width: parent.width - 32px;
@@ -558,8 +610,7 @@ export component AppWindow inherits Window {
                     padding: 32px;
                         
                     Text {
-                        text: root.workspace-active-step == 1 ? root.workspace-stepper-orientation-label :
-                              root.workspace-active-step == 2 ? root.workspace-stepper-collection-label :
+                        text: root.workspace-active-step == 2 ? root.workspace-stepper-collection-label :
                               root.workspace-active-step == 3 ? root.workspace-stepper-review-label :
                               root.workspace-stepper-export-label;
                         font-size: 18px;
