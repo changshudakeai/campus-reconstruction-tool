@@ -197,7 +197,8 @@
     "importance_normal": "普通",
     "importance_high": "重要",
     "archive_button": "归档",
-    "archived_notice": "已归档到通知中心"
+    "archived_notice": "已归档到通知中心",
+    "unread_marker": "(未读)"
   },
   "trash": {
     "page_title": "回收站",
