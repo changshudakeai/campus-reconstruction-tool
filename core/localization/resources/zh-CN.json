@@ -188,5 +188,30 @@
   "workspace": {
     "placeholder_title": "① 圈边界 → ② 定朝向 → ③ 采集 → ④ 评审 → ⑤ 导出",
     "placeholder_subtitle": "（步骤条骨架待 T19B-5B 完整实现）"
+  },
+  "notice": {
+    "page_title": "公告栏",
+    "empty_list": "暂无公告",
+    "date_today": "今天",
+    "date_yesterday": "昨天",
+    "importance_normal": "普通",
+    "importance_high": "重要",
+    "archive_button": "归档",
+    "archived_notice": "已归档到通知中心"
+  },
+  "trash": {
+    "page_title": "回收站",
+    "empty_list": "回收站是空的",
+    "restore_button": "恢复",
+    "purge_button": "立即永久删除",
+    "restore_confirm_title": "恢复方案",
+    "restore_confirm_body": "确定要恢复？此方案将回到原校区吗？",
+    "purge_confirm_title": "立即永久删除",
+    "purge_confirm_body": "确定要立即永久删除吗？此操作不可恢复。",
+    "conflict_title": "恢复冲突",
+    "conflict_body": "该名称已在当前校区存在，请选择处理方式",
+    "conflict_option_replace": "覆盖同名方案",
+    "conflict_option_rename": "保留原名并重命名",
+    "retention_notice": "回收站保留 30 天"
   }
 }
