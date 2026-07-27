@@ -671,7 +671,8 @@ impl ViewModelInjector {
                 injector.orientation_angle = Some(pending_angle);
                 // Step C: 更新当前方案的进度状态（has_orientation = true）
                 if let Some(plan_id) = injector.active_plan_id.clone() {
-                    injector.update_plan_progress(&plan_id, true, true);
+                    let has_boundary = injector.current_plan_has_boundary();
+                    injector.update_plan_progress(&plan_id, has_boundary, true);
                 }
                 injector.sync_workspace_progress(&window);
                 return;
