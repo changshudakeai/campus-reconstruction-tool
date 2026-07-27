@@ -8,7 +8,7 @@
 
 import { Button } from "std-widgets.slint";
 import { SettingsWizard } from "settings_wizard.slint";
-import { CampusSelect } from "campus_select.slint";
+import { CampusSelect, CampusData } from "campus_select.slint";
 import { PlanList, PlanCardData } from "plan_list.slint";
 
 export component AppWindow inherits Window {
@@ -43,14 +43,14 @@ export component AppWindow inherits Window {
     in property <string> error-dialog-body;
     in property <string> error-dialog-ok-label;
     
-    // ── 校区选择页属性（T19B-3 新增）────────────────────
+    // ── 校区选择页属性（T19B-3 新增，T19B-5 第 0 号前置修改）───────────────
     in property <string> campus-select-title;
-    in property <string> campus-select-campus-list-placeholder-text;
-    in property <string> campus-select-example-campus-a-text;
-    in property <string> campus-select-example-campus-b-text;
-    in property <string> campus-select-settings-button-text;
+    in property <string> campus-select-empty-list-text;  // T19B-5 新增
+    in property <string> campus-select-new-demo-campus-button-text;  // T19B-5 新增
+    in property <string> campus-select-settings-button-text;  // 改名为新命名
+    in property <[CampusData]> campus-select-model;  // T19B-5 新增：动态列表
 
-    callback campus-select-campus-selected(campus-id: string);
+    callback campus-select-new-demo-campus-clicked();  // T19B-5 新增回调
     callback campus-select-settings-clicked();
 
     // ── 方案列表页属性（T19B-4 新增）────────────────────
@@ -108,15 +108,15 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── 屏 1：校区选择页（T19B-3 新增）──────────────────
+    // ── 屏 1：校区选择页（T19B-3 + T19B-5 第 0 号前置修改）──────────────
     if root.active-screen == 1: CampusSelect {
         title <=> root.campus-select-title;
-        campus-list-placeholder-text <=> root.campus-select-campus-list-placeholder-text;
-        example-campus-a-text <=> root.campus-select-example-campus-a-text;
-        example-campus-b-text <=> root.campus-select-example-campus-b-text;
+        empty-list-text <=> root.campus-select-empty-list-text;
+        new-demo-campus-button-text <=> root.campus-select-new-demo-campus-button-text;
         settings-button-text <=> root.campus-select-settings-button-text;
+        campus-model <=> root.campus-select-model;
 
-        campus-selected(id) => { root.campus-select-campus-selected(id) }
+        new-demo-campus-clicked => { root.campus-select-new-demo-campus-clicked() }
         settings-clicked => { root.campus-select-settings-clicked() }
     }
 

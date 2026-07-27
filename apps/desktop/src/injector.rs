@@ -29,7 +29,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::dispatch::report_callback_error;
 use crate::runtime::{decide, status_text, LandingDecision};
-use crate::AppWindow;
+use crate::{generated::CampusData, AppWindow};
 
 /// 壳持有的 B2 连接组。
 ///
@@ -139,15 +139,10 @@ impl ViewModelInjector {
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
-        // 校区选择页（T19B-3）
+        // 校区选择页（T19B-3/T19B-5）
         window.set_campus_select_title(l10n.t("app.campus_select_title").into());
-        window.set_campus_select_campus_list_placeholder_text(
-            l10n.t("app.campus_select_placeholder").into(),
-        );
         window
-            .set_campus_select_example_campus_a_text(l10n.t("app.campus_select_example_a").into());
-        window
-            .set_campus_select_example_campus_b_text(l10n.t("app.campus_select_example_b").into());
+            .set_campus_select_new_demo_campus_button_text(l10n.t("app.new_demo_button").into());
         window.set_campus_select_settings_button_text(l10n.t("app.settings_button").into());
 
         // 方案列表页（T19B-4）
@@ -202,36 +197,37 @@ impl ViewModelInjector {
             }
         });
 
-        // ── T19B-3：校区选择页回调 ────────────────────────────
+        // ── T19B-3/T19B-5：校区选择页回调 ────────────────────────
         Self::bind_campus_select(injector, window);
         // ── T19B-4：方案列表页回调 ────────────────────────────
         Self::bind_plan_list(injector, window);
     }
 
-    /// T19B-3：校区选择页回调绑定。
+    /// T19B-3/T19B-5：校区选择页回调绑定。
     ///
-    /// 点击示例校区 → remember_campus → 刷新方案列表 → 跳屏 2；
-    /// 点击设置 → 跳屏 3。
+    /// 新建演示校区 → create_campus 刷新列表；点列表项 → remember_campus →
+    /// 刷新方案列表 → 跳屏 2；点击设置 → 跳屏 3。
     fn bind_campus_select(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
-        window.on_campus_select_campus_selected(move |campus_id_str| {
+        window.on_campus_select_new_demo_campus_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
-            let campus_id = match CampusId::parse(&campus_id_str) {
-                Ok(id) => id,
-                Err(e) => {
-                    report_callback_error(injector.l10n(), &e);
-                    return;
+            let campus_name = injector.l10n().t("campus.demo_name").to_string();
+            
+            match injector.projects_mut().create_campus(&campus_name) {
+                Ok(campus) => {
+                    // 创建成功后立即选中该校区
+                    if let Ok(campus_id) = CampusId::parse(&campus.id) {
+                        // 先记住校区，再刷新列表
+                        let _ = injector.projects_mut().remember_campus(&campus_id);
+                        injector.refresh_campus_list(&window);
+                        // 自动进入方案列表
+                        window.set_active_screen(2);
+                    }
                 }
-            };
-            if let Err(error) = injector.projects_mut().remember_campus(&campus_id) {
-                report_callback_error(injector.l10n(), &error);
-                return;
+                Err(error) => report_callback_error(injector.l10n(), &error),
             }
-            // 刷新方案列表页数据并跳屏 2
-            injector.refresh_plan_list(&window, &campus_id);
-            window.set_active_screen(2);
         });
 
         let weak = window.as_weak();
@@ -459,7 +455,7 @@ impl ViewModelInjector {
         &self.export
     }
 
-    // ── T19B-4 辅助方法：方案列表页数据流转 ─────────────────
+    // ── T19B-4/T19B-5 辅助方法：校区列表与方案列表数据流转 ────────────────
 
     /// 当前校区 ID（读 B2 app_settings 中的“上次使用的校区”）
     fn current_campus_id(&self) -> Option<CampusId> {
@@ -470,11 +466,28 @@ impl ViewModelInjector {
             .and_then(|c| CampusId::parse(&c.id).ok())
     }
 
+    /// 刷新校区选择页：动态列表 + 空占位文案
+    fn refresh_campus_list(&mut self, window: &AppWindow) {
+        let l10n = &self.l10n;
+
+        // 动态列表（F3 list_campuses）
+        let campuses = self.projects.list_campuses().unwrap_or_default();
+        let model: Vec<CampusData> = campuses
+            .iter()
+            .map(|c| CampusData {
+                id: c.id.clone().into(),
+                name: c.name.clone().into(),
+            })
+            .collect();
+        window.set_campus_select_model(ModelRc::new(VecModel::from(model.clone())));
+
+        // 空列表占位
+        if model.is_empty() {
+            window.set_campus_select_empty_list_text(l10n.t("app.campus_select_no_campus").into());
+        }
+    }
+
     /// 刷新方案列表页数据：校区名 + 卡片模型 + 教程气泡钩子。
-    ///
-    /// 教程气泡（ADR-0028 plan_list_intro）：首次渲染方案列表页时调用
-    /// F2 `bubble_for`，若教程未看完且未全跳则弹出气泡（坐标占位值，
-    /// 定稿归 T19B-8 负责人审核）。
     fn refresh_plan_list(&mut self, window: &AppWindow, campus_id: &CampusId) {
         let l10n = &self.l10n;
 

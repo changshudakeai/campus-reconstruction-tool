@@ -2,6 +2,8 @@
 
 > 本文件随 T19B 系列子工单逐单更新，反映仓库真实状态。
 
+## 📋 当前任务序列（负责人 2026-07-27 批准）
+
 ## ✅ 已落地（全部过本地门禁 + 可运行）
 
 ### Phase1（T19）
@@ -13,6 +15,9 @@
   校区选择），判定委托 F1 `SettingsManager`，附单元测试
 - zh-CN.json `app.shell_status_*` 三个文本键
 - deny.toml：slint 家族 Royalty-Free 许可豁免（见 deny.toml 内注释）
+
+> ⚠️ **T19B-5 已拆分为 5A + 5B**：见 `.scratch/v2-implementation/issues/` 新工单；
+本文件后续按新顺序补充文档（5A 还债与基建、5B 方案工作区）。
 
 ### T19B-1（Shell 基础框架与 VM 注入，2026-07-26）
 

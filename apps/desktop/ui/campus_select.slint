@@ -1,18 +1,29 @@
-// T19B-3 — 校区选择页（极简占位屏）。
-// 
-// 注意：本文件仅作为占位符，真实功能需后续工单完善。
-// 当前只演示基本的 CampusSelect component 能正常编译通过。
+// T19B-3 — 校区选择页。
+//
+// T19B-5 第 0 号前置：删除伪 ID 示例按钮，改为动态列表 + “新建演示校区”
 
-import { Button } from "std-widgets.slint";
+import { Button, ListView } from "std-widgets.slint";
+
+/// 校区视图数据（由 Rust 侧 F3 list_campuses 产出）
+export struct CampusData {
+    /// 校区 ID (UUID 文本)
+    id: string,
+    /// 校区名
+    name: string,
+}
 
 export component CampusSelect inherits Rectangle {
+    // ── 文案属性（全部由 Rust 侧 l10n 注入）────────────
     in property <string> title;
-    in property <string> campus-list-placeholder-text;
-    in property <string> example-campus-a-text;
-    in property <string> example-campus-b-text;
-    in property <string> settings-button-text;
+    in property <string> empty_list_text;  // T19B-5 新增：空列表占位
+    // 按钮文案
+    in property <string> new_demo_campus_button_text;
+    in property <string> settings_button_text;
 
-    callback campus-selected(campus_id: string);
+    // ── 数据模型 ──────────────────────────────────────
+    in property <[CampusData]> campus-model;
+
+    callback new-demo-campus-clicked();
     callback settings-clicked();
     
     width: 800px;
@@ -28,34 +39,53 @@ export component CampusSelect inherits Rectangle {
             horizontal-alignment: center;
         }
         
-        Text {
-            text: root.campus-list-placeholder-text;
-            font-size: 14px;
-            color: #888;
+        if root.campus-model.length == 0: VerticalLayout {
+            alignment: center;
+
+            Text {
+                text: root.empty_list_text;
+                font-size: 15px;
+                color: #999;
+                horizontal-alignment: center;
+            }
         }
-        
-        Button {
-            text: root.example-campus-a-text;
-            clicked => {
-                root.campus-selected("campus_001");
+
+        if root.campus-model.length > 0: ListView {
+            for campus in root.campus-model: Rectangle {
+                height: 56px;
+                
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding: 12px;
+
+                    Text {
+                        text: campus.name;
+                        font-size: 16px;
+                    }
+                }
+                
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #e0e0e0;
+                }
             }
         }
         
-        Button {
-            text: root.example-campus-b-text;
-            clicked => {
-                root.campus-selected("campus_002");
-            }
-        }
-        
+        // 底部操作区
         HorizontalLayout {
             alignment: end;
+            spacing: 12px;
             
-                        Button {
-                text: root.settings-button-text;
-                clicked => {
-                    root.settings-clicked();
-                }
+            Button {
+                text: root.new_demo_campus_button_text;
+                primary: true;
+                clicked => { root.new-demo-campus-clicked(); }
+            }
+            
+            Button {
+                text: root.settings_button_text;
+                clicked => { root.settings-clicked(); }
             }
         }
     }
