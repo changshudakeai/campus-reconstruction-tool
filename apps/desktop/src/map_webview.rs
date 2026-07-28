@@ -177,6 +177,64 @@ pub(crate) fn show(
     });
 }
 
+/// T25: 显示（或重建）地图 WebView，使用完整配置（朝向模式/已确认边界）。
+///
+/// 与 [`show`] 不同：本函数允许调用方传入完整 `BoundaryEditPageConfig`，
+/// 用于步骤②朝向模式（显示半透明边界参照）。
+pub(crate) fn show_with_config(
+    window_weak: Weak<crate::AppWindow>,
+    config: gaode_client::BoundaryEditPageConfig,
+) {
+    // 非幂等：朝向模式需要重建 WebView 以切换 HTML 初始化参数
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        state.last_api_key = config.api_key.clone();
+        state.last_security_key = config.security_key.clone();
+        state.last_anchor = (config.anchor_lon, config.anchor_lat);
+    });
+
+    let weak_for_timer = window_weak.clone();
+    let _ = slint::spawn_local(async move {
+        let Some(app_window) = window_weak.upgrade() else {
+            return;
+        };
+        let Ok(winit_win) = app_window.window().winit_window().await else {
+            return;
+        };
+
+        // HTML 由 B3 生成（密钥注入校验在 B3 内）
+        let Ok(html) = gaode_client::build_boundary_edit_page_html(&config) else {
+            return;
+        };
+
+        let scale = app_window.window().scale_factor();
+        let width = app_window.window().size().width;
+        let bounds = compute_bounds(width, scale);
+
+        let result = wry::WebViewBuilder::new()
+            .with_html(html)
+            .with_bounds(bounds)
+            .with_ipc_handler(|request: wry::http::Request<String>| {
+                let body = request.body().to_string();
+                STATE.with(|s| {
+                    if let Some(handler) = s.borrow().ipc_handler.clone() {
+                        handler(&body);
+                    }
+                });
+            })
+            .build_as_child(&*winit_win);
+
+        if let Ok(webview) = result {
+            STATE.with(|s| {
+                let mut state = s.borrow_mut();
+                state.webview = Some(webview);
+                state.last_size_scale = (width, scale);
+            });
+            start_resize_timer(weak_for_timer);
+        }
+    });
+}
+
 /// 隐藏边界地图 WebView（离开屏 4 时调用）。
 ///
 /// 诚实声明：wry 0.55 无 `set_visible` API，这里直接 drop WebView；

@@ -106,11 +106,15 @@ pub struct ViewModelInjector {
     pending_gaode_redirect: bool,
 }
 
-/// 单方案进度状态（内存模型，Step C 新增）
+/// 单方案进度状态（内存模型，Step C 新增；T25 扩展 per-plan 朝向与边界坐标）
 #[derive(Debug, Clone, Default)]
 struct PlanProgressState {
     has_boundary: bool,
     has_orientation: bool,
+    // T25: 已确认朝向角度（per-plan，切方案时恢复）
+    orientation_angle: Option<f32>,
+    // T25: 已确认边界 GCJ-02 坐标（per-plan，朝向模式半透明参照）
+    boundary_gcj02: Option<Vec<[f64; 2]>>,
 }
 
 impl PlanProgressState {
@@ -424,8 +428,12 @@ impl ViewModelInjector {
         };
         window.set_workspace_orientation_path_commands(path.into());
 
-        // 角度值
-        let angle = self.orientation_angle.unwrap_or(-1.0);
+        // 角度值：优先用当前方案的已确认角度；否则用工作区临时角度
+        let confirmed_angle = self
+            .active_plan_id
+            .as_ref()
+            .and_then(|id| self.plan_orientation_angle(id));
+        let angle = confirmed_angle.or(self.orientation_angle).unwrap_or(-1.0);
         window.set_workspace_orientation_angle(angle);
         // Step C: is_determined 由方案进度状态派生
         window.set_workspace_orientation_is_determined(self.current_plan_has_orientation());
@@ -676,6 +684,56 @@ impl ViewModelInjector {
                         message,
                     );
                 }
+                // T25: 朝向相关
+                IpcMessage::OrientationPoints { points: _ } => {
+                    // JS 已上报两点坐标，等待 confirm 后再计算
+                    // 不立即处理，等 confirm_orientation
+                }
+                IpcMessage::ConfirmOrientation { points } => {
+                    // B5 计算：两点 → 方位角
+                    let (x0, y0) = (points[0][0], points[0][1]);
+                    let (x1, y1) = (points[1][0], points[1][1]);
+
+                    match OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
+                        .and_then(|line| OrientationCalculator::calculate(&line))
+                    {
+                        Some(orientation) => {
+                            let degree = orientation.degree();
+                            // T25: 按方案保存已确认朝向角度
+                            if let Some(plan_id) = injector.active_plan_id.clone() {
+                                let has_boundary = injector.current_plan_has_boundary();
+                                injector.update_plan_progress(&plan_id, has_boundary, true);
+                                injector.set_plan_orientation_angle(&plan_id, Some(degree));
+                            }
+                            // Rust→JS: 返回角度值供显示
+                            crate::map_webview::evaluate_script(&format!(
+                                "window.calculatedOrientationAngle = {};",
+                                degree
+                            ));
+                            // 同步 UI
+                            injector.sync_workspace_progress(&window);
+                            injector.sync_orientation_display(&window);
+                        }
+                        None => {
+                            report_callback_error(
+                                injector.l10n(),
+                                &injector.l10n().t("orientation.error_coincident_points"),
+                            );
+                        }
+                    }
+                }
+                IpcMessage::OrientationClear => {
+                    injector.orientation_points.clear();
+                    // T25: 清除当前工作角度；按方案清除已确认角度
+                    injector.orientation_angle = None;
+                    if let Some(plan_id) = injector.active_plan_id.clone() {
+                        let has_boundary = injector.current_plan_has_boundary();
+                        injector.update_plan_progress(&plan_id, has_boundary, false);
+                        injector.set_plan_orientation_angle(&plan_id, None);
+                    }
+                    injector.sync_orientation_display(&window);
+                    injector.sync_workspace_progress(&window);
+                }
             }
         }));
     }
@@ -911,12 +969,14 @@ impl ViewModelInjector {
             if let Some(pending_angle) = injector.pending_orientation_angle.take() {
                 // 应用新朝向值
                 injector.orientation_angle = Some(pending_angle);
-                // Step C: 更新当前方案的进度状态（has_orientation = true）
+                // T25: 按方案保存已确认朝向角度
                 if let Some(plan_id) = injector.active_plan_id.clone() {
                     let has_boundary = injector.current_plan_has_boundary();
                     injector.update_plan_progress(&plan_id, has_boundary, true);
+                    injector.set_plan_orientation_angle(&plan_id, Some(pending_angle));
                 }
                 injector.sync_workspace_progress(&window);
+                injector.sync_orientation_display(&window);
                 return;
             }
 
@@ -1125,6 +1185,81 @@ impl ViewModelInjector {
                     window.set_confirm_dialog_visible(true);
                     return; // 不激活步骤
                 }
+
+                // T25: 进入步骤①后显示边界编辑地图
+                {
+                    let injector_ref = shared.borrow();
+                    let api_key = injector_ref
+                        .settings()
+                        .gaode_api_key()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let security_key = injector_ref
+                        .settings()
+                        .gaode_security_key()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if !api_key.is_empty() {
+                        let (anchor_lon, anchor_lat) = injector_ref.map_anchor();
+                        crate::map_webview::show(
+                            window.as_weak(),
+                            api_key,
+                            security_key,
+                            anchor_lon,
+                            anchor_lat,
+                        );
+                    }
+                }
+            }
+
+            // T25: 进入步骤②时显示朝向模式地图（带已确认边界作为参照）
+            if step_index == 1 {
+                let injector_ref = shared.borrow();
+                let api_key = injector_ref
+                    .settings()
+                    .gaode_api_key()
+                    .unwrap_or(None)
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false);
+                drop(injector_ref);
+
+                if api_key {
+                    // 重新创建 WebView 用于朝向模式
+                    crate::map_webview::hide();
+
+                    let injector_mut = shared.borrow_mut();
+                    let api_key = injector_mut
+                        .settings()
+                        .gaode_api_key()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let security_key = injector_mut
+                        .settings()
+                        .gaode_security_key()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let (anchor_lon, anchor_lat) = injector_mut.map_anchor();
+
+                    // T25: 取当前方案已确认边界的 GCJ-02 坐标作为朝向模式参照
+                    let existing_boundary_gcj02 = injector_mut
+                        .active_plan_id
+                        .as_ref()
+                        .and_then(|id| injector_mut.plan_boundary_gcj02(id));
+
+                    use gaode_client::BoundaryEditPageConfig;
+                    let config = BoundaryEditPageConfig::new(&api_key, &security_key)
+                        .with_anchor(anchor_lon, anchor_lat)
+                        .with_orientation_mode(true)
+                        .with_existing_boundary(existing_boundary_gcj02);
+
+                    // Show will rebuild with this config
+                    // For now use default constructor - future refactor needed
+                    crate::map_webview::show_with_config(window.as_weak(), config);
+                }
             }
 
             window.set_workspace_active_step(step_index);
@@ -1236,9 +1371,11 @@ impl ViewModelInjector {
             // Reset → 清空所有顶点
             injector.boundary_drawer_mut().reset();
             // Step C: 边界重置 → 更新方案进度 has_boundary = false
+            // T25: 同时清除当前方案的 GCJ-02 边界坐标
             if let Some(plan_id) = injector.active_plan_id.clone() {
                 let has_orientation = injector.current_plan_has_orientation();
                 injector.update_plan_progress(&plan_id, false, has_orientation);
+                injector.set_plan_boundary_gcj02(&plan_id, None);
             }
             // 同步 UI
             {
@@ -1249,60 +1386,15 @@ impl ViewModelInjector {
         });
 
         // ── 屏 4 步骤②：定朝向回调（T19B-5B Phase 2 Step B）────────────
-        // 两点模式：画布点击 → 存点 → 第二次点击时调 B5 calculate
+        // NOTE: T25 - 使用高德地图而非纯画布。方向点击由 map IPC 处理，本处仅做门控状态切换
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
-        window.on_workspace_orientation_canvas_clicked(move |x, y| {
-            let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
-
-            // 已有朝向值时重新设定 → 弹确认窗 (collection.orientation_recalc_notice) + store pending state
-            if injector.current_plan_has_orientation() {
-                // P0-3: 保存待应用的朝向值供 confirm dialog 使用
-                injector.pending_orientation_angle = injector.orientation_angle;
-                window
-                    .set_confirm_dialog_title(injector.l10n().t("orientation.recalc_title").into());
-                window.set_confirm_dialog_body(
-                    injector
-                        .l10n()
-                        .t("collection.orientation_recalc_notice")
-                        .into(),
-                );
-                window.set_confirm_dialog_visible(true);
-                return;
-            }
-
-            // 存点 (Slint f32 → B5 f64)
-            if injector.orientation_points.len() < 2 {
-                injector.orientation_points.push((x as f64, y as f64));
-            }
-
-            // 第二个点就位 → 调 B5 OrientationCalculator::calculate
-            if injector.orientation_points.len() == 2 {
-                let (x0, y0) = injector.orientation_points[0];
-                let (x1, y1) = injector.orientation_points[1];
-                let line = OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1));
-                match line.and_then(|l| OrientationCalculator::calculate(&l)) {
-                    Some(orientation) => {
-                        injector.orientation_angle = Some(orientation.degree());
-                    }
-                    None => {
-                        // P0-1/2: 硬编码英文 → i18n + B7 弹窗（非 toast）
-                        window
-                            .set_error_dialog_title(injector.l10n().t("dialog.error_title").into());
-                        window.set_error_dialog_source(injector.l10n().t("app.source_tag").into());
-                        window.set_error_dialog_body(
-                            injector
-                                .l10n()
-                                .t("orientation.error_coincident_points")
-                                .into(),
-                        );
-                        window.set_error_dialog_visible(true);
-                        injector.orientation_points.clear();
-                    }
-                }
-            }
-            injector.sync_orientation_display(&window);
+        window.on_workspace_orientation_canvas_clicked(move |x: f32, y: f32| {
+            // T25: 地图模式已接管该交互，Slint 画布点击为 NO-OP
+            // 此处保留参数避免未使用警告
+            let _ = (x, y);
+            let _ = weak;
+            let _ = shared;
         });
 
         // 提交按钮：角度输入模式下校验并设定朝向
@@ -1349,10 +1441,12 @@ impl ViewModelInjector {
                             return;
                         }
                         injector.orientation_angle = Some(orientation.degree());
-                        // Step C: 更新方案进度状态
+                        // T25: 按方案保存已确认朝向角度
                         if let Some(plan_id) = injector.active_plan_id.clone() {
                             let has_boundary = injector.current_plan_has_boundary();
                             injector.update_plan_progress(&plan_id, has_boundary, true);
+                            injector
+                                .set_plan_orientation_angle(&plan_id, Some(orientation.degree()));
                         }
                         injector.sync_workspace_progress(&window);
                     }
@@ -1372,12 +1466,14 @@ impl ViewModelInjector {
                     }
                 }
             } else if mode == "two-points" {
-                // 两点模式：两个点就位且角度已算出 → 确定朝向
+                // 两点模式：地图 IPC 已直接处理 confirm_orientation，
+                // Slint 提交按钮在此处仅做 UI 同步兜底。
                 if injector.orientation_points.len() == 2 && injector.orientation_angle.is_some() {
-                    // Step C: 更新方案进度状态
+                    let angle = injector.orientation_angle;
                     if let Some(plan_id) = injector.active_plan_id.clone() {
                         let has_boundary = injector.current_plan_has_boundary();
                         injector.update_plan_progress(&plan_id, has_boundary, true);
+                        injector.set_plan_orientation_angle(&plan_id, angle);
                     }
                     injector.sync_workspace_progress(&window);
                 }
@@ -1392,10 +1488,11 @@ impl ViewModelInjector {
             let mut injector = shared.borrow_mut();
             injector.orientation_points.clear();
             injector.orientation_angle = None;
-            // Step C: 重置当前方案的朝向进度
+            // T25: 按方案清除已确认朝向角度
             if let Some(plan_id) = injector.active_plan_id.clone() {
                 let has_boundary = injector.current_plan_has_boundary();
                 injector.update_plan_progress(&plan_id, has_boundary, false);
+                injector.set_plan_orientation_angle(&plan_id, None);
             }
             {
                 let Some(window) = weak.upgrade() else { return };
@@ -1560,9 +1657,45 @@ impl ViewModelInjector {
         state.has_orientation = has_orientation;
     }
 
+    /// T25: 设置指定方案的已确认朝向角度
+    fn set_plan_orientation_angle(&mut self, plan_id: &str, angle: Option<f32>) {
+        let state = self
+            .plan_progress_states
+            .entry(plan_id.to_string())
+            .or_default();
+        state.orientation_angle = angle;
+    }
+
+    /// T25: 读取指定方案的已确认朝向角度
+    fn plan_orientation_angle(&self, plan_id: &str) -> Option<f32> {
+        self.plan_progress_states
+            .get(plan_id)
+            .and_then(|state| state.orientation_angle)
+    }
+
+    /// T25: 设置指定方案的已确认边界 GCJ-02 坐标
+    fn set_plan_boundary_gcj02(&mut self, plan_id: &str, coords: Option<Vec<[f64; 2]>>) {
+        let state = self
+            .plan_progress_states
+            .entry(plan_id.to_string())
+            .or_default();
+        state.boundary_gcj02 = coords;
+    }
+
+    /// T25: 读取指定方案的已确认边界 GCJ-02 坐标
+    fn plan_boundary_gcj02(&self, plan_id: &str) -> Option<Vec<[f64; 2]>> {
+        self.plan_progress_states
+            .get(plan_id)
+            .and_then(|state| state.boundary_gcj02.clone())
+    }
+
     /// 设置当前激活方案 ID（用于多方案切换时隔离进度）
     fn set_active_plan(&mut self, plan_id: Option<&str>) {
         self.active_plan_id = plan_id.map(|s| s.to_string());
+        // T25: 切换方案时清空工作区临时朝向状态，避免 A 方案未提交的点串到 B 方案
+        self.orientation_points.clear();
+        self.orientation_angle = None;
+        self.pending_orientation_angle = None;
     }
 
     /// 同步工作区进度到 Slint 窗口（completed-steps + is_determined）
@@ -1650,6 +1783,10 @@ impl ViewModelInjector {
         }
 
         // 合法：装载 B5 drawer 为 Determined（T24 地图来源与画布来源同状态机）
+        // T25: 同时按方案保存 GCJ-02 原始坐标，供朝向模式半透明参照
+        if let Some(plan_id) = self.active_plan_id.clone() {
+            self.set_plan_boundary_gcj02(&plan_id, Some(coords.to_vec()));
+        }
         self.boundary_drawer.load_determined(vertices);
         if let Some(plan_id) = self.active_plan_id.clone() {
             let has_orientation = self.current_plan_has_orientation();

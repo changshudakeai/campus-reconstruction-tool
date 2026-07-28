@@ -200,7 +200,7 @@ mod tests {
     }
 }
 
-/// T23/T24: IPC 消息类型（取点页/边界编辑页回传）
+/// T23/T24/T25: IPC 消息类型（取点页/边界编辑页/朝向页面回传）
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcMessage {
     /// 坐标："经度，纬度" 字符串（T23 pick point / T24 manual_point）
@@ -220,6 +220,13 @@ pub enum IpcMessage {
     ManualClear,
     /// 确认最终边界 (confirm_boundary: GCJ-02 or WGS-84 TBD)
     ConfirmBoundary { coords: Vec<[f64; 2]> },
+    // T25: 朝向模式
+    /// 朝向点击两点 [(lng,lat), (lng,lat)]
+    OrientationPoints { points: [[f64; 2]; 2] },
+    /// 确认朝向并请求计算角度 (同上)
+    ConfirmOrientation { points: [[f64; 2]; 2] },
+    /// 清除朝向点
+    OrientationClear,
 }
 
 /// T24: OSM 元素结构 (Overpass JSON)
@@ -258,6 +265,9 @@ pub struct OsmMember {
 /// - JSON 含 `type="manual_cancel"` → [`IpcMessage::ManualCancel`]
 /// - JSON 含 `type="manual_clear"` → [`IpcMessage::ManualClear`]
 /// - JSON 含 `type="confirm_boundary"` → [`IpcMessage::ConfirmBoundary`]
+/// - JSON 含 `type="orientation_points"` → [`IpcMessage::OrientationPoints`]
+/// - JSON 含 `type="confirm_orientation"` → [`IpcMessage::ConfirmOrientation`]
+/// - JSON 含 `type="orientation_clear"` → [`IpcMessage::OrientationClear`]
 /// - 其他 → [`Error::UnsupportedIpcMessage`]
 pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
     // 先尝试直接当作 "经度，纬度" (pick point / manual_point)
@@ -335,6 +345,24 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                 }
                 "manual_clear" => {
                     return Ok(IpcMessage::ManualClear);
+                }
+                "orientation_points" | "confirm_orientation" => {
+                    #[derive(Deserialize)]
+                    struct OrientationPayload {
+                        #[serde(default)]
+                        points: Option<[[f64; 2]; 2]>,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<OrientationPayload>(msg) {
+                        if let Some(points) = payload.points {
+                            if type_payload.r#type == "orientation_points" {
+                                return Ok(IpcMessage::OrientationPoints { points });
+                            }
+                            return Ok(IpcMessage::ConfirmOrientation { points });
+                        }
+                    }
+                }
+                "orientation_clear" => {
+                    return Ok(IpcMessage::OrientationClear);
                 }
                 _ => {}
             }
