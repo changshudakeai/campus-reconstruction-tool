@@ -129,7 +129,17 @@
     "status_drawing": "已添加 {0} 个点，继续点击或点'确认边界'闭合",
     "status_determined": "边界已确认，可点'重置'重新绘制",
     "status_editing": "拖动顶点调整位置",
-    "map_placeholder": "地图底图待后续决策"
+    "map_placeholder": "地图底图待后续决策",
+    "osm_auto_selected_title": "OSM 边界已自动选取",
+    "osm_auto_selected_body": "已按规则自动选取「{0}」（{1} 个顶点），可拖动顶点调整",
+    "osm_no_geometry_title": "OSM 无可用边界数据",
+    "osm_no_geometry_body": "自动获取的边界缺少坐标，请人工圈画",
+    "osm_not_found_title": "OSM 未查询到边界",
+    "osm_not_found_body": "未能在 OSM 匹配到此校区边界，请人工圈画",
+    "map_notice_title": "地图提示",
+    "error_too_few_points": "边界至少需要 3 个点才能闭合",
+    "error_convert_failed": "坐标换算失败：未设参考原点",
+    "unknown_campus": "未命名校区"
   },
   "orientation": {
     "step_title": "② 定朝向",
