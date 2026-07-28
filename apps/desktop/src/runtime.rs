@@ -18,7 +18,6 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
-use crate::map_embed::GaodeMapView;
 use crate::presenter::ShellPresenter;
 use crate::theme::apply_theme;
 use crate::AppWindow;
@@ -83,13 +82,8 @@ pub fn run_dev() -> Result<()> {
         .registry()
         .set_presenter(ShellPresenter::install(&window));
 
-    // T21 REAL COMPILE: 高德地图嵌入探针 (screen 4 WebView 子窗口)
-    let _map_view = {
-        match GaodeMapView::new(400) {
-            Ok(map_view) => map_view.render_into(&window.window(), (116.397, 39.916)),
-            Err(e) => None,
-        }
-    };
+    // T21 VERIFIED PATH: 高德地图嵌入探针 (spawn_local 异步等事件循环启动)
+    crate::map_embed::embed_probe(window.as_weak());
 
     // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
     let injector = match ShellDatabases::open(DEV_DB_FILE) {
