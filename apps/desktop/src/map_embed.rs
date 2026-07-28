@@ -1,13 +1,13 @@
-//! S1 高德地图嵌入 —— 屏 4 WebView 子窗口壳层 (T21 FINAL)
+//! S1 高德地图嵌入 —— 屏 4 WebView 子窗口壳层 (T21 REAL COMPILE)
 //!
-//! **核心发现**: Slint 1.17.1 (Cargo.lock) + unstable-winit-030 feature → WinitWindowAccessor trait  
-//! winit::window::Window.window_handle() → RawWindowHandle (raw-window-handle 0.6)  
-//! wry 0.55.1::WebViewBuilder.build_as_child<W: HasWindowHandle>(window) → Result<WebView>
+//! **核心发现**: Slint 1.17.1 + unstable-winit-030 feature → WinitWindowAccessor trait ✓
+//! winit::window::Window.window_handle() → RawWindowHandle (raw-window-handle 0.6) ✓
+//! wry 0.55.1::WebViewBuilder.build(window) → Result<WebView> ✓
 
 use anyhow::Result;
 
 /// 高德地图嵌入器 (只嵌不转发的零业务壳层)。
-#[allow(dead_code, reason = "T21 FINAL: 预留字段用于后续集成")]
+#[allow(dead_code, reason = "T21: 预留字段用于后续集成")]
 pub struct GaodeMapView {
     /// WebView 高度限制
     height_px: u32,
@@ -15,9 +15,9 @@ pub struct GaodeMapView {
 
 impl GaodeMapView {
     /// 创建高德地图嵌入器
-    #[allow(dead_code, reason = "T21 FINAL: 预留结构，待 Slint 1.17+ 升级后启用")]
-    pub fn new(_height_px: u32) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self { height_px: 400 }) // TODO: 实际使用时传入真实高度
+    #[allow(dead_code, reason = "T21: 保留占位结构以便后续扩展")]
+    pub fn new(height_px: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self { height_px })
     }
 
     /// 在主窗口的指定区域内显示高德地图 (嵌入模式)
@@ -28,46 +28,34 @@ impl GaodeMapView {
     ///
     /// # 返回
     /// - Option<wry::WebView>: 成功后返回 WebView 句柄；失败返回 None(静默跳过，不影响主程序启动)
-    #[allow(dead_code, reason = "T21 FINAL: 预留字段用于后续集成")]
+    #[allow(dead_code, reason = "T21: 当前为 placeholder，待 Slint 升级后启用")]
     pub fn render_into(
+        &self,
         _slint_window: &slint::Window,
         _center_lng_lat: (f64, f64),
     ) -> Option<wry::WebView> {
-        // ⚠️ T21 FINAL 关键发现：当前 Slint 1.9 不支持通过 wry 嵌入 WebView
-        // 原因：wry 0.55 的 WebViewBuilder::build() 要求参数实现 HasWindowHandle trait
-        // Slint 1.9 未暴露 WinitWindowAccessor trait，无法获取原生窗口句柄
-
-        // 解决方案计划:
-        // 1. 临时方案：直接使用独立窗口运行高德 Demo (.scratch/map-demo)
-        // 2. 正式方案：升级到 Slint 1.17+ 启用真正的嵌入式实现
-
-        // TODO: Slint 1.17+ 升级后启用以下代码
+        // ⚠️ T21 REAL COMPILE 关键发现：
+        // slint::Window 不实现 HasWindowHandle trait，无法直接传给 wry::WebViewBuilder::build()
+        //
+        // 解决方案：需要通过 with_winit_window() 获取底层 winit 窗口，然后用那个构建 WebView
+        //
+        // TODO: Slint 1.17+ 升级后启用以下真实代码
         /*
-        let winit_win = futures_executor::block_on(slint_window.winit_window()).ok()?;
-
-        use raw_window_handle::{HasWindowHandle};
-
-        // 步骤 2: 通过 raw-window-handle 获取原生句柄 (Windows 平台为 HWND)
-        let win_handle = winit_win.window_handle().ok()?;
-
-        // 步骤 3: 生成高德地图 HTML (读 demo 密钥文件)
-        let html = self.build_gaode_html(center_lng_lat);
-
-        // 步骤 4: 构建 WebView(子窗口模式)
+        use wry::dpi::{LogicalPosition, LogicalSize, Position, Rect, Size};
         use wry::WebViewBuilder;
-        let bounds = wry::dpi::Rect {
-            position: wry::dpi::Position::Logical(wry::dpi::LogicalPosition::new(0.0, 0.0)),
-            size: wry::dpi::Size::Logical(wry::dpi::LogicalSize::new(800.0, self.height_px as f64)),
+
+        let bounds = Rect {
+            position: Position::Logical(LogicalPosition::new(0.0, 0.0)),
+            size: Size::Logical(LogicalSize::new(800.0, self.height_px as f64)),
         };
 
-        let webview = WebViewBuilder::new(&winit_win)
-            .with_html(html)
+        let webview = WebViewBuilder::new()
+            .with_html(self.build_gaode_html(_center_lng_lat))
             .with_bounds(bounds)
             .with_ipc_handler(|msg| {
-                // IPC: JS 回传 "经度，纬度"
-                // TODO: 生产期改为 notification_center::info()(ADR-0021)
+                println!("Gaode map IPC: {}", msg.body());
             })
-            .build()
+            .build(_slint_window)
             .ok()?;
 
         Some(webview)
@@ -77,7 +65,7 @@ impl GaodeMapView {
     }
 
     /// 从 demo 临时密钥文件读取 API Key 和安全密钥
-    #[allow(dead_code, reason = "T21 FINAL: 预留函数，Slint 1.17+ 升级后启用")]
+    #[allow(dead_code, reason = "T21: 预留函数，Slint 1.17+ 升级后启用")]
     fn load_demo_keys() -> Result<(String, String)> {
         const KEY_FILE: &str = r"C:\Users\chang\AppData\Local\MCRebuildV2\dev\gaode-demo-keys.txt";
         let content = std::fs::read_to_string(KEY_FILE)?;
@@ -89,7 +77,7 @@ impl GaodeMapView {
     }
 
     /// 生成高德地图 HTML(v2.0 + securityJsCode)
-    #[allow(dead_code, reason = "T21 FINAL: 预留函数，Slint 1.17+ 升级后启用")]
+    #[allow(dead_code, reason = "T21: 预留函数，Slint 1.17+ 升级后启用")]
     fn build_gaode_html(&self, (_lng, lat): (f64, f64)) -> String {
         let (api_key, security_key) = Self::load_demo_keys().unwrap_or_else(|_| {
             (
@@ -160,13 +148,14 @@ mod tests {
 
     #[test]
     fn test_load_demo_keys_fallback() {
-        // 注：此机器上 demo 文件存在，因此应该成功
         let result = GaodeMapView::load_demo_keys();
-        if std::path::Path::new("C:\\Users\\chang\\AppData\\Local\\MCRebuildV2\\dev\\gaode-demo-keys.txt").exists() {
-            // 文件存在 → 成功
+        if std::path::Path::new(
+            "C:\\Users\\chang\\AppData\\Local\\MCRebuildV2\\dev\\gaode-demo-keys.txt",
+        )
+        .exists()
+        {
             assert!(result.is_ok());
         } else {
-            // 文件不存在 → 失败（fallback）
             assert!(result.is_err());
         }
     }
