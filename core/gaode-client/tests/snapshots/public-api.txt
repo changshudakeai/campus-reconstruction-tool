@@ -4,11 +4,12 @@
 # 本文件记录 B3 高德地图客户端的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 #
-# 最后更新: 2026-07-26 (T05 实施)
+# 最后更新: 2026-07-28 (T24 实施)
 
 ## Constants
 
-pub const GAODE_CDN_URL_TEMPLATE: &str                       (官方 CDN v1.2 + PlaceSearch 插件)
+pub const GAODE_CDN_URL_TEMPLATE: &str                       (官方 CDN v2.0 + PlaceSearch 插件)
+pub const BOUNDARY_CDN_TEMPLATE: &str                        (官方 CDN v2.0 + PolygonEditor 插件, T24)
 pub const MAP_MIN_HEIGHT_PX: u32 = 300                       (地图最小高度硬约束)
 pub const SCHOOL_TYPECODE_PREFIX: &str = "1412"              (高德教育类目前缀)
 
@@ -66,7 +67,9 @@ pub fn confirm(&mut self) -> Result<ConfirmedCampus>          (显式确认，�
 ## Functions
 
 pub fn parse_place_search_response(json: &str) -> Result<Vec<SchoolPoi>>
+pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage>    (T23/T24: WebView IPC 多分支解析，畸形载荷拒绝)
 pub fn build_map_page_html(config: &MapPageConfig) -> Result<String>
+pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<String>  (T24)
 
 pub struct MapPageConfig {
     pub api_key: String,
@@ -74,6 +77,61 @@ pub struct MapPageConfig {
 }
 pub fn MapPageConfig::new(api_key: impl Into<String>) -> Self
 pub fn MapPageConfig::effective_height_px(&self) -> u32       (钳制 >= 300)
+
+## T24: 边界编辑地图页与 IPC 协议
+
+pub struct BoundaryEditPageConfig {                          (Debug + Clone + PartialEq)
+    pub api_key: String,
+    pub security_key: String,
+    pub anchor_lon: f64,
+    pub anchor_lat: f64,
+    pub height_px: u32,
+}
+pub fn BoundaryEditPageConfig::new(api_key: impl Into<String>, security_key: impl Into<String>) -> Self
+pub fn BoundaryEditPageConfig::with_anchor(self, lon: f64, lat: f64) -> Self
+pub fn BoundaryEditPageConfig::effective_height_px(&self) -> u32  (钳制 >= 300)
+
+pub enum IpcMessage {                                        (Debug + Clone + PartialEq)
+    Coordinate { longitude: f64, latitude: f64 },            (T23 pick point / 纯文本经纬度)
+    Error { message: String },
+    OsmElements { elements: Vec<OsmElement> },               (T24: Overpass 原始要素回传)
+    BoundaryUpdate { coords: Vec<[f64; 2]> },                (T24: 编辑中坐标 GCJ-02)
+    ManualPoint { lon: f64, lat: f64 },                      (T24: 人工圈画落点)
+    ManualCancel,                                            (T24: 撤销落点)
+    ManualClear,                                             (T24: 清空重画)
+    ConfirmBoundary { coords: Vec<[f64; 2]> },               (T24: 确认最终边界 GCJ-02)
+}
+
+pub struct OsmElement {                                      (Serialize + Deserialize + PartialEq)
+    pub r#type: String,
+    pub id: i64,
+    pub geometry: Option<Vec<[f64; 2]>>,
+    pub members: Vec<OsmMember>,
+    pub tags: HashMap<String, String>,
+}
+pub struct OsmMember {                                       (Serialize + Deserialize + PartialEq)
+    pub r#type: String,
+    pub reference: i64,
+    pub role: String,
+}
+
+## T24: OSM 边界候选排序（ADR-0029，排序只在 Rust 可单测）
+
+pub struct BoundarySorter
+impl BoundarySorter {
+    pub fn sort_candidates(elements: Vec<OsmElement>, anchor_lon: f64, anchor_lat: f64, requested_campus_name: Option<&str>) -> Vec<BoundaryCandidateScore>
+    pub fn best_match(elements: Vec<OsmElement>, anchor_lon: f64, anchor_lat: f64, requested_campus_name: Option<&str>) -> Option<Vec<[f64; 2]>>
+}
+pub struct BoundaryCandidateScore {                          (Debug + Clone)
+    pub element: OsmElement,
+    pub contains_anchor: bool,
+    pub name_match_score: f64,
+    pub distance_to_anchor_m: f64,
+    pub rank_score: f64,
+}
+impl BoundaryCandidateScore {
+    pub fn new(element: OsmElement) -> Self
+}
 
 ## Errors
 

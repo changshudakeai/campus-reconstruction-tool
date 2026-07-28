@@ -132,6 +132,18 @@ impl BoundaryDrawer {
         self.state = BoundaryState::Idle;
     }
 
+    /// T24: 从外部来源（地图 WebView 确认）装载已定边界顶点
+    ///
+    /// 顶点须为平面米单位（相对同一参考原点），且调用前必须经
+    /// [`crate::validate_polygon_closure`] 验证通过——本方法只做
+    /// 状态迁移（任意状态 → `Determined`），不重复几何校验。
+    /// 不受 `max_vertices` 点击上限约束（该上限仅约束手工点击 UX，
+    /// OSM 自动获取的多边形顶点数可能远超 50）。
+    pub fn load_determined(&mut self, vertices: Vec<Vertex>) {
+        self.vertices = vertices;
+        self.state = BoundaryState::Determined;
+    }
+
     /// 点击空白处：开始绘制或追加顶点
     fn on_click(&mut self, x: f64, y: f64) -> EventResult {
         match self.state {

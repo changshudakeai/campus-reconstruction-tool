@@ -4,7 +4,7 @@
 # 本文件记录 B5 地基模式的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 # 
-# 最后更新：2026-07-26 (T14 实施)
+# 最后更新：2026-07-28 (T24 实施)
 
 ## Structures
 
@@ -26,11 +26,12 @@ pub struct OrientationImpactReport { pub items: Vec<ImpactItem>, pub all_safe_to
 pub enum BoundaryState { Idle, Drawing, Determined, Editing { selected_vertex: usize } }  // #[derive(Default)] Idle
 pub enum BoundaryUiEvent { ClickAt { x: f64, y: f64 }, DragTo { x: f64, y: f64 }, Confirm, Cancel, ClickVertex { index: usize } }
 pub enum EventResult { Accepted, Rejected(String), Ignored }
-pub enum BoundaryValidationError #[non_exhaustive] { InsufficientVertices(usize), AreaTooSmall { area: f64, min: f64 } }
+pub enum BoundaryValidationError #[non_exhaustive] { InsufficientVertices(usize), AreaTooSmall { area: f64, min: f64 }, SelfIntersecting { edge_a: usize, edge_b: usize } }  // SelfIntersecting: T24 新增（ADR-0029）
 
 ## Functions
 
 pub fn validate_polygon_closure(vertices: &[Vertex]) -> ValidationResult
+pub fn detect_self_intersection(vertices: &[Vertex]) -> Option<(usize, usize)>  // T24 新增（ADR-0029：自相交检测属 B5）
 pub fn check_orientation_change_impact(existing_data: &HashMap<CandidateCategory, usize>, old_orientation: Option<Orientation>, new_orientation: Orientation) -> OrientationImpactReport
 pub fn should_show_confirmation_dialog(report: &OrientationImpactReport) -> bool
 pub fn format_impact_details(report: &OrientationImpactReport) -> String
@@ -93,6 +94,7 @@ impl BoundaryDrawer {
     pub fn state(&self) -> BoundaryState
     pub fn handle_event(&mut self, event: BoundaryUiEvent) -> EventResult
     pub fn reset(&mut self)
+    pub fn load_determined(&mut self, vertices: Vec<Vertex>)   // T24 新增：装载外部（地图确认）已验证边界
 }
 
 impl Default for BoundaryDrawer

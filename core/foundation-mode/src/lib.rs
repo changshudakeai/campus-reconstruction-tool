@@ -19,10 +19,11 @@
 //!
 //! ## 依赖纪律（ADR-0017）
 //!
-//! 只依赖 B1 shared-domain-types：[Boundary]/[Orientation] 直接复用 T02
-//! 类型定义。不碰 B2 data-persistence（存储归 T11），不依赖 B6
-//! localization（基础层横向零依赖）——错误文案暂为中文硬编码，待壳层
-//! 经 B6 解析文本键。
+//! 只依赖 B1 shared-domain-types：[Boundary]/[Orientation] 直接复用 T02 类型
+//! 定义。不碰 B2 data-persistence（存储归 T11），不依赖 B3/B6 等基础层横
+//! 向模块（基础层横向零依赖，xtask arch 强制）——T24 OSM 候选排序因操作
+//! B3 自有 `OsmElement` 类型而归 B3 gaode-client（ADR-0029 允许 B3/B5 任一）。
+//! 错误文案暂为中文硬编码，待壳层经 B6 解析文本键。
 
 pub mod boundary_ui;
 pub mod coordinate;
@@ -34,7 +35,9 @@ pub mod warning;
 pub use boundary_ui::{BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex};
 pub use coordinate::{CoordinateConverter, McBlockCoord, MercatorCoord, PlaneMileUnit};
 pub use orientation::{OrientationCalculator, OrientationLine, Point2D};
-pub use validation::{validate_polygon_closure, BoundaryValidationError, ValidationResult};
+pub use validation::{
+    detect_self_intersection, validate_polygon_closure, BoundaryValidationError, ValidationResult,
+};
 pub use warning::{
     check_orientation_change_impact, format_impact_details, should_show_confirmation_dialog,
     ImpactItem, OrientationImpactReport,

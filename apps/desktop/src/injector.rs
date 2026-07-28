@@ -22,9 +22,10 @@ use data_acquisition::AcquisitionPipeline;
 use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
 use foundation_mode::{
-    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult,
-    OrientationCalculator, OrientationLine, Point2D, Vertex,
+    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, CoordinateConverter,
+    EventResult, MercatorCoord, OrientationCalculator, OrientationLine, Point2D, Vertex,
 };
+use gaode_client::{BoundarySorter, IpcMessage};
 use global_settings::{FirstRunSetup, SettingsManager};
 use localization::{Language, Localization};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
@@ -481,6 +482,7 @@ impl ViewModelInjector {
                     // 有 → 该校区方案列表占位），判定仍全权委托 F1
                     window
                         .set_status_text(status_text(injector.l10n(), &injector.landing()).into());
+                    crate::map_webview::hide();
                     window.set_active_screen(1);
                 }
                 Err(error) => report_callback_error(injector.l10n(), &error),
@@ -561,6 +563,121 @@ impl ViewModelInjector {
         Self::bind_toolbar(injector, window);
         // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────
         Self::bind_workspace(injector, window);
+        // ── T24: 边界地图 WebView IPC 桥接注册 ─────────────────────
+        Self::bind_boundary_map_ipc(injector, window);
+    }
+
+    /// T24：注册边界地图 WebView 的 IPC 处理器。
+    ///
+    /// 消息分发（B3 `parse_ipc_message` 解析；业务计算委托 B5）：
+    /// - OsmElements → B5 BoundarySorter 排序选取 → 公告栏告知选中
+    /// - ConfirmBoundary → 经纬度→平面米（B5 CoordinateConverter）→
+    ///   B5 校验（闭合/面积/自相交）→ 步骤条打勾；失败 → B7 弹窗
+    /// - BoundaryUpdate → 暂存编辑中坐标（壳只桥接，不做计算）
+    /// - ManualPoint/Cancel/Clear → 人工圈画累积点同步到 Slint 画布状态
+    /// - Error/未知 → 公告栏提示（非弹窗，非阻塞，ADR-0021 分级）
+    fn bind_boundary_map_ipc(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        crate::map_webview::register_ipc_handler(Rc::new(move |msg: &str| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut injector = shared.borrow_mut();
+            let Ok(parsed) = gaode_client::parse_ipc_message(msg) else {
+                return; // 畸形载荷静默丢弃（B3 解析层已尽力）
+            };
+            match parsed {
+                IpcMessage::OsmElements { elements } => {
+                    // B5 排序选取（含锚点 → 名称匹配 → 距离最近；无候选列表，ADR-0029）
+                    let (anchor_lon, anchor_lat) = injector.map_anchor();
+                    let campus_name = injector.current_campus_name();
+                    let sorted = BoundarySorter::sort_candidates(
+                        elements,
+                        anchor_lon,
+                        anchor_lat,
+                        campus_name.as_deref(),
+                    );
+                    match sorted.into_iter().next() {
+                        Some(best) => {
+                            let name =
+                                best.element.tags.get("name").cloned().unwrap_or_else(|| {
+                                    injector.l10n().t("boundary.unknown_campus")
+                                });
+                            match best.element.geometry {
+                                Some(coords) => {
+                                    let count = coords.len();
+                                    // Rust→JS：选中的 WGS-84 坐标发回 JS，
+                                    // 经 AMap.convertFrom 转 GCJ-02 后上屏
+                                    // （红线：未转换坐标禁止上屏）
+                                    let coords_json = serde_json::to_string(&coords)
+                                        .unwrap_or_else(|_| "[]".to_string());
+                                    let name_json = serde_json::to_string(&name)
+                                        .unwrap_or_else(|_| "\"未知校区\"".to_string());
+                                    crate::map_webview::evaluate_script(&format!(
+                                        "convertAndDraw({coords_json}, {name_json});"
+                                    ));
+                                    let body = injector.l10n().t_with_array(
+                                        "boundary.osm_auto_selected_body",
+                                        &[&name, &count.to_string()],
+                                    );
+                                    notification_center::info(
+                                        injector.l10n().t("collection.boundary_step"),
+                                        injector.l10n().t("boundary.osm_auto_selected_title"),
+                                        body,
+                                    );
+                                }
+                                None => {
+                                    // 候选无坐标数据 → JS 切人工圈画兜底
+                                    crate::map_webview::evaluate_script("enableManualMode();");
+                                    notification_center::info(
+                                        injector.l10n().t("collection.boundary_step"),
+                                        injector.l10n().t("boundary.osm_no_geometry_title"),
+                                        injector.l10n().t("boundary.osm_no_geometry_body"),
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            // 无匹配要素 → JS 切人工圈画兜底（非弹窗，非阻塞）
+                            crate::map_webview::evaluate_script("enableManualMode();");
+                            notification_center::info(
+                                injector.l10n().t("collection.boundary_step"),
+                                injector.l10n().t("boundary.osm_not_found_title"),
+                                injector.l10n().t("boundary.osm_not_found_body"),
+                            );
+                        }
+                    }
+                }
+                IpcMessage::ConfirmBoundary { coords } => {
+                    injector.confirm_map_boundary(&window, &coords);
+                }
+                IpcMessage::BoundaryUpdate { coords: _ } => {
+                    // No-op: 编辑中坐标不回存，确认时以载荷为准
+                }
+                IpcMessage::ManualPoint { lon: _, lat: _ } => {
+                    // No-op: 人工落点在 JS 侧累积，确认时以载荷为准
+                }
+                IpcMessage::ManualCancel => {
+                    // No-op
+                }
+                IpcMessage::ManualClear => {
+                    // No-op
+                }
+                IpcMessage::Coordinate {
+                    longitude: _,
+                    latitude: _,
+                } => {
+                    // No-op: manual points are JS-side only
+                }
+                IpcMessage::Error { message } => {
+                    // 公告栏提示（非弹窗、非阻塞，ADR-0021 分级）
+                    notification_center::info(
+                        injector.l10n().t("collection.boundary_step"),
+                        injector.l10n().t("boundary.map_notice_title"),
+                        message,
+                    );
+                }
+            }
+        }));
     }
 
     /// T19B-3/T19B-5：校区选择页回调绑定。
@@ -583,6 +700,7 @@ impl ViewModelInjector {
                         let _ = injector.projects_mut().remember_campus(&campus_id);
                         injector.refresh_campus_list(&window);
                         // 自动进入方案列表
+                        crate::map_webview::hide();
                         window.set_active_screen(2);
                     }
                 }
@@ -593,6 +711,7 @@ impl ViewModelInjector {
         let weak = window.as_weak();
         window.on_campus_select_settings_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
+            crate::map_webview::hide();
             window.set_active_screen(3);
         });
 
@@ -614,6 +733,7 @@ impl ViewModelInjector {
                 return;
             }
             injector.refresh_plan_list(&window, &campus_id);
+            crate::map_webview::hide();
             window.set_active_screen(2);
         });
     }
@@ -646,6 +766,7 @@ impl ViewModelInjector {
         let weak = window.as_weak();
         window.on_plan_list_back_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
+            crate::map_webview::hide();
             window.set_active_screen(1);
         });
 
@@ -661,6 +782,32 @@ impl ViewModelInjector {
             window.set_active_plan_id(plan_id.clone());
             window.set_workspace_active_step(0);
             window.set_active_screen(4);
+            // T24: 进入屏 4 → 显示边界地图 WebView（密钥只经 F1；
+            // 空密钥则跳过创建，Slint 画布人工圈画兜底仍可用）
+            {
+                let api_key = injector
+                    .settings()
+                    .gaode_api_key()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let security_key = injector
+                    .settings()
+                    .gaode_security_key()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                if !api_key.is_empty() {
+                    let (anchor_lon, anchor_lat) = injector.map_anchor();
+                    crate::map_webview::show(
+                        window.as_weak(),
+                        api_key,
+                        security_key,
+                        anchor_lon,
+                        anchor_lat,
+                    );
+                }
+            }
             // Step C: 同步当前方案的进度到步骤条
             injector.sync_workspace_progress(&window);
             // F2 步骤条气泡钩子（规矩③"只教一次"：已见过则返回 None）
@@ -755,6 +902,7 @@ impl ViewModelInjector {
 
             // T22: Gaode Key 空值引导至设置页
             if std::mem::replace(&mut injector.pending_gaode_redirect, false) {
+                crate::map_webview::hide();
                 window.set_active_screen(3); // 跳设置页
                 return;
             }
@@ -893,6 +1041,7 @@ impl ViewModelInjector {
         let weak_clone = weak.clone();
         window.on_notice_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
+                crate::map_webview::hide();
                 window.set_active_screen(5);
             }
         });
@@ -901,6 +1050,7 @@ impl ViewModelInjector {
         let weak_clone = weak.clone();
         window.on_switch_campus_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
+                crate::map_webview::hide();
                 window.set_active_screen(1);
             }
         });
@@ -909,6 +1059,7 @@ impl ViewModelInjector {
         let weak_clone = weak.clone();
         window.on_trash_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
+                crate::map_webview::hide();
                 window.set_active_screen(6);
             }
         });
@@ -917,6 +1068,7 @@ impl ViewModelInjector {
         let weak_clone = weak.clone();
         window.on_settings_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
+                crate::map_webview::hide();
                 window.set_active_screen(3);
             }
         });
@@ -1429,6 +1581,82 @@ impl ViewModelInjector {
             .ok()
             .flatten()
             .and_then(|c| CampusId::parse(&c.id).ok())
+    }
+
+    // ── T24: 地图边界辅助方法（壳只桥接，计算全在 B3/B5）──────────────
+
+    /// T24: 当前锚点经纬度 (lon, lat)。
+    ///
+    /// 诚实声明（占位回退）：campuses 表尚无锚点坐标列（T05 数据流缺口），
+    /// 暂用默认锚点（北京）回退，待 T05 落地后改读 F3 校区锚点。
+    /// 排序器对“包含锚点”的判定在此回退下仍确定有效（bbox 粗判）。
+    fn map_anchor(&self) -> (f64, f64) {
+        (116.397, 39.916)
+    }
+
+    /// T24: 当前校区名（供 B5 排序器名称匹配权重）。
+    fn current_campus_name(&self) -> Option<String> {
+        self.projects
+            .landing_campus()
+            .ok()
+            .flatten()
+            .map(|c| c.name)
+    }
+
+    /// T24: 地图边界确认流程。
+    ///
+    /// GCJ-02 经纬度 →（B5 链式换算：Mercator → 平面米，多边形重心为
+    /// 参考原点）→ B5 校验（闭合/面积/自相交）→ 失败 B7 弹窗（ADR-0021）；
+    /// 成功 → 装载 B5 drawer 为 Determined → 步骤条打勾 → 同步工作区进度。
+    fn confirm_map_boundary(&mut self, window: &AppWindow, coords: &[[f64; 2]]) {
+        if coords.len() < 3 {
+            report_callback_error(self.l10n(), &self.l10n().t("boundary.error_too_few_points"));
+            return;
+        }
+
+        // 参考原点：多边形重心（校园尺度下经纬度算术平均足够）
+        let (sum_lon, sum_lat) = coords
+            .iter()
+            .fold((0.0_f64, 0.0_f64), |(slon, slat), [lon, lat]| {
+                (slon + lon, slat + lat)
+            });
+        let n = coords.len() as f64;
+        let (center_lon, center_lat) = (sum_lon / n, sum_lat / n);
+
+        // B5 链式换算：经纬度 → Mercator → 平面米（相对重心）
+        let mut converter = CoordinateConverter::default();
+        converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
+        let mut vertices: Vec<Vertex> = Vec::with_capacity(coords.len());
+        for [lon, lat] in coords {
+            let mercator = MercatorCoord::from_lat_lon(*lat, *lon);
+            let Some(plane) = converter.mercator_to_plane(mercator) else {
+                report_callback_error(self.l10n(), &self.l10n().t("boundary.error_convert_failed"));
+                return;
+            };
+            vertices.push(Vertex::new(plane.x, plane.y));
+        }
+
+        // B5 校验（闭合/面积/自相交，ADR-0029）——失败走 B7 弹窗
+        let validation_result = validate_polygon_closure(&vertices);
+        if !validation_result.is_valid {
+            let error_detail: String = validation_result
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            report_callback_error(self.l10n(), &error_detail);
+            return;
+        }
+
+        // 合法：装载 B5 drawer 为 Determined（T24 地图来源与画布来源同状态机）
+        self.boundary_drawer.load_determined(vertices);
+        if let Some(plan_id) = self.active_plan_id.clone() {
+            let has_orientation = self.current_plan_has_orientation();
+            self.update_plan_progress(&plan_id, true, has_orientation);
+        }
+        self.sync_workspace_progress(window);
+        self.sync_boundary_display(window);
     }
 
     /// 刷新校区选择页：动态列表 + 空占位文案

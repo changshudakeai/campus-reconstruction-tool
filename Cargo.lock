@@ -1319,6 +1319,7 @@ dependencies = [
  "data-persistence",
  "export-console",
  "foundation-mode",
+ "gaode-client",
  "global-settings",
  "localization",
  "log",

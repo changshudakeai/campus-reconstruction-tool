@@ -200,22 +200,67 @@ mod tests {
     }
 }
 
-/// T23: IPC 消息类型（取点页回传）
+/// T23/T24: IPC 消息类型（取点页/边界编辑页回传）
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcMessage {
-    /// 坐标："经度，纬度" 字符串
+    /// 坐标："经度，纬度" 字符串（T23 pick point / T24 manual_point）
     Coordinate { longitude: f64, latitude: f64 },
     /// 错误：结构化 JSON
     Error { message: String },
+    // T24: OSM 边界编辑相关
+    /// OSM Overpass 返回的原始要素列表 (osm_elements)
+    OsmElements { elements: Vec<OsmElement> },
+    /// 编辑后的多边形坐标 (boundary_update: GCJ-02 坐标数组)
+    BoundaryUpdate { coords: Vec<[f64; 2]> },
+    /// 人工圈画落点 (manual_point: WGS-84 单个点)
+    ManualPoint { lon: f64, lat: f64 },
+    /// 撤销上一个点 (manual_cancel)
+    ManualCancel,
+    /// 清空重画 (manual_clear)
+    ManualClear,
+    /// 确认最终边界 (confirm_boundary: GCJ-02 or WGS-84 TBD)
+    ConfirmBoundary { coords: Vec<[f64; 2]> },
 }
 
-/// 解析来自 WebView IPC 的消息（三分支：坐标 / 错误/畸形载荷）
+/// T24: OSM 元素结构 (Overpass JSON)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OsmElement {
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub geometry: Option<Vec<[f64; 2]>>,
+    #[serde(default)]
+    pub members: Vec<OsmMember>,
+    #[serde(default)]
+    pub tags: std::collections::HashMap<String, String>,
+}
+
+/// T24: OSM 成员结构 (relation member)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OsmMember {
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub reference: i64,
+    #[serde(default)]
+    pub role: String,
+}
+
+/// 解析来自 WebView IPC 的消息（多分支：坐标/错误/OSM/编辑/手动）
 ///
-/// - 纯文本 → 尝试解析为 "经度，纬度"
+/// - 纯文本 → 尝试解析为 "经度，纬度" (pick point / manual_point)
 /// - JSON 含 `type="error"` → [`IpcMessage::Error`]
+/// - JSON 含 `type="osm_elements"` → [`IpcMessage::OsmElements`]
+/// - JSON 含 `type="boundary_update"` → [`IpcMessage::BoundaryUpdate`]
+/// - JSON 含 `type="manual_point"` → [`IpcMessage::ManualPoint`]
+/// - JSON 含 `type="manual_cancel"` → [`IpcMessage::ManualCancel`]
+/// - JSON 含 `type="manual_clear"` → [`IpcMessage::ManualClear`]
+/// - JSON 含 `type="confirm_boundary"` → [`IpcMessage::ConfirmBoundary`]
 /// - 其他 → [`Error::UnsupportedIpcMessage`]
 pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
-    // 先尝试直接当作 "经度，纬度" (pick point)
+    // 先尝试直接当作 "经度，纬度" (pick point / manual_point)
     if let Some((longitude, latitude)) = try_parse_coordinate(msg) {
         return Ok(IpcMessage::Coordinate {
             longitude,
@@ -223,20 +268,75 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
         });
     }
 
-    // 再尝试 JSON 错误格式
+    // JSON 载荷解析
     if msg.starts_with('{') {
         #[derive(Deserialize)]
-        struct ErrorPayload {
+        struct TypePayload {
             #[serde(default)]
             r#type: String,
-            #[serde(default)]
-            message: String,
         }
-        if let Ok(payload) = serde_json::from_str::<ErrorPayload>(msg) {
-            if payload.r#type == "error" {
-                return Ok(IpcMessage::Error {
-                    message: payload.message,
-                });
+        if let Ok(type_payload) = serde_json::from_str::<TypePayload>(msg) {
+            match type_payload.r#type.as_str() {
+                "error" => {
+                    #[derive(Deserialize)]
+                    struct ErrorPayload {
+                        #[serde(default)]
+                        message: String,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<ErrorPayload>(msg) {
+                        return Ok(IpcMessage::Error {
+                            message: payload.message,
+                        });
+                    }
+                }
+                "osm_elements" => {
+                    #[derive(Deserialize)]
+                    struct OsmPayload {
+                        #[serde(default)]
+                        elements: Vec<OsmElement>,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<OsmPayload>(msg) {
+                        return Ok(IpcMessage::OsmElements {
+                            elements: payload.elements,
+                        });
+                    }
+                }
+                "boundary_update" | "confirm_boundary" => {
+                    #[derive(Deserialize)]
+                    struct BoundaryPayload {
+                        #[serde(default)]
+                        coords: Vec<[f64; 2]>,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<BoundaryPayload>(msg) {
+                        if type_payload.r#type == "boundary_update" {
+                            return Ok(IpcMessage::BoundaryUpdate {
+                                coords: payload.coords,
+                            });
+                        }
+                        return Ok(IpcMessage::ConfirmBoundary {
+                            coords: payload.coords,
+                        });
+                    }
+                }
+                "manual_point" => {
+                    #[derive(Deserialize)]
+                    struct ManualPointPayload {
+                        #[serde(default)]
+                        point: Option<[f64; 2]>,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<ManualPointPayload>(msg) {
+                        if let Some([lon, lat]) = payload.point {
+                            return Ok(IpcMessage::ManualPoint { lon, lat });
+                        }
+                    }
+                }
+                "manual_cancel" => {
+                    return Ok(IpcMessage::ManualCancel);
+                }
+                "manual_clear" => {
+                    return Ok(IpcMessage::ManualClear);
+                }
+                _ => {}
             }
         }
     }
@@ -288,5 +388,90 @@ mod ipc_tests {
             parse_ipc_message(bad_json),
             Err(Error::UnsupportedIpcMessage(_))
         ));
+    }
+
+    // T24: 新 IPC 类型测试
+    #[test]
+    fn osm_elements_parsed_correctly() {
+        let json = r#"{
+            "type": "osm_elements",
+            "elements": [
+                {"type": "way", "id": 123, "tags": {"amenity": "university"}, "geometry": [[116.4, 39.9], [116.5, 39.9], [116.5, 40.0], [116.4, 40.0]]}
+            ]
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        if let IpcMessage::OsmElements { elements } = result {
+            assert_eq!(elements.len(), 1);
+            assert_eq!(
+                elements[0].tags.get("amenity"),
+                Some(&"university".to_string())
+            );
+        } else {
+            panic!("Expected OsmElements variant");
+        }
+    }
+
+    #[test]
+    fn boundary_update_parsed_correctly() {
+        let json = r#"{
+            "type": "boundary_update",
+            "coords": [[116.4, 39.9], [116.5, 39.9], [116.5, 40.0]]
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        if let IpcMessage::BoundaryUpdate { coords } = result {
+            assert_eq!(coords.len(), 3);
+            assert_eq!(coords[0], [116.4, 39.9]);
+        } else {
+            panic!("Expected BoundaryUpdate variant");
+        }
+    }
+
+    #[test]
+    fn confirm_boundary_parsed_correctly() {
+        // confirm_boundary 与 boundary_update 载荷同形但语义不同——
+        // 映射必须严格区分（回归锁定：曾共用分支导致映射混淆）
+        let json = r#"{
+            "type": "confirm_boundary",
+            "coords": [[116.4, 39.9], [116.5, 39.9], [116.5, 40.0]]
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        if let IpcMessage::ConfirmBoundary { coords } = result {
+            assert_eq!(coords.len(), 3);
+        } else {
+            panic!("Expected ConfirmBoundary variant");
+        }
+    }
+
+    #[test]
+    fn manual_point_parsed_correctly() {
+        let json = r#"{
+            "type": "manual_point",
+            "point": [116.456, 39.876]
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        if let IpcMessage::ManualPoint { lon, lat } = result {
+            assert_eq!(lon, 116.456);
+            assert_eq!(lat, 39.876);
+        } else {
+            panic!("Expected ManualPoint variant");
+        }
+    }
+
+    #[test]
+    fn manual_cancel_parsed_correctly() {
+        let json = r#"{
+            "type": "manual_cancel"
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        matches!(result, IpcMessage::ManualCancel);
+    }
+
+    #[test]
+    fn manual_clear_parsed_correctly() {
+        let json = r#"{
+            "type": "manual_clear"
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        matches!(result, IpcMessage::ManualClear);
     }
 }

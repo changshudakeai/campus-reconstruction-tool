@@ -34,6 +34,8 @@ raw-window-handle = { workspace = true }
 localization = { workspace = true }
 # T19B-5B: B5 地基模式 (边界绘制与朝向设定)
 foundation-mode = { workspace = true }
+# T24: B3 高德地图客户端（边界地图页生成 + IPC 协议解析 + OSM 元素类型）
+gaode-client = { workspace = true }
 # F1 全局设置 (首次运行判定 + 老用户着陆校区)
 global-settings = { workspace = true }
 # F2 新手教程（引导进度装载；气泡接线归后续 T19B 工单）

@@ -15,6 +15,10 @@
 //!   —— 校区 POI 持久化载荷（POI identity + coordinate lineage）
 //! - [map_page](crate::map_page)：`build_map_page_html` + `build_pick_point_page_html`
 //!   —— WebView 地图页（官方 CDN v2.0，安全密钥，地图最小高度 300px）
+//! - [boundary_edit_map_page](crate::boundary_edit_map_page)：`build_boundary_edit_page_html`
+//!   —— T24 边界编辑地图页（Overpass 查询 + PolygonEditor 编辑 + 人工圈画兼底）
+//! - [boundary_sorting](crate::boundary_sorting)：`BoundarySorter`
+//!   —— T24 OSM 边界候选排序（包含锚点 → 名称匹配 → 距离最近，纯函数可单测）
 //!
 //! ## 架构边界（ADR-0017）
 //!
@@ -22,19 +26,27 @@
 
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
+mod boundary_edit_map_page;
+mod boundary_sorting;
 mod error;
 mod map_page;
 mod poi;
 mod record;
 mod search_flow;
 
+pub use boundary_edit_map_page::{
+    build_boundary_edit_page_html, BoundaryEditPageConfig,
+    GAODE_CDN_URL_TEMPLATE as BOUNDARY_CDN_TEMPLATE,
+};
+pub use boundary_sorting::{BoundaryCandidateScore, BoundarySorter};
 pub use error::{Error, Result};
 pub use map_page::{
     build_map_page_html, build_pick_point_page_html, MapPageConfig, GAODE_CDN_URL_TEMPLATE,
     MAP_MIN_HEIGHT_PX,
 };
 pub use poi::{
-    parse_ipc_message, parse_place_search_response, IpcMessage, SchoolPoi, SCHOOL_TYPECODE_PREFIX,
+    parse_ipc_message, parse_place_search_response, IpcMessage, OsmElement, OsmMember, SchoolPoi,
+    SCHOOL_TYPECODE_PREFIX,
 };
 pub use record::CampusPoiRecord;
 pub use search_flow::{CampusSearchFlow, ConfirmedCampus, SearchFlowState};
