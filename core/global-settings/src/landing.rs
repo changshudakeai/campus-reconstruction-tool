@@ -10,16 +10,20 @@ use shared_domain_types::CampusId;
 use crate::error::Result;
 
 /// 着陆页所需的校区视图（方案列表页顶部展示）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LandingCampus {
     /// 校区 ID（B1 共享类型，T02 复用）
     pub id: CampusId,
     /// 校区名称（页面顶部显著展示）
     pub name: String,
+    /// T05：锚点经度（GCJ-02），用于高德地图自动定位
+    pub anchor_lng: f64,
+    /// T05：锚点纬度（GCJ-02），用于高德地图自动定位
+    pub anchor_lat: f64,
 }
 
 impl LandingCampus {
-    /// 按 ID 查找校区并组装着陆视图；校区不存在（已被删除）返回 `None`
+    /// T05：按 ID 查找校区并组装着陆视图；校区不存在（已被删除）返回 `None`
     pub(crate) fn find(db: &Database, campus_id: &CampusId) -> Result<Option<Self>> {
         let Some(entity) = db.find_campus_by_id(&campus_id.to_string())? else {
             return Ok(None);
@@ -31,6 +35,20 @@ impl LandingCampus {
         Ok(Some(Self {
             id,
             name: entity.name,
+            anchor_lng: entity.anchor_lng,
+            anchor_lat: entity.anchor_lat,
         }))
+    }
+
+    /// T05：纯数据查询——只返回 ID+ 名称 + 锚点，不要求 CampusId 可解析
+    /// （用于 F1/UI 展示校区列表时显示最新锚点）
+    pub fn from_entity(entity: data_persistence::CampusEntity) -> Option<Self> {
+        // 尝试将字符串转换为 CampusId，如果失败则返回 None
+        CampusId::parse(&entity.id).ok().map(|id| Self {
+            id,
+            name: entity.name,
+            anchor_lng: entity.anchor_lng,
+            anchor_lat: entity.anchor_lat,
+        })
     }
 }

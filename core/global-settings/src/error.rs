@@ -37,4 +37,8 @@ pub enum Error {
     /// 高德地图连通性测试失败（T22）
     #[error("高德地图连通性测试失败：{0}")]
     GaodeConnectionFailed(String),
+
+    /// T05：校区 ID 解析失败
+    #[error("校区 ID 解析失败：{0}")]
+    InvalidCampusId(String),
 }

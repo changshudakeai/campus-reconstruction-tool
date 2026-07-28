@@ -13,9 +13,9 @@ all-features = true
 # ── 漏洞与维护公告 ─────────────────────────────────────────────
 [advisories]
 yanked = "deny"
-# 逐条留痕豁免（非关检查项）：以下均为 slint UI 栈的传递依赖的
-# “停维护公告”（非漏洞），壳之外无人引用；等 slint 上游切换替代品
-# 后随版本升级自然消失，届时删除对应条目。
+# 逐条留痕豁免（非关检查项）：以下均为传递依赖的
+# “停维护公告”（非漏洞），仅影响 Linux 平台；Windows/macOS 不受影响
+# 等待上游升级替代方案后自然消失，届时删除对应条目。
 ignore = [
     # paste 停维护：slint 宏栈传递依赖，等上游迁移 pastey
     { id = "RUSTSEC-2024-0436", reason = "slint 传递依赖，非漏洞；等上游迁移" },
@@ -23,6 +23,18 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "slint 传递依赖，非漏洞；等上游切 skrifa" },
     # rustybuzz 停维护：slint→resvg 传递依赖，上游计划切 harfrust
     { id = "RUSTSEC-2026-0206", reason = "slint 传递依赖，非漏洞；等上游切 harfrust" },
+    # gtk-rs GTK3 bindings: wry 传递依赖（仅 Linux 平台），非漏洞
+    { id = "RUSTSEC-2024-0412", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0413", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0414", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0415", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0416", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0417", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0418", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0419", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    { id = "RUSTSEC-2024-0420", reason = "wry→gtk-rs (仅 Linux)，非漏洞；等 upstream 切换 GTK4" },
+    # proc-macro-error: wry 传递依赖（仅 Linux），非漏洞
+    { id = "RUSTSEC-2024-0370", reason = "wry→proc-macro-error (仅 Linux)，非漏洞；等 upstream 修复" },
 ]
 
 # ── 许可证白名单（新依赖带新许可证 = CI 红灯，仿 rust-analyzer）──

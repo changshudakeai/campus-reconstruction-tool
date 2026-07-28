@@ -7,7 +7,7 @@
 //! - **即使每个下拉菜单只有一个选项，首次设置页仍照常显示**：页面兼任
 //!   "知情告知"职责（[`VERSION_NOTICE_TEXT`] 提示文字 + 勾选确认）。
 
-use data_persistence::{AppSettingKey, AppSettingsApi, Database};
+use data_persistence::{AppSettingKey, AppSettingsApi, CampusCrudApi, Database};
 use shared_domain_types::CampusId;
 
 use crate::error::{Error, Result};
@@ -163,6 +163,48 @@ impl SettingsManager {
         self.db
             .set_setting(AppSettingKey::LastUsedCampus, &campus_id.to_string())?;
         Ok(())
+    }
+
+    /// T05：选择校区并保存锚点坐标（完整流程：创建校区 + 记录最后使用 + 标记首次完成）
+    pub fn select_campus_with_anchor(
+        &mut self,
+        name: &str,
+        poi_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<CampusId> {
+        // 1. 创建校区（带锚点）
+        let campus = self
+            .db
+            .create_campus_with_anchor(name, poi_id, anchor_lng, anchor_lat)?;
+
+        // 2. 解析 CampusId
+        let campus_id =
+            CampusId::parse(&campus.id).map_err(|e| Error::InvalidCampusId(e.to_string()))?;
+
+        // 3. 记录"上次使用的校区"
+        self.remember_campus(&campus_id)?;
+
+        // 4. 标记首次运行完成（如果是新用户）
+        let is_first = self.is_first_run()?;
+        if is_first {
+            self.db
+                .set_setting(AppSettingKey::FirstRunCompleted, "true")?;
+        }
+
+        Ok(campus_id)
+    }
+
+    /// T05：仅更新已有校区的锚点坐标
+    pub fn update_campus_anchor(
+        &self,
+        campus_id: &CampusId,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<()> {
+        Ok(self
+            .db
+            .update_campus_anchor(&campus_id.to_string(), anchor_lng, anchor_lat)?)
     }
 
     /// 读取高德 API key（未设置返回 None）
@@ -348,5 +390,58 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("非法字符"));
+    }
+
+    // T05: 测试校区锚点持久化功能
+    #[test]
+    fn test_select_campus_with_anchor() {
+        let mut manager = manager();
+
+        // 选择校区并保存锚点
+        let campus_id = manager
+            .select_campus_with_anchor(
+                "北京大学",
+                "239494",
+                116.308, // 经度
+                39.995,  // 纬度
+            )
+            .expect("创建校区");
+
+        // 验证校区已保存到数据库
+        let campuses = manager.db.list_campuses().unwrap();
+        assert_eq!(campuses.len(), 1);
+        assert_eq!(campuses[0].name, "北京大学");
+        assert_eq!(campuses[0].anchor_lng, 116.308);
+        assert_eq!(campuses[0].anchor_lat, 39.995);
+
+        // 验证最后使用的校区被记录
+        let landing = manager.landing_campus().unwrap().expect("应该有校区");
+        assert_eq!(landing.name, "北京大学");
+        assert_eq!(landing.anchor_lng, 116.308);
+        assert_eq!(landing.anchor_lat, 39.995);
+        assert_eq!(landing.id, campus_id);
+
+        // 验证首次运行完成标志已设置
+        assert!(!manager.is_first_run().unwrap());
+    }
+
+    #[test]
+    fn test_update_campus_anchor() {
+        let mut manager = manager();
+
+        // 先创建校区
+        let campus_id = manager
+            .select_campus_with_anchor("清华大学", "239495", 116.320, 39.998)
+            .expect("创建校区");
+
+        // 更新锚点坐标
+        manager
+            .update_campus_anchor(&campus_id, 116.330, 40.000)
+            .expect("更新锚点");
+
+        // 验证锚点已更新
+        let campuses = manager.db.list_campuses().unwrap();
+        assert_eq!(campuses[0].anchor_lng, 116.330);
+        assert_eq!(campuses[0].anchor_lat, 40.000);
     }
 }

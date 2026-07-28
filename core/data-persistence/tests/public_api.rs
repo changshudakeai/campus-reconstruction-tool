@@ -13,8 +13,8 @@ use shared_domain_types::{CandidateCategory, ReviewState};
 
 #[test]
 fn public_api_types_exist() {
-    // 常量
-    assert_eq!(LATEST_SCHEMA_VERSION, 2);
+    // T05：版本号升级到 3（新增校区锚点列）
+    assert_eq!(LATEST_SCHEMA_VERSION, 3);
     assert_eq!(TRASH_RETENTION_DAYS, 30);
 
     // Database：打开即迁移到最新版本

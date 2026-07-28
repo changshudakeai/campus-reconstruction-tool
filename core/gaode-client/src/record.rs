@@ -46,6 +46,25 @@ impl CampusPoiRecord {
             data_source: Self::DATA_SOURCE_GAODE.to_owned(),
         }
     }
+
+    /// T05: 显式构建带坐标的方法（用于测试和特殊情况）
+    pub fn new_with_coordinates(
+        poi_id: impl Into<String>,
+        name: impl Into<String>,
+        address: impl Into<String>,
+        longitude: f64,
+        latitude: f64,
+    ) -> Self {
+        Self {
+            gaode_poi_id: poi_id.into(),
+            name: name.into(),
+            address: address.into(),
+            longitude,
+            latitude,
+            coordinate_system: Self::COORDINATE_SYSTEM_GCJ02.to_owned(),
+            data_source: Self::DATA_SOURCE_GAODE.to_owned(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -48,6 +48,8 @@ impl ProjectManager {
             .map(|c| CampusView {
                 id: c.id,
                 name: c.name,
+                anchor_lng: c.anchor_lng,
+                anchor_lat: c.anchor_lat,
             })
             .collect())
     }
@@ -58,6 +60,8 @@ impl ProjectManager {
         Ok(CampusView {
             id: campus.id,
             name: campus.name,
+            anchor_lng: campus.anchor_lng,
+            anchor_lat: campus.anchor_lat,
         })
     }
 
@@ -73,6 +77,8 @@ impl ProjectManager {
         Ok(Some(CampusView {
             id: campus.id,
             name: campus.name,
+            anchor_lng: campus.anchor_lng,
+            anchor_lat: campus.anchor_lat,
         }))
     }
 

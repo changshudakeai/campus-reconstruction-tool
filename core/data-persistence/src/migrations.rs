@@ -27,10 +27,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "原始观测表 + 评审终态表 + 回收站",
         sql: include_str!("../migrations/002_add_persistence_tables.sql"),
     },
+    Migration {
+        version: 3,
+        description: "校区锚点列：anchor_lng/anchor_lat",
+        sql: include_str!("../migrations/003_add_anchor_columns_to_campuses.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 2;
+pub const LATEST_SCHEMA_VERSION: u32 = 3;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

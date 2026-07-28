@@ -15,12 +15,16 @@ use crate::error::{Error, Result};
 use crate::trash::TrashApi;
 
 /// 校区实体（campuses 表的一行）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CampusEntity {
     /// 校区 ID（UUID 文本）
     pub id: String,
     /// 校区名称
     pub name: String,
+    /// 锚点经度（GCJ-02 坐标系，T05 新增）
+    pub anchor_lng: f64,
+    /// 锚点纬度（GCJ-02 坐标系，T05 新增）
+    pub anchor_lat: f64,
     /// 创建时间（RFC3339 文本）
     pub created_at: String,
     /// 更新时间（RFC3339 文本）
@@ -90,8 +94,21 @@ pub trait CampusCrudApi {
     /// 创建校区
     fn create_campus(&mut self, name: &str) -> Result<CampusEntity>;
 
+    /// T05：创建校区并指定锚点坐标（高德 POI 中心）
+    fn create_campus_with_anchor(
+        &mut self,
+        name: &str,
+        poi_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<CampusEntity>;
+
     /// 按 ID 查校区（不存在返回 None）
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>>;
+
+    /// T05：更新校区的锚点坐标
+    fn update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64)
+        -> Result<()>;
 }
 
 /// 应用设置读写接口（缝 2，"上次使用的校区"等）
@@ -154,14 +171,16 @@ fn plan_name_taken(
 impl CampusCrudApi for Connection {
     fn list_campuses(&self) -> Result<Vec<CampusEntity>> {
         let mut stmt = self.prepare(
-            "SELECT id, name, created_at, updated_at FROM campuses ORDER BY updated_at DESC",
+            "SELECT id, name, anchor_lng, anchor_lat, created_at, updated_at FROM campuses ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(CampusEntity {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3)?,
+                anchor_lng: row.get(2)?,
+                anchor_lat: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })?;
         let mut result = Vec::new();
@@ -171,16 +190,33 @@ impl CampusCrudApi for Connection {
         Ok(result)
     }
 
+    /// 创建校区（仅名称，用于旧兼容场景）
     fn create_campus(&mut self, name: &str) -> Result<CampusEntity> {
+        self.create_campus_with_anchor(name, "", 116.397, 39.916)
+    }
+
+    /// T05：创建校区并指定锚点坐标（高德 POI 中心）
+    fn create_campus_with_anchor(
+        &mut self,
+        name: &str,
+        _poi_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<CampusEntity> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_text();
+        // 注意：T05 中 poi_id 列尚未加入 campuses 表，此处预留字段位置
+        // 当前实现仅存储锚点，poi_id 存储在 campus_poi_records 或其他扩展表（待 TXX）
         self.execute(
-            "INSERT INTO campuses (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![id, name, now, now],
+            "INSERT INTO campuses (id, name, anchor_lng, anchor_lat, created_at, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, name, anchor_lng, anchor_lat, now.clone(), now.clone()],
         )?;
         Ok(CampusEntity {
             id,
             name: name.to_owned(),
+            anchor_lng,
+            anchor_lat,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -189,19 +225,36 @@ impl CampusCrudApi for Connection {
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>> {
         let entity = self
             .query_row(
-                "SELECT id, name, created_at, updated_at FROM campuses WHERE id = ?1",
+                "SELECT id, name, anchor_lng, anchor_lat, created_at, updated_at FROM campuses WHERE id = ?1",
                 [campus_id],
                 |row| {
                     Ok(CampusEntity {
                         id: row.get(0)?,
                         name: row.get(1)?,
-                        created_at: row.get(2)?,
-                        updated_at: row.get(3)?,
+                        anchor_lng: row.get(2)?,
+                        anchor_lat: row.get(3)?,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
                     })
                 },
             )
             .optional()?;
         Ok(entity)
+    }
+
+    /// T05：更新校区的锚点坐标
+    fn update_campus_anchor(
+        &self,
+        campus_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<()> {
+        let now = now_text();
+        self.execute(
+            "UPDATE campuses SET anchor_lng = ?1, anchor_lat = ?2, updated_at = ?3 WHERE id = ?4",
+            params![anchor_lng, anchor_lat, now, campus_id],
+        )?;
+        Ok(())
     }
 }
 
@@ -336,8 +389,29 @@ impl CampusCrudApi for crate::Database {
         self.conn.create_campus(name)
     }
 
+    fn create_campus_with_anchor(
+        &mut self,
+        name: &str,
+        poi_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<CampusEntity> {
+        self.conn
+            .create_campus_with_anchor(name, poi_id, anchor_lng, anchor_lat)
+    }
+
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>> {
         self.conn.find_campus_by_id(campus_id)
+    }
+
+    fn update_campus_anchor(
+        &self,
+        campus_id: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<()> {
+        self.conn
+            .update_campus_anchor(campus_id, anchor_lng, anchor_lat)
     }
 }
 

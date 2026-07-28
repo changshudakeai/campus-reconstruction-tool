@@ -4,12 +4,16 @@
 //! 所有用户可见文字走文本键（ADR-0005），本文件只产出键与参数，不硬编码文案。
 
 /// 校区视图（列表页顶部展示当前校区名，ADR-0006）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CampusView {
     /// 校区 ID
     pub id: String,
     /// 校区名称
     pub name: String,
+    /// T05：锚点经度（GCJ-02），用于高德地图自动定位
+    pub anchor_lng: f64,
+    /// T05：锚点纬度（GCJ-02），用于高德地图自动定位
+    pub anchor_lat: f64,
 }
 
 /// 方案卡片三件套（ADR-0018）

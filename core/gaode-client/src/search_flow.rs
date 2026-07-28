@@ -17,12 +17,13 @@ use crate::record::CampusPoiRecord;
 
 /// 确认后的校区：新分配的校区 ID + 选定的 POI 持久化载荷
 ///
-/// 调用方（F3 方案管理）持此载荷创建校区并存档 POI 记录。
+/// T05 增强：record 中的 longitude/latitude 即为锚点坐标（GCJ-02），可直接用于落地 campuses 表。
+/// 调用方（SettingsManager::select_campus_with_anchor）持此载荷创建校区并存档 POI 记录。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfirmedCampus {
     /// 新分配的校区 ID（B1 共享类型，T02 复用）
     pub campus_id: CampusId,
-    /// 校区 POI 持久化载荷（identity + coordinate lineage，ADR-0008）
+    /// 校区 POI 持久化载荷（identity + coordinate lineage，ADR-0008/T05）
     pub record: CampusPoiRecord,
 }
 
