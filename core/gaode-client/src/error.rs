@@ -27,4 +27,8 @@ pub enum Error {
     /// 候选下标越界
     #[error("无效的候选序号：{0}")]
     CandidateOutOfRange(usize),
+
+    /// IPC 消息类型不支持（取点页回传的非坐标/错误载荷）
+    #[error("IPC 消息类型不支持：{0}")]
+    UnsupportedIpcMessage(String),
 }

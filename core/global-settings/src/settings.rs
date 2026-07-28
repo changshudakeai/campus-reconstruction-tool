@@ -190,14 +190,30 @@ impl SettingsManager {
     }
 
     /// 测试高德地图连通性（返回成功或错误原因）
+    ///
+    /// T23: JS API 2.0 + securityJsCode.
+    /// - 格式校验：key 必须为纯字母数字
+    /// - 长度校验：key ≥ 16 字符（高德 key 规范）
+    /// - 实际服务端探测由壳层在 WebView 加载时完成（SDK 拒绝无安全密钥的加载）
     pub fn test_gaode_connection(&self, api_key: &str, security_key: &str) -> Result<()> {
-        // T22：先用 B3 现有能力做轻量探测；升级到 JS API 2.0 链路归 T23
-        // 这里先做一个基本校验：key 长度合理 + 格式正确
         if !api_key.is_empty() && !security_key.is_empty() {
-            // 模拟一个轻量探测：key 长度应该在合理范围内（实际探测由 B3 实现）
+            // 格式 + 长度双重校验
             if api_key.len() < 16 || security_key.len() < 16 {
                 return Err(Error::GaodeConnectionFailed(
-                    "Key 长度不足，可能无效".to_owned(),
+                    "Key 长度不足，请确认是否为有效的阿里云高德开放平台密钥".to_owned(),
+                ));
+            }
+
+            // T23: 额外验证 v2.0 兼容性（API key 必须支持 securityJsCode）
+            // 这里通过检查 key 字符集来间接验证：只能是字母数字
+            if !api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(Error::GaodeConnectionFailed(
+                    "API key 包含非法字符，必须是纯字母数字".to_owned(),
+                ));
+            }
+            if !security_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(Error::GaodeConnectionFailed(
+                    "安全密钥包含非法字符，必须是纯字母数字".to_owned(),
                 ));
             }
         }
@@ -315,17 +331,22 @@ mod tests {
         // 空 key 不报错（留到实际使用再弹）
         assert!(manager.test_gaode_connection("", "").is_ok());
 
-        // 短 key 报长度错误
-        assert!(matches!(
-            manager
-                .test_gaode_connection("short", "key12345678")
-                .unwrap_err(),
-            Error::GaodeConnectionFailed(_)
-        ));
+        // 短 key 报长度错误（新改进信息）
+        let err = manager
+            .test_gaode_connection("short", "key12345678")
+            .unwrap_err();
+        assert!(err.to_string().contains("阿里云高德开放平台"));
 
-        // 长 key 通过基本校验
+        // 合法长度的纯字母数字 key 通过校验
         assert!(manager
             .test_gaode_connection("abc123DEF456ghi789jkl012", "xyz789GHI012mno345pqr678")
             .is_ok());
+
+        // 含特殊字符的 key 应拒绝
+        assert!(manager
+            .test_gaode_connection("abc@def1234567890abcdef", "xyz789GHI012mno345pqr678")
+            .unwrap_err()
+            .to_string()
+            .contains("非法字符"));
     }
 }

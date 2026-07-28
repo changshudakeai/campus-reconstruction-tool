@@ -199,3 +199,94 @@ mod tests {
         assert!(matches!(err, Error::MalformedResponse(_)));
     }
 }
+
+/// T23: IPC 消息类型（取点页回传）
+#[derive(Debug, Clone, PartialEq)]
+pub enum IpcMessage {
+    /// 坐标："经度，纬度" 字符串
+    Coordinate { longitude: f64, latitude: f64 },
+    /// 错误：结构化 JSON
+    Error { message: String },
+}
+
+/// 解析来自 WebView IPC 的消息（三分支：坐标 / 错误/畸形载荷）
+///
+/// - 纯文本 → 尝试解析为 "经度，纬度"
+/// - JSON 含 `type="error"` → [`IpcMessage::Error`]
+/// - 其他 → [`Error::UnsupportedIpcMessage`]
+pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
+    // 先尝试直接当作 "经度，纬度" (pick point)
+    if let Some((longitude, latitude)) = try_parse_coordinate(msg) {
+        return Ok(IpcMessage::Coordinate {
+            longitude,
+            latitude,
+        });
+    }
+
+    // 再尝试 JSON 错误格式
+    if msg.starts_with('{') {
+        #[derive(Deserialize)]
+        struct ErrorPayload {
+            #[serde(default)]
+            r#type: String,
+            #[serde(default)]
+            message: String,
+        }
+        if let Ok(payload) = serde_json::from_str::<ErrorPayload>(msg) {
+            if payload.r#type == "error" {
+                return Ok(IpcMessage::Error {
+                    message: payload.message,
+                });
+            }
+        }
+    }
+
+    Err(Error::UnsupportedIpcMessage(msg.to_owned()))
+}
+
+fn try_parse_coordinate(s: &str) -> Option<(f64, f64)> {
+    let (lng_text, lat_text) = s.split_once(',')?;
+    let longitude: f64 = lng_text.trim().parse().ok()?;
+    let latitude: f64 = lat_text.trim().parse().ok()?;
+    // 合法范围粗校验
+    if !(-180.0..=180.0).contains(&longitude) || !(-90.0..=90.0).contains(&latitude) {
+        return None;
+    }
+    Some((longitude, latitude))
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+
+    #[test]
+    fn coordinate_payload_parsed_correctly() {
+        let result = parse_ipc_message("121.456,31.033").unwrap();
+        assert!(
+            matches!(result, IpcMessage::Coordinate { longitude, latitude }
+            if longitude == 121.456 && latitude == 31.033)
+        );
+    }
+
+    #[test]
+    fn error_payload_parsed_correctly() {
+        let json = r#"{"type":"error","message":"SDK 加载超时"}"#;
+        let result = parse_ipc_message(json).unwrap();
+        assert!(matches!(result, IpcMessage::Error { message } if message == "SDK 加载超时"));
+    }
+
+    #[test]
+    fn malformed_payload_rejected() {
+        let bad_msg = "not_a_coordinate";
+        assert!(matches!(
+            parse_ipc_message(bad_msg),
+            Err(Error::UnsupportedIpcMessage(_))
+        ));
+
+        let bad_json = r#"{"type":"unknown"}"#;
+        assert!(matches!(
+            parse_ipc_message(bad_json),
+            Err(Error::UnsupportedIpcMessage(_))
+        ));
+    }
+}

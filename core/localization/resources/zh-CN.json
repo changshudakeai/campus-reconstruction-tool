@@ -211,6 +211,10 @@
     "rename_title": "改名方案",
     "name_label": "方案名称"
   },
+  "map": {
+    "pick_page_title": "圈选边界",
+    "search_campus_button": "搜索校区"
+  },
   "error": {
     "campus_not_found": "校区不存在",
     "invalid_geometry": "圈画的范围形状不合法",

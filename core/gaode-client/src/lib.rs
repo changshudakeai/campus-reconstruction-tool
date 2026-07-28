@@ -13,8 +13,8 @@
 //!   —— 候选列表 → 详情 → **显式确认**状态机（不自动进入校区）
 //! - [record](crate::record)：`CampusPoiRecord`
 //!   —— 校区 POI 持久化载荷（POI identity + coordinate lineage）
-//! - [map_page](crate::map_page)：`build_map_page_html`
-//!   —— WebView 地图页（官方 CDN v1.2，地图最小高度 300px）
+//! - [map_page](crate::map_page)：`build_map_page_html` + `build_pick_point_page_html`
+//!   —— WebView 地图页（官方 CDN v2.0，安全密钥，地图最小高度 300px）
 //!
 //! ## 架构边界（ADR-0017）
 //!
@@ -29,7 +29,12 @@ mod record;
 mod search_flow;
 
 pub use error::{Error, Result};
-pub use map_page::{build_map_page_html, MapPageConfig, GAODE_CDN_URL_TEMPLATE, MAP_MIN_HEIGHT_PX};
-pub use poi::{parse_place_search_response, SchoolPoi, SCHOOL_TYPECODE_PREFIX};
+pub use map_page::{
+    build_map_page_html, build_pick_point_page_html, MapPageConfig, GAODE_CDN_URL_TEMPLATE,
+    MAP_MIN_HEIGHT_PX,
+};
+pub use poi::{
+    parse_ipc_message, parse_place_search_response, IpcMessage, SchoolPoi, SCHOOL_TYPECODE_PREFIX,
+};
 pub use record::CampusPoiRecord;
 pub use search_flow::{CampusSearchFlow, ConfirmedCampus, SearchFlowState};

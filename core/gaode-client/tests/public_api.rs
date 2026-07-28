@@ -12,8 +12,8 @@ use gaode_client::{
 
 #[test]
 fn public_api_types_exist() {
-    // 常量：官方 CDN v1.2 + 最小高度 300px + 教育类目前缀
-    assert!(GAODE_CDN_URL_TEMPLATE.starts_with("https://webapi.amap.com/maps?v=1.2"));
+    // 常量：官方 CDN v2.0 + 最小高度 300px + 教育类目前缀
+    assert!(GAODE_CDN_URL_TEMPLATE.starts_with("https://webapi.amap.com/maps?v=2.0"));
     assert_eq!(MAP_MIN_HEIGHT_PX, 300);
     assert_eq!(SCHOOL_TYPECODE_PREFIX, "1412");
 
@@ -57,8 +57,9 @@ fn public_api_types_exist() {
         serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
     assert_eq!(round_trip, record);
 
-    // 地图页：官方 CDN + 最小高度 300px
-    let html = build_map_page_html(&MapPageConfig::new("0123456789abcdef")).unwrap();
-    assert!(html.contains("webapi.amap.com/maps?v=1.2"));
+    // 地图页：官方 CDN v2.0 + 最小高度 300px
+    let html =
+        build_map_page_html(&MapPageConfig::new("0123456789abcdef", "fedcba9876543210")).unwrap();
+    assert!(html.contains("webapi.amap.com/maps?v=2.0"));
     assert!(html.contains("min-height: 300px"));
 }
