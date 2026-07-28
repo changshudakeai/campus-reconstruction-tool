@@ -2,17 +2,89 @@
 
 ## 项目状态
 
-**决策讨论期**。产品与架构决策通过访谈逐条确认，记录为 `docs/adr/` 下的决策记录（ADR）。代码实施在决策定案后开始；模块目录建立并通过接口评审后，才加入 `Cargo.toml` 的 members 列表。
+**实施期（ADR 驱动）**。产品与架构决策逐条记录于 `docs/adr/`（ADR-0001 起连续编号至 0029）。代码实施以工单为单位推进；模块目录建立并通过接口评审后，才加入 `Cargo.toml` 的 members 列表。
+
+## 开工前必读（按此顺序）
+
+1. **`README.md`** — 项目概述 + 全部 ADR 索引
+2. **`CONTEXT.md`** — 领域术语表（42 个中英对照术语；引用术语以它为准）
+3. **`docs/agents/`** — issue tracker / triage labels / domain docs 规则
+4. **`docs/adr/`** — 与任务相关的 ADR 原文（出题与验收前必须重读）
+5. **`docs/module-decisions.md`** — 按模块归类的决策索引
+6. **`.scratch/`** — 最新 handoff 文档（开工前先读最近一份）
 
 - 决策总览与"尚未决定"清单：见 `README.md`
-- 全部已确认决策：见 `docs/adr/`（0001 起连续编号）
-- v1.x 源码（复用来源，勿删）：`../New branch/`——Sponge 导出引擎、Arnis 规则、地图逻辑按 ADR-0003 迁入
+- v1.x 源码已按 ADR-0003 完成迁入（导出引擎/Arnis 规则/地图逻辑），原目录已删除
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues（使用 `gh` CLI）。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五个标准化标签：`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+**Single-context** —— 单一 `CONTEXT.md` + `docs/adr/` 在仓库根目录。详见 `docs/agents/domain.md`。
 
 ## 硬性工程纪律
 
 1. **界面文本外置**（ADR-0005）：所有用户可见文字放语言资源文件，代码只引用文本键，禁止硬编码；带变量文案用占位符插值，禁止字符串拼接组句。
 2. **配置集中**（ADR-0009/0011）：标签映射表、类目筛选规则集中定义，禁止散落硬编码。
 3. **禁止抢跑**：未经 ADR 确认的功能不得实施；基于猜测的代码宁缺毋滥。
+
+## 本地验证流程（提交前必跑）
+
+### 全套门禁命令（按顺序执行）
+
+```powershell
+# 1. 依赖分析（第一道门，检测未使用依赖）
+cargo machete
+
+# 2. 单元测试 + 执法测试（含 tidy/arch 内嵌测试）
+cargo test --workspace
+
+# 3. 格式检查（本地格式化，CI 用 --check 阻断）
+cargo fmt --all --check
+
+# 4. 代码规范检查（本地 warn 档；CI 提为 deny）
+cargo clippy --workspace --all-targets -- -D warnings
+
+# 5. 许可证与漏洞扫描
+cargo deny check advisories bans licenses sources
+
+# 6. xtask 独立检查（单独运行特定子命令）
+cargo xtask ci          # tidy + arch 组合
+cargo xtask timings     # 编译时间预算报告
+```
+
+### 验证流程说明
+
+| 步骤 | 命令 | 作用 | 失败后果 |
+|------|------|------|----------|
+| 1 | `cargo machete` | 检测未使用的直接依赖 | 依赖白名单腐化，二进制体积膨胀 |
+| 2 | `cargo test --workspace` | 运行全部单元测试 + 执法测试 | 功能或架构违规，不准合并 |
+| 3 | `cargo fmt --all --check` | 代码格式校验 | 格式不一致，CI 红灯 |
+| 4 | `cargo clippy ...` | 代码质量 lint | 警告提升至 deny，阻止编译 |
+| 5 | `cargo deny check ...` | 许可证/漏洞/禁用包扫描 | 法律风险或安全漏洞 |
+| 6 | `cargo xtask ci` | 规模红线 + 架构 DAG 断言 | 违反 ADR 架构决策 |
+
+### 执法测试特点
+
+- **xtask 内嵌测试**：`xtask/src/main.rs`、`tidy.rs`、`arch.rs` 中的 `#[test]` 函数随 `cargo test` 自动执行
+- **public-api 快照**：每个基础 crate (B1-B18) 的 `tests/public_api.rs` 确保公开 API 任何变更显形于 PR diff
+- **架构断言**：`cargo xtask arch` 验证依赖 DAG，禁止横向依赖（功能模块间零直连）
+
+### CI 流水线对照
+
+完整 CI 流程见 `.github/workflows/ci.yml`，包含 7 个并行 job：
+- `rustfmt` / `clippy` / `test` / `xtask` / `timings` / `machete` / `dependencies`
+- 聚合 job `conclusion` 作为唯一的 required status check（分支保护规则）
+
+**注意**：PowerShell 中执行多条命令需用分号 `;` 分隔，不可使用 `&&`。
 
 # 非技术产品负责人协作规则
 

@@ -33,6 +33,11 @@ ADR（决策记录），代码实施在决策定案后才开始。
 | [ADR-0022](docs/adr/0022-three-state-review-undo-deferred.md) | 三态评审（待定/保留/剔除）+ 撤销暂缓（保留席位与接口）+ 导出封账弹窗 |
 | [ADR-0023](docs/adr/0023-theming-color-cards-motion-table.md) | 主题与动画——亮暗双色卡 + 动效表 + Codex 手感基准 + 减少动画开关 |
 | [ADR-0024](docs/adr/0024-export-initial-campus-generation-engine.md) | 导出成品——Arnis 式完整初始校园（.schem）+ 新立 B18 生成引擎 + 用料表版本绑定
+| [ADR-0025](docs/adr/0025-shell-can-depend-on-domain-types.md) | Shell 层可依赖 domain types
+| [ADR-0026](docs/adr/0026-material-table-in-b17.md) | 用料配置表与版本校验器同居 B17
+| [ADR-0027](docs/adr/0027-stepper-wizard-navigation.md) | 步骤条向导导航设计
+| [ADR-0028](docs/adr/0028-tutorial-bubble-list.md) | 新手教程气泡列表机制
+| [ADR-0029](docs/adr/0029-boundary-from-osm-with-manual-adjustment.md) | 边界从 OSM 自动获取 + 人工调整
 
 ## 已确认的产品流程（持续补充中）
 
@@ -53,10 +58,16 @@ ADR（决策记录），代码实施在决策定案后才开始。
 
 ```
 New-branch-v2/
-├── docs/adr/            决策记录（本项目的"为什么"）
+├── AGENTS.md            Agent 协作规则（开工前必读顺序在此）
+├── CONTEXT.md           领域术语表（42 个中英对照术语，引用术语以它为准）
+├── docs/adr/            决策记录 ADR-0001~0029（本项目的"为什么"）
+├── docs/agents/         Agent 技能配置（issue-tracker / triage-labels / domain）
+├── docs/research/       深度技术研究（地图集成、模块边界执法等）
+├── docs/module-decisions.md  ADR 按模块归类索引
+├── .scratch/            工单与 handoff 文档（本地 markdown tracker）
 ├── sqlite/schemas/      数据库设计草案（随决策扩充）
-├── Cargo.toml           Rust workspace 根清单（模块随实施逐个加入）
-└── apps/ core/          模块目录占位（实施阶段填充）
+├── Cargo.toml           Rust workspace 根清单（依赖白名单 + lint 门禁）
+└── apps/ core/ xtask/   30 个 crate（1 薄壳 + 7 功能 + 17 基础 + 构建自动化）
 ```
 
 ## 尚未决定（禁止抢跑实施）
