@@ -551,7 +551,7 @@ impl ViewModelInjector {
         });
 
         // T21: 高德地图嵌入探针初始化 (placeholder，待 Slint 1.17+ 升级)
-        // TODO: 后续集成到 notification-center
+        // ↻ 集成到 notification-center → T24 完成
 
         // ── T19B-3/T19B-5：校区选择页回调 ────────────────────────
         Self::bind_campus_select(injector, window);
