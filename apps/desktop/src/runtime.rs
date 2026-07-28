@@ -82,9 +82,6 @@ pub fn run_dev() -> Result<()> {
         .registry()
         .set_presenter(ShellPresenter::install(&window));
 
-    // T21 VERIFIED PATH: 高德地图嵌入探针 (spawn_local 异步等事件循环启动)
-    crate::map_embed::embed_probe(window.as_weak());
-
     // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
     let injector = match ShellDatabases::open(DEV_DB_FILE) {
         Ok(databases) => Some(ViewModelInjector::new(databases)?),
