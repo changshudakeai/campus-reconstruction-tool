@@ -40,6 +40,7 @@ allow = [
     "BSL-1.0",      # slint → winit → clipboard-win、error-code
     "Unlicense",    # slint → ksni（Linux 托盘，公共领域式许可）
     "NCSA",         # slint → rav1e → libfuzzer-sys（(MIT OR Apache-2.0) AND NCSA）
+    "MPL-2.0",      # wry → gtk-rs（Linux 托盘支持），弱著佐权，T05a 守门人豁免
 ]
 confidence-threshold = 0.93
 # workspace 成员均为内部 crate（publish = false），不参与许可证审查
