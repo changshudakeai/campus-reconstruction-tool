@@ -83,24 +83,12 @@ pub fn run_dev() -> Result<()> {
         .registry()
         .set_presenter(ShellPresenter::install(&window));
 
-    // T21: 高德地图嵌入探针（screen 4 WebView 子窗口）
+    // T21 FINAL: 高德地图嵌入探针 (screen 4 WebView 子窗口)
     // 使用 Slint 1.17+ winit 桥接 API 获取原生窗口句柄，创建嵌入式 WebView2
-    let _map_view = {
-        match GaodeMapView::render_into(
-            &window.window(),
-            400,               // 屏 4 工作区高度限制
-            (116.397, 39.916), // 北京天安门作为默认中心点
-        ) {
-            Ok(view) => {
-                eprintln!("✅ 高德地图 WebView 嵌入成功");
-                Some(view)
-            }
-            Err(e) => {
-                eprintln!("⚠️ 高德地图嵌入失败：{}", e);
-                None
-            }
-        }
-    };
+    let _map_view = GaodeMapView::render_into(
+        &window.window(),
+        (116.397, 39.916), // 北京天安门作为默认中心点（T24 换成校区锚点）
+    );
 
     // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
     let injector = match ShellDatabases::open(DEV_DB_FILE) {

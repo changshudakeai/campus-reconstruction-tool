@@ -87,11 +87,14 @@ sha2 = "0.10"
 # T19 S1 UI 框架 (slint 只准 desktop-shell 依赖，deny.toml 已配置 bans)。
 # 用官方默认 features（winit 后端 + femtovg/软件渲染器 + 无障碍），
 # 关掉默认 features 会没有窗口后端，桌面应用无法启动。
-slint = "1.9"
+# T21 FINAL: 启用 winit_030 模块以支持 WebView 嵌入
+slint = { version = "1.9", features = ["unstable-winit-030"] }
 slint-build = "1.9"
 # B3 + S1: wry WebView + raw-window-handle（高德地图嵌入）
 wry = "0.55"
 raw-window-handle = "0.6"
+# T21 FINAL: 用于 block_on(slhint_window.winit_window())
+futures-executor = "0.3"
 # 测试临时目录
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
