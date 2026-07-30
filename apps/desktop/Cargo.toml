@@ -1,20 +1,17 @@
 # MCRebuild V2 —— S1 主程序应用壳（T19 Phase1）
 #
-# 职责：零业务逻辑的 Slint 薄壳——声明主窗口、判定首开着陆去向
-# （首次向导 / 老用户直达 / 校区选择），文案全部经 B6 注入（ADR-0005）。
-# T19B-1：ViewModelInjector 构造并持有全部 F 模块实例，把视图状态
-# 注入 Slint 属性；页面级接线与导航骨架（ADR-0027）归 T19B-2..8。
+# 迁移期职责：声明主窗口并绑定可观察页面状态；现有首开判定与流程协调
+# 仅作为工单 01 行为基线保留，不授权新增 S1 业务逻辑（ADR-0037）。
 #
-# ⚖️ 本依赖段即白名单：壳只准依赖 F1-F9、B1-B7、B9-B11、B17 与 slint
-# （ADR-0017 + ADR-0025，xtask arch 断言 2 强制）。slint 仅本 crate 可依
-# （deny.toml bans wrappers）。
-
+# ⚖️ 下列依赖是迁移期现状清单，不是白名单。ADR-0037 的目标态只允许呈现接口、
+# 共享展示类型与呈现能力；不得新增持久化、生成或导出实现依赖。后续工单负责
+# 迁出 B2/B17/B18 等业务实现并收紧架构检查，本工单不删除依赖或改变行为。
 [package]
 name = "desktop-shell"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "S1 主程序应用壳：Slint 薄壳 UI + 首开着陆判定，零业务逻辑（ADR-0017）"
+description = "S1 主程序应用壳：Slint 页面状态、导航与通知呈现（ADR-0037）"
 
 [[bin]]
 name = "campus-tool-dev"

@@ -38,6 +38,8 @@ ADR（决策记录），代码实施在决策定案后才开始。
 | [ADR-0027](docs/adr/0027-stepper-wizard-navigation.md) | 步骤条向导导航设计
 | [ADR-0028](docs/adr/0028-tutorial-bubble-list.md) | 新手教程气泡列表机制
 | [ADR-0029](docs/adr/0029-boundary-from-osm-with-manual-adjustment.md) | 边界从 OSM 自动获取 + 人工调整
+| [ADR-0037](docs/adr/0037-s1-presentation-only-shell.md) | S1 只承担呈现，不承担业务协调
+| [ADR-0038](docs/adr/0038-no-amap-offline-map-in-v2.md) | V2 不提供高德离线地图，不抓取或缓存高德地图内容
 
 ## 已确认的产品流程（持续补充中）
 
@@ -60,7 +62,7 @@ ADR（决策记录），代码实施在决策定案后才开始。
 New-branch-v2/
 ├── AGENTS.md            Agent 协作规则（开工前必读顺序在此）
 ├── CONTEXT.md           领域术语表（42 个中英对照术语，引用术语以它为准）
-├── docs/adr/            决策记录 ADR-0001~0029（本项目的"为什么"）
+├── docs/adr/            决策记录 ADR-0001~0038（本项目的"为什么"）
 ├── docs/agents/         Agent 技能配置（issue-tracker / triage-labels / domain）
 ├── docs/research/       深度技术研究（地图集成、模块边界执法等）
 ├── docs/module-decisions.md  ADR 按模块归类索引

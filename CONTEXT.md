@@ -28,7 +28,7 @@
 
 | 中文 | 英文 | 定义 | 来源 |
 |------|------|------|------|
-| **薄壳** | Thin Shell / Desktop Shell | 主程序应用壳（S1），只放 UI 声明和 ViewModel 绑定，零业务逻辑 | ADR-0017 |
+| **薄壳** | Thin Shell / Desktop Shell | 主程序应用壳（S1），只负责呈现页面状态、进度、导航结果和通知，不承担业务协调或正式业务数据持有 | ADR-0037（收紧 ADR-0017/0025） |
 | **功能模块** | Functional Module (F1-F9) | 面向用户的业务功能模块（如 F1 全局设置、F5 评审工作台） | ADR-0017 |
 | **基础模块** | Base Module (B1-B18) | 提供技术支撑的底层模块（如 B2 数据持久化、B3 高德客户端） | ADR-0017 |
 | **共享领域类型** | Shared Domain Types (B1) | 跨模块共享的数据类型定义（CampusId, PlanId 等） | ADR-0017 |
