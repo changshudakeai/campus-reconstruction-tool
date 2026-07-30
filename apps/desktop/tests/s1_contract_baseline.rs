@@ -35,6 +35,7 @@ fn latest_s1_and_map_decisions_are_traceable_from_all_indexes() {
     let glossary = read_workspace_file("CONTEXT.md");
     let module_decisions = read_workspace_file("docs/module-decisions.md");
     let adr_0017 = read_workspace_file("docs/adr/0017-modular-architecture-and-crate-catalog.md");
+    let adr_0025 = read_workspace_file("docs/adr/0025-shell-can-depend-on-domain-types.md");
 
     assert!(
         readme.contains("[ADR-0037](docs/adr/0037-s1-presentation-only-shell.md)")
@@ -59,6 +60,14 @@ fn latest_s1_and_map_decisions_are_traceable_from_all_indexes() {
         adr_0017.contains("由 ADR-0037 收紧")
             && adr_0017.contains("不得直接协调持久化、生成或导出"),
         "旧 ADR-0017 必须明确不再授权 S1 协调业务实现"
+    );
+    assert!(
+        adr_0025.contains("依赖授权由 ADR-0037 收紧")
+            && adr_0025.contains("S1 不得直接依赖 B2")
+            && adr_0025.contains("B17/B18（生成与导出实现） | ❌")
+            && !adr_0025.contains("S1 → B2 → B1 模式正常")
+            && !adr_0025.contains("B17（Manifest 生成器） | ✅"),
+        "旧 ADR-0025 必须保留 B1 只读类型例外，但不再授权 S1 直接依赖持久化、生成或导出实现"
     );
 }
 
