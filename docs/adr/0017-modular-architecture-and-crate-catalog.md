@@ -55,15 +55,15 @@ v1.x 失败的核心原因是代码耦合严重：一个 Cargo workspace 内所�
 | B4 | Sponge 导出引擎 | `sponge-export` | Sponge V3 `.schem` 文件格式生成器 | v1.x 复用来源（ADR-0003） |
 | B5 | 地基模式引擎 | `foundation-mode` | 边界绘制、朝向计算、坐标系转换子模块 | ADR-0011 |
 | B6 | 国际化/i18n | `localization` | 界面文本资源文件管理、多语言切换 | ADR-0005 |
-| B7 | 通知中心 | `notification-center` | 系统消息推送、 Toast 提示、历史通知列表 | ADR-0037（v1.x 参考） |
+| B7 | 通知中心 | `notification-center` | 系统消息推送、Toast 提示、历史通知列表 | ADR-0021、ADR-0031 |
 | B8 | 撤销重做 | `undo-redo` | 命令模式实现的多步撤销/重做栈 | ⚠️ 暂缓实施（ADR-0022）：v2.0.0 不动工，保留席位与接口预留 |
 | B9 | 全局快捷键 | `global-shortcuts` | Windows 热键注册、跨进程消息拦截 | ⚠️ 需评估 OS 耦合影响 |
 | B10 | 主题/外观 | `theming` | 颜色方案、字体大小、暗色/亮色模式 | ⚠️ 建议新增 ADR |
-| B11 | 诊断日志 | `diagnostics` | 结构化日志、性能计时器、错误堆栈捕获 | ADR-0039 |
+| B11 | 诊断日志 | `diagnostics` | 结构化日志、性能计时器、错误堆栈捕获 | ADR-0031 |
 | B12 | 数据源适配器 | `data-source-adapters` | Overture Bridge、Overpass API、图生图插件接入 | ✅ ETL 特有 |
 | B13 | 数据转换器 | `data-transformers` | 字段映射、标签转类别、几何投影变换 | ✅ ETL+GIS 特有 |
 | B14 | 几何验证器 | `geometry-validator` | 多边形闭合检查、自相交检测、**内含 R-tree 空间索引子模块** | ✅ GIS 特有 |
-| B15 | 拓扑规则引擎 | `topology-rules` | 建筑物重叠检测、道路连通性规则 | ✅ GIS 特有 |
+| B15 | 拓扑规则引擎 | `topology-rules` | 建筑重叠、建筑组成关系、不同类别明显位置冲突；V2 不检查道路连通性 | ✅ GIS 特有；道路连通性由 ADR-0036 修订 |
 | B17 | Manifest 生成器 | `manifest-generator` | `foundation_manifest.json` schema 生成器 + SHA256 校验和 | ✅ ETL 特有 |
 | B18 | 初始校园生成引擎 | `generation-engine` | 评审保留数据 → 方块模型；Arnis 建筑规则 + 六类生成规则 + 用料配置表（MC 版本绑定） | ADR-0024；复用 v1.x arnis-core |
 

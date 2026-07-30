@@ -38,6 +38,13 @@ ADR（决策记录），代码实施在决策定案后才开始。
 | [ADR-0027](docs/adr/0027-stepper-wizard-navigation.md) | 步骤条向导导航设计
 | [ADR-0028](docs/adr/0028-tutorial-bubble-list.md) | 新手教程气泡列表机制
 | [ADR-0029](docs/adr/0029-boundary-from-osm-with-manual-adjustment.md) | 边界从 OSM 自动获取 + 人工调整
+| [ADR-0030](docs/adr/0030-incremental-refresh-changes-first.md) | 重新采集结果——变化优先、全量可查
+| [ADR-0031](docs/adr/0031-notification-diagnostics-seam.md) | 通知中心与故障诊断分工——一个入口，说明与证据分离
+| [ADR-0032](docs/adr/0032-isolate-invalid-candidate-geometry.md) | 候选几何检查——隔离单个问题对象，不阻断整次采集
+| [ADR-0033](docs/adr/0033-warn-on-overlapping-building-outlines.md) | 建筑轮廓重叠——提醒用户，不自动删除或合并
+| [ADR-0034](docs/adr/0034-recognize-explicit-building-part-containment.md) | 明确的建筑组成关系——作为正常结构处理
+| [ADR-0035](docs/adr/0035-warn-only-on-clear-cross-category-collisions.md) | 不同类别的包含关系——正常包含不提醒，明显位置冲突才提醒
+| [ADR-0036](docs/adr/0036-no-road-connectivity-warnings.md) | 道路连通性——V2 不检查、不提醒、不自动修正
 | [ADR-0037](docs/adr/0037-s1-presentation-only-shell.md) | S1 只承担呈现，不承担业务协调
 | [ADR-0038](docs/adr/0038-no-amap-offline-map-in-v2.md) | V2 不提供高德离线地图，不抓取或缓存高德地图内容
 
@@ -45,7 +52,7 @@ ADR（决策记录），代码实施在决策定案后才开始。
 
 全部已定决策的**按模块归类视图**：[docs/module-decisions.md](docs/module-decisions.md)（出工单时以此为索引）。
 
-首次打开：基本设置（语言、游戏版本）→ 选择/创建校区 → 校区下的方案列表 → 进入方案。
+首次打开：基本设置（语言、游戏版本）→ 选择校区（上方搜索、下方最近使用记录）→ 校区下的方案列表 → 进入方案。
 
 层级关系：
 
@@ -61,7 +68,7 @@ ADR（决策记录），代码实施在决策定案后才开始。
 ```
 New-branch-v2/
 ├── AGENTS.md            Agent 协作规则（开工前必读顺序在此）
-├── CONTEXT.md           领域术语表（42 个中英对照术语，引用术语以它为准）
+├── CONTEXT.md           领域术语表（44 个中英对照术语，引用术语以它为准）
 ├── docs/adr/            决策记录 ADR-0001~0038（本项目的"为什么"）
 ├── docs/agents/         Agent 技能配置（issue-tracker / triage-labels / domain）
 ├── docs/research/       深度技术研究（地图集成、模块边界执法等）
@@ -76,5 +83,5 @@ New-branch-v2/
 
 - 校区级共享知识与方案级数据的完整清单
 - v1.x 项目数据的迁移策略与排期
-- F1 全局设置扩展点、F4 增量刷新交互（P2，见 docs/module-decisions.md 待访谈队列）
+
 - 界面定稿后的开发版审核项：教程气泡位置、动画舞步、快捷键清单、用料效果

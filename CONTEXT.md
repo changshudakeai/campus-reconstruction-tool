@@ -60,6 +60,7 @@
 | **步骤条** | Stepper / Wizard Navigation | 采集流程的向导式导航（边界→朝向→采集） | ADR-0027 |
 | **新手教程** | Onboarding Tutorial | 跟练式气泡引导，不设单独教程页 | ADR-0020 |
 | **通知中心** | Notification Center (B7) | 轻公告栏 + 弹窗铁律（要紧错误必须弹窗） | ADR-0021 |
+| **故障资料** | Diagnostic Bundle (B11) | 与一条错误通知通过故障编号关联、供开发人员排查的运行证据；用户从通知中心导出 | ADR-0031 |
 | **色卡机制** | Color Card Mechanism | 代码只写颜色角色名，禁止写颜色号 | ADR-0023 |
 | **动效表** | Motion Table | 动画节奏参数集中定义 | ADR-0023 |
 | **方案列表页** | Plan List Page | 老用户二次启动着陆页，显示卡片三件套 | ADR-0006, ADR-0018 |
@@ -73,6 +74,7 @@
 | **三态评审** | Three-State Review | 待定（pending）/ 保留（keep）/ 剔除（remove） | ADR-0022 |
 | **封账** | Seal / Commit Review | 导出时批量写入评审终态，评审结束 | ADR-0016, ADR-0022 |
 | **轻创建** | Lightweight Plan Creation | 先有方案再补充信息，输入方案名即建立 | ADR-0010 |
+| **最近使用的校区** | Recent Campuses | 用户曾经成功选中并进入过的真实校区；不包含搜索关键词，也不包含只浏览但未进入的搜索结果 | ADR-0006, ADR-0008 |
 | **必经步骤** | Required Steps | 边界→朝向→导出地基（最小路径） | ADR-0012 |
 | **增量刷新** | Incremental Refresh | 检测数据源变化，只更新差异部分 | ADR-0017 (F4 备注) |
 | **工单** | Ticket / Issue | 任务单元，记录需求、验收标准、状态 | - |
