@@ -89,6 +89,25 @@ impl ProjectManager {
         Ok(())
     }
 
+    /// 一次读取校区选择与上次校区方案列表所需的完整状态。
+    pub fn campus_plan_snapshot(&self) -> Result<crate::CampusPlanSnapshot> {
+        let campuses = self.list_campuses()?;
+        let landing_campus = self.landing_campus()?;
+        let plans = match &landing_campus {
+            Some(campus) => {
+                let campus_id = CampusId::parse(&campus.id)
+                    .map_err(|error| Error::InvalidId(error.to_string()))?;
+                self.list_plan_cards(&campus_id)?
+            }
+            None => Vec::new(),
+        };
+        Ok(crate::CampusPlanSnapshot {
+            campuses,
+            landing_campus,
+            plans,
+        })
+    }
+
     // ── 方案卡片与 CRUD（ADR-0010/0018）───────────────────
 
     /// 列出校区的方案卡片（最近修改倒序，由 B2 SQL 保证）

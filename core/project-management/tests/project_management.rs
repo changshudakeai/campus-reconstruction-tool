@@ -159,3 +159,15 @@ fn landing_returns_none_when_campus_deleted_or_unset() {
     manager.remember_campus(&ghost).unwrap();
     assert!(manager.landing_campus().unwrap().is_none());
 }
+
+#[test]
+fn campus_plan_snapshot_is_one_complete_feature_result() {
+    let (mut manager, campus_id) = manager_with_campus();
+    manager.create_plan(&campus_id, "方案 1").unwrap();
+    manager.remember_campus(&campus_id).unwrap();
+
+    let snapshot = manager.campus_plan_snapshot().expect("完整校区方案结果");
+    assert_eq!(snapshot.campuses.len(), 1);
+    assert_eq!(snapshot.landing_campus.expect("着陆校区").name, "测试大学");
+    assert_eq!(snapshot.plans.len(), 1);
+}

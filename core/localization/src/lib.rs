@@ -109,6 +109,15 @@ struct ResourceBundle {
     /// 相对时间表述（ADR-0018 §一第 3 条，T19B-5A）
     #[serde(default)]
     pub time: HashMap<String, String>,
+    /// 当前五步工作区占位页面。
+    #[serde(default)]
+    pub workspace: HashMap<String, String>,
+    /// 公告栏页面。
+    #[serde(default)]
+    pub notice: HashMap<String, String>,
+    /// 回收站页面。
+    #[serde(default)]
+    pub trash: HashMap<String, String>,
     /// 共同语言章名词定义（用于验证覆盖完整性）
     #[serde(default)]
     pub domain: HashMap<String, String>,
@@ -132,6 +141,9 @@ impl ResourceBundle {
             ("error", self.error),
             ("messages", self.messages),
             ("time", self.time),
+            ("workspace", self.workspace),
+            ("notice", self.notice),
+            ("trash", self.trash),
         ];
         for (prefix, table) in categories {
             for (key, value) in table {

@@ -7,12 +7,13 @@
 //! 3. 设置页"重新查看教程"（F2 进度清零落库，债务②）；
 //! 4. B7 ShellPresenter 错误模态遮罩（弹窗铁律 ADR-0021，装喇叭）。
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use desktop_shell::{AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector};
+use data_persistence::Database;
+use desktop_shell::{
+    assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
+};
+use global_settings::SettingsManager;
 use localization::{Language, Localization};
-use notification_center::{Notification, Presenter};
+use notification_center::{Notification, NotificationCenter, Presenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStatus};
 
 #[test]
@@ -22,13 +23,15 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
     // ── 场景 1：全新库 → 首跑向导屏，文案与默认值全部来自 F1/B6 ──
     // 跨模块落库断言用同一临时文件连接组（内存库两连接各自独立）
     let dir = tempfile::tempdir().expect("建临时目录");
-    let db = ShellDatabases::open(dir.path().join("ui-test.db")).expect("文件库连接组");
-    let injector = Rc::new(RefCell::new(
-        ViewModelInjector::new(db).expect("构造注入器"),
-    ));
+    let database_path = dir.path().join("ui-test.db");
+    let db = ShellDatabases::open(&database_path).expect("文件库连接组");
+    let injector = ViewModelInjector::new(db).expect("构造注入器");
     let window = AppWindow::new().expect("创建 Slint 窗口");
-    injector.borrow().inject(&window);
-    ViewModelInjector::bind(&injector, &window);
+    let center = NotificationCenter::init(PresenterRegistry::new());
+    center
+        .registry()
+        .set_presenter(ShellPresenter::install(&window));
+    let _runtime = assemble_application(&window, injector, center.clone());
 
     assert_eq!(window.get_app_title().as_str(), l10n.t("app.welcome_title"));
     assert_eq!(
@@ -67,24 +70,21 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
     }
 
     // ── 场景 2：向导完成设置（ADR-0004 双保险 + F1 落库 + 跳屏）──
+    let is_first_run = || {
+        SettingsManager::new(Database::open(&database_path).expect("重开设置库"))
+            .is_first_run()
+            .expect("读首次运行标记")
+    };
     // 未勾选知情告知 → F1 拒绝，仍停在向导屏（UI 按钮禁用之外的兜底）
     window.set_wizard_acknowledged(false);
     window.invoke_wizard_continue_clicked();
-    assert!(injector
-        .borrow()
-        .settings()
-        .is_first_run()
-        .expect("读首次运行标记"));
+    assert!(is_first_run());
     assert_eq!(window.get_active_screen(), 0);
 
     // 勾选后完成 → F1 落库；无上次校区 → 校区选择页占位文案
     window.set_wizard_acknowledged(true);
     window.invoke_wizard_continue_clicked();
-    assert!(!injector
-        .borrow()
-        .settings()
-        .is_first_run()
-        .expect("读首次运行标记"));
+    assert!(!is_first_run());
     assert_eq!(window.get_active_screen(), 1, "向导完成应跳到着陆占位屏");
     assert_eq!(
         window.get_status_text().as_str(),
@@ -93,20 +93,13 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
 
     // ── 场景 3：设置页"重新查看教程"（债务②，F2 规矩④）──
     window.invoke_replay_tutorial_clicked();
+    let database = Database::open(&database_path).expect("重开引导库");
+    let reloaded = OnboardingTutorial::load(&database).expect("重新装载引导进度");
     assert_eq!(
-        injector.borrow().tutorial().status(),
-        TutorialStatus::NotStarted
+        reloaded.status(),
+        TutorialStatus::NotStarted,
+        "进度已落库清零"
     );
-    {
-        let mut shared = injector.borrow_mut();
-        let reloaded = OnboardingTutorial::load(shared.projects_mut().database_mut())
-            .expect("重新装载引导进度");
-        assert_eq!(
-            reloaded.status(),
-            TutorialStatus::NotStarted,
-            "进度已落库清零"
-        );
-    }
 
     // ── 场景 4：B7 ShellPresenter 错误模态遮罩（装喇叭）──
     let presenter = ShellPresenter::install(&window);

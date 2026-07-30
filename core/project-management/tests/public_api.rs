@@ -5,8 +5,8 @@
 
 use data_persistence::Database;
 use project_management::{
-    CampusView, Error, PlanCardView, PlanProgress, ProjectManager, TrashItemView,
-    DUPLICATE_SUFFIX_KEY,
+    CampusPlanSnapshot, CampusView, Error, PlanCardView, PlanProgress, ProjectManager,
+    TrashItemView, DUPLICATE_SUFFIX_KEY,
 };
 use shared_domain_types::{CampusId, PlanId};
 
@@ -42,6 +42,9 @@ fn public_api_types_exist() {
     assert_eq!(cards[0].progress, PlanProgress::BoundaryNotSet);
     assert_eq!(cards[0].progress.text_key(), "plan.boundary_not_set");
     assert!(!cards[0].last_modified_at.is_empty());
+    let snapshot: CampusPlanSnapshot = manager.campus_plan_snapshot().unwrap();
+    assert_eq!(snapshot.campuses.len(), 1);
+    assert_eq!(snapshot.plans.len(), 1);
 
     // 改名 + 复制 + 删除进回收站
     manager.rename_plan(&plan_id, "方案 1 - 全景复刻").unwrap();

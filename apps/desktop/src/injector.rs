@@ -29,9 +29,9 @@ use shared_domain_types::{CampusId, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::dispatch::report_callback_error;
+use crate::production::ProductionEntries;
 use crate::runtime::{decide, status_text, LandingDecision};
-use crate::theme::format_relative_time;
-use crate::{generated::CampusData, AppWindow, BoundaryPointData, OrientationPointData};
+use crate::{AppWindow, BoundaryPointData, OrientationPointData};
 
 /// 壳持有的 B2 连接组。
 ///
@@ -147,7 +147,7 @@ impl ViewModelInjector {
     ///
     /// T19B-2 起覆盖：首开文案 + 首跑向导（屏 0）+ 设置页文案（屏 3）+
     /// B7 弹窗静态文案；T19B-3 校区选择页文案；T19B-4 方案列表页文案。
-    pub fn inject(&self, window: &AppWindow) {
+    pub(crate) fn inject(&self, window: &AppWindow) {
         let l10n = &self.l10n;
         window.set_app_title(l10n.t("app.welcome_title").into());
         window.set_status_text(status_text(l10n, &self.landing()).into());
@@ -466,10 +466,15 @@ impl ViewModelInjector {
     ///
     /// 回调闭包持 `Rc<RefCell<Self>>` 共享可变访问（Slint 单线程 UI）；
     /// 回调错误一律递 [`report_callback_error`]（弹窗铁律 ADR-0021）。
-    pub fn bind(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    pub(crate) fn bind(
+        injector: &Rc<RefCell<Self>>,
+        presentation: &Rc<RefCell<ProductionEntries>>,
+        window: &AppWindow,
+    ) {
         // 完成设置：读窗口选项 → F1 complete_first_run → 重判着陆跳下一屏
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_startup = Rc::clone(presentation);
         window.on_wizard_continue_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             let setup = FirstRunSetup {
@@ -482,10 +487,9 @@ impl ViewModelInjector {
                 Ok(()) => {
                     // 向导完成 → 重新判定着陆（无上次校区 → 校区选择占位；
                     // 有 → 该校区方案列表占位），判定仍全权委托 F1
-                    window
-                        .set_status_text(status_text(injector.l10n(), &injector.landing()).into());
                     crate::map_webview::hide();
-                    window.set_active_screen(1);
+                    drop(injector);
+                    presentation_startup.borrow_mut().show_startup(&window);
                 }
                 Err(error) => report_callback_error(injector.l10n(), &error),
             }
@@ -558,13 +562,13 @@ impl ViewModelInjector {
         // ↻ 集成到 notification-center → T24 完成
 
         // ── T19B-3/T19B-5：校区选择页回调 ────────────────────────
-        Self::bind_campus_select(injector, window);
+        Self::bind_campus_select(injector, presentation, window);
         // ── T19B-4：方案列表页回调 ────────────────────────────
-        Self::bind_plan_list(injector, window);
+        Self::bind_plan_list(injector, presentation, window);
         // ── T19B-9: 右上角工具栏回调 ─────────────────────
-        Self::bind_toolbar(injector, window);
+        Self::bind_toolbar(presentation, window);
         // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────
-        Self::bind_workspace(injector, window);
+        Self::bind_workspace(injector, presentation, window);
         // ── T24: 边界地图 WebView IPC 桥接注册 ─────────────────────
         Self::bind_boundary_map_ipc(injector, window);
     }
@@ -736,9 +740,14 @@ impl ViewModelInjector {
     ///
     /// 新建演示校区 → create_campus 刷新列表；点列表项 → remember_campus →
     /// 刷新方案列表 → 跳屏 2；点击设置 → 跳屏 3。
-    fn bind_campus_select(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    fn bind_campus_select(
+        injector: &Rc<RefCell<Self>>,
+        presentation: &Rc<RefCell<ProductionEntries>>,
+        window: &AppWindow,
+    ) {
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_new = Rc::clone(presentation);
         window.on_campus_select_new_demo_campus_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
@@ -750,10 +759,10 @@ impl ViewModelInjector {
                     if let Ok(campus_id) = CampusId::parse(&campus.id) {
                         // 先记住校区，再刷新列表
                         let _ = injector.projects_mut().remember_campus(&campus_id);
-                        injector.refresh_campus_list(&window);
                         // 自动进入方案列表
                         crate::map_webview::hide();
-                        window.set_active_screen(2);
+                        drop(injector);
+                        presentation_new.borrow_mut().show_plan_list(&window);
                     }
                 }
                 Err(error) => report_callback_error(injector.l10n(), &error),
@@ -761,15 +770,17 @@ impl ViewModelInjector {
         });
 
         let weak = window.as_weak();
+        let presentation_settings = Rc::clone(presentation);
         window.on_campus_select_settings_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             crate::map_webview::hide();
-            window.set_active_screen(3);
+            presentation_settings.borrow_mut().show_settings(&window);
         });
 
         // 单击已有校区行（T19B-5B 补接）：remember_campus → 刷新方案列表 → 跳屏 2
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_plan = Rc::clone(presentation);
         window.on_campus_select_campus_clicked(move |campus_id_str| {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
@@ -784,9 +795,9 @@ impl ViewModelInjector {
                 report_callback_error(injector.l10n(), &error);
                 return;
             }
-            injector.refresh_plan_list(&window, &campus_id);
             crate::map_webview::hide();
-            window.set_active_screen(2);
+            drop(injector);
+            presentation_plan.borrow_mut().show_plan_list(&window);
         });
     }
 
@@ -794,7 +805,11 @@ impl ViewModelInjector {
     ///
     /// 新建方案（ADR-0010 轻创建对话框）/ 返回校区选择 / ···菜单操作
     /// （改名/复制/删除，ADR-0018 §三）/ 教程气泡钩子（F2 规矩①②）。
-    fn bind_plan_list(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    fn bind_plan_list(
+        injector: &Rc<RefCell<Self>>,
+        presentation: &Rc<RefCell<ProductionEntries>>,
+        window: &AppWindow,
+    ) {
         // 新建方案（ADR-0010）：弹输入窗，预填可修改的默认名
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
@@ -816,10 +831,11 @@ impl ViewModelInjector {
 
         // 返回校区选择页
         let weak = window.as_weak();
+        let presentation_campus = Rc::clone(presentation);
         window.on_plan_list_back_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             crate::map_webview::hide();
-            window.set_active_screen(1);
+            presentation_campus.borrow_mut().show_campus_select(&window);
         });
 
         // 单击方案卡片（ADR-0027 第 6 轮：单击即开，无概览层）→ 跳屏 4 工作区
@@ -908,6 +924,7 @@ impl ViewModelInjector {
         // 复制方案：调 F3 duplicate_plan，后缀取 l10n “副本”
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_duplicate = Rc::clone(presentation);
         window.on_plan_list_duplicate_clicked(move |plan_id_str| {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
@@ -921,9 +938,8 @@ impl ViewModelInjector {
             let suffix = injector.l10n().t("plan.duplicate_suffix");
             match injector.projects_mut().duplicate_plan(&plan_id, &suffix) {
                 Ok(_) => {
-                    if let Some(campus_id) = injector.current_campus_id() {
-                        injector.refresh_plan_list(&window, &campus_id);
-                    }
+                    drop(injector);
+                    presentation_duplicate.borrow_mut().show_plan_list(&window);
                 }
                 Err(error) => report_callback_error(injector.l10n(), &error),
             }
@@ -934,6 +950,7 @@ impl ViewModelInjector {
         let shared = Rc::clone(injector);
         let shared_confirmed = Rc::clone(injector);
         let shared_cancel = Rc::clone(injector);
+        let presentation_confirmed = Rc::clone(presentation);
         window.on_plan_list_delete_clicked(move |plan_id_str| {
             let Some(window) = weak.upgrade() else { return };
             let injector = shared.borrow();
@@ -955,7 +972,8 @@ impl ViewModelInjector {
             // T22: Gaode Key 空值引导至设置页
             if std::mem::replace(&mut injector.pending_gaode_redirect, false) {
                 crate::map_webview::hide();
-                window.set_active_screen(3); // 跳设置页
+                drop(injector);
+                presentation_confirmed.borrow_mut().show_settings(&window);
                 return;
             }
 
@@ -988,7 +1006,10 @@ impl ViewModelInjector {
                 return;
             };
             match injector.projects_mut().delete_plan(&campus_id, &plan_id) {
-                Ok(_) => injector.refresh_plan_list(&window, &campus_id),
+                Ok(_) => {
+                    drop(injector);
+                    presentation_confirmed.borrow_mut().show_plan_list(&window);
+                }
                 Err(error) => report_callback_error(injector.l10n(), &error),
             }
         });
@@ -1010,6 +1031,7 @@ impl ViewModelInjector {
         // 确认输入：根据 mode 分派新建/改名
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_input = Rc::clone(presentation);
         window.on_input_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             let mut injector = shared.borrow_mut();
@@ -1029,7 +1051,8 @@ impl ViewModelInjector {
                     match injector.projects_mut().create_plan(&campus_id, &name) {
                         Ok(_) => {
                             window.set_input_dialog_visible(false);
-                            injector.refresh_plan_list(&window, &campus_id);
+                            drop(injector);
+                            presentation_input.borrow_mut().show_plan_list(&window);
                         }
                         Err(error) => report_callback_error(injector.l10n(), &error),
                     }
@@ -1047,7 +1070,8 @@ impl ViewModelInjector {
                     match injector.projects_mut().rename_plan(&plan_id, &name) {
                         Ok(_) => {
                             window.set_input_dialog_visible(false);
-                            injector.refresh_plan_list(&window, &campus_id);
+                            drop(injector);
+                            presentation_input.borrow_mut().show_plan_list(&window);
                         }
                         Err(error) => report_callback_error(injector.l10n(), &error),
                     }
@@ -1088,24 +1112,26 @@ impl ViewModelInjector {
     }
 
     // ── T19B-9: 右上角工具栏回调绑定 ────────────────────────
-    fn bind_toolbar(_injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    fn bind_toolbar(presentation: &Rc<RefCell<ProductionEntries>>, window: &AppWindow) {
         let weak = window.as_weak();
 
         // 公告栏入口：跳屏 5
         let weak_clone = weak.clone();
+        let presentation_notice = Rc::clone(presentation);
         window.on_notice_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
                 crate::map_webview::hide();
-                window.set_active_screen(5);
+                presentation_notice.borrow_mut().show_notifications(&window);
             }
         });
 
         // 切换校区入口：跳屏 1
         let weak_clone = weak.clone();
+        let presentation_campus = Rc::clone(presentation);
         window.on_switch_campus_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
                 crate::map_webview::hide();
-                window.set_active_screen(1);
+                presentation_campus.borrow_mut().show_campus_select(&window);
             }
         });
 
@@ -1120,24 +1146,58 @@ impl ViewModelInjector {
 
         // 设置入口：跳屏 3
         let weak_clone = weak.clone();
+        let presentation_settings = Rc::clone(presentation);
         window.on_settings_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
                 crate::map_webview::hide();
-                window.set_active_screen(3);
+                presentation_settings.borrow_mut().show_settings(&window);
+            }
+        });
+
+        // 设置页返回：经校区与方案入口刷新校区选择页
+        let weak_clone = weak.clone();
+        let presentation_campus_back = Rc::clone(presentation);
+        window.on_settings_back_clicked(move || {
+            if let Some(window) = weak_clone.upgrade() {
+                crate::map_webview::hide();
+                presentation_campus_back
+                    .borrow_mut()
+                    .show_campus_select(&window);
             }
         });
     }
 
     // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────────
-    fn bind_workspace(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
+    fn bind_workspace(
+        injector: &Rc<RefCell<Self>>,
+        presentation: &Rc<RefCell<ProductionEntries>>,
+        window: &AppWindow,
+    ) {
         // 步骤点击：上锁步骤不可点击（ADR-0027：前跳上锁，回跳自由，第①格永远解锁）
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
+        let presentation_steps = Rc::clone(presentation);
         window.on_workspace_step_clicked(move |step_index| {
             let Some(window) = weak.upgrade() else { return };
             let completed = window.get_workspace_completed_steps();
             if step_index > completed {
                 return; // 锁定步骤忽略点击
+            }
+
+            match step_index {
+                2 => {
+                    presentation_steps.borrow_mut().show_collection(&window);
+                    return;
+                }
+                3 => {
+                    presentation_steps.borrow_mut().show_review(&window);
+                    return;
+                }
+                4 => {
+                    presentation_steps.borrow_mut().show_export(&window);
+                    return;
+                }
+                _ => {}
             }
 
             // T22: 空 Gaode Key 检测与引导（步骤①：圈边界编辑器）
@@ -1651,6 +1711,18 @@ impl ViewModelInjector {
         state.has_orientation = has_orientation;
     }
 
+    /// 方案卡片进度文案：沿用 T19B-5B 的内存进度覆盖，
+    /// 在工单 03～09 迁移前保持既有列表数据结果不变。
+    pub(crate) fn plan_card_progress_text(&self, plan_id: &str, fallback: &str) -> String {
+        match self.plan_progress_states.get(plan_id) {
+            Some(state) if state.has_boundary && state.has_orientation => {
+                self.l10n.t("plan.progress_next_collection")
+            }
+            Some(state) if state.has_boundary => self.l10n.t("plan.progress_boundary_done"),
+            _ => fallback.to_owned(),
+        }
+    }
+
     /// T25: 设置指定方案的已确认朝向角度
     fn set_plan_orientation_angle(&mut self, plan_id: &str, angle: Option<f32>) {
         let state = self
@@ -1792,80 +1864,6 @@ impl ViewModelInjector {
         }
         self.sync_workspace_progress(window);
         self.sync_boundary_display(window);
-    }
-
-    /// 刷新校区选择页：动态列表 + 空占位文案
-    fn refresh_campus_list(&mut self, window: &AppWindow) {
-        let l10n = &self.l10n;
-
-        // 动态列表（F3 list_campuses）
-        let campuses = self.projects.list_campuses().unwrap_or_default();
-        let model: Vec<CampusData> = campuses
-            .iter()
-            .map(|c| CampusData {
-                id: c.id.clone().into(),
-                name: c.name.clone().into(),
-            })
-            .collect();
-        window.set_campus_select_model(ModelRc::new(VecModel::from(model.clone())));
-
-        // 空列表占位
-        if model.is_empty() {
-            window.set_campus_select_empty_list_text(l10n.t("app.campus_select_no_campus").into());
-        }
-    }
-
-    /// 刷新方案列表页数据：校区名 + 卡片模型 + 教程气泡钩子。
-    fn refresh_plan_list(&mut self, window: &AppWindow, campus_id: &CampusId) {
-        let l10n = &self.l10n;
-
-        // 校区名显示
-        let campus_name = self
-            .projects
-            .landing_campus()
-            .ok()
-            .flatten()
-            .map(|c| l10n.t_with_array("app.shell_status_last_campus", &[&c.name]))
-            .unwrap_or_default();
-        window.set_plan_list_campus_name(campus_name.into());
-
-        // 卡片模型（F3 返回已按修改时间倒序）
-        let cards = self.projects.list_plan_cards(campus_id).unwrap_or_default();
-        let model: Vec<crate::PlanCardData> = cards
-            .iter()
-            .map(|card| {
-                // Step C: 按内存进度派生卡片状态文案（ADR-0027 单一事实来源）
-                let progress_desc = match self.plan_progress_states.get(&card.plan_id) {
-                    Some(state) if state.has_boundary && state.has_orientation => {
-                        l10n.t("plan.progress_next_collection").into()
-                    }
-                    Some(state) if state.has_boundary => {
-                        l10n.t("plan.progress_boundary_done").into()
-                    }
-                    _ => l10n.t(card.progress.text_key()).into(),
-                };
-                crate::PlanCardData {
-                    plan_id: card.plan_id.clone().into(),
-                    name: card.name.clone().into(),
-                    progress_desc,
-                    // ADR-0018 §一第 3 条：相对表述（"刚刚/X 分钟前/X 小时前/X 天前"）
-                    last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
-                }
-            })
-            .collect();
-        window.set_plan_list_model(ModelRc::new(VecModel::from(model)));
-
-        // 教程气泡钩子（F2 规矩③“只教一次”：已见过则返回 None）
-        if let Some(bubble) = self.tutorial.bubble_for(TutorialStep::PlanListIntro, l10n) {
-            window.set_plan_list_tutorial_visible(true);
-            window.set_plan_list_tutorial_text(bubble.message.into());
-            window.set_plan_list_tutorial_dismiss_label(bubble.dismiss_label.into());
-            window.set_plan_list_tutorial_skip_all_label(
-                bubble.skip_all_label.unwrap_or_default().into(),
-            );
-        } else {
-            window.set_plan_list_tutorial_visible(false);
-        }
     }
 
     /// 生成不冲突的方案名：“新方案 1”“新方案 2”……

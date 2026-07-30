@@ -6,6 +6,7 @@
 //! 新增业务协调的授权。
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Result;
 use data_persistence::Database;
@@ -16,6 +17,7 @@ use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
 use crate::presenter::ShellPresenter;
+use crate::production::ProductionEntries;
 use crate::theme::apply_theme;
 use crate::AppWindow;
 
@@ -65,6 +67,36 @@ pub(crate) fn status_text(l10n: &Localization, decision: &LandingDecision) -> St
     }
 }
 
+/// 正式窗口装配的生命周期句柄；持有旧接线与八类呈现入口直到窗口退出。
+pub struct ApplicationRuntime {
+    _injector: Rc<RefCell<ViewModelInjector>>,
+    _presentation: Rc<RefCell<ProductionEntries>>,
+}
+
+/// 使用与开发版主程序相同的组合根装配窗口，供正式入口和集成测试共用。
+pub fn assemble_application(
+    window: &AppWindow,
+    injector: ViewModelInjector,
+    center: Arc<NotificationCenter>,
+) -> ApplicationRuntime {
+    let injector = Rc::new(RefCell::new(injector));
+    injector.borrow().inject(window);
+
+    let presentation = Rc::new(RefCell::new(ProductionEntries::new(
+        Rc::clone(&injector),
+        window,
+        center,
+    )));
+    presentation.borrow_mut().show_startup(window);
+    ViewModelInjector::bind(&injector, &presentation, window);
+    ProductionEntries::bind_actions(&presentation, window);
+
+    ApplicationRuntime {
+        _injector: injector,
+        _presentation: presentation,
+    }
+}
+
 /// 开发版桌面应用入口：装配主窗口并进入事件循环。
 pub fn run_dev() -> Result<()> {
     // B7 一本账先于任何回调可用（弹窗铁律 ADR-0021）。
@@ -86,10 +118,7 @@ pub fn run_dev() -> Result<()> {
     };
     match injector {
         Some(injector) => {
-            // 回调闭包共享注入器（Slint 单线程 UI），事件循环全程存活
-            let injector = Rc::new(RefCell::new(injector));
-            injector.borrow().inject(&window);
-            ViewModelInjector::bind(&injector, &window);
+            let _runtime = assemble_application(&window, injector, Arc::clone(&center));
             window.run()?;
         }
         None => {
@@ -104,6 +133,52 @@ pub fn run_dev() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn assembly_calls_only_startup_and_retains_the_coverage_port() {
+        crate::production::reset_entry_calls();
+        let directory = tempfile::tempdir().expect("建立临时目录");
+        let databases = ShellDatabases::open(directory.path().join("assembly.db"))
+            .expect("建立正式数据库连接组");
+        let injector = ViewModelInjector::new(databases).expect("建立正式注入器");
+        let window = AppWindow::new().expect("建立正式窗口");
+        let center = Arc::new(NotificationCenter::new(PresenterRegistry::new()));
+
+        let runtime = assemble_application(&window, injector, center);
+        assert_eq!(crate::production::entry_calls(), [1, 0, 0, 0, 0, 0, 0, 0]);
+
+        // 真实 AppWindow 步骤回调：采集/评审/导出分别只经过各自入口
+        window.set_workspace_completed_steps(4);
+        window.invoke_workspace_step_clicked(2);
+        assert_eq!(
+            crate::production::entry_calls(),
+            [1, 0, 0, 1, 0, 0, 0, 0],
+            "点击采集步骤只能经过采集入口"
+        );
+        window.invoke_workspace_step_clicked(3);
+        assert_eq!(
+            crate::production::entry_calls(),
+            [1, 0, 0, 1, 1, 0, 0, 0],
+            "点击评审步骤只能经过评审入口"
+        );
+        window.invoke_workspace_step_clicked(4);
+        assert_eq!(
+            crate::production::entry_calls(),
+            [1, 0, 0, 1, 1, 0, 1, 0],
+            "点击导出步骤只能经过导出入口"
+        );
+        window.invoke_workspace_step_clicked(1);
+        assert_eq!(
+            crate::production::entry_calls(),
+            [1, 0, 0, 1, 1, 0, 1, 0],
+            "边界与朝向旧路径不得触发新入口"
+        );
+
+        runtime
+            ._presentation
+            .borrow_mut()
+            .show_coverage_for_test(&window);
+        assert_eq!(crate::production::entry_calls(), [1, 0, 0, 1, 1, 1, 1, 0]);
+    }
     use super::*;
 
     #[test]

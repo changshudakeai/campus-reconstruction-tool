@@ -21,10 +21,13 @@ pub const CLEANUP_INTERVAL: Duration = 5 分钟          (cleanup，扫描间隔
 ## Enums #[non_exhaustive]
 
 pub enum NotificationLevel { Error, Warn, Info }
+pub enum NotificationActionOutcome { Succeeded(Notification), Failed(Notification) }
 
 ## Structures
 
 pub struct Notification { pub id: Uuid, pub level: NotificationLevel, pub title: String, pub body: String, pub source_tag: String, pub created_at: DateTime<Utc> }
+pub struct OpaqueNotificationAction { .. }
+pub struct NotificationRecord { .. }
 pub struct InMemoryStorage { .. }
 pub struct DummyPresenter
 pub struct PresenterRegistry { .. }
@@ -55,6 +58,25 @@ impl NotificationLevel {
     pub fn is_info(&self) -> bool
 }
 
+impl OpaqueNotificationAction {
+    pub fn new<Outcome>(executor: impl Fn() -> Outcome + Send + Sync + 'static) -> Self where Outcome: Into<NotificationActionOutcome>
+    pub fn invoke(&self) -> NotificationActionOutcome
+}
+
+impl NotificationActionOutcome {
+    pub fn succeeded(notification: Notification) -> Self
+    pub fn failed(notification: Notification) -> Self
+    pub fn is_failed(&self) -> bool
+    pub fn into_notification(self) -> Notification
+}
+
+impl NotificationRecord {
+    pub fn new(notification: Notification) -> Self
+    pub fn with_diagnostic_action(self, action: OpaqueNotificationAction) -> Self
+    pub fn notification(&self) -> &Notification
+    pub fn has_diagnostic_action(&self) -> bool
+    pub fn diagnostic_action(&self) -> Option<&OpaqueNotificationAction>
+}
 impl Notification {
     pub fn error(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self
     pub fn warn(source_tag: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self
@@ -85,6 +107,10 @@ impl NotificationCenter {
     pub fn init(registry: PresenterRegistry) -> Arc<Self>
     pub fn global() -> Option<Arc<Self>>
     pub fn publish(&self, notification: Notification)
+    pub fn publish_with_action(&self, notification: Notification, action: OpaqueNotificationAction)
+    pub fn publish_action_outcome(&self, outcome: NotificationActionOutcome, is_current: bool)
+    pub fn board_records(&self) -> Vec<NotificationRecord>
+    pub fn diagnostic_action(&self, notification_id: &str) -> Option<OpaqueNotificationAction>
     pub fn board_snapshot(&self) -> Vec<Notification>
     pub fn mark_board_opened(&self)
     pub fn unread_count(&self) -> usize
@@ -106,6 +132,9 @@ impl Drop for CleanupScheduler
 
 NotificationLevel: Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize
 Notification: Debug, Clone, PartialEq, Serialize, Deserialize
+NotificationActionOutcome: Debug, Clone
+OpaqueNotificationAction: Debug, Clone
+NotificationRecord: Debug, Clone
 InMemoryStorage: Debug, Default, Clone
 DummyPresenter: Debug, Default, Clone, Copy
 PresenterRegistry: Clone, Default

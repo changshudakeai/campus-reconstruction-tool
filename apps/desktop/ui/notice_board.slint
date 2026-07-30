@@ -21,6 +21,8 @@ export struct NoticeData {
     importance: string,
     /// 是否已读
     read: bool,
+    /// 是否可以把功能模块拥有的故障资料操作原样交回
+    has-diagnostic-action: bool,
 }
 
 export component NoticeBoard inherits Rectangle {
@@ -37,12 +39,14 @@ export component NoticeBoard inherits Rectangle {
     in property <string> importance_high_label;
     // 未读标记
     in property <string> unread-marker;
+    in property <string> diagnostic-action-label;
 
     // ── 数据模型 ──────────────────────────────────────
     in property <[NoticeData]> notice-model;
 
     callback archive-all-clicked();
     callback notice-clicked(notice-id: string);
+    callback diagnostic-action-clicked(notice-id: string);
 
     width: 800px;
     height: 600px;
@@ -154,6 +158,11 @@ export component NoticeBoard inherits Rectangle {
                                 color: Theme.error;
                             }
                         }
+                    }
+
+                    if notice.has-diagnostic-action: Button {
+                        text: root.diagnostic-action-label;
+                        clicked => { root.diagnostic-action-clicked(notice.id); }
                     }
                 }
 
