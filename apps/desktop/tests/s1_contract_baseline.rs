@@ -3,6 +3,7 @@
 //! 这些检查只固定已接受决定的可追溯性；不会把迁移中的内部函数或数据结构
 //! 写进契约。S1 的用户可观察行为由 `docs/behavior-baselines/` 固定。
 
+use desktop_shell::{landing_decision, AppWindow, LandingDecision};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,13 @@ fn read_workspace_file(relative: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!("无法读取书面契约 {}: {error}", path.display());
     })
+}
+fn find_flow_row<'a>(baseline: &'a str, flow: &str) -> &'a str {
+    let row_prefix = format!("| **{flow}** |");
+    baseline
+        .lines()
+        .find(|line| line.starts_with(&row_prefix))
+        .unwrap_or_else(|| panic!("行为基线缺少流程行：{flow}"))
 }
 
 #[test]
@@ -86,12 +94,7 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
         "评审",
         "导出",
     ] {
-        let row_prefix = format!("| **{flow}** |");
-        let row = baseline
-            .lines()
-            .find(|line| line.starts_with(&row_prefix))
-            .unwrap_or_else(|| panic!("行为基线缺少流程行：{flow}"));
-        let cells: Vec<_> = row
+        let cells: Vec<_> = find_flow_row(&baseline, flow)
             .split('|')
             .skip(1)
             .take_while(|cell| !cell.is_empty())
@@ -118,22 +121,57 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
         "行为基线必须明确排除内部实现细节"
     );
     assert!(
-        baseline.contains("当前实现静默显示首次设置")
-            && baseline.contains("当前实现静默显示校区选择")
-            && baseline.contains("失败显示错误通知后导航回评审步骤"),
-        "基线必须如实固定启动读取失败与导出失败的现有可观察行为"
+        baseline.contains("界面仍显示默认的校区选择页")
+            && baseline.contains("状态文案按首次设置显示")
+            && baseline.contains("不存在失败后返回评审的行为"),
+        "基线必须如实固定启动读取失败与导出占位的现有可观察行为"
+    );
+}
+
+#[test]
+fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
+    let baseline =
+        read_workspace_file("docs/behavior-baselines/s1-current-user-observable-behavior.md");
+    for flow in ["采集", "评审", "导出"] {
+        let row = find_flow_row(&baseline, flow);
+        assert!(
+            row.contains("当前仅显示占位页") && row.contains("没有可观察的"),
+            "{flow} 必须记录提交树中的占位现状，不能提前冻结后续工单行为"
+        );
+    }
+
+    let settings_row = find_flow_row(&baseline, "设置");
+    assert!(
+        settings_row.contains("当前没有默认导出位置、清空全部密钥或测试中状态")
+            && settings_row.contains("没有可观察的处理中状态")
+            && settings_row.contains("没有对应确认状态"),
+        "设置基线不得提前声明尚未存在的设置项或状态"
+    );
+    let campus_row = find_flow_row(&baseline, "校区与方案");
+    assert!(
+        campus_row.contains("回收站的恢复、永久删除和清空当前没有可观察效果")
+            && campus_row.contains("不会显示确认弹窗"),
+        "校区与方案基线必须记录回收站按钮尚未接线的现状"
     );
 
-    let ui_contract = read_workspace_file("apps/desktop/ui/main.slint");
-    for public_observation in [
-        "active-screen",
-        "status-text",
-        "error-dialog-visible",
-        "confirm-dialog-visible",
-    ] {
-        assert!(
-            ui_contract.contains(public_observation),
-            "AppWindow 缺少基线所需的公开观察通道：{public_observation}"
+    let window = AppWindow::new().expect("创建公开 AppWindow");
+    assert_eq!(window.get_active_screen(), 1, "窗口默认显示校区选择页");
+    assert_eq!(landing_decision(None), LandingDecision::FirstRunSetup);
+    window.set_active_screen(3);
+    assert!(window.get_gaode_status_message().is_empty());
+    assert!(!window.get_confirm_dialog_visible());
+
+    window.set_active_screen(4);
+    window.set_workspace_completed_steps(4);
+    window.set_workspace_step_pending_notice("步骤待实现".into());
+    for step in 2..=4 {
+        window.set_workspace_active_step(step);
+        assert_eq!(window.get_workspace_active_step(), step);
+        assert_eq!(
+            window.get_workspace_step_pending_notice().as_str(),
+            "步骤待实现"
         );
+        assert!(!window.get_error_dialog_visible());
+        assert!(!window.get_confirm_dialog_visible());
     }
 }
