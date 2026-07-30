@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use notification_center::{
-    CleanupScheduler, DummyPresenter, InMemoryStorage, Notification, NotificationCenter,
-    NotificationLevel, PresenterRegistry, Storage, CLEANUP_INTERVAL, MAX_RETAINED_DAYS,
-    MAX_RETAINED_MESSAGES,
+    CleanupScheduler, DummyPresenter, InMemoryStorage, Notification, NotificationActionOutcome,
+    NotificationCenter, NotificationLevel, NotificationRecord, OpaqueNotificationAction,
+    PresenterRegistry, Storage, CLEANUP_INTERVAL, MAX_RETAINED_DAYS, MAX_RETAINED_MESSAGES,
 };
 
 #[test]
@@ -47,8 +47,30 @@ fn public_api_types_exist() {
     // NotificationCenter 独立实例：发布 / 公告栏 / 未读数 / 清理
     let center = NotificationCenter::new(registry);
     center.publish(Notification::warn("应用", "设置已保存", "语言切换为中文"));
-    assert_eq!(center.board_snapshot().len(), 1);
-    assert_eq!(center.unread_count(), 1);
+    let diagnostic = Notification::error("应用", "失败", "可导出资料");
+    let diagnostic_id = diagnostic.id.to_string();
+    center.publish_with_action(
+        diagnostic,
+        OpaqueNotificationAction::new(|| Notification::info("应用", "故障资料已导出", "完成")),
+    );
+    let failed = OpaqueNotificationAction::new(|| {
+        NotificationActionOutcome::failed(Notification::error("应用", "失败", "未导出"))
+    })
+    .invoke();
+    assert!(failed.is_failed());
+    center.publish_action_outcome(failed.clone(), false);
+    assert_eq!(failed.into_notification().body, "未导出");
+    assert!(
+        !NotificationActionOutcome::succeeded(Notification::info("应用", "完成", "已导出"))
+            .is_failed()
+    );
+    let records: Vec<NotificationRecord> = center.board_records();
+    assert!(records
+        .iter()
+        .any(NotificationRecord::has_diagnostic_action));
+    assert!(center.diagnostic_action(&diagnostic_id).is_some());
+    assert_eq!(center.board_snapshot().len(), 3);
+    assert_eq!(center.unread_count(), 3);
     center.mark_board_opened();
     assert_eq!(center.unread_count(), 0);
     center.cleanup().run_once();

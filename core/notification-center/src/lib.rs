@@ -31,7 +31,9 @@ pub mod storage;
 pub use center::NotificationCenter;
 pub use cleanup::{CleanupScheduler, CLEANUP_INTERVAL};
 pub use level::NotificationLevel;
-pub use message::Notification;
+pub use message::{
+    Notification, NotificationActionOutcome, NotificationRecord, OpaqueNotificationAction,
+};
 pub use presenter::{DummyPresenter, Presenter, PresenterRegistry};
 pub use storage::{InMemoryStorage, Storage, MAX_RETAINED_DAYS, MAX_RETAINED_MESSAGES};
 

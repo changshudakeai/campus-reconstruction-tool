@@ -34,6 +34,32 @@ pub struct LandingCampus {
     pub name: String,
 }
 
+pub enum StartupDestination { FirstRunSetup, CampusSelect, LastUsedCampus { name: String } }
+pub struct StartupSnapshot {
+    pub settings: GlobalSettings,
+    pub destination: StartupDestination,
+}
+pub struct CompleteStartupResult<LandingContent> {
+    pub snapshot: StartupSnapshot,
+    pub landing_content: Option<LandingContent>,
+}
+pub enum StartupResultError<LandingError> {
+    Startup(Error),
+    Landing(LandingError),
+}
+
+## Traits
+
+pub trait StartupLandingContentProvider {
+    type Content
+    type Error
+    fn landing_content(&self) -> std::result::Result<Self::Content, Self::Error>
+}
+pub struct SettingsSnapshot {
+    pub settings: GlobalSettings,
+    pub gaode_api_key: Option<String>,
+    pub gaode_security_key: Option<String>,
+}
 pub struct SettingsManager { .. }                             (内部持有 Database，不外泄)
 
 ## SettingsManager Methods
@@ -41,6 +67,8 @@ pub struct SettingsManager { .. }                             (内部持有 Data
 pub fn new(db: Database) -> Self
 pub fn is_first_run(&self) -> Result<bool>
 pub fn settings(&self) -> Result<GlobalSettings>
+pub fn startup_result<Provider>(&self, provider: &Provider) -> std::result::Result<CompleteStartupResult<Provider::Content>, StartupResultError<Provider::Error>> where Provider: StartupLandingContentProvider
+pub fn settings_snapshot(&self) -> Result<SettingsSnapshot>
 pub fn set_language(&mut self, language: &str) -> Result<()>
 pub fn set_minecraft_version(&mut self, version: &str) -> Result<()>
 pub fn complete_first_run(&mut self, setup: &FirstRunSetup) -> Result<()>

@@ -54,7 +54,57 @@ impl Default for GlobalSettings {
     }
 }
 
-/// 首次设置向导的提交载荷（页面兼任知情告知，ADR-0004）
+/// 启动呈现入口的一次性着陆决定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupDestination {
+    /// 首次运行，显示设置向导。
+    FirstRunSetup,
+    /// 已完成设置，但没有可用的上次校区。
+    CampusSelect,
+    /// 直接恢复上次校区。
+    LastUsedCampus { name: String },
+}
+
+/// F1 一次返回启动页面所需的全部正式状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupSnapshot {
+    pub settings: GlobalSettings,
+    pub destination: StartupDestination,
+}
+
+/// 由组合根注入 F1、用于取得目标页面正式内容的无界面端口。
+pub trait StartupLandingContentProvider {
+    type Content;
+    type Error;
+
+    /// 一次返回着陆目标页面所需的完整功能状态。
+    fn landing_content(&self) -> std::result::Result<Self::Content, Self::Error>;
+}
+
+/// F1 启动用例一次返回的设置、着陆决定与目标页面内容。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompleteStartupResult<LandingContent> {
+    pub snapshot: StartupSnapshot,
+    pub landing_content: Option<LandingContent>,
+}
+
+/// 完整启动结果读取失败，保留失败所属边界。
+#[derive(Debug)]
+pub enum StartupResultError<LandingError> {
+    /// F1 的设置或着陆决定读取失败。
+    Startup(Error),
+    /// 注入的着陆内容提供端口读取失败。
+    Landing(LandingError),
+}
+
+/// F1 一次返回设置页面所需的全部正式状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsSnapshot {
+    pub settings: GlobalSettings,
+    pub gaode_api_key: Option<String>,
+    pub gaode_security_key: Option<String>,
+}
+/// 首次设置向导的提交载荷（页面兼任知情告知，ADR-0004）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstRunSetup {
     /// 用户在下拉菜单中选择的语言
@@ -111,7 +161,61 @@ impl SettingsManager {
         })
     }
 
-    /// 修改语言（设置页下拉菜单；不在支持范围内则拒绝）
+    /// 一次读取启动呈现所需的设置与着陆决定。
+    fn startup_snapshot(&self) -> Result<StartupSnapshot> {
+        let settings = self.settings()?;
+        let destination = if self.is_first_run()? {
+            StartupDestination::FirstRunSetup
+        } else {
+            match self.landing_campus()? {
+                Some(campus) => StartupDestination::LastUsedCampus { name: campus.name },
+                None => StartupDestination::CampusSelect,
+            }
+        };
+        Ok(StartupSnapshot {
+            settings,
+            destination,
+        })
+    }
+
+    /// 一次读取设置页所需的全部正式设置。
+    pub fn settings_snapshot(&self) -> Result<SettingsSnapshot> {
+        Ok(SettingsSnapshot {
+            settings: self.settings()?,
+            gaode_api_key: self.gaode_api_key()?,
+            gaode_security_key: self.gaode_security_key()?,
+        })
+    }
+
+    /// 只通过 F1 一次取得完整启动结果；是否读取着陆内容由 F1 决定。
+    pub fn startup_result<Provider>(
+        &self,
+        provider: &Provider,
+    ) -> std::result::Result<
+        CompleteStartupResult<Provider::Content>,
+        StartupResultError<Provider::Error>,
+    >
+    where
+        Provider: StartupLandingContentProvider,
+    {
+        let snapshot = self
+            .startup_snapshot()
+            .map_err(StartupResultError::Startup)?;
+        let landing_content = match &snapshot.destination {
+            StartupDestination::FirstRunSetup => None,
+            StartupDestination::CampusSelect | StartupDestination::LastUsedCampus { .. } => Some(
+                provider
+                    .landing_content()
+                    .map_err(StartupResultError::Landing)?,
+            ),
+        };
+        Ok(CompleteStartupResult {
+            snapshot,
+            landing_content,
+        })
+    }
+
+    /// 修改语言（设置页下拉菜单；不在支持范围内则拒绝）。
     pub fn set_language(&mut self, language: &str) -> Result<()> {
         if !SUPPORTED_LANGUAGES.contains(&language) {
             return Err(Error::UnsupportedLanguage(language.to_owned()));
@@ -443,5 +547,21 @@ mod tests {
         let campuses = manager.db.list_campuses().unwrap();
         assert_eq!(campuses[0].anchor_lng, 116.330);
         assert_eq!(campuses[0].anchor_lat, 40.000);
+    }
+
+    #[test]
+    fn presentation_snapshots_are_complete_single_results() {
+        let manager = manager();
+        let startup = manager.startup_snapshot().expect("完整启动结果");
+        assert_eq!(startup.settings, GlobalSettings::default());
+        assert!(matches!(
+            startup.destination,
+            StartupDestination::FirstRunSetup
+        ));
+
+        let settings = manager.settings_snapshot().expect("完整设置结果");
+        assert_eq!(settings.settings, GlobalSettings::default());
+        assert_eq!(settings.gaode_api_key, None);
+        assert_eq!(settings.gaode_security_key, None);
     }
 }

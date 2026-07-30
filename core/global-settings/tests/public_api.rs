@@ -6,11 +6,33 @@
 
 use data_persistence::Database;
 use global_settings::{
-    Error, FirstRunSetup, GlobalSettings, LandingCampus, SettingsManager, DEFAULT_LANGUAGE,
-    DEFAULT_MINECRAFT_VERSION, SUPPORTED_LANGUAGES, SUPPORTED_MINECRAFT_VERSIONS,
-    VERSION_NOTICE_TEXT,
+    CompleteStartupResult, Error, FirstRunSetup, GlobalSettings, LandingCampus, SettingsManager,
+    SettingsSnapshot, StartupDestination, StartupLandingContentProvider, StartupResultError,
+    StartupSnapshot, DEFAULT_LANGUAGE, DEFAULT_MINECRAFT_VERSION, SUPPORTED_LANGUAGES,
+    SUPPORTED_MINECRAFT_VERSIONS, VERSION_NOTICE_TEXT,
 };
 use shared_domain_types::CampusId;
+
+struct LandingProvider;
+
+impl StartupLandingContentProvider for LandingProvider {
+    type Content = &'static str;
+    type Error = &'static str;
+
+    fn landing_content(&self) -> Result<Self::Content, Self::Error> {
+        Ok("完整着陆内容")
+    }
+}
+struct FailingLandingProvider;
+
+impl StartupLandingContentProvider for FailingLandingProvider {
+    type Content = &'static str;
+    type Error = &'static str;
+
+    fn landing_content(&self) -> Result<Self::Content, Self::Error> {
+        Err("landing failed")
+    }
+}
 
 #[test]
 fn public_api_types_exist() {
@@ -32,6 +54,16 @@ fn public_api_types_exist() {
     let db = Database::open_in_memory().expect("内存库可打开");
     let mut manager = SettingsManager::new(db);
     assert!(manager.is_first_run().unwrap());
+    let complete: CompleteStartupResult<&str> = manager.startup_result(&LandingProvider).unwrap();
+    assert!(complete.landing_content.is_none());
+    let startup: StartupSnapshot = complete.snapshot;
+    let _error_type: Option<StartupResultError<&str>> = None;
+    assert!(matches!(
+        startup.destination,
+        StartupDestination::FirstRunSetup
+    ));
+    let settings: SettingsSnapshot = manager.settings_snapshot().unwrap();
+    assert_eq!(settings.settings, defaults);
 
     // 未勾选知情告知 → 拒绝完成（Error 可匹配，#[non_exhaustive]）
     let err = manager.complete_first_run(&setup).unwrap_err();
@@ -45,6 +77,15 @@ fn public_api_types_exist() {
     manager.complete_first_run(&acknowledged).unwrap();
     assert!(!manager.is_first_run().unwrap());
     assert_eq!(manager.settings().unwrap(), defaults);
+    let complete: CompleteStartupResult<&str> = manager.startup_result(&LandingProvider).unwrap();
+    assert!(complete.landing_content.is_some());
+    let error = manager
+        .startup_result(&FailingLandingProvider)
+        .expect_err("landing content failure must not become an empty page");
+    assert!(matches!(
+        error,
+        StartupResultError::Landing("landing failed")
+    ));
 
     manager.set_language("zh-CN").unwrap();
     manager.set_minecraft_version("26.1.2").unwrap();

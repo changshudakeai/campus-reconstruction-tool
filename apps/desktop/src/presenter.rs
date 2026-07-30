@@ -16,14 +16,91 @@
 //! Warn 级 toast 与铃铛角标的 Slint 呈现随公告栏工单（T19B 后续）接线，
 //! 消息与未读数已由 B7 留底/维护，不丢。
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
-use notification_center::{Notification, Presenter};
+use notification_center::{
+    Notification, NotificationActionOutcome, OpaqueNotificationAction, Presenter,
+};
 use slint::{ComponentHandle, Weak};
 
 use crate::AppWindow;
+
+/// 在后台执行 B7 保存的不透明故障操作，并只把完成事件送回 UI 线程。
+#[derive(Clone, Default)]
+pub(crate) struct DiagnosticActionRunner {
+    state: Arc<ActionRunnerState>,
+}
+
+#[derive(Default)]
+struct ActionRunnerState {
+    next_generation: AtomicU64,
+    latest_generation: AtomicU64,
+    completed: Mutex<VecDeque<(u64, Option<NotificationActionOutcome>)>>,
+}
+
+/// 一次已经回到 UI 事件循环的后台操作结果。
+pub(crate) struct CompletedDiagnosticAction {
+    is_latest: bool,
+    outcome: Option<NotificationActionOutcome>,
+}
+
+impl CompletedDiagnosticAction {
+    pub(crate) fn into_parts(self) -> (bool, Option<NotificationActionOutcome>) {
+        (self.is_latest, self.outcome)
+    }
+}
+
+impl DiagnosticActionRunner {
+    /// 记录一个后来发生的页面操作，使仍在后台运行的旧结果不能覆盖它。
+    pub(crate) fn invalidate(&self) {
+        let generation = self.state.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.state
+            .latest_generation
+            .store(generation, Ordering::SeqCst);
+    }
+
+    /// 立即登记处理中状态并把功能模块拥有的用例移交后台线程。
+    pub(crate) fn start(&self, action: OpaqueNotificationAction, window: Weak<AppWindow>) {
+        let generation = self.state.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.state
+            .latest_generation
+            .store(generation, Ordering::SeqCst);
+        let state = Arc::clone(&self.state);
+        std::thread::spawn(move || {
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action.invoke())).ok();
+            state
+                .completed
+                .lock()
+                .expect("故障操作完成队列锁不可中毒")
+                .push_back((generation, outcome));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = window.upgrade() {
+                    window.invoke_diagnostic_actions_completed();
+                }
+            });
+        });
+    }
+
+    /// 仅在 UI 事件循环中取回已完成结果；较旧任务仍入 B7，但不覆盖最新状态。
+    pub(crate) fn drain(&self) -> Vec<CompletedDiagnosticAction> {
+        let latest = self.state.latest_generation.load(Ordering::SeqCst);
+        self.state
+            .completed
+            .lock()
+            .expect("故障操作完成队列锁不可中毒")
+            .drain(..)
+            .map(|(generation, outcome)| CompletedDiagnosticAction {
+                is_latest: generation == latest,
+                outcome,
+            })
+            .collect()
+    }
+}
 
 /// B7 [`Presenter`] 的 Slint 壳实现（经 `PresenterRegistry::set_presenter` 注册）。
 pub struct ShellPresenter {
@@ -52,6 +129,7 @@ impl ShellPresenter {
         window.on_error_dialog_dismissed(move || {
             if let Some(window) = weak.upgrade() {
                 window.set_error_dialog_visible(false);
+                window.set_error_dialog_diagnostic_action_visible(false);
             }
             // 唤醒全部等待中的后台调用者（弹窗已被用户确认）
             for ack in acks.lock().expect("弹窗确认队列锁不可中毒").drain(..) {
@@ -67,6 +145,14 @@ impl ShellPresenter {
         window.set_error_dialog_title(notification.title.clone().into());
         window.set_error_dialog_source(notification.source_tag.clone().into());
         window.set_error_dialog_body(notification.body.clone().into());
+        window.set_error_dialog_notification_id(notification.id.to_string().into());
+        let has_diagnostic_action =
+            notification_center::NotificationCenter::global().is_some_and(|center| {
+                center
+                    .diagnostic_action(&notification.id.to_string())
+                    .is_some()
+            });
+        window.set_error_dialog_diagnostic_action_visible(has_diagnostic_action);
         window.set_error_dialog_visible(true);
     }
 }

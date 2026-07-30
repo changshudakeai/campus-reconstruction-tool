@@ -1,4 +1,4 @@
-﻿// T19 — S1 薄壳主窗口。
+// T19 — S1 薄壳主窗口。
 // 薄壳原则（ADR-0017）：此处零业务逻辑，只声明属性与布局；
 // 全部文案由 Rust 侧经 B6 l10n 注入（文本外置铁律 ADR-0005），
 // .slint 内不得出现硬编码的用户可见文字。
@@ -24,6 +24,14 @@ import { OrientationView, OrientationPointData } from "orientation.slint";
 export { Theme }
 export { OrientationPointData }
 
+export enum OperationPresentationState {
+    ready,
+    succeeded,
+    processing,
+    failed,
+    needs-confirmation,
+}
+
 export component AppWindow inherits Window {
     // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表占位，3 = 设置页
     in-out property <int> active-screen: 1;
@@ -31,6 +39,10 @@ export component AppWindow inherits Window {
     // 窗口标题与着陆状态文案，均由壳的 Rust 侧填充
     in property <string> app-title;
     in property <string> status-text;
+    in property <OperationPresentationState> operation-state: OperationPresentationState.ready;
+    in property <int> operation-progress: 0;
+    in property <OperationPresentationState> diagnostic-operation-state: OperationPresentationState.ready;
+    in property <int> diagnostic-operation-progress: 0;
 
     // ── 首跑向导（属性直通 SettingsWizard，值全部来自 Rust 侧）──
     in property <string> wizard-title;
@@ -84,7 +96,9 @@ export component AppWindow inherits Window {
     in property <string> notice-board-date-yesterday;
     in property <string> notice-board-importance-high-label;
     in property <string> notice-board-unread-marker;
+    in property <string> notice-board-diagnostic-action-label;
     in property <[NoticeData]> notice-board-model;
+    callback notice-diagnostic-action-clicked(notification-id: string);
 
     // ── 屏 6：回收站页属性（T19B-9 新增）────────────
     in property <string> trash-page-title;
@@ -168,6 +182,9 @@ export component AppWindow inherits Window {
     in property <string> error-dialog-source;
     in property <string> error-dialog-body;
     in property <string> error-dialog-ok-label;
+    in property <bool> error-dialog-diagnostic-action-visible;
+    in property <string> error-dialog-notification-id;
+    in property <string> error-dialog-diagnostic-action-label;
 
     // ── 通用确认窗（T19B-5A 对话框基建）──────────────────────
     in-out property <bool> confirm-dialog-visible;
@@ -234,7 +251,10 @@ export component AppWindow inherits Window {
 
     callback wizard-continue-clicked();
     callback replay-tutorial-clicked();
+    callback settings-back-clicked();
     callback error-dialog-dismissed();
+    callback error-dialog-diagnostic-action-clicked(notification-id: string);
+    callback diagnostic-actions-completed();
     callback settings-clicked();
     // ── T19B-9: 右上角工具栏回调 ─────────────────────
     callback notice-toolbar-button-clicked();
@@ -358,6 +378,16 @@ export component AppWindow inherits Window {
         }
     }
     
+    if root.operation-state == OperationPresentationState.processing || root.diagnostic-operation-state == OperationPresentationState.processing: Text {
+        x: parent.width - 72px;
+        y: 60px;
+        text: (root.diagnostic-operation-state == OperationPresentationState.processing
+            ? root.diagnostic-operation-progress
+            : root.operation-progress) + "%";
+        color: Theme.text-secondary;
+        font-size: 12px;
+    }
+
     // 屏 0：首跑向导（ADR-0004：即使下拉各只有一个选项也照常显示）
     if root.active-screen == 0: SettingsWizard {
         wizard-title: root.wizard-title;
@@ -481,6 +511,14 @@ export component AppWindow inherits Window {
 
                 HorizontalLayout {
                     alignment: end;
+                    spacing: 8px;
+
+                    if root.error-dialog-diagnostic-action-visible: Button {
+                        text: root.error-dialog-diagnostic-action-label;
+                        clicked => {
+                            root.error-dialog-diagnostic-action-clicked(root.error-dialog-notification-id);
+                        }
+                    }
 
                     Button {
                         text: root.error-dialog-ok-label;
@@ -524,7 +562,7 @@ export component AppWindow inherits Window {
             Button {
                 text: root.settings-back-label;
                 clicked => {
-                    root.active-screen = 1; // 回校区选择页
+                    root.settings-back-clicked();
                 }
             }
         }
@@ -823,10 +861,12 @@ export component AppWindow inherits Window {
         date-yesterday <=> root.notice-board-date-yesterday;
         importance-high-label <=> root.notice-board-importance-high-label;
         unread-marker <=> root.notice-board-unread-marker;
+        diagnostic-action-label <=> root.notice-board-diagnostic-action-label;
         notice-model <=> root.notice-board-model;
         
         archive-all-clicked => { /* 归档逻辑待 F3 实现 */ }
         notice-clicked(notice-id) => { /* 详情查看待 T20 */ }
+        diagnostic-action-clicked(notice-id) => { root.notice-diagnostic-action-clicked(notice-id); }
     }
     
     // ── 屏 6：回收站页（T19B-9）────────────────────────────

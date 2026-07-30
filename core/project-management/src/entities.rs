@@ -63,3 +63,11 @@ pub struct TrashItemView {
     /// 删除时间（RFC3339 文本）
     pub deleted_at: String,
 }
+
+/// F3 一次返回校区选择与当前方案列表所需的全部正式状态。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CampusPlanSnapshot {
+    pub campuses: Vec<CampusView>,
+    pub landing_campus: Option<CampusView>,
+    pub plans: Vec<PlanCardView>,
+}

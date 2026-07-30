@@ -260,7 +260,9 @@
     "importance_high": "重要",
     "archive_button": "归档",
     "archived_notice": "已归档到通知中心",
-    "unread_marker": "(未读)"
+    "unread_marker": "(未读)",
+    "diagnostic_action": "导出故障资料",
+    "diagnostic_action_panicked": "故障资料操作意外中止，请重试"
   },
   "trash": {
     "page_title": "回收站",

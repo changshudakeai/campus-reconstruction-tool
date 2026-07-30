@@ -7,14 +7,27 @@
 mod dispatch;
 mod injector;
 mod map_webview;
+mod presentation;
 mod presenter;
+mod production;
 mod runtime;
 mod theme;
 
 pub use dispatch::report_callback_error;
 pub use injector::{ShellDatabases, ViewModelInjector};
+pub use presentation::{
+    CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
+    CollectionPresentationEntry, ConfirmationPresentation, CoveragePageState,
+    CoveragePresentationEntry, ExportPageState, ExportPresentationEntry, InvalidProgress,
+    NavigationDecision, NotificationFact, NotificationPageState, NotificationPresentationEntry,
+    OpaqueNotificationAction, OperationState, Presentation, PresentationAdapter, Progress,
+    ReviewPageState, ReviewPresentationEntry, Screen, SettingsPageState, SettingsPresentationEntry,
+    StartupPageState, StartupPresentationEntry, ToolbarPageState, WorkspacePageState,
+};
 pub use presenter::ShellPresenter;
-pub use runtime::{landing_decision, run_dev, LandingDecision};
+pub use runtime::{
+    assemble_application, landing_decision, run_dev, ApplicationRuntime, LandingDecision,
+};
 
 // ui/main.slint 生成的 AppWindow 绑定（build.rs 产出）。生成代码的可见性
 // 与属性由 Slint 生成器决定，不受本库 lint 约束，故在模块内豁免。
@@ -30,4 +43,7 @@ mod generated {
     slint::include_modules!();
 }
 
-pub use generated::{AppWindow, BoundaryPointData, OrientationPointData, PlanCardData, Theme};
+pub use generated::{
+    AppWindow, BoundaryPointData, CampusData, NoticeData, OperationPresentationState,
+    OrientationPointData, PlanCardData, Theme,
+};

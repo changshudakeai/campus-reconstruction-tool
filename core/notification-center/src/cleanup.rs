@@ -27,6 +27,7 @@ struct Worker {
 /// 自动清理调度器 —— 定期把过期/超量消息移出存储。
 pub struct CleanupScheduler {
     storage: Arc<dyn Storage>,
+    on_remove: Arc<dyn Fn(&uuid::Uuid) + Send + Sync>,
     worker: Mutex<Option<Worker>>,
 }
 
@@ -35,6 +36,19 @@ impl CleanupScheduler {
     pub fn new(storage: Arc<dyn Storage>) -> Self {
         Self {
             storage,
+            on_remove: Arc::new(|_| {}),
+            worker: Mutex::new(None),
+        }
+    }
+
+    /// 建立一份在删除通知时同步释放其运行时附属资源的调度器。
+    pub(crate) fn with_remove_handler(
+        storage: Arc<dyn Storage>,
+        on_remove: impl Fn(&uuid::Uuid) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            storage,
+            on_remove: Arc::new(on_remove),
             worker: Mutex::new(None),
         }
     }
@@ -56,12 +70,15 @@ impl CleanupScheduler {
 
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let storage = Arc::clone(&self.storage);
+        let on_remove = Arc::clone(&self.on_remove);
         let handle = std::thread::spawn(move || loop {
             // recv_timeout 既是定时器也是停止信号接收器：
             // 收到消息或通道关闭 → 退出；超时 → 执行一轮清理。
             match stop_rx.recv_timeout(interval) {
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => run_cleanup(storage.as_ref()),
+                Err(RecvTimeoutError::Timeout) => {
+                    run_cleanup(storage.as_ref(), on_remove.as_ref());
+                }
             }
         });
         *guard = Some(Worker { stop_tx, handle });
@@ -85,7 +102,7 @@ impl CleanupScheduler {
 
     /// 立即执行一轮清理（不依赖后台线程；测试与手动触发用）。
     pub fn run_once(&self) {
-        run_cleanup(self.storage.as_ref());
+        run_cleanup(self.storage.as_ref(), self.on_remove.as_ref());
     }
 }
 
@@ -97,7 +114,7 @@ impl Drop for CleanupScheduler {
 }
 
 /// 单轮清理：把不在留存快照（200 条 / 30 天）内的消息移出存储。
-fn run_cleanup(storage: &dyn Storage) {
+fn run_cleanup(storage: &dyn Storage, on_remove: &(dyn Fn(&uuid::Uuid) + Send + Sync)) {
     let all = storage.all_notifications();
     let keep: std::collections::HashSet<uuid::Uuid> =
         storage.snapshot().iter().map(|n| n.id).collect();
@@ -105,6 +122,7 @@ fn run_cleanup(storage: &dyn Storage) {
     let mut cleaned = 0usize;
     for stale in all.iter().filter(|n| !keep.contains(&n.id)) {
         storage.remove_by_id(&stale.id);
+        on_remove(&stale.id);
         cleaned += 1;
     }
 
