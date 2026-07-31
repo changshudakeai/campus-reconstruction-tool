@@ -45,6 +45,17 @@ fn pump_event_loop() {
     slint::run_event_loop_until_quit().expect("运行测试事件循环");
 }
 
+/// 轮询事件循环直到条件满足或超时（后台线程结果经事件循环回调到达；单次 100ms 泵送在慢 CI 上偶发竞态）。
+fn pump_until(deadline: Duration, cond: impl Fn() -> bool) {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        pump_event_loop();
+        if cond() {
+            return;
+        }
+    }
+}
+
 fn toolbar(suffix: &str) -> ToolbarPageState {
     ToolbarPageState {
         title: format!("工具栏-{suffix}"),
@@ -497,7 +508,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         );
         publisher_released.send(()).expect("报告发布线程已释放");
     });
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || window.get_error_dialog_visible());
     assert!(window.get_error_dialog_visible());
     window.invoke_error_dialog_diagnostic_action_clicked(popup_id.into());
     publisher_release
@@ -507,7 +518,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Succeeded
@@ -575,7 +588,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放门锁") = true;
         signal.notify_all();
     }
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_operation_state() == OperationPresentationState::Ready
+    });
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Ready,
@@ -635,7 +650,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("release dialog action gate") = true;
         signal.notify_all();
     }
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Succeeded
@@ -664,7 +681,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Failed
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Failed
@@ -719,7 +738,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Failed
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Failed,
@@ -785,7 +806,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放较新门锁") = true;
         signal.notify_all();
     }
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Succeeded
@@ -797,7 +820,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放较早门锁") = true;
         signal.notify_all();
     }
-    pump_event_loop();
+    pump_until(Duration::from_secs(5), || {
+        window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
+    });
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Succeeded,
