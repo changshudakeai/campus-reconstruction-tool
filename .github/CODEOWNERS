@@ -19,8 +19,8 @@ deny.toml @changshudakeai
 /.github/ @changshudakeai
 /xtask/ @changshudakeai
 
-# ② 共享类型（B1 共同语言，T02 立户于 core/domain）
-/core/domain/ @changshudakeai
+# ② 共享类型（B1 共同语言，T02 立户于 core/shared-domain-types）
+/core/shared-domain-types/ @changshudakeai
 
 # ② 公开 API 快照：任何 pub 增删必须现形并过守门人（执法清单 2.5）
 **/tests/snapshots/public-api.txt @changshudakeai

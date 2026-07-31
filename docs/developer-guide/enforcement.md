@@ -88,6 +88,8 @@ fn public_api() {
 > 已实测通过；public-api 0.52.x 实际要求 format 57 的新版 nightly，但其 0.52.1 发布时
 > 的 `MINIMUM_NIGHTLY_RUST_VERSION` 常量仍指向 2025-08-02（上游发布缺陷，实测解析失败），
 > 故 B1 当前使用 public-api 0.50.3，模板按 0.50.x 执行。
+> 
+> 换行符：快照文件由工具以 LF 生成；.gitattributes 已固定 **/tests/snapshots/public-api.txt text eol=lf，防止 Windows autocrlf 使 CI 比对失败（2026-07-31 实测）。
 
 公开 API 的任何增删改由此**必然现形于 PR diff**；快照文件受 CODEOWNERS
 守卫，更新快照需守门人批准（十戒第 5 条"接口最小化"的客观量尺）。
