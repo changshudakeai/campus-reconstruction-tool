@@ -81,6 +81,14 @@ fn public_api() {
 }
 ```
 
+> ⚠️ 实测修正（T02 跟进，2026-07-31）：`rustdoc-json` 0.9.x **不会自动安装** nightly 工具链；
+> 运行快照测试前必须显式安装 `public_api::MINIMUM_NIGHTLY_RUST_VERSION` 对应的 nightly
+> （本项目 CI 的 test job 已加 `rustup toolchain install nightly-2025-08-02`）。
+> 版本配套：public-api 0.50.x ↔ rustdoc-types 0.56 ↔ nightly-2025-08-02（rustdoc JSON format 55）
+> 已实测通过；public-api 0.52.x 实际要求 format 57 的新版 nightly，但其 0.52.1 发布时
+> 的 `MINIMUM_NIGHTLY_RUST_VERSION` 常量仍指向 2025-08-02（上游发布缺陷，实测解析失败），
+> 故 B1 当前使用 public-api 0.50.3，模板按 0.50.x 执行。
+
 公开 API 的任何增删改由此**必然现形于 PR diff**；快照文件受 CODEOWNERS
 守卫，更新快照需守门人批准（十戒第 5 条"接口最小化"的客观量尺）。
 

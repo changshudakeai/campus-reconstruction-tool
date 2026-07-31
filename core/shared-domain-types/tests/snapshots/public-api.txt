@@ -1,100 +1,768 @@
----
-# shared-domain-types Public API Snapshot
-# 
-# 本文件记录 B1 共享领域类型的公开 API 结构
-# 任何增删都会在此文件中体现，PR diff 可见
-# 
-# 最后更新: 2026-07-26 (T02 实施)
-
-## Structures
-
-pub struct CampusId(Uuid)
-pub struct PlanId(Uuid)
-pub struct Boundary { pub type: String, pub coordinates: serde_json::Value }
-pub struct Orientation(f32)
-pub struct ParseIdError(String)
-
-## Enums #[non_exhaustive]
-
-pub enum CandidateCategory { Building, Road, Water, Vegetation, Sports, Other }
-pub enum ReviewState { Pending, Keep, Remove }
-pub enum CollectionJobStatus { Pending, InProgress, Completed, Failed }
-
-## Traits & Implementations
-
-impl CampusId {
-    pub fn generate() -> Self
-    pub fn parse(s: &str) -> Result<Self, ParseIdError>
-    pub fn as_hyphenated(&self) -> uuid::fmt::Hyphenated
-    pub fn as_simple(&self) -> uuid::fmt::Simple
-}
-
-impl std::fmt::Display for CampusId
-impl serde::Serialize for CampusId
-impl<'de> serde::Deserialize<'de> for CampusId
-
-impl PlanId {
-    pub fn generate() -> Self
-    pub fn parse(s: &str) -> Result<Self, ParseIdError>
-    pub fn as_hyphenated(&self) -> uuid::fmt::Hyphenated
-    pub fn as_simple(&self) -> uuid::fmt::Simple
-}
-
-impl std::fmt::Display for PlanId
-impl serde::Serialize for PlanId
-impl<'de> serde::Deserialize<'de> for PlanId
-
-impl Boundary {
-    pub fn empty() -> Self
-    pub fn is_empty(&self) -> bool
-}
-
-impl Default for Boundary
-
-impl Orientation {
-    pub fn new(degree: f32) -> Option<Self>
-    pub fn parse(s: &str) -> Option<Self>
-    pub fn degree(&self) -> f32
-    pub fn cardinal_direction(&self) -> &'static str
-}
-
-impl std::fmt::Display for Orientation
-
-impl CandidateCategory {
-    pub fn display_name(&self) -> &'static str
-    pub fn priority(&self) -> u8
-}
-
-impl ReviewState {
-    pub fn display_name(&self) -> &'static str
-    pub fn is_keep(&self) -> bool
-    pub fn is_pending(&self) -> bool
-    pub fn is_remove(&self) -> bool
-    pub fn parse(s: &str) -> Option<Self>
-    pub fn to_identifier(&self) -> &'static str
-}
-
-impl serde::Serialize for ReviewState
-impl<'de> serde::Deserialize<'de> for ReviewState
-
-impl CollectionJobStatus {
-    pub fn display_name(&self) -> &'static str
-    pub fn is_finished(&self) -> bool
-    pub fn is_success(&self) -> bool
-}
-
-## Derives
-
-CampusId: Debug, Clone, Copy, PartialEq, Eq, Hash
-PlanId: Debug, Clone, Copy, PartialEq, Eq, Hash
-Boundary: Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize
-Orientation: Debug, Clone, Copy, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize
-ParseIdError: Debug, thiserror::Error
-
-CandidateCategory: Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize
-ReviewState: Debug, Clone, Copy, PartialEq, Eq
-CollectionJobStatus: Debug, Clone, Copy, PartialEq, Eq
-
----
-END OF PUBLIC API SNAPSHOT
----
+pub mod shared_domain_types
+pub mod shared_domain_types::boundary
+pub struct shared_domain_types::boundary::Boundary
+pub shared_domain_types::boundary::Boundary::coordinates: serde_json::value::Value
+pub shared_domain_types::boundary::Boundary::type: alloc::string::String
+impl shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::empty() -> Self
+pub fn shared_domain_types::boundary::Boundary::is_empty(&self) -> bool
+impl core::clone::Clone for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::clone(&self) -> shared_domain_types::boundary::Boundary
+impl core::cmp::PartialEq for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::eq(&self, other: &shared_domain_types::boundary::Boundary) -> bool
+impl core::default::Default for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::default() -> Self
+impl core::fmt::Debug for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for shared_domain_types::boundary::Boundary
+impl serde_core::ser::Serialize for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::boundary::Boundary
+impl core::marker::Send for shared_domain_types::boundary::Boundary
+impl core::marker::Sync for shared_domain_types::boundary::Boundary
+impl core::marker::Unpin for shared_domain_types::boundary::Boundary
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::boundary::Boundary
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::boundary::Boundary
+impl<T, U> core::convert::Into<U> for shared_domain_types::boundary::Boundary where U: core::convert::From<T>
+pub fn shared_domain_types::boundary::Boundary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::boundary::Boundary where U: core::convert::Into<T>
+pub type shared_domain_types::boundary::Boundary::Error = core::convert::Infallible
+pub fn shared_domain_types::boundary::Boundary::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::boundary::Boundary where U: core::convert::TryFrom<T>
+pub type shared_domain_types::boundary::Boundary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::boundary::Boundary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::boundary::Boundary where T: core::clone::Clone
+pub type shared_domain_types::boundary::Boundary::Owned = T
+pub fn shared_domain_types::boundary::Boundary::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::boundary::Boundary::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::boundary::Boundary where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::boundary::Boundary where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::boundary::Boundary where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::boundary::Boundary where T: core::clone::Clone
+pub unsafe fn shared_domain_types::boundary::Boundary::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::boundary::Boundary where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::boundary::Orientation(_)
+impl shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::cardinal_direction(&self) -> &'static str
+pub fn shared_domain_types::boundary::Orientation::degree(&self) -> f32
+pub fn shared_domain_types::boundary::Orientation::new(degree: f32) -> core::option::Option<Self>
+pub fn shared_domain_types::boundary::Orientation::parse(s: &str) -> core::option::Option<Self>
+impl core::clone::Clone for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::clone(&self) -> shared_domain_types::boundary::Orientation
+impl core::cmp::PartialEq for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::eq(&self, other: &shared_domain_types::boundary::Orientation) -> bool
+impl core::cmp::PartialOrd for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::partial_cmp(&self, other: &shared_domain_types::boundary::Orientation) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::boundary::Orientation
+impl core::marker::StructuralPartialEq for shared_domain_types::boundary::Orientation
+impl serde_core::ser::Serialize for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::boundary::Orientation
+impl core::marker::Send for shared_domain_types::boundary::Orientation
+impl core::marker::Sync for shared_domain_types::boundary::Orientation
+impl core::marker::Unpin for shared_domain_types::boundary::Orientation
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::boundary::Orientation
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::boundary::Orientation
+impl<T, U> core::convert::Into<U> for shared_domain_types::boundary::Orientation where U: core::convert::From<T>
+pub fn shared_domain_types::boundary::Orientation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::boundary::Orientation where U: core::convert::Into<T>
+pub type shared_domain_types::boundary::Orientation::Error = core::convert::Infallible
+pub fn shared_domain_types::boundary::Orientation::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::boundary::Orientation where U: core::convert::TryFrom<T>
+pub type shared_domain_types::boundary::Orientation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::boundary::Orientation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::boundary::Orientation where T: core::clone::Clone
+pub type shared_domain_types::boundary::Orientation::Owned = T
+pub fn shared_domain_types::boundary::Orientation::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::boundary::Orientation::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::boundary::Orientation where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::boundary::Orientation where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::boundary::Orientation where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::boundary::Orientation where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::boundary::Orientation where T: core::clone::Clone
+pub unsafe fn shared_domain_types::boundary::Orientation::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::boundary::Orientation where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod shared_domain_types::category
+#[non_exhaustive] pub enum shared_domain_types::category::CandidateCategory
+pub shared_domain_types::category::CandidateCategory::Building
+pub shared_domain_types::category::CandidateCategory::Other
+pub shared_domain_types::category::CandidateCategory::Road
+pub shared_domain_types::category::CandidateCategory::Sports
+pub shared_domain_types::category::CandidateCategory::Vegetation
+pub shared_domain_types::category::CandidateCategory::Water
+impl shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::display_name(&self) -> &'static str
+pub fn shared_domain_types::category::CandidateCategory::priority(&self) -> u8
+impl core::clone::Clone for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::clone(&self) -> shared_domain_types::category::CandidateCategory
+impl core::cmp::Eq for shared_domain_types::category::CandidateCategory
+impl core::cmp::Ord for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::cmp(&self, other: &shared_domain_types::category::CandidateCategory) -> core::cmp::Ordering
+impl core::cmp::PartialEq for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::eq(&self, other: &shared_domain_types::category::CandidateCategory) -> bool
+impl core::cmp::PartialOrd for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::partial_cmp(&self, other: &shared_domain_types::category::CandidateCategory) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::category::CandidateCategory
+impl core::marker::StructuralPartialEq for shared_domain_types::category::CandidateCategory
+impl serde_core::ser::Serialize for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::category::CandidateCategory
+impl core::marker::Send for shared_domain_types::category::CandidateCategory
+impl core::marker::Sync for shared_domain_types::category::CandidateCategory
+impl core::marker::Unpin for shared_domain_types::category::CandidateCategory
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::category::CandidateCategory
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::category::CandidateCategory
+impl<T, U> core::convert::Into<U> for shared_domain_types::category::CandidateCategory where U: core::convert::From<T>
+pub fn shared_domain_types::category::CandidateCategory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::category::CandidateCategory where U: core::convert::Into<T>
+pub type shared_domain_types::category::CandidateCategory::Error = core::convert::Infallible
+pub fn shared_domain_types::category::CandidateCategory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::category::CandidateCategory where U: core::convert::TryFrom<T>
+pub type shared_domain_types::category::CandidateCategory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::category::CandidateCategory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::category::CandidateCategory where T: core::clone::Clone
+pub type shared_domain_types::category::CandidateCategory::Owned = T
+pub fn shared_domain_types::category::CandidateCategory::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::category::CandidateCategory::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::category::CandidateCategory where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::category::CandidateCategory where T: ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::category::CandidateCategory where T: ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::category::CandidateCategory where T: core::clone::Clone
+pub unsafe fn shared_domain_types::category::CandidateCategory::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::category::CandidateCategory where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod shared_domain_types::id
+pub struct shared_domain_types::id::CampusId(_)
+impl shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::as_hyphenated(&self) -> uuid::fmt::Hyphenated
+pub fn shared_domain_types::id::CampusId::as_simple(&self) -> uuid::fmt::Simple
+pub fn shared_domain_types::id::CampusId::generate() -> Self
+pub fn shared_domain_types::id::CampusId::parse(s: &str) -> core::result::Result<Self, shared_domain_types::id::ParseIdError>
+impl core::clone::Clone for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::clone(&self) -> shared_domain_types::id::CampusId
+impl core::cmp::Eq for shared_domain_types::id::CampusId
+impl core::cmp::PartialEq for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::eq(&self, other: &shared_domain_types::id::CampusId) -> bool
+impl core::fmt::Debug for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::id::CampusId
+impl core::marker::StructuralPartialEq for shared_domain_types::id::CampusId
+impl serde_core::ser::Serialize for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::id::CampusId
+impl core::marker::Send for shared_domain_types::id::CampusId
+impl core::marker::Sync for shared_domain_types::id::CampusId
+impl core::marker::Unpin for shared_domain_types::id::CampusId
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::id::CampusId
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::id::CampusId
+impl<T, U> core::convert::Into<U> for shared_domain_types::id::CampusId where U: core::convert::From<T>
+pub fn shared_domain_types::id::CampusId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::id::CampusId where U: core::convert::Into<T>
+pub type shared_domain_types::id::CampusId::Error = core::convert::Infallible
+pub fn shared_domain_types::id::CampusId::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::id::CampusId where U: core::convert::TryFrom<T>
+pub type shared_domain_types::id::CampusId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::id::CampusId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::id::CampusId where T: core::clone::Clone
+pub type shared_domain_types::id::CampusId::Owned = T
+pub fn shared_domain_types::id::CampusId::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::id::CampusId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::id::CampusId where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::id::CampusId where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::id::CampusId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::id::CampusId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::id::CampusId where T: core::clone::Clone
+pub unsafe fn shared_domain_types::id::CampusId::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::id::CampusId where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::id::ParseIdError(_)
+impl core::error::Error for shared_domain_types::id::ParseIdError
+impl core::fmt::Debug for shared_domain_types::id::ParseIdError
+pub fn shared_domain_types::id::ParseIdError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::id::ParseIdError
+pub fn shared_domain_types::id::ParseIdError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for shared_domain_types::id::ParseIdError
+impl core::marker::Send for shared_domain_types::id::ParseIdError
+impl core::marker::Sync for shared_domain_types::id::ParseIdError
+impl core::marker::Unpin for shared_domain_types::id::ParseIdError
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::id::ParseIdError
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::id::ParseIdError
+impl<T, U> core::convert::Into<U> for shared_domain_types::id::ParseIdError where U: core::convert::From<T>
+pub fn shared_domain_types::id::ParseIdError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::id::ParseIdError where U: core::convert::Into<T>
+pub type shared_domain_types::id::ParseIdError::Error = core::convert::Infallible
+pub fn shared_domain_types::id::ParseIdError::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::id::ParseIdError where U: core::convert::TryFrom<T>
+pub type shared_domain_types::id::ParseIdError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::id::ParseIdError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for shared_domain_types::id::ParseIdError where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::id::ParseIdError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::id::ParseIdError where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::id::ParseIdError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::id::ParseIdError where T: ?core::marker::Sized
+pub fn shared_domain_types::id::ParseIdError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::id::ParseIdError where T: ?core::marker::Sized
+pub fn shared_domain_types::id::ParseIdError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for shared_domain_types::id::ParseIdError
+pub fn shared_domain_types::id::ParseIdError::from(t: T) -> T
+pub struct shared_domain_types::id::PlanId(_)
+impl shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::as_hyphenated(&self) -> uuid::fmt::Hyphenated
+pub fn shared_domain_types::id::PlanId::as_simple(&self) -> uuid::fmt::Simple
+pub fn shared_domain_types::id::PlanId::generate() -> Self
+pub fn shared_domain_types::id::PlanId::parse(s: &str) -> core::result::Result<Self, shared_domain_types::id::ParseIdError>
+impl core::clone::Clone for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::clone(&self) -> shared_domain_types::id::PlanId
+impl core::cmp::Eq for shared_domain_types::id::PlanId
+impl core::cmp::PartialEq for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::eq(&self, other: &shared_domain_types::id::PlanId) -> bool
+impl core::fmt::Debug for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::id::PlanId
+impl core::marker::StructuralPartialEq for shared_domain_types::id::PlanId
+impl serde_core::ser::Serialize for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::id::PlanId
+impl core::marker::Send for shared_domain_types::id::PlanId
+impl core::marker::Sync for shared_domain_types::id::PlanId
+impl core::marker::Unpin for shared_domain_types::id::PlanId
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::id::PlanId
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::id::PlanId
+impl<T, U> core::convert::Into<U> for shared_domain_types::id::PlanId where U: core::convert::From<T>
+pub fn shared_domain_types::id::PlanId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::id::PlanId where U: core::convert::Into<T>
+pub type shared_domain_types::id::PlanId::Error = core::convert::Infallible
+pub fn shared_domain_types::id::PlanId::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::id::PlanId where U: core::convert::TryFrom<T>
+pub type shared_domain_types::id::PlanId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::id::PlanId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::id::PlanId where T: core::clone::Clone
+pub type shared_domain_types::id::PlanId::Owned = T
+pub fn shared_domain_types::id::PlanId::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::id::PlanId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::id::PlanId where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::id::PlanId where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::id::PlanId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::id::PlanId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::id::PlanId where T: core::clone::Clone
+pub unsafe fn shared_domain_types::id::PlanId::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::id::PlanId where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod shared_domain_types::review
+#[non_exhaustive] pub enum shared_domain_types::review::ReviewState
+pub shared_domain_types::review::ReviewState::Keep
+pub shared_domain_types::review::ReviewState::Pending
+pub shared_domain_types::review::ReviewState::Remove
+impl shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::display_name(&self) -> &'static str
+pub fn shared_domain_types::review::ReviewState::is_keep(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::is_pending(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::is_remove(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::parse(s: &str) -> core::option::Option<Self>
+pub fn shared_domain_types::review::ReviewState::to_identifier(&self) -> &'static str
+impl core::clone::Clone for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::clone(&self) -> shared_domain_types::review::ReviewState
+impl core::cmp::Eq for shared_domain_types::review::ReviewState
+impl core::cmp::PartialEq for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::eq(&self, other: &shared_domain_types::review::ReviewState) -> bool
+impl core::fmt::Debug for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::review::ReviewState
+impl core::marker::StructuralPartialEq for shared_domain_types::review::ReviewState
+impl serde_core::ser::Serialize for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::review::ReviewState
+impl core::marker::Send for shared_domain_types::review::ReviewState
+impl core::marker::Sync for shared_domain_types::review::ReviewState
+impl core::marker::Unpin for shared_domain_types::review::ReviewState
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::review::ReviewState
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::review::ReviewState
+impl<T, U> core::convert::Into<U> for shared_domain_types::review::ReviewState where U: core::convert::From<T>
+pub fn shared_domain_types::review::ReviewState::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::review::ReviewState where U: core::convert::Into<T>
+pub type shared_domain_types::review::ReviewState::Error = core::convert::Infallible
+pub fn shared_domain_types::review::ReviewState::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::review::ReviewState where U: core::convert::TryFrom<T>
+pub type shared_domain_types::review::ReviewState::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::review::ReviewState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::review::ReviewState where T: core::clone::Clone
+pub type shared_domain_types::review::ReviewState::Owned = T
+pub fn shared_domain_types::review::ReviewState::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::review::ReviewState::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::review::ReviewState where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::review::ReviewState where T: ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::review::ReviewState where T: ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::review::ReviewState where T: core::clone::Clone
+pub unsafe fn shared_domain_types::review::ReviewState::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::review::ReviewState where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod shared_domain_types::status
+#[non_exhaustive] pub enum shared_domain_types::status::CollectionJobStatus
+pub shared_domain_types::status::CollectionJobStatus::Completed
+pub shared_domain_types::status::CollectionJobStatus::Failed
+pub shared_domain_types::status::CollectionJobStatus::InProgress
+pub shared_domain_types::status::CollectionJobStatus::Pending
+impl shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::display_name(&self) -> &'static str
+pub fn shared_domain_types::status::CollectionJobStatus::is_finished(&self) -> bool
+pub fn shared_domain_types::status::CollectionJobStatus::is_success(&self) -> bool
+impl core::clone::Clone for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::clone(&self) -> shared_domain_types::status::CollectionJobStatus
+impl core::cmp::Eq for shared_domain_types::status::CollectionJobStatus
+impl core::cmp::PartialEq for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::eq(&self, other: &shared_domain_types::status::CollectionJobStatus) -> bool
+impl core::fmt::Debug for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::status::CollectionJobStatus
+impl core::marker::StructuralPartialEq for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Freeze for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Send for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Sync for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Unpin for shared_domain_types::status::CollectionJobStatus
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::status::CollectionJobStatus
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::status::CollectionJobStatus
+impl<T, U> core::convert::Into<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::From<T>
+pub fn shared_domain_types::status::CollectionJobStatus::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::Into<T>
+pub type shared_domain_types::status::CollectionJobStatus::Error = core::convert::Infallible
+pub fn shared_domain_types::status::CollectionJobStatus::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::TryFrom<T>
+pub type shared_domain_types::status::CollectionJobStatus::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::status::CollectionJobStatus::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::status::CollectionJobStatus where T: core::clone::Clone
+pub type shared_domain_types::status::CollectionJobStatus::Owned = T
+pub fn shared_domain_types::status::CollectionJobStatus::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::status::CollectionJobStatus::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::status::CollectionJobStatus where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::status::CollectionJobStatus where T: ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::status::CollectionJobStatus where T: ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::status::CollectionJobStatus where T: core::clone::Clone
+pub unsafe fn shared_domain_types::status::CollectionJobStatus::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::from(t: T) -> T
+#[non_exhaustive] pub enum shared_domain_types::CandidateCategory
+pub shared_domain_types::CandidateCategory::Building
+pub shared_domain_types::CandidateCategory::Other
+pub shared_domain_types::CandidateCategory::Road
+pub shared_domain_types::CandidateCategory::Sports
+pub shared_domain_types::CandidateCategory::Vegetation
+pub shared_domain_types::CandidateCategory::Water
+impl shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::display_name(&self) -> &'static str
+pub fn shared_domain_types::category::CandidateCategory::priority(&self) -> u8
+impl core::clone::Clone for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::clone(&self) -> shared_domain_types::category::CandidateCategory
+impl core::cmp::Eq for shared_domain_types::category::CandidateCategory
+impl core::cmp::Ord for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::cmp(&self, other: &shared_domain_types::category::CandidateCategory) -> core::cmp::Ordering
+impl core::cmp::PartialEq for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::eq(&self, other: &shared_domain_types::category::CandidateCategory) -> bool
+impl core::cmp::PartialOrd for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::partial_cmp(&self, other: &shared_domain_types::category::CandidateCategory) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::category::CandidateCategory
+impl core::marker::StructuralPartialEq for shared_domain_types::category::CandidateCategory
+impl serde_core::ser::Serialize for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::category::CandidateCategory
+impl core::marker::Send for shared_domain_types::category::CandidateCategory
+impl core::marker::Sync for shared_domain_types::category::CandidateCategory
+impl core::marker::Unpin for shared_domain_types::category::CandidateCategory
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::category::CandidateCategory
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::category::CandidateCategory
+impl<T, U> core::convert::Into<U> for shared_domain_types::category::CandidateCategory where U: core::convert::From<T>
+pub fn shared_domain_types::category::CandidateCategory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::category::CandidateCategory where U: core::convert::Into<T>
+pub type shared_domain_types::category::CandidateCategory::Error = core::convert::Infallible
+pub fn shared_domain_types::category::CandidateCategory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::category::CandidateCategory where U: core::convert::TryFrom<T>
+pub type shared_domain_types::category::CandidateCategory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::category::CandidateCategory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::category::CandidateCategory where T: core::clone::Clone
+pub type shared_domain_types::category::CandidateCategory::Owned = T
+pub fn shared_domain_types::category::CandidateCategory::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::category::CandidateCategory::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::category::CandidateCategory where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::category::CandidateCategory where T: ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::category::CandidateCategory where T: ?core::marker::Sized
+pub fn shared_domain_types::category::CandidateCategory::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::category::CandidateCategory where T: core::clone::Clone
+pub unsafe fn shared_domain_types::category::CandidateCategory::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::category::CandidateCategory
+pub fn shared_domain_types::category::CandidateCategory::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::category::CandidateCategory where T: for<'de> serde_core::de::Deserialize<'de>
+#[non_exhaustive] pub enum shared_domain_types::CollectionJobStatus
+pub shared_domain_types::CollectionJobStatus::Completed
+pub shared_domain_types::CollectionJobStatus::Failed
+pub shared_domain_types::CollectionJobStatus::InProgress
+pub shared_domain_types::CollectionJobStatus::Pending
+impl shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::display_name(&self) -> &'static str
+pub fn shared_domain_types::status::CollectionJobStatus::is_finished(&self) -> bool
+pub fn shared_domain_types::status::CollectionJobStatus::is_success(&self) -> bool
+impl core::clone::Clone for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::clone(&self) -> shared_domain_types::status::CollectionJobStatus
+impl core::cmp::Eq for shared_domain_types::status::CollectionJobStatus
+impl core::cmp::PartialEq for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::eq(&self, other: &shared_domain_types::status::CollectionJobStatus) -> bool
+impl core::fmt::Debug for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::status::CollectionJobStatus
+impl core::marker::StructuralPartialEq for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Freeze for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Send for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Sync for shared_domain_types::status::CollectionJobStatus
+impl core::marker::Unpin for shared_domain_types::status::CollectionJobStatus
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::status::CollectionJobStatus
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::status::CollectionJobStatus
+impl<T, U> core::convert::Into<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::From<T>
+pub fn shared_domain_types::status::CollectionJobStatus::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::Into<T>
+pub type shared_domain_types::status::CollectionJobStatus::Error = core::convert::Infallible
+pub fn shared_domain_types::status::CollectionJobStatus::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::status::CollectionJobStatus where U: core::convert::TryFrom<T>
+pub type shared_domain_types::status::CollectionJobStatus::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::status::CollectionJobStatus::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::status::CollectionJobStatus where T: core::clone::Clone
+pub type shared_domain_types::status::CollectionJobStatus::Owned = T
+pub fn shared_domain_types::status::CollectionJobStatus::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::status::CollectionJobStatus::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::status::CollectionJobStatus where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::status::CollectionJobStatus where T: ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::status::CollectionJobStatus where T: ?core::marker::Sized
+pub fn shared_domain_types::status::CollectionJobStatus::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::status::CollectionJobStatus where T: core::clone::Clone
+pub unsafe fn shared_domain_types::status::CollectionJobStatus::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::status::CollectionJobStatus
+pub fn shared_domain_types::status::CollectionJobStatus::from(t: T) -> T
+#[non_exhaustive] pub enum shared_domain_types::ReviewState
+pub shared_domain_types::ReviewState::Keep
+pub shared_domain_types::ReviewState::Pending
+pub shared_domain_types::ReviewState::Remove
+impl shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::display_name(&self) -> &'static str
+pub fn shared_domain_types::review::ReviewState::is_keep(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::is_pending(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::is_remove(&self) -> bool
+pub fn shared_domain_types::review::ReviewState::parse(s: &str) -> core::option::Option<Self>
+pub fn shared_domain_types::review::ReviewState::to_identifier(&self) -> &'static str
+impl core::clone::Clone for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::clone(&self) -> shared_domain_types::review::ReviewState
+impl core::cmp::Eq for shared_domain_types::review::ReviewState
+impl core::cmp::PartialEq for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::eq(&self, other: &shared_domain_types::review::ReviewState) -> bool
+impl core::fmt::Debug for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::review::ReviewState
+impl core::marker::StructuralPartialEq for shared_domain_types::review::ReviewState
+impl serde_core::ser::Serialize for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::review::ReviewState
+impl core::marker::Send for shared_domain_types::review::ReviewState
+impl core::marker::Sync for shared_domain_types::review::ReviewState
+impl core::marker::Unpin for shared_domain_types::review::ReviewState
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::review::ReviewState
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::review::ReviewState
+impl<T, U> core::convert::Into<U> for shared_domain_types::review::ReviewState where U: core::convert::From<T>
+pub fn shared_domain_types::review::ReviewState::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::review::ReviewState where U: core::convert::Into<T>
+pub type shared_domain_types::review::ReviewState::Error = core::convert::Infallible
+pub fn shared_domain_types::review::ReviewState::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::review::ReviewState where U: core::convert::TryFrom<T>
+pub type shared_domain_types::review::ReviewState::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::review::ReviewState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::review::ReviewState where T: core::clone::Clone
+pub type shared_domain_types::review::ReviewState::Owned = T
+pub fn shared_domain_types::review::ReviewState::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::review::ReviewState::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::review::ReviewState where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::review::ReviewState where T: ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::review::ReviewState where T: ?core::marker::Sized
+pub fn shared_domain_types::review::ReviewState::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::review::ReviewState where T: core::clone::Clone
+pub unsafe fn shared_domain_types::review::ReviewState::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::review::ReviewState
+pub fn shared_domain_types::review::ReviewState::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::review::ReviewState where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::Boundary
+pub shared_domain_types::Boundary::coordinates: serde_json::value::Value
+pub shared_domain_types::Boundary::type: alloc::string::String
+impl shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::empty() -> Self
+pub fn shared_domain_types::boundary::Boundary::is_empty(&self) -> bool
+impl core::clone::Clone for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::clone(&self) -> shared_domain_types::boundary::Boundary
+impl core::cmp::PartialEq for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::eq(&self, other: &shared_domain_types::boundary::Boundary) -> bool
+impl core::default::Default for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::default() -> Self
+impl core::fmt::Debug for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for shared_domain_types::boundary::Boundary
+impl serde_core::ser::Serialize for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::boundary::Boundary
+impl core::marker::Send for shared_domain_types::boundary::Boundary
+impl core::marker::Sync for shared_domain_types::boundary::Boundary
+impl core::marker::Unpin for shared_domain_types::boundary::Boundary
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::boundary::Boundary
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::boundary::Boundary
+impl<T, U> core::convert::Into<U> for shared_domain_types::boundary::Boundary where U: core::convert::From<T>
+pub fn shared_domain_types::boundary::Boundary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::boundary::Boundary where U: core::convert::Into<T>
+pub type shared_domain_types::boundary::Boundary::Error = core::convert::Infallible
+pub fn shared_domain_types::boundary::Boundary::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::boundary::Boundary where U: core::convert::TryFrom<T>
+pub type shared_domain_types::boundary::Boundary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::boundary::Boundary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::boundary::Boundary where T: core::clone::Clone
+pub type shared_domain_types::boundary::Boundary::Owned = T
+pub fn shared_domain_types::boundary::Boundary::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::boundary::Boundary::to_owned(&self) -> T
+impl<T> core::any::Any for shared_domain_types::boundary::Boundary where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::boundary::Boundary where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::boundary::Boundary where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Boundary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::boundary::Boundary where T: core::clone::Clone
+pub unsafe fn shared_domain_types::boundary::Boundary::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::boundary::Boundary
+pub fn shared_domain_types::boundary::Boundary::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::boundary::Boundary where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::CampusId(_)
+impl shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::as_hyphenated(&self) -> uuid::fmt::Hyphenated
+pub fn shared_domain_types::id::CampusId::as_simple(&self) -> uuid::fmt::Simple
+pub fn shared_domain_types::id::CampusId::generate() -> Self
+pub fn shared_domain_types::id::CampusId::parse(s: &str) -> core::result::Result<Self, shared_domain_types::id::ParseIdError>
+impl core::clone::Clone for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::clone(&self) -> shared_domain_types::id::CampusId
+impl core::cmp::Eq for shared_domain_types::id::CampusId
+impl core::cmp::PartialEq for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::eq(&self, other: &shared_domain_types::id::CampusId) -> bool
+impl core::fmt::Debug for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::id::CampusId
+impl core::marker::StructuralPartialEq for shared_domain_types::id::CampusId
+impl serde_core::ser::Serialize for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::id::CampusId
+impl core::marker::Send for shared_domain_types::id::CampusId
+impl core::marker::Sync for shared_domain_types::id::CampusId
+impl core::marker::Unpin for shared_domain_types::id::CampusId
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::id::CampusId
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::id::CampusId
+impl<T, U> core::convert::Into<U> for shared_domain_types::id::CampusId where U: core::convert::From<T>
+pub fn shared_domain_types::id::CampusId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::id::CampusId where U: core::convert::Into<T>
+pub type shared_domain_types::id::CampusId::Error = core::convert::Infallible
+pub fn shared_domain_types::id::CampusId::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::id::CampusId where U: core::convert::TryFrom<T>
+pub type shared_domain_types::id::CampusId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::id::CampusId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::id::CampusId where T: core::clone::Clone
+pub type shared_domain_types::id::CampusId::Owned = T
+pub fn shared_domain_types::id::CampusId::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::id::CampusId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::id::CampusId where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::id::CampusId where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::id::CampusId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::id::CampusId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::CampusId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::id::CampusId where T: core::clone::Clone
+pub unsafe fn shared_domain_types::id::CampusId::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::id::CampusId
+pub fn shared_domain_types::id::CampusId::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::id::CampusId where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::Orientation(_)
+impl shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::cardinal_direction(&self) -> &'static str
+pub fn shared_domain_types::boundary::Orientation::degree(&self) -> f32
+pub fn shared_domain_types::boundary::Orientation::new(degree: f32) -> core::option::Option<Self>
+pub fn shared_domain_types::boundary::Orientation::parse(s: &str) -> core::option::Option<Self>
+impl core::clone::Clone for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::clone(&self) -> shared_domain_types::boundary::Orientation
+impl core::cmp::PartialEq for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::eq(&self, other: &shared_domain_types::boundary::Orientation) -> bool
+impl core::cmp::PartialOrd for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::partial_cmp(&self, other: &shared_domain_types::boundary::Orientation) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for shared_domain_types::boundary::Orientation
+impl core::marker::StructuralPartialEq for shared_domain_types::boundary::Orientation
+impl serde_core::ser::Serialize for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::boundary::Orientation
+impl core::marker::Send for shared_domain_types::boundary::Orientation
+impl core::marker::Sync for shared_domain_types::boundary::Orientation
+impl core::marker::Unpin for shared_domain_types::boundary::Orientation
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::boundary::Orientation
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::boundary::Orientation
+impl<T, U> core::convert::Into<U> for shared_domain_types::boundary::Orientation where U: core::convert::From<T>
+pub fn shared_domain_types::boundary::Orientation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::boundary::Orientation where U: core::convert::Into<T>
+pub type shared_domain_types::boundary::Orientation::Error = core::convert::Infallible
+pub fn shared_domain_types::boundary::Orientation::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::boundary::Orientation where U: core::convert::TryFrom<T>
+pub type shared_domain_types::boundary::Orientation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::boundary::Orientation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::boundary::Orientation where T: core::clone::Clone
+pub type shared_domain_types::boundary::Orientation::Owned = T
+pub fn shared_domain_types::boundary::Orientation::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::boundary::Orientation::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::boundary::Orientation where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::boundary::Orientation where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::boundary::Orientation where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::boundary::Orientation where T: ?core::marker::Sized
+pub fn shared_domain_types::boundary::Orientation::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::boundary::Orientation where T: core::clone::Clone
+pub unsafe fn shared_domain_types::boundary::Orientation::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::boundary::Orientation
+pub fn shared_domain_types::boundary::Orientation::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::boundary::Orientation where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct shared_domain_types::PlanId(_)
+impl shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::as_hyphenated(&self) -> uuid::fmt::Hyphenated
+pub fn shared_domain_types::id::PlanId::as_simple(&self) -> uuid::fmt::Simple
+pub fn shared_domain_types::id::PlanId::generate() -> Self
+pub fn shared_domain_types::id::PlanId::parse(s: &str) -> core::result::Result<Self, shared_domain_types::id::ParseIdError>
+impl core::clone::Clone for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::clone(&self) -> shared_domain_types::id::PlanId
+impl core::cmp::Eq for shared_domain_types::id::PlanId
+impl core::cmp::PartialEq for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::eq(&self, other: &shared_domain_types::id::PlanId) -> bool
+impl core::fmt::Debug for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for shared_domain_types::id::PlanId
+impl core::marker::StructuralPartialEq for shared_domain_types::id::PlanId
+impl serde_core::ser::Serialize for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for shared_domain_types::id::PlanId
+impl core::marker::Send for shared_domain_types::id::PlanId
+impl core::marker::Sync for shared_domain_types::id::PlanId
+impl core::marker::Unpin for shared_domain_types::id::PlanId
+impl core::panic::unwind_safe::RefUnwindSafe for shared_domain_types::id::PlanId
+impl core::panic::unwind_safe::UnwindSafe for shared_domain_types::id::PlanId
+impl<T, U> core::convert::Into<U> for shared_domain_types::id::PlanId where U: core::convert::From<T>
+pub fn shared_domain_types::id::PlanId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for shared_domain_types::id::PlanId where U: core::convert::Into<T>
+pub type shared_domain_types::id::PlanId::Error = core::convert::Infallible
+pub fn shared_domain_types::id::PlanId::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for shared_domain_types::id::PlanId where U: core::convert::TryFrom<T>
+pub type shared_domain_types::id::PlanId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn shared_domain_types::id::PlanId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for shared_domain_types::id::PlanId where T: core::clone::Clone
+pub type shared_domain_types::id::PlanId::Owned = T
+pub fn shared_domain_types::id::PlanId::clone_into(&self, target: &mut T)
+pub fn shared_domain_types::id::PlanId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for shared_domain_types::id::PlanId where T: core::fmt::Display + ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for shared_domain_types::id::PlanId where T: 'static + ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for shared_domain_types::id::PlanId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for shared_domain_types::id::PlanId where T: ?core::marker::Sized
+pub fn shared_domain_types::id::PlanId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for shared_domain_types::id::PlanId where T: core::clone::Clone
+pub unsafe fn shared_domain_types::id::PlanId::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for shared_domain_types::id::PlanId
+pub fn shared_domain_types::id::PlanId::from(t: T) -> T
+impl<T> serde_core::de::DeserializeOwned for shared_domain_types::id::PlanId where T: for<'de> serde_core::de::Deserialize<'de>
