@@ -2,9 +2,6 @@
 // 薄壳原则（ADR-0017）：此处零业务逻辑，只声明属性与布局；
 // 全部文案由 Rust 侧经 B6 l10n 注入（文本外置铁律 ADR-0005），
 // .slint 内不得出现硬编码的用户可见文字。
-// T19B-2：首跑向导屏 + 着陆占位屏 + 设置页（债务②）+ B7 错误模态遮罩。
-// 完整五步步骤条导航骨架（ADR-0027）随 T19B-3..8 逐单落地。
-// T19B-3：校区选择页（campus_select.slint）接入，五屏路由（0 向导/1 选择/2 列表占位/3 设置）
 // T19B-5A：色卡角色名替换（ADR-0023）+ 通用对话框基建 + ADR-0010/0018 还债。
 // 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
 
@@ -30,6 +27,7 @@ export enum OperationPresentationState {
     processing,
     failed,
     needs-confirmation,
+    needs-input,
 }
 
 export component AppWindow inherits Window {
@@ -116,17 +114,14 @@ export component AppWindow inherits Window {
     in property <[NoticeData]> notice-board-model;
     callback notice-diagnostic-action-clicked(notification-id: string);
 
-    // ── 屏 6：回收站页属性（T19B-9 新增）────────────
     in property <string> trash-page-title;
     in property <string> trash-page-empty-list-text;
     in property <string> trash-page-restore-button-text;
     in property <string> trash-page-purge-button-text;
     in property <string> trash-page-retention-notice-text;
     in property <string> trash-page-campus-prefix;
-    in property <string> trash-page-date-today;
     in property <[TrashItemData]> trash-page-model;
     
-    // ── 屏 4：方案工作区属性（T19B-5B）──────────────────────
     in-out property <int> workspace-active-step: 0;  // 当前步骤索引
     in-out property <int> workspace-completed-steps: 0;  // 已完成步数
     in property <string> workspace-placeholder-title;
@@ -221,19 +216,24 @@ export component AppWindow inherits Window {
     // 当前操作的方案 ID（改名/删除时由 Rust 侧填入）
     in-out property <string> active-plan-id;
 
-    // ── 校区选择页属性（T19B-3 新增，T19B-5 第 0 号前置修改）───────────────
     in property <string> campus-select-title;
     in property <string> campus-select-empty-list-text;
     in property <string> campus-select-new-demo-campus-button-text;
     in property <string> campus-select-settings-button-text;
     in property <[CampusData]> campus-select-model;
+    in-out property <string> campus-search-text;
+    in property <string> campus-search-placeholder;
+    in property <string> campus-search-button-text;
+    in property <string> campus-recent-title;
+    in property <[CampusData]> campus-search-results-model;
+    in property <bool> campus-show-results;
 
     callback campus-select-new-demo-campus-clicked();
     callback campus-select-settings-clicked();
-    // 单击已有校区行 → 进入该校区方案列表（T19B-5B 补接）
     callback campus-select-campus-clicked(campus-id: string);
+    callback campus-search-requested();
+    callback campus-select-remove-recent-clicked(campus-id: string);
 
-    // ── 方案列表页属性（T19B-4 新增）────────────────────
     in property <string> plan-list-title;
     in property <string> plan-list-campus-name;
     in property <string> plan-list-create-button-text;
@@ -243,7 +243,6 @@ export component AppWindow inherits Window {
     in property <string> plan-list-duplicate-label;
     in property <string> plan-list-delete-label;
     in property <[PlanCardData]> plan-list-model;
-    // 教程气泡（F2 钩子）
     in property <bool> plan-list-tutorial-visible;
     in property <string> plan-list-tutorial-text;
     in property <string> plan-list-tutorial-dismiss-label;
@@ -259,7 +258,6 @@ export component AppWindow inherits Window {
     callback plan-list-tutorial-dismiss-clicked();
     callback plan-list-tutorial-skip-all-clicked();
 
-    // ── 对话框回调（T19B-5A）────────────────────────────
     callback confirm-dialog-confirmed();
     callback confirm-dialog-cancelled();
     callback input-dialog-confirmed();
@@ -277,6 +275,9 @@ export component AppWindow inherits Window {
     callback switch-campus-toolbar-button-clicked();
     callback trash-toolbar-button-clicked();
     callback settings-toolbar-button-clicked();
+    callback trash-restore-clicked(plan-id: string);
+    callback trash-purge-clicked(plan-id: string);
+    callback trash-purge-all-clicked();
 
     title: root.app-title;
     // femtovg 渲染器的默认字体缺部分中文字形（显示方块），显式指定
@@ -421,20 +422,26 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── 屏 1：校区选择页（T19B-3 + T19B-5 第 0 号前置修改）──────────────
     if root.active-screen == 1: CampusSelect {
         title <=> root.campus-select-title;
         empty-list-text <=> root.campus-select-empty-list-text;
         new-demo-campus-button-text <=> root.campus-select-new-demo-campus-button-text;
         settings-button-text <=> root.campus-select-settings-button-text;
         campus-model <=> root.campus-select-model;
+        search-text <=> root.campus-search-text;
+        search-placeholder: root.campus-search-placeholder;
+        search-button-text: root.campus-search-button-text;
+        recent-title: root.campus-recent-title;
+        result-model <=> root.campus-search-results-model;
+        show-results: root.campus-show-results;
 
         new-demo-campus-clicked => { root.campus-select-new-demo-campus-clicked() }
         settings-clicked => { root.campus-select-settings-clicked() }
         campus-clicked(id) => { root.campus-select-campus-clicked(id) }
+        search-requested => { root.campus-search-requested() }
+        remove-recent-clicked(id) => { root.campus-select-remove-recent-clicked(id) }
     }
 
-    // ── 屏 2：方案列表页（T19B-4）────────────────────────
     if root.active-screen == 2: PlanList {
         title: root.plan-list-title;
         campus-name: root.plan-list-campus-name;
@@ -460,7 +467,6 @@ export component AppWindow inherits Window {
         tutorial-skip-all-clicked => { root.plan-list-tutorial-skip-all-clicked() }
     }
 
-    // ── 通用确认窗（T19B-5A 对话框基建，声明在屏之后 = 渲染在上层）──
     ConfirmDialog {
         dialog-visible: root.confirm-dialog-visible;
         title: root.confirm-dialog-title;
@@ -548,7 +554,6 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── 屏 3：设置页（T19B-2 已实现，债务②）───────────────
     if root.active-screen == 3: VerticalLayout {
         alignment: center;
         spacing: 16px;
@@ -956,7 +961,6 @@ export component AppWindow inherits Window {
         }
     }
     
-    // ── 屏 5：公告栏页（T19B-9）────────────────────────────
     if root.active-screen == 5: NoticeBoard {
         title <=> root.notice-board-title;
         empty-list-text <=> root.notice-board-empty-list-text;
@@ -973,7 +977,6 @@ export component AppWindow inherits Window {
         diagnostic-action-clicked(notice-id) => { root.notice-diagnostic-action-clicked(notice-id); }
     }
     
-    // ── 屏 6：回收站页（T19B-9）────────────────────────────
     if root.active-screen == 6: Trash {
         title <=> root.trash-page-title;
         empty-list-text <=> root.trash-page-empty-list-text;
@@ -981,12 +984,12 @@ export component AppWindow inherits Window {
         purge-button-text <=> root.trash-page-purge-button-text;
         retention-notice-text <=> root.trash-page-retention-notice-text;
         campus-prefix <=> root.trash-page-campus-prefix;
-        date-today <=> root.trash-page-date-today;
         trash-model <=> root.trash-page-model;
+
+        restore-clicked(plan-id) => { root.trash-restore-clicked(plan-id) }
+        purge-clicked(plan-id) => { root.trash-purge-clicked(plan-id) }
+        purge-all-clicked() => { root.trash-purge-all-clicked() }
         
-        restore-clicked(plan-id) => { /* 恢复逻辑待 F3 */ }
-        purge-clicked(plan-id) => { /* 二次确认 + 永久删除待 F3 */ }
-        purge-all-clicked() => { /* 清空回收站需二次确认 */ }
     }
 }
 

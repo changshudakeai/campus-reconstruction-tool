@@ -9,28 +9,28 @@ use std::sync::Arc;
 
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
-use project_management::CampusPlanSnapshot;
 use slint::ComponentHandle;
 
 use crate::presentation::{
-    CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
-    CollectionPresentationEntry, CoveragePageState, CoveragePresentationEntry, ExportPageState,
-    ExportPresentationEntry, NavigationDecision, NotificationPageState,
-    NotificationPresentationEntry, Presentation, PresentationAdapter, Progress, ReviewPageState,
-    ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
-    StartupPresentationEntry, StartupRequest, ToolbarPageState, WorkspacePageState,
+    CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
+    CoveragePageState, CoveragePresentationEntry, ExportPageState, ExportPresentationEntry,
+    NavigationDecision, NotificationPageState, NotificationPresentationEntry, Presentation,
+    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
+    SettingsPresentationEntry, SettingsRequest, StartupPresentationEntry, StartupRequest,
+    ToolbarPageState, TrashPresentationEntry, TrashRequest, WorkspacePageState,
 };
+mod campus_plan_trash;
 mod startup_settings;
 
+use campus_plan_trash::{CampusPlanProductionAdapter, CampusPlanRequest, TrashProductionAdapter};
 use startup_settings::{SettingsProductionAdapter, StartupProductionAdapter};
 
 use crate::presenter::DiagnosticActionRunner;
-use crate::theme::format_relative_time;
-use crate::{AppWindow, CampusData, NoticeData, PlanCardData, ViewModelInjector};
+use crate::{AppWindow, NoticeData, ViewModelInjector};
 
 #[cfg(test)]
-static ENTRY_CALLS: [std::sync::atomic::AtomicUsize; 8] =
-    [const { std::sync::atomic::AtomicUsize::new(0) }; 8];
+static ENTRY_CALLS: [std::sync::atomic::AtomicUsize; 9] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 9];
 
 #[cfg(test)]
 pub(crate) fn record_entry_call(index: usize) {
@@ -45,99 +45,8 @@ pub(crate) fn reset_entry_calls() {
 }
 
 #[cfg(test)]
-pub(crate) fn entry_calls() -> [usize; 8] {
+pub(crate) fn entry_calls() -> [usize; 9] {
     std::array::from_fn(|index| ENTRY_CALLS[index].load(std::sync::atomic::Ordering::SeqCst))
-}
-
-#[derive(Clone, Copy)]
-enum CampusPlanRequest {
-    CampusSelect,
-    PlanList,
-}
-
-struct CampusPlanProductionAdapter {
-    injector: Rc<RefCell<ViewModelInjector>>,
-}
-
-impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanProductionAdapter {
-    fn present(&mut self, request: CampusPlanRequest) -> Presentation<CampusPlanPageState> {
-        #[cfg(test)]
-        record_entry_call(2);
-        let injector = self.injector.borrow();
-        let presentation = match injector.projects().campus_plan_snapshot() {
-            Ok(snapshot) => Presentation::ready(campus_plan_page(
-                &injector,
-                snapshot,
-                matches!(request, CampusPlanRequest::PlanList),
-            )),
-            Err(_) => Presentation::failed(campus_plan_page(
-                &injector,
-                CampusPlanSnapshot {
-                    campuses: Vec::new(),
-                    landing_campus: None,
-                    plans: Vec::new(),
-                },
-                matches!(request, CampusPlanRequest::PlanList),
-            )),
-        };
-        let screen = match request {
-            CampusPlanRequest::CampusSelect => Screen::CampusSelect,
-            CampusPlanRequest::PlanList => Screen::PlanList,
-        };
-        presentation.with_navigation(NavigationDecision::Show(screen))
-    }
-}
-
-pub(crate) fn campus_plan_page(
-    injector: &ViewModelInjector,
-    snapshot: CampusPlanSnapshot,
-    toolbar_visible: bool,
-) -> CampusPlanPageState {
-    let l10n = injector.l10n();
-    let campuses = snapshot
-        .campuses
-        .into_iter()
-        .map(|campus| CampusData {
-            id: campus.id.into(),
-            name: campus.name.into(),
-        })
-        .collect();
-    let plans = snapshot
-        .plans
-        .into_iter()
-        .map(|card| PlanCardData {
-            progress_desc: injector
-                .plan_card_progress_text(&card.plan_id, &l10n.t(card.progress.text_key()))
-                .into(),
-            plan_id: card.plan_id.into(),
-            name: card.name.into(),
-            last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
-        })
-        .collect();
-    CampusPlanPageState {
-        toolbar: toolbar(l10n, toolbar_visible),
-        campus_select_title: l10n.t("app.campus_select_title"),
-        campus_empty_text: l10n.t("app.campus_select_no_campus"),
-        new_demo_campus_label: l10n.t("app.new_demo_button"),
-        campus_settings_label: l10n.t("app.settings_button"),
-        campuses,
-        plan_list_title: l10n.t("plan.list_header"),
-        campus_name: snapshot
-            .landing_campus
-            .map(|campus| l10n.t_with_array("app.shell_status_last_campus", &[&campus.name]))
-            .unwrap_or_default(),
-        create_plan_label: l10n.t("plan.create"),
-        back_to_campus_label: l10n.t("app.switch_campus"),
-        plan_empty_text: l10n.t("plan.empty_list"),
-        rename_label: l10n.t("plan.rename"),
-        duplicate_label: l10n.t("plan.duplicate"),
-        delete_label: l10n.t("plan.delete"),
-        plans,
-        tutorial_visible: false,
-        tutorial_text: String::new(),
-        tutorial_dismiss_label: l10n.t("tutorial.dismiss_button"),
-        tutorial_skip_all_label: String::new(),
-    }
 }
 
 fn workspace(l10n: &Localization, window: Option<&AppWindow>) -> WorkspacePageState {
@@ -346,10 +255,19 @@ fn toolbar(l10n: &Localization, visible: bool) -> ToolbarPageState {
 }
 
 /// 与应用窗口同寿命的八类生产呈现入口；组合根只持有端口，不理解功能内部步骤。
-/// 等待用户确认后由设置入口执行的操作。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum PendingConfirmation {
     ClearGaodeKeys,
+    DeletePlan { plan_id: String },
+    PurgePlan { trash_id: String },
+    ClearTrash,
+}
+
+/// 等待用户确认输入窗后由方案入口执行的操作。
+#[derive(Clone, PartialEq, Eq)]
+enum PendingInput {
+    CreatePlan,
+    RenamePlan { plan_id: String },
 }
 
 pub(crate) struct ProductionEntries {
@@ -361,10 +279,12 @@ pub(crate) struct ProductionEntries {
     _coverage: CoveragePresentationEntry<'static, ()>,
     export: ExportPresentationEntry<'static, ()>,
     notification: NotificationPresentationEntry<'static, NotificationRequest>,
+    trash: TrashPresentationEntry<'static, TrashRequest>,
     center: Arc<NotificationCenter>,
     action_runner: DiagnosticActionRunner,
     diagnostic_failure: DiagnosticFailureLabels,
     pending_confirmation: Option<PendingConfirmation>,
+    pending_input: Option<PendingInput>,
 }
 
 impl ProductionEntries {
@@ -393,7 +313,9 @@ impl ProductionEntries {
             settings: SettingsPresentationEntry::new(SettingsProductionAdapter {
                 injector: Rc::clone(&injector),
             }),
-            campus_plan: CampusPlanPresentationEntry::new(CampusPlanProductionAdapter { injector }),
+            campus_plan: CampusPlanPresentationEntry::new(CampusPlanProductionAdapter {
+                injector: Rc::clone(&injector),
+            }),
             collection: CollectionPresentationEntry::new(CollectionProductionAdapter(
                 workspace.clone(),
             )),
@@ -404,10 +326,14 @@ impl ProductionEntries {
                 center: Arc::clone(&center),
                 labels,
             }),
+            trash: TrashPresentationEntry::new(TrashProductionAdapter {
+                injector: Rc::clone(&injector),
+            }),
             center,
             action_runner: DiagnosticActionRunner::default(),
             diagnostic_failure,
             pending_confirmation: None,
+            pending_input: None,
         }
     }
 
@@ -486,8 +412,8 @@ impl ProductionEntries {
             .show(window, &self.center, SettingsRequest::ClearKeys);
     }
 
-    /// 用户确认清除密钥后执行；返回是否消费了设置入口的确认。
-    pub(crate) fn confirm_pending_settings(&mut self, window: &AppWindow) -> bool {
+    /// 用户确认后执行对应的待确认操作；返回是否消费了本次确认。
+    pub(crate) fn confirm_pending_action(&mut self, window: &AppWindow) -> bool {
         let Some(pending) = self.pending_confirmation.take() else {
             return false;
         };
@@ -495,13 +421,60 @@ impl ProductionEntries {
             PendingConfirmation::ClearGaodeKeys => {
                 self.settings
                     .show(window, &self.center, SettingsRequest::ConfirmClearKeys);
-                true
+            }
+            PendingConfirmation::DeletePlan { plan_id } => {
+                self.campus_plan.show(
+                    window,
+                    &self.center,
+                    CampusPlanRequest::ConfirmDeletePlan { plan_id },
+                );
+            }
+            PendingConfirmation::PurgePlan { trash_id } => {
+                self.trash.show(
+                    window,
+                    &self.center,
+                    TrashRequest::ConfirmPurge { trash_id },
+                );
+            }
+            PendingConfirmation::ClearTrash => {
+                self.trash
+                    .show(window, &self.center, TrashRequest::ConfirmClearAll);
             }
         }
+        true
     }
 
-    pub(crate) fn cancel_pending_settings(&mut self) {
+    pub(crate) fn cancel_pending_action(&mut self) {
         self.pending_confirmation = None;
+    }
+
+    /// 用户确认输入窗后执行对应的方案操作；返回是否消费了本次输入确认。
+    pub(crate) fn confirm_pending_input(&mut self, window: &AppWindow) -> bool {
+        let Some(pending) = self.pending_input.take() else {
+            return false;
+        };
+        let name = window.get_input_dialog_text().to_string();
+        match pending {
+            PendingInput::CreatePlan => {
+                self.campus_plan.show(
+                    window,
+                    &self.center,
+                    CampusPlanRequest::ConfirmCreatePlan { name },
+                );
+            }
+            PendingInput::RenamePlan { plan_id } => {
+                self.campus_plan.show(
+                    window,
+                    &self.center,
+                    CampusPlanRequest::ConfirmRenamePlan { plan_id, name },
+                );
+            }
+        }
+        true
+    }
+
+    pub(crate) fn cancel_pending_input(&mut self) {
+        self.pending_input = None;
     }
 
     pub(crate) fn replay_tutorial(&mut self, window: &AppWindow) {
@@ -515,13 +488,6 @@ impl ProductionEntries {
         crate::map_webview::hide();
         self.campus_plan
             .show(window, &self.center, CampusPlanRequest::CampusSelect);
-    }
-
-    pub(crate) fn show_plan_list(&mut self, window: &AppWindow) {
-        self.supersede_diagnostic(window);
-        crate::map_webview::hide();
-        self.campus_plan
-            .show(window, &self.center, CampusPlanRequest::PlanList);
     }
 
     pub(crate) fn show_collection(&mut self, window: &AppWindow) {
@@ -677,6 +643,140 @@ impl ProductionEntries {
         window.on_diagnostic_actions_completed(move || {
             let Some(window) = weak.upgrade() else { return };
             shared.borrow_mut().finish_diagnostic_actions(&window);
+        });
+
+        // ── S1-04：校区搜索与最近记录 ────────────────────────
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_campus_search_requested(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().request_campus_search(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_campus_select_campus_clicked(move |campus_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .select_campus(&window, campus_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_campus_select_remove_recent_clicked(move |campus_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .remove_recent_campus(&window, campus_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_campus_select_new_demo_campus_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().create_demo_campus(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_campus_select_settings_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().show_settings(&window);
+            }
+        });
+
+        // ── S1-04：方案列表 CRUD ────────────────────────────
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_plan_list_create_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().request_create_plan(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_plan_list_rename_clicked(move |plan_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .request_rename_plan(&window, plan_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_plan_list_duplicate_clicked(move |plan_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .duplicate_plan(&window, plan_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_plan_list_delete_clicked(move |plan_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .request_delete_plan(&window, plan_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_plan_list_back_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().show_campus_select(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_trash_restore_clicked(move |plan_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .restore_trash_item(&window, plan_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_trash_purge_clicked(move |plan_id| {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .request_purge_trash_item(&window, plan_id.to_string());
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_trash_purge_all_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().request_clear_trash(&window);
+            }
+        });
+
+        // ── 输入窗（方案新建/改名，S1-04）──────────────────
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_input_dialog_confirmed(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().confirm_pending_input(&window);
+            }
+        });
+
+        let shared = Rc::clone(entries);
+        window.on_input_dialog_cancelled(move || {
+            shared.borrow_mut().cancel_pending_input();
         });
     }
 }

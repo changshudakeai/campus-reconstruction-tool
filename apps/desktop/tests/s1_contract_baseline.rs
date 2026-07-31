@@ -157,9 +157,11 @@ fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
     );
     let campus_row = find_flow_row(&baseline, "校区与方案");
     assert!(
-        campus_row.contains("回收站的恢复、永久删除和清空当前没有可观察效果")
-            && campus_row.contains("不会显示确认弹窗"),
-        "校区与方案基线必须记录回收站按钮尚未接线的现状"
+        campus_row.contains("搜索只在点击“搜索”或按回车时开始")
+            && campus_row.contains("最近使用的校区（名称+地址）")
+            && campus_row.contains("恢复、永久删除和清空成功后在回收站停留并短暂提示")
+            && campus_row.contains("移除最近记录不弹确认"),
+        "校区与方案基线必须记录校区搜索、最近记录与回收站接线现状"
     );
 
     let window = AppWindow::new().expect("创建公开 AppWindow");

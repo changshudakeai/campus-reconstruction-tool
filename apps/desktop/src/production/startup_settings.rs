@@ -7,6 +7,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::presentation::{
+    CampusPlanPageState, ConfirmationPresentation, NavigationDecision, NotificationFact,
+    Presentation, PresentationAdapter, Screen, SettingsPageState, SettingsRequest,
+    StartupPageState, StartupRequest,
+};
+use crate::runtime::format_relative_time;
+use crate::{CampusData, PlanCardData, ViewModelInjector};
 use global_settings::{
     FirstRunSetup, SettingsSnapshot, StartupDestination, StartupLandingContentProvider,
     StartupSnapshot,
@@ -14,14 +21,6 @@ use global_settings::{
 use localization::Localization;
 use notification_center::Notification;
 use project_management::{CampusPlanSnapshot, ProjectManager};
-
-use crate::presentation::{
-    ConfirmationPresentation, NavigationDecision, NotificationFact, Presentation,
-    PresentationAdapter, Screen, SettingsPageState, SettingsRequest, StartupPageState,
-    StartupRequest,
-};
-use crate::production::campus_plan_page;
-use crate::ViewModelInjector;
 
 #[cfg(test)]
 use crate::production::record_entry_call;
@@ -404,3 +403,64 @@ fn error_fact(l10n: &Localization, body: &str) -> NotificationFact {
         body.to_owned(),
     ))
 }
+
+pub(crate) fn campus_plan_page(
+    injector: &ViewModelInjector,
+    snapshot: CampusPlanSnapshot,
+    toolbar_visible: bool,
+) -> CampusPlanPageState {
+    let l10n = injector.l10n();
+    let campuses = snapshot
+        .campuses
+        .into_iter()
+        .map(|campus| CampusData {
+            id: campus.id.into(),
+            name: campus.name.into(),
+            address: campus.address.into(),
+        })
+        .collect();
+    let plans = snapshot
+        .plans
+        .into_iter()
+        .map(|card| PlanCardData {
+            progress_desc: injector
+                .plan_card_progress_text(&card.plan_id, &l10n.t(card.progress.text_key()))
+                .into(),
+            plan_id: card.plan_id.into(),
+            name: card.name.into(),
+            last_modified: format_relative_time(l10n, &card.last_modified_at).into(),
+        })
+        .collect();
+    CampusPlanPageState {
+        toolbar: super::toolbar(l10n, toolbar_visible),
+        campus_select_title: l10n.t("app.campus_select_title"),
+        campus_empty_text: l10n.t("app.campus_select_no_campus"),
+        new_demo_campus_label: l10n.t("app.new_demo_button"),
+        campus_settings_label: l10n.t("app.settings_button"),
+        campuses,
+        campus_search_query: String::new(),
+        campus_search_placeholder: l10n.t("app.campus_search_placeholder"),
+        campus_search_button_label: l10n.t("campus.search_button"),
+        campus_recent_title: l10n.t("campus.recent_section"),
+        campus_search_results: Vec::new(),
+        campus_show_results: false,
+        plan_list_title: l10n.t("plan.list_header"),
+        campus_name: snapshot
+            .landing_campus
+            .map(|campus| l10n.t_with_array("app.shell_status_last_campus", &[&campus.name]))
+            .unwrap_or_default(),
+        create_plan_label: l10n.t("plan.create"),
+        back_to_campus_label: l10n.t("app.switch_campus"),
+        plan_empty_text: l10n.t("plan.empty_list"),
+        rename_label: l10n.t("plan.rename"),
+        duplicate_label: l10n.t("plan.duplicate"),
+        delete_label: l10n.t("plan.delete"),
+        plans,
+        tutorial_visible: false,
+        tutorial_text: String::new(),
+        tutorial_dismiss_label: l10n.t("tutorial.dismiss_button"),
+        tutorial_skip_all_label: String::new(),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────

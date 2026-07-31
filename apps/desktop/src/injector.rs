@@ -25,7 +25,7 @@ use localization::{Language, Localization};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::{CampusId, PlanId};
+use shared_domain_types::PlanId;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::presenter::report_callback_error;
@@ -216,24 +216,6 @@ impl ViewModelInjector {
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
-        // 校区选择页（T19B-3/T19B-5）
-        window.set_campus_select_title(l10n.t("app.campus_select_title").into());
-        window.set_campus_select_new_demo_campus_button_text(l10n.t("app.new_demo_button").into());
-        window.set_campus_select_settings_button_text(l10n.t("app.settings_button").into());
-
-        // 方案列表页（T19B-4）
-        window.set_plan_list_title(l10n.t("plan.list_header").into());
-        window.set_plan_list_create_button_text(l10n.t("plan.create").into());
-        window.set_plan_list_back_button_text(l10n.t("app.switch_campus").into());
-        window.set_plan_list_empty_text(l10n.t("plan.empty_list").into());
-        window.set_plan_list_rename_label(l10n.t("plan.rename").into());
-        window.set_plan_list_duplicate_label(l10n.t("plan.duplicate").into());
-        window.set_plan_list_delete_label(l10n.t("plan.delete").into());
-        window.set_plan_list_tutorial_visible(false);
-        window.set_plan_list_tutorial_text(SharedString::new());
-        window.set_plan_list_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
-        window.set_plan_list_tutorial_skip_all_label(SharedString::new());
-
         // 通用对话框文案（T19B-5A 对话框基建）
         window.set_confirm_dialog_confirm_label(l10n.t("dialog.confirm_button").into());
         window.set_confirm_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
@@ -258,15 +240,7 @@ impl ViewModelInjector {
         window.set_notice_board_date_yesterday(l10n.t("notice.date_yesterday").into());
         window.set_notice_board_importance_high_label(l10n.t("notice.importance_high").into());
         window.set_notice_board_unread_marker(l10n.t("notice.unread_marker").into());
-
-        // 回收站页（Screen 6）文案
-        window.set_trash_page_title(l10n.t("trash.page_title").into());
-        window.set_trash_page_empty_list_text(l10n.t("trash.empty_list").into());
-        window.set_trash_page_restore_button_text(l10n.t("trash.restore_button").into());
-        window.set_trash_page_purge_button_text(l10n.t("trash.purge_button").into());
-        window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
         window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + ":").into());
-        window.set_trash_page_date_today(l10n.t("notice.date_today").into());
     }
 
     /// 同步边界绘制器状态到 Slint 显示模型
@@ -420,12 +394,12 @@ impl ViewModelInjector {
         // T21: 高德地图嵌入探针初始化 (placeholder，待 Slint 1.17+ 升级)
         // ↻ 集成到 notification-center → T24 完成
 
-        // ── T19B-3/T19B-5：校区选择页回调 ────────────────────────
-        Self::bind_campus_select(injector, presentation, window);
-        // ── T19B-4：方案列表页回调 ────────────────────────────
-        Self::bind_plan_list(injector, presentation, window);
+        // ── S1-04：校区/方案/回收站回调已全部改经呈现入口（bind_actions）──
+        // 方案列表遗留：卡片单击打开工作区 + 教程气泡（F2，后续工单迁出）
+        Self::bind_plan_list(injector, window);
         // ── T19B-9: 右上角工具栏回调 ─────────────────────
         Self::bind_toolbar(presentation, window);
+        Self::bind_confirm_dialog(injector, presentation, window);
         // ── T19B-5B: 方案工作区回调绑定（Phase 1）───────────────────
         Self::bind_workspace(injector, presentation, window);
         // ── T24: 边界地图 WebView IPC 桥接注册 ─────────────────────
@@ -595,108 +569,9 @@ impl ViewModelInjector {
         }));
     }
 
-    /// T19B-3/T19B-5：校区选择页回调绑定。
-    ///
-    /// 新建演示校区 → create_campus 刷新列表；点列表项 → remember_campus →
-    /// 刷新方案列表 → 跳屏 2；点击设置 → 跳屏 3。
-    fn bind_campus_select(
-        injector: &Rc<RefCell<Self>>,
-        presentation: &Rc<RefCell<ProductionEntries>>,
-        window: &AppWindow,
-    ) {
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let presentation_new = Rc::clone(presentation);
-        window.on_campus_select_new_demo_campus_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
-            let campus_name = injector.l10n().t("campus.demo_name").to_string();
-
-            match injector.projects_mut().create_campus(&campus_name) {
-                Ok(campus) => {
-                    // 创建成功后立即选中该校区
-                    if let Ok(campus_id) = CampusId::parse(&campus.id) {
-                        // 先记住校区，再刷新列表
-                        let _ = injector.projects_mut().remember_campus(&campus_id);
-                        // 自动进入方案列表
-                        crate::map_webview::hide();
-                        drop(injector);
-                        presentation_new.borrow_mut().show_plan_list(&window);
-                    }
-                }
-                Err(error) => report_callback_error(injector.l10n(), &error),
-            }
-        });
-
-        let weak = window.as_weak();
-        let presentation_settings = Rc::clone(presentation);
-        window.on_campus_select_settings_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            crate::map_webview::hide();
-            presentation_settings.borrow_mut().show_settings(&window);
-        });
-
-        // 单击已有校区行（T19B-5B 补接）：remember_campus → 刷新方案列表 → 跳屏 2
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let presentation_plan = Rc::clone(presentation);
-        window.on_campus_select_campus_clicked(move |campus_id_str| {
-            let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
-            let campus_id = match CampusId::parse(&campus_id_str) {
-                Ok(id) => id,
-                Err(error) => {
-                    report_callback_error(injector.l10n(), &error);
-                    return;
-                }
-            };
-            if let Err(error) = injector.projects_mut().remember_campus(&campus_id) {
-                report_callback_error(injector.l10n(), &error);
-                return;
-            }
-            crate::map_webview::hide();
-            drop(injector);
-            presentation_plan.borrow_mut().show_plan_list(&window);
-        });
-    }
-
-    /// T19B-4/T19B-5A：方案列表页回调绑定。
-    ///
-    /// 新建方案（ADR-0010 轻创建对话框）/ 返回校区选择 / ···菜单操作
-    /// （改名/复制/删除，ADR-0018 §三）/ 教程气泡钩子（F2 规矩①②）。
-    fn bind_plan_list(
-        injector: &Rc<RefCell<Self>>,
-        presentation: &Rc<RefCell<ProductionEntries>>,
-        window: &AppWindow,
-    ) {
-        // 新建方案（ADR-0010）：弹输入窗，预填可修改的默认名
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        window.on_plan_list_create_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let injector = shared.borrow();
-            let Some(campus_id) = injector.current_campus_id() else {
-                report_callback_error(injector.l10n(), &"cannot create plan: no campus selected");
-                return;
-            };
-            let base_name = injector.l10n().t("plan.default_name");
-            let default_name = injector.next_plan_name(&campus_id, &base_name);
-            // 设置输入窗为“新建方案”模式（mode=0）
-            window.set_input_dialog_mode(0);
-            window.set_input_dialog_title(injector.l10n().t("dialog.create_title").into());
-            window.set_input_dialog_text(default_name.into());
-            window.set_input_dialog_visible(true);
-        });
-
-        // 返回校区选择页
-        let weak = window.as_weak();
-        let presentation_campus = Rc::clone(presentation);
-        window.on_plan_list_back_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            crate::map_webview::hide();
-            presentation_campus.borrow_mut().show_campus_select(&window);
-        });
-
+    /// 方案列表遗留绑定（S1-04 后仅保留工作区与教程气泡，其余已迁到呈现入口）：
+    /// 卡片单击打开方案工作区（ADR-0027 第 6 轮）+ F2 教程气泡 ①②。
+    fn bind_plan_list(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
         // 单击方案卡片（ADR-0027 第 6 轮：单击即开，无概览层）→ 跳屏 4 工作区
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
@@ -753,210 +628,6 @@ impl ViewModelInjector {
             }
         });
 
-        // 改名（ADR-0018 §三）：···菜单 → 输入窗（预填现名）→ F3 rename_plan
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        window.on_plan_list_rename_clicked(move |plan_id| {
-            let Some(window) = weak.upgrade() else { return };
-            let injector = shared.borrow();
-            // 查找当前方案名作为预填值
-            let current_name = if let Some(campus_id) = injector.current_campus_id() {
-                injector
-                    .projects()
-                    .list_plan_cards(&campus_id)
-                    .unwrap_or_default()
-                    .iter()
-                    .find(|c| c.plan_id.as_str() == plan_id.as_str())
-                    .map(|c| c.name.clone())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            // 设置输入窗为“改名”模式（mode=1）
-            window.set_input_dialog_mode(1);
-            window.set_input_dialog_title(injector.l10n().t("dialog.rename_title").into());
-            window.set_input_dialog_text(current_name.into());
-            window.set_active_plan_id(plan_id);
-            window.set_input_dialog_visible(true);
-        });
-
-        // 复制方案：调 F3 duplicate_plan，后缀取 l10n “副本”
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let presentation_duplicate = Rc::clone(presentation);
-        window.on_plan_list_duplicate_clicked(move |plan_id_str| {
-            let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
-            let plan_id = match PlanId::parse(&plan_id_str) {
-                Ok(id) => id,
-                Err(e) => {
-                    report_callback_error(injector.l10n(), &e);
-                    return;
-                }
-            };
-            let suffix = injector.l10n().t("plan.duplicate_suffix");
-            match injector.projects_mut().duplicate_plan(&plan_id, &suffix) {
-                Ok(_) => {
-                    drop(injector);
-                    presentation_duplicate.borrow_mut().show_plan_list(&window);
-                }
-                Err(error) => report_callback_error(injector.l10n(), &error),
-            }
-        });
-
-        // 删除（ADR-0018 §三）：先弹确认窗，确认后进回收站
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let shared_confirmed = Rc::clone(injector);
-        let shared_cancel = Rc::clone(injector);
-        let presentation_confirmed = Rc::clone(presentation);
-        let presentation_cancel = Rc::clone(presentation);
-        window.on_plan_list_delete_clicked(move |plan_id_str| {
-            let Some(window) = weak.upgrade() else { return };
-            let injector = shared.borrow();
-            // 设置确认窗文案
-            window.set_confirm_dialog_title(injector.l10n().t("dialog.delete_title").into());
-            window.set_confirm_dialog_body(injector.l10n().t("plan.delete_confirm").into());
-            window.set_active_plan_id(plan_id_str);
-            window.set_confirm_dialog_visible(true);
-        });
-
-        // ── 确认窗回调（T19B-5A + P0-3 朝向重算 + T22 Gaode Key 引导）───────────────
-        // 确认删除：调 F3 delete_plan（保留 30 天），或应用朝向重算值，或跳转 Gaode 设置
-        let weak = window.as_weak();
-        window.on_confirm_dialog_confirmed(move || {
-            let Some(window) = weak.upgrade() else { return };
-            window.set_confirm_dialog_visible(false);
-
-            // 设置入口的确认（清除高德密钥）先于其他确认消费
-            if presentation_confirmed
-                .borrow_mut()
-                .confirm_pending_settings(&window)
-            {
-                return;
-            }
-
-            let mut injector = shared_confirmed.borrow_mut();
-
-            // T22: Gaode Key 空值引导至设置页
-            if std::mem::replace(&mut injector.pending_gaode_redirect, false) {
-                crate::map_webview::hide();
-                drop(injector);
-                presentation_confirmed.borrow_mut().show_settings(&window);
-                return;
-            }
-
-            // P0-3: 如果有待应用的朝向值，优先处理
-            if let Some(pending_angle) = injector.pending_orientation_angle.take() {
-                // 应用新朝向值
-                injector.orientation_angle = Some(pending_angle);
-                // T25: 按方案保存已确认朝向角度
-                if let Some(plan_id) = injector.active_plan_id.clone() {
-                    let has_boundary = injector.current_plan_has_boundary();
-                    injector.update_plan_progress(&plan_id, has_boundary, true);
-                    injector.set_plan_orientation_angle(&plan_id, Some(pending_angle));
-                }
-                injector.sync_workspace_progress(&window);
-                injector.sync_orientation_display(&window);
-                return;
-            }
-
-            // 无 pending state → 删除计划
-            let plan_id_str = window.get_active_plan_id().to_string();
-            let plan_id = match PlanId::parse(&plan_id_str) {
-                Ok(id) => id,
-                Err(e) => {
-                    report_callback_error(injector.l10n(), &e);
-                    return;
-                }
-            };
-            let Some(campus_id) = injector.current_campus_id() else {
-                report_callback_error(injector.l10n(), &"cannot delete plan: no campus selected");
-                return;
-            };
-            match injector.projects_mut().delete_plan(&campus_id, &plan_id) {
-                Ok(_) => {
-                    drop(injector);
-                    presentation_confirmed.borrow_mut().show_plan_list(&window);
-                }
-                Err(error) => report_callback_error(injector.l10n(), &error),
-            }
-        });
-
-        // 取消删除 / 取消朝向重算 / 取消 Gaode Key 引导
-        let weak = window.as_weak();
-        window.on_confirm_dialog_cancelled(move || {
-            let Some(window) = weak.upgrade() else { return };
-            window.set_confirm_dialog_visible(false);
-            // 设置入口的待确认操作（清除高德密钥）取消时一并重置
-            presentation_cancel.borrow_mut().cancel_pending_settings();
-            // P0-3: 重置 pending state（如果已设置）
-            // T22: 同时重置 Gaode Key 引导标志
-            if let Ok(mut injector) = shared_cancel.try_borrow_mut() {
-                injector.pending_orientation_angle = None;
-                injector.pending_gaode_redirect = false;
-            }
-        });
-
-        // ── 输入窗回调（T19B-5A）───────────────────────────
-        // 确认输入：根据 mode 分派新建/改名
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let presentation_input = Rc::clone(presentation);
-        window.on_input_dialog_confirmed(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let mut injector = shared.borrow_mut();
-            let mode = window.get_input_dialog_mode();
-            let name = window.get_input_dialog_text().to_string();
-            let name = name.trim().to_string();
-            if name.is_empty() {
-                return; // 空名不提交，窗保持打开
-            }
-            let Some(campus_id) = injector.current_campus_id() else {
-                report_callback_error(injector.l10n(), &"no campus selected");
-                return;
-            };
-            match mode {
-                0 => {
-                    // 新建方案（ADR-0010）
-                    match injector.projects_mut().create_plan(&campus_id, &name) {
-                        Ok(_) => {
-                            window.set_input_dialog_visible(false);
-                            drop(injector);
-                            presentation_input.borrow_mut().show_plan_list(&window);
-                        }
-                        Err(error) => report_callback_error(injector.l10n(), &error),
-                    }
-                }
-                _ => {
-                    // 改名（ADR-0018 §三）
-                    let plan_id_str = window.get_active_plan_id().to_string();
-                    let plan_id = match PlanId::parse(&plan_id_str) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            report_callback_error(injector.l10n(), &e);
-                            return;
-                        }
-                    };
-                    match injector.projects_mut().rename_plan(&plan_id, &name) {
-                        Ok(_) => {
-                            window.set_input_dialog_visible(false);
-                            drop(injector);
-                            presentation_input.borrow_mut().show_plan_list(&window);
-                        }
-                        Err(error) => report_callback_error(injector.l10n(), &error),
-                    }
-                }
-            }
-        });
-
-        // 取消输入
-        let weak = window.as_weak();
-        window.on_input_dialog_cancelled(move || {
-            let Some(window) = weak.upgrade() else { return };
-            window.set_input_dialog_visible(false);
-        });
-
         // 教程气泡“知道了”（F2 规矩①）
         let weak = window.as_weak();
         let shared = Rc::clone(injector);
@@ -1006,12 +677,12 @@ impl ViewModelInjector {
             }
         });
 
-        // 回收站入口：跳屏 6
+        // 回收站入口（S1-04：经回收站呈现入口刷新完整状态）
         let weak_clone = weak.clone();
+        let presentation_trash = Rc::clone(presentation);
         window.on_trash_toolbar_button_clicked(move || {
             if let Some(window) = weak_clone.upgrade() {
-                crate::map_webview::hide();
-                window.set_active_screen(6);
+                presentation_trash.borrow_mut().show_trash(&window);
             }
         });
 
@@ -1022,6 +693,67 @@ impl ViewModelInjector {
             if let Some(window) = weak_clone.upgrade() {
                 crate::map_webview::hide();
                 presentation_settings.borrow_mut().show_settings(&window);
+            }
+        });
+    }
+
+    /// 通用确认窗回调（S1-04 起：先经呈现入口消费方案/回收站/设置的待确认
+    /// 操作，其余分支为工作区遗留——朝向重算与空密钥引导，后续工单迁出）。
+    fn bind_confirm_dialog(
+        injector: &Rc<RefCell<Self>>,
+        presentation: &Rc<RefCell<ProductionEntries>>,
+        window: &AppWindow,
+    ) {
+        // 确认：入口待确认操作优先，其余为工作区遗留分支
+        let weak = window.as_weak();
+        let shared = Rc::clone(injector);
+        let presentation_confirmed = Rc::clone(presentation);
+        window.on_confirm_dialog_confirmed(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_confirm_dialog_visible(false);
+
+            // 方案删除/回收站/设置密钥的确认由对应呈现入口消费
+            if presentation_confirmed
+                .borrow_mut()
+                .confirm_pending_action(&window)
+            {
+                return;
+            }
+
+            let mut injector = shared.borrow_mut();
+
+            // T22: Gaode Key 空值引导至设置页
+            if std::mem::replace(&mut injector.pending_gaode_redirect, false) {
+                crate::map_webview::hide();
+                drop(injector);
+                presentation_confirmed.borrow_mut().show_settings(&window);
+                return;
+            }
+
+            // P0-3: 如果有待应用的朝向值，优先处理
+            if let Some(pending_angle) = injector.pending_orientation_angle.take() {
+                injector.orientation_angle = Some(pending_angle);
+                if let Some(plan_id) = injector.active_plan_id.clone() {
+                    let has_boundary = injector.current_plan_has_boundary();
+                    injector.update_plan_progress(&plan_id, has_boundary, true);
+                    injector.set_plan_orientation_angle(&plan_id, Some(pending_angle));
+                }
+                injector.sync_workspace_progress(&window);
+                injector.sync_orientation_display(&window);
+            }
+        });
+
+        // 取消：重置入口待确认操作与工作区遗留状态
+        let weak = window.as_weak();
+        let shared_cancel = Rc::clone(injector);
+        let presentation_cancel = Rc::clone(presentation);
+        window.on_confirm_dialog_cancelled(move || {
+            let Some(window) = weak.upgrade() else { return };
+            window.set_confirm_dialog_visible(false);
+            presentation_cancel.borrow_mut().cancel_pending_action();
+            if let Ok(mut injector) = shared_cancel.try_borrow_mut() {
+                injector.pending_orientation_angle = None;
+                injector.pending_gaode_redirect = false;
             }
         });
     }
@@ -1630,17 +1362,6 @@ impl ViewModelInjector {
         window.set_workspace_orientation_is_determined(self.current_plan_has_orientation());
     }
 
-    // ── T19B-4/T19B-5 辅助方法：校区列表与方案列表数据流转 ────────────────
-
-    /// 当前校区 ID（读 B2 app_settings 中的“上次使用的校区”）
-    fn current_campus_id(&self) -> Option<CampusId> {
-        self.projects
-            .landing_campus()
-            .ok()
-            .flatten()
-            .and_then(|c| CampusId::parse(&c.id).ok())
-    }
-
     // ── T24: 地图边界辅助方法（壳只桥接，计算全在 B3/B5）──────────────
 
     /// T24/T05: 当前锚点经纬度 (lon, lat)。
@@ -1723,19 +1444,6 @@ impl ViewModelInjector {
         }
         self.sync_workspace_progress(window);
         self.sync_boundary_display(window);
-    }
-
-    /// 生成不冲突的方案名：“新方案 1”“新方案 2”……
-    fn next_plan_name(&self, campus_id: &CampusId, base_name: &str) -> String {
-        let existing = self.projects.list_plan_cards(campus_id).unwrap_or_default();
-        let names: Vec<&str> = existing.iter().map(|c| c.name.as_str()).collect();
-        for n in 1..1000 {
-            let candidate = format!("{base_name} {n}");
-            if !names.contains(&candidate.as_str()) {
-                return candidate;
-            }
-        }
-        format!("{base_name} {}", names.len() + 1)
     }
 }
 
