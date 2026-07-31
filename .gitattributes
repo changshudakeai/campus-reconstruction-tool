@@ -1,0 +1,3 @@
+# public-api snapshot files are generated with LF line endings.
+# Force LF on checkout so Windows autocrlf cannot break CI snapshot comparison.
+**/tests/snapshots/public-api.txt text eol=lf
