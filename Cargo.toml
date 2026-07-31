@@ -110,7 +110,8 @@ gaode-client = { path = "core/gaode-client" }
 # 构建自动化（xtask is not a regular crate）
 xtask = { path = "xtask" }
 # public-api snapshot testing
-public-api = "0.52"
+public-api = "0.50.1"
+rustdoc-json = "0.9.10"
 # 路径依赖
 shared-domain-types = { path = "core/shared-domain-types" }
 localization = { path = "core/localization" }

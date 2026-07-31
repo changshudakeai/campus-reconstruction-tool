@@ -41,6 +41,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable; rustup default stable
+      # B1 public-api 快照测试需要 nightly 生成 rustdoc JSON（rustdoc-json 0.9.x 不会自动安装；
+      # nightly-2025-08-02 = public-api 0.50.x 的 MINIMUM_NIGHTLY_RUST_VERSION，见 docs/developer-guide/enforcement.md）
+      - run: rustup toolchain install nightly-2025-08-02
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
