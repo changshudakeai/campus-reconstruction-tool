@@ -1,4 +1,4 @@
-//! 工单 02 的生产呈现装配。
+//! 工单 02/03 的生产呈现装配。
 //!
 //! 每个适配器一次调用一个功能模块接口。仍未实施界面的功能只呈现当前占位页，
 //! 不在 S1 读取或推演后续业务状态。
@@ -7,10 +7,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use global_settings::{StartupDestination, StartupLandingContentProvider, StartupSnapshot};
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
-use project_management::{CampusPlanSnapshot, ProjectManager};
+use project_management::CampusPlanSnapshot;
 use slint::ComponentHandle;
 
 use crate::presentation::{
@@ -18,9 +17,13 @@ use crate::presentation::{
     CollectionPresentationEntry, CoveragePageState, CoveragePresentationEntry, ExportPageState,
     ExportPresentationEntry, NavigationDecision, NotificationPageState,
     NotificationPresentationEntry, Presentation, PresentationAdapter, Progress, ReviewPageState,
-    ReviewPresentationEntry, Screen, SettingsPageState, SettingsPresentationEntry,
-    StartupPageState, StartupPresentationEntry, ToolbarPageState, WorkspacePageState,
+    ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
+    StartupPresentationEntry, StartupRequest, ToolbarPageState, WorkspacePageState,
 };
+mod startup_settings;
+
+use startup_settings::{SettingsProductionAdapter, StartupProductionAdapter};
+
 use crate::presenter::DiagnosticActionRunner;
 use crate::theme::format_relative_time;
 use crate::{AppWindow, CampusData, NoticeData, PlanCardData, ViewModelInjector};
@@ -30,7 +33,7 @@ static ENTRY_CALLS: [std::sync::atomic::AtomicUsize; 8] =
     [const { std::sync::atomic::AtomicUsize::new(0) }; 8];
 
 #[cfg(test)]
-fn record_entry_call(index: usize) {
+pub(crate) fn record_entry_call(index: usize) {
     ENTRY_CALLS[index].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -44,138 +47,6 @@ pub(crate) fn reset_entry_calls() {
 #[cfg(test)]
 pub(crate) fn entry_calls() -> [usize; 8] {
     std::array::from_fn(|index| ENTRY_CALLS[index].load(std::sync::atomic::Ordering::SeqCst))
-}
-
-struct CampusPlanLandingProvider<'a>(&'a ProjectManager);
-
-impl StartupLandingContentProvider for CampusPlanLandingProvider<'_> {
-    type Content = CampusPlanSnapshot;
-    type Error = project_management::Error;
-
-    fn landing_content(&self) -> Result<Self::Content, Self::Error> {
-        self.0.campus_plan_snapshot()
-    }
-}
-
-struct StartupProductionAdapter {
-    injector: Rc<RefCell<ViewModelInjector>>,
-}
-
-impl PresentationAdapter<(), StartupPageState> for StartupProductionAdapter {
-    fn present(&mut self, (): ()) -> Presentation<StartupPageState> {
-        #[cfg(test)]
-        record_entry_call(0);
-        let injector = self.injector.borrow();
-        let provider = CampusPlanLandingProvider(injector.projects());
-        match injector.settings().startup_result(&provider) {
-            Ok(result) => {
-                let snapshot = result.snapshot;
-                let landing_page = result.landing_content.map(|campus_plan| {
-                    let show_plan_list = matches!(
-                        &snapshot.destination,
-                        StartupDestination::LastUsedCampus { .. }
-                    );
-                    campus_plan_page(&injector, campus_plan, show_plan_list)
-                });
-                startup_presentation(injector.l10n(), snapshot, landing_page)
-            }
-            Err(_) => Presentation::failed(startup_page(injector.l10n(), None)),
-        }
-    }
-}
-
-fn startup_presentation(
-    l10n: &Localization,
-    snapshot: StartupSnapshot,
-    landing_page: Option<CampusPlanPageState>,
-) -> Presentation<StartupPageState> {
-    let (status_text, destination) = match &snapshot.destination {
-        StartupDestination::FirstRunSetup => {
-            (l10n.t("app.shell_status_first_run"), Screen::FirstRunSetup)
-        }
-        StartupDestination::CampusSelect => (
-            l10n.t("app.shell_status_campus_select"),
-            Screen::CampusSelect,
-        ),
-        StartupDestination::LastUsedCampus { name } => (
-            l10n.t_with_array("app.shell_status_last_campus", &[name]),
-            Screen::PlanList,
-        ),
-    };
-    Presentation::ready(StartupPageState {
-        status_text,
-        landing_page,
-        ..startup_page(l10n, Some(snapshot))
-    })
-    .with_navigation(NavigationDecision::Show(destination))
-}
-
-fn startup_page(l10n: &Localization, snapshot: Option<StartupSnapshot>) -> StartupPageState {
-    let settings = snapshot
-        .map(|snapshot| snapshot.settings)
-        .unwrap_or_default();
-    StartupPageState {
-        app_title: l10n.t("app.welcome_title"),
-        status_text: l10n.t("app.shell_status_first_run"),
-        wizard_title: l10n.t("settings.wizard_title"),
-        language_label: l10n.t("settings.language_label"),
-        version_label: l10n.t("settings.minecraft_version_label"),
-        notice_text: l10n.t("settings.notice_checkbox"),
-        continue_label: l10n.t("settings.continue_button"),
-        language_options: global_settings::SUPPORTED_LANGUAGES
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        version_options: global_settings::SUPPORTED_MINECRAFT_VERSIONS
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        selected_language: settings.language,
-        selected_version: settings.minecraft_version,
-        acknowledged: false,
-        landing_page: None,
-    }
-}
-
-struct SettingsProductionAdapter {
-    injector: Rc<RefCell<ViewModelInjector>>,
-}
-
-impl PresentationAdapter<(), SettingsPageState> for SettingsProductionAdapter {
-    fn present(&mut self, (): ()) -> Presentation<SettingsPageState> {
-        #[cfg(test)]
-        record_entry_call(1);
-        let injector = self.injector.borrow();
-        let presentation = match injector.settings().settings_snapshot() {
-            Ok(snapshot) => Presentation::ready(settings_page(
-                injector.l10n(),
-                snapshot.gaode_api_key.unwrap_or_default(),
-                snapshot.gaode_security_key.unwrap_or_default(),
-            )),
-            Err(_) => {
-                Presentation::failed(settings_page(injector.l10n(), String::new(), String::new()))
-            }
-        };
-        presentation.with_navigation(NavigationDecision::Show(Screen::Settings))
-    }
-}
-
-fn settings_page(l10n: &Localization, api_key: String, security_key: String) -> SettingsPageState {
-    SettingsPageState {
-        title: l10n.t("app.settings_title"),
-        back_label: l10n.t("app.back_button"),
-        tutorial_replay_label: l10n.t("tutorial.replay_button"),
-        gaode_group_title: l10n.t("settings.gaode_group_title"),
-        api_key_label: l10n.t("settings.gaode_api_key_label"),
-        api_key_placeholder: l10n.t("settings.gaode_api_key_placeholder"),
-        api_key,
-        security_key_label: l10n.t("settings.gaode_security_key_label"),
-        security_key_placeholder: l10n.t("settings.gaode_security_key_placeholder"),
-        security_key,
-        save_label: l10n.t("settings.gaode_save_button"),
-        test_label: l10n.t("settings.gaode_test_button"),
-        status_message: String::new(),
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -217,7 +88,7 @@ impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanP
     }
 }
 
-fn campus_plan_page(
+pub(crate) fn campus_plan_page(
     injector: &ViewModelInjector,
     snapshot: CampusPlanSnapshot,
     toolbar_visible: bool,
@@ -475,9 +346,15 @@ fn toolbar(l10n: &Localization, visible: bool) -> ToolbarPageState {
 }
 
 /// 与应用窗口同寿命的八类生产呈现入口；组合根只持有端口，不理解功能内部步骤。
+/// 等待用户确认后由设置入口执行的操作。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingConfirmation {
+    ClearGaodeKeys,
+}
+
 pub(crate) struct ProductionEntries {
-    startup: StartupPresentationEntry<'static, ()>,
-    settings: SettingsPresentationEntry<'static, ()>,
+    startup: StartupPresentationEntry<'static, StartupRequest>,
+    settings: SettingsPresentationEntry<'static, SettingsRequest>,
     campus_plan: CampusPlanPresentationEntry<'static, CampusPlanRequest>,
     collection: CollectionPresentationEntry<'static, ()>,
     review: ReviewPresentationEntry<'static, ()>,
@@ -487,6 +364,7 @@ pub(crate) struct ProductionEntries {
     center: Arc<NotificationCenter>,
     action_runner: DiagnosticActionRunner,
     diagnostic_failure: DiagnosticFailureLabels,
+    pending_confirmation: Option<PendingConfirmation>,
 }
 
 impl ProductionEntries {
@@ -529,6 +407,7 @@ impl ProductionEntries {
             center,
             action_runner: DiagnosticActionRunner::default(),
             diagnostic_failure,
+            pending_confirmation: None,
         }
     }
 
@@ -540,22 +419,107 @@ impl ProductionEntries {
 
     pub(crate) fn show_startup(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        self.startup.show(window, &self.center, ());
+        crate::map_webview::hide();
+        self.startup
+            .show(window, &self.center, StartupRequest::Show);
+    }
+
+    pub(crate) fn complete_first_run(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        crate::map_webview::hide();
+        let request = StartupRequest::CompleteFirstRun {
+            language: window.get_wizard_language().to_string(),
+            minecraft_version: window.get_wizard_version().to_string(),
+            acknowledged: window.get_wizard_acknowledged(),
+        };
+        self.startup.show(window, &self.center, request);
     }
 
     pub(crate) fn show_settings(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        self.settings.show(window, &self.center, ());
+        crate::map_webview::hide();
+        self.settings
+            .show(window, &self.center, SettingsRequest::Show);
+    }
+
+    pub(crate) fn save_settings(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.settings.show(
+            window,
+            &self.center,
+            SettingsRequest::SaveGeneral {
+                language: window.get_settings_language().to_string(),
+                minecraft_version: window.get_settings_version().to_string(),
+                default_export_location: window.get_settings_export_location().to_string(),
+            },
+        );
+    }
+
+    pub(crate) fn save_keys(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.settings.show(
+            window,
+            &self.center,
+            SettingsRequest::SaveKeys {
+                api_key: window.get_gaode_api_key().to_string(),
+                security_key: window.get_gaode_security_key().to_string(),
+            },
+        );
+    }
+
+    pub(crate) fn test_gaode_connection(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.settings.show(
+            window,
+            &self.center,
+            SettingsRequest::TestConnection {
+                api_key: window.get_gaode_api_key().to_string(),
+                security_key: window.get_gaode_security_key().to_string(),
+            },
+        );
+    }
+
+    pub(crate) fn request_clear_keys(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.pending_confirmation = Some(PendingConfirmation::ClearGaodeKeys);
+        self.settings
+            .show(window, &self.center, SettingsRequest::ClearKeys);
+    }
+
+    /// 用户确认清除密钥后执行；返回是否消费了设置入口的确认。
+    pub(crate) fn confirm_pending_settings(&mut self, window: &AppWindow) -> bool {
+        let Some(pending) = self.pending_confirmation.take() else {
+            return false;
+        };
+        match pending {
+            PendingConfirmation::ClearGaodeKeys => {
+                self.settings
+                    .show(window, &self.center, SettingsRequest::ConfirmClearKeys);
+                true
+            }
+        }
+    }
+
+    pub(crate) fn cancel_pending_settings(&mut self) {
+        self.pending_confirmation = None;
+    }
+
+    pub(crate) fn replay_tutorial(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.settings
+            .show(window, &self.center, SettingsRequest::ReplayTutorial);
     }
 
     pub(crate) fn show_campus_select(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
+        crate::map_webview::hide();
         self.campus_plan
             .show(window, &self.center, CampusPlanRequest::CampusSelect);
     }
 
     pub(crate) fn show_plan_list(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
+        crate::map_webview::hide();
         self.campus_plan
             .show(window, &self.center, CampusPlanRequest::PlanList);
     }
@@ -633,6 +597,62 @@ impl ProductionEntries {
     }
 
     pub(crate) fn bind_actions(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_wizard_continue_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().complete_first_run(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_settings_save_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().save_settings(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_gaode_save_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().save_keys(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_gaode_test_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().test_gaode_connection(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_gaode_clear_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().request_clear_keys(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_replay_tutorial_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().replay_tutorial(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_settings_back_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().show_campus_select(&window);
+            }
+        });
+
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
         window.on_notice_diagnostic_action_clicked(move |notification_id| {

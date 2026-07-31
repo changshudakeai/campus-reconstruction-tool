@@ -20,7 +20,7 @@ use foundation_mode::{
     EventResult, MercatorCoord, OrientationCalculator, OrientationLine, Point2D, Vertex,
 };
 use gaode_client::{BoundarySorter, IpcMessage};
-use global_settings::{FirstRunSetup, SettingsManager};
+use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
@@ -28,9 +28,9 @@ use review_workbench::ReviewWorkbench;
 use shared_domain_types::{CampusId, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use crate::dispatch::report_callback_error;
+use crate::presenter::report_callback_error;
 use crate::production::ProductionEntries;
-use crate::runtime::{decide, status_text, LandingDecision};
+use crate::runtime::{decide, LandingDecision};
 use crate::{AppWindow, BoundaryPointData, OrientationPointData};
 
 /// 壳持有的 B2 连接组。
@@ -149,32 +149,6 @@ impl ViewModelInjector {
     /// B7 弹窗静态文案；T19B-3 校区选择页文案；T19B-4 方案列表页文案。
     pub(crate) fn inject(&self, window: &AppWindow) {
         let l10n = &self.l10n;
-        window.set_app_title(l10n.t("app.welcome_title").into());
-        window.set_status_text(status_text(l10n, &self.landing()).into());
-
-        // 首跑向导（ADR-0004：选项与默认值全部来自 F1，壳零业务逻辑）
-        window.set_active_screen(match self.landing() {
-            LandingDecision::FirstRunSetup => 0,
-            _ => 1,
-        });
-        window.set_wizard_title(l10n.t("settings.wizard_title").into());
-        window.set_wizard_language_label(l10n.t("settings.language_label").into());
-        window.set_wizard_version_label(l10n.t("settings.minecraft_version_label").into());
-        window.set_wizard_notice_text(l10n.t("settings.notice_checkbox").into());
-        window.set_wizard_continue_label(l10n.t("settings.continue_button").into());
-        window.set_wizard_language_options(string_model(global_settings::SUPPORTED_LANGUAGES));
-        window.set_wizard_version_options(string_model(
-            global_settings::SUPPORTED_MINECRAFT_VERSIONS,
-        ));
-        let settings = self.settings.settings().unwrap_or_default();
-        window.set_wizard_language(settings.language.into());
-        window.set_wizard_version(settings.minecraft_version.into());
-        window.set_wizard_acknowledged(false);
-
-        // 设置页（债务②：按钮文案取自 F2 settings_entry，规矩④）
-        window.set_settings_title(l10n.t("app.settings_title").into());
-        window.set_settings_back_label(l10n.t("app.back_button").into());
-        window.set_tutorial_replay_label(self.tutorial.settings_entry(l10n).replay_label.into());
 
         // 屏 4：方案工作区占位文案（T19B-5B）
         window.set_workspace_placeholder_title(l10n.t("workspace.placeholder_title").into());
@@ -293,34 +267,6 @@ impl ViewModelInjector {
         window.set_trash_page_retention_notice_text(l10n.t("trash.retention_notice").into());
         window.set_trash_page_campus_prefix((l10n.t("domain.campus").to_string() + ":").into());
         window.set_trash_page_date_today(l10n.t("notice.date_today").into());
-
-        // ── T22: 高德地图密钥设置──────────────────────
-        window.set_gaode_group_title(l10n.t("settings.gaode_group_title").into());
-        window.set_gaode_api_key_label(l10n.t("settings.gaode_api_key_label").into());
-        window.set_gaode_api_key_placeholder(l10n.t("settings.gaode_api_key_placeholder").into());
-        window.set_gaode_security_key_label(l10n.t("settings.gaode_security_key_label").into());
-        window.set_gaode_security_key_placeholder(
-            l10n.t("settings.gaode_security_key_placeholder").into(),
-        );
-        window.set_gaode_save_button_label(l10n.t("settings.gaode_save_button").into());
-        window.set_gaode_test_button_label(l10n.t("settings.gaode_test_button").into());
-        window.set_gaode_status_message(SharedString::new());
-
-        let api_key = self
-            .settings
-            .gaode_api_key()
-            .unwrap_or(None)
-            .unwrap_or_default();
-        let security_key = self
-            .settings
-            .gaode_security_key()
-            .unwrap_or(None)
-            .unwrap_or_default();
-        window.set_gaode_api_key(api_key.into());
-        window.set_gaode_security_key(security_key.into());
-
-        // T21: 高德地图嵌入探针初始化 (直接读文件)
-        let _t21_probe_info = "T21 REDO: gaode-demo-keys.txt 路径：%LOCALAPPDATA%\\MCRebuildV2\\dev\\gaode-demo-keys.txt";
     }
 
     /// 同步边界绘制器状态到 Slint 显示模型
@@ -471,93 +417,6 @@ impl ViewModelInjector {
         presentation: &Rc<RefCell<ProductionEntries>>,
         window: &AppWindow,
     ) {
-        // 完成设置：读窗口选项 → F1 complete_first_run → 重判着陆跳下一屏
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        let presentation_startup = Rc::clone(presentation);
-        window.on_wizard_continue_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let setup = FirstRunSetup {
-                language: window.get_wizard_language().to_string(),
-                minecraft_version: window.get_wizard_version().to_string(),
-                acknowledged: window.get_wizard_acknowledged(),
-            };
-            let mut injector = shared.borrow_mut();
-            match injector.settings_mut().complete_first_run(&setup) {
-                Ok(()) => {
-                    // 向导完成 → 重新判定着陆（无上次校区 → 校区选择占位；
-                    // 有 → 该校区方案列表占位），判定仍全权委托 F1
-                    crate::map_webview::hide();
-                    drop(injector);
-                    presentation_startup.borrow_mut().show_startup(&window);
-                }
-                Err(error) => report_callback_error(injector.l10n(), &error),
-            }
-        });
-
-        // 设置页“重新查看教程”：F2 规矩④，进度清零落库
-        let shared = Rc::clone(injector);
-        window.on_replay_tutorial_clicked(move || {
-            let mut injector = shared.borrow_mut();
-            if let Err(error) = injector.restart_tutorial() {
-                report_callback_error(injector.l10n(), &error);
-            }
-        });
-
-        // ── T22: 高德地图密钥保存与测试──────────────────
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        window.on_gaode_save_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let api_key = window.get_gaode_api_key().to_string();
-            let security_key = window.get_gaode_security_key().to_string();
-            let mut injector = shared.borrow_mut();
-            match injector.settings_mut().set_gaode_api_key(&api_key) {
-                Ok(()) => {}
-                Err(err) => {
-                    report_callback_error(injector.l10n(), &err);
-                    return;
-                }
-            }
-            match injector
-                .settings_mut()
-                .set_gaode_security_key(&security_key)
-            {
-                Ok(()) => {
-                    notification_center::info(
-                        "应用",
-                        "高德地图密钥已保存",
-                        "请在需要地图功能的页面测试使用",
-                    );
-                }
-                Err(err) => report_callback_error(injector.l10n(), &err),
-            }
-        });
-
-        let weak = window.as_weak();
-        let shared = Rc::clone(injector);
-        window.on_gaode_test_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            let api_key = window.get_gaode_api_key().to_string();
-            let security_key = window.get_gaode_security_key().to_string();
-            let mut injector = shared.borrow_mut();
-            match injector
-                .settings_mut()
-                .test_gaode_connection(&api_key, &security_key)
-            {
-                Ok(()) => {
-                    notification_center::info(
-                        "高德地图密钥验证",
-                        "连通性正常",
-                        "高德地图 API 可正常使用",
-                    );
-                }
-                Err(err) => {
-                    report_callback_error(injector.l10n(), &err);
-                }
-            }
-        });
-
         // T21: 高德地图嵌入探针初始化 (placeholder，待 Slint 1.17+ 升级)
         // ↻ 集成到 notification-center → T24 完成
 
@@ -951,6 +810,7 @@ impl ViewModelInjector {
         let shared_confirmed = Rc::clone(injector);
         let shared_cancel = Rc::clone(injector);
         let presentation_confirmed = Rc::clone(presentation);
+        let presentation_cancel = Rc::clone(presentation);
         window.on_plan_list_delete_clicked(move |plan_id_str| {
             let Some(window) = weak.upgrade() else { return };
             let injector = shared.borrow();
@@ -967,6 +827,15 @@ impl ViewModelInjector {
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
+
+            // 设置入口的确认（清除高德密钥）先于其他确认消费
+            if presentation_confirmed
+                .borrow_mut()
+                .confirm_pending_settings(&window)
+            {
+                return;
+            }
+
             let mut injector = shared_confirmed.borrow_mut();
 
             // T22: Gaode Key 空值引导至设置页
@@ -1019,6 +888,8 @@ impl ViewModelInjector {
         window.on_confirm_dialog_cancelled(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
+            // 设置入口的待确认操作（清除高德密钥）取消时一并重置
+            presentation_cancel.borrow_mut().cancel_pending_settings();
             // P0-3: 重置 pending state（如果已设置）
             // T22: 同时重置 Gaode Key 引导标志
             if let Ok(mut injector) = shared_cancel.try_borrow_mut() {
@@ -1151,18 +1022,6 @@ impl ViewModelInjector {
             if let Some(window) = weak_clone.upgrade() {
                 crate::map_webview::hide();
                 presentation_settings.borrow_mut().show_settings(&window);
-            }
-        });
-
-        // 设置页返回：经校区与方案入口刷新校区选择页
-        let weak_clone = weak.clone();
-        let presentation_campus_back = Rc::clone(presentation);
-        window.on_settings_back_clicked(move || {
-            if let Some(window) = weak_clone.upgrade() {
-                crate::map_webview::hide();
-                presentation_campus_back
-                    .borrow_mut()
-                    .show_campus_select(&window);
             }
         });
     }
@@ -1881,15 +1740,6 @@ impl ViewModelInjector {
 }
 
 /// 把 F1 的静态选项表转成 Slint 下拉菜单 model（纯数据搬运）。
-fn string_model(items: &[&str]) -> ModelRc<SharedString> {
-    ModelRc::new(VecModel::from(
-        items
-            .iter()
-            .map(|item| SharedString::from(*item))
-            .collect::<Vec<_>>(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use onboarding_tutorial::TutorialStatus;

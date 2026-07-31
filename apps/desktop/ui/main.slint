@@ -8,7 +8,7 @@
 // T19B-5A：色卡角色名替换（ADR-0023）+ 通用对话框基建 + ADR-0010/0018 还债。
 // 颜色一律引用 Theme 角色名（ADR-0023），零硬编码颜色号。
 
-import { Button, GroupBox, LineEdit } from "std-widgets.slint";
+import { Button, ComboBox, GroupBox, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SettingsWizard } from "settings_wizard.slint";
 import { CampusSelect, CampusData } from "campus_select.slint";
@@ -74,6 +74,22 @@ export component AppWindow inherits Window {
     in property <string> gaode-status-message;
     callback gaode-save-clicked();
     callback gaode-test-clicked();
+
+    // ── 设置页：常规设置（ADR-0004 语言/版本/默认导出位置）──
+    in property <string> settings-general-group-title;
+    in property <string> settings-language-label;
+    in property <[string]> settings-language-options;
+    in-out property <string> settings-language;
+    in property <string> settings-version-label;
+    in property <[string]> settings-version-options;
+    in-out property <string> settings-version;
+    in property <string> settings-export-location-label;
+    in property <string> settings-export-location-placeholder;
+    in-out property <string> settings-export-location;
+    in property <string> settings-save-button-label;
+    in property <string> gaode-clear-button-label;
+    callback settings-save-clicked();
+    callback gaode-clear-clicked();
 
     // ── 右上角工具栏（ADR-0027 §决定 - 四入口固定）───────────────
     // 可见性由 active-screen 派生（屏 2/4/5/6 显示，0/1/3 隐藏），无需 Rust 注入
@@ -567,6 +583,82 @@ export component AppWindow inherits Window {
             }
         }
 
+        // 常规设置（ADR-0004：语言、Minecraft 版本、默认导出位置）
+        GroupBox {
+            title: root.settings-general-group-title;
+            preferred-width: 450px;
+
+            VerticalLayout {
+                spacing: 16px;
+
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.settings-language-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    ComboBox {
+                        model: root.settings-language-options;
+                        current-value <=> root.settings-language;
+                        preferred-width: 240px;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.settings-version-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    ComboBox {
+                        model: root.settings-version-options;
+                        current-value <=> root.settings-version;
+                        preferred-width: 240px;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.settings-export-location-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    LineEdit {
+                        text <=> root.settings-export-location;
+                        placeholder-text: root.settings-export-location-placeholder;
+                        preferred-width: 240px;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        text: root.settings-save-button-label;
+                        primary: true;
+                        clicked => {
+                            root.settings-save-clicked();
+                        }
+                    }
+                }
+            }
+        }
+
         // T22: 高德地图密钥配置卡片
         GroupBox {
             title: root.gaode-group-title;
@@ -632,6 +724,18 @@ export component AppWindow inherits Window {
                         enabled: root.gaode-api-key != "" && root.gaode-security-key != "";
                         clicked => { 
                             root.gaode-test-clicked(); 
+                        }
+                    }
+                }
+
+                // 清除全部高德密钥（ADR-0004：先确认，后一次清除）
+                HorizontalLayout {
+                    alignment: center;
+
+                    Button {
+                        text: root.gaode-clear-button-label;
+                        clicked => {
+                            root.gaode-clear-clicked();
                         }
                     }
                 }

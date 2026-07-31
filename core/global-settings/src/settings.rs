@@ -33,6 +33,16 @@ pub const DEFAULT_LANGUAGE: &str = "zh-CN";
 /// 默认 Minecraft 游戏版本
 pub const DEFAULT_MINECRAFT_VERSION: &str = "26.1.2";
 
+/// ADR-0004 默认导出位置初始值：当前用户的文档/校园复刻工具/导出文件夹。
+/// 仅支持 Windows 的 USERPROFILE 环境变量；缺失时返回空串，由设置页提示填写。
+fn default_export_directory() -> String {
+    std::env::var("USERPROFILE")
+        .ok()
+        .filter(|home| !home.is_empty())
+        .map(|home| format!("{home}\\Documents\\校园复刻工具\\导出"))
+        .unwrap_or_default()
+}
+
 /// 首次设置页的知情告知文字（ADR-0004 原文；暂硬编码，待 T03 文本键接入）
 pub const VERSION_NOTICE_TEXT: &str = "请确认你的 Minecraft 游戏版本与此一致，否则导入可能失败";
 
@@ -103,6 +113,8 @@ pub struct SettingsSnapshot {
     pub settings: GlobalSettings,
     pub gaode_api_key: Option<String>,
     pub gaode_security_key: Option<String>,
+    /// 默认导出位置（未设置时为 ADR-0004 初始路径）
+    pub default_export_location: String,
 }
 /// 首次设置向导的提交载荷（页面兼任知情告知，ADR-0004）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +196,28 @@ impl SettingsManager {
             settings: self.settings()?,
             gaode_api_key: self.gaode_api_key()?,
             gaode_security_key: self.gaode_security_key()?,
+            default_export_location: self.default_export_location()?,
         })
+    }
+
+    /// 读取默认导出位置（ADR-0004：初始值为文档/校园复刻工具/导出）
+    pub fn default_export_location(&self) -> Result<String> {
+        Ok(self
+            .db
+            .get_setting(AppSettingKey::DefaultExportLocation)?
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(default_export_directory))
+    }
+
+    /// 修改默认导出位置（保存设置页；空路径拒绝）
+    pub fn set_default_export_location(&mut self, path: &str) -> Result<()> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(Error::InvalidExportLocation);
+        }
+        self.db
+            .set_setting(AppSettingKey::DefaultExportLocation, path)?;
+        Ok(())
     }
 
     /// 只通过 F1 一次取得完整启动结果；是否读取着陆内容由 F1 决定。
@@ -311,9 +344,12 @@ impl SettingsManager {
             .update_campus_anchor(&campus_id.to_string(), anchor_lng, anchor_lat)?)
     }
 
-    /// 读取高德 API key（未设置返回 None）
+    /// 读取高德 API key（未设置或已清除返回 None）
     pub fn gaode_api_key(&self) -> Result<Option<String>> {
-        Ok(self.db.get_setting(AppSettingKey::GaodeApiKey)?)
+        Ok(self
+            .db
+            .get_setting(AppSettingKey::GaodeApiKey)?
+            .filter(|value| !value.is_empty()))
     }
 
     /// 保存高德 API key（经格式校验：仅字母数字）
@@ -323,9 +359,19 @@ impl SettingsManager {
         Ok(())
     }
 
-    /// 读取高德安全密钥（未设置返回 None）
+    /// 读取高德安全密钥（未设置或已清除返回 None）
     pub fn gaode_security_key(&self) -> Result<Option<String>> {
-        Ok(self.db.get_setting(AppSettingKey::GaodeSecurityKey)?)
+        Ok(self
+            .db
+            .get_setting(AppSettingKey::GaodeSecurityKey)?
+            .filter(|value| !value.is_empty()))
+    }
+
+    /// 清除全部高德密钥（ADR-0004：一次清除已保存值与输入内容）
+    pub fn clear_gaode_keys(&mut self) -> Result<()> {
+        self.db.set_setting(AppSettingKey::GaodeApiKey, "")?;
+        self.db.set_setting(AppSettingKey::GaodeSecurityKey, "")?;
+        Ok(())
     }
 
     /// 保存高德安全密钥（经格式校验：仅字母数字）
@@ -563,5 +609,37 @@ mod tests {
         assert_eq!(settings.settings, GlobalSettings::default());
         assert_eq!(settings.gaode_api_key, None);
         assert_eq!(settings.gaode_security_key, None);
+        assert_eq!(settings.default_export_location, default_export_directory());
+    }
+
+    #[test]
+    fn export_location_defaults_to_documents_directory_and_round_trips() {
+        let mut manager = manager();
+        assert_eq!(
+            manager.default_export_location().unwrap(),
+            default_export_directory()
+        );
+        assert!(matches!(
+            manager.set_default_export_location("   ").unwrap_err(),
+            Error::InvalidExportLocation
+        ));
+        manager.set_default_export_location("D:/导出").unwrap();
+        assert_eq!(manager.default_export_location().unwrap(), "D:/导出");
+        let snapshot = manager.settings_snapshot().unwrap();
+        assert_eq!(snapshot.default_export_location, "D:/导出");
+    }
+
+    #[test]
+    fn clear_gaode_keys_removes_saved_values() {
+        let mut manager = manager();
+        let valid_key = "abc123DEF456ghi789";
+        manager.set_gaode_api_key(valid_key).unwrap();
+        manager.set_gaode_security_key(valid_key).unwrap();
+        manager.clear_gaode_keys().unwrap();
+        assert_eq!(manager.gaode_api_key().unwrap(), None);
+        assert_eq!(manager.gaode_security_key().unwrap(), None);
+        let snapshot = manager.settings_snapshot().unwrap();
+        assert_eq!(snapshot.gaode_api_key, None);
+        assert_eq!(snapshot.gaode_security_key, None);
     }
 }

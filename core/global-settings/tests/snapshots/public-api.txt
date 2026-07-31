@@ -59,6 +59,7 @@ pub struct SettingsSnapshot {
     pub settings: GlobalSettings,
     pub gaode_api_key: Option<String>,
     pub gaode_security_key: Option<String>,
+    pub default_export_location: String,
 }
 pub struct SettingsManager { .. }                             (内部持有 Database，不外泄)
 
@@ -69,11 +70,19 @@ pub fn is_first_run(&self) -> Result<bool>
 pub fn settings(&self) -> Result<GlobalSettings>
 pub fn startup_result<Provider>(&self, provider: &Provider) -> std::result::Result<CompleteStartupResult<Provider::Content>, StartupResultError<Provider::Error>> where Provider: StartupLandingContentProvider
 pub fn settings_snapshot(&self) -> Result<SettingsSnapshot>
+pub fn default_export_location(&self) -> Result<String>
+pub fn set_default_export_location(&mut self, path: &str) -> Result<()>
 pub fn set_language(&mut self, language: &str) -> Result<()>
 pub fn set_minecraft_version(&mut self, version: &str) -> Result<()>
 pub fn complete_first_run(&mut self, setup: &FirstRunSetup) -> Result<()>
 pub fn landing_campus(&self) -> Result<Option<LandingCampus>>  (ADR-0006：被删/未设置 → None)
 pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()>
+pub fn gaode_api_key(&self) -> Result<Option<String>>
+pub fn gaode_security_key(&self) -> Result<Option<String>>
+pub fn set_gaode_api_key(&mut self, key: &str) -> Result<()>
+pub fn set_gaode_security_key(&mut self, key: &str) -> Result<()>
+pub fn clear_gaode_keys(&mut self) -> Result<()>
+pub fn test_gaode_connection(&self, api_key: &str, security_key: &str) -> Result<()>
 
 ## Errors
 
@@ -83,4 +92,8 @@ pub enum Error {                                              (#[non_exhaustive]
     UnsupportedLanguage(String),
     UnsupportedMinecraftVersion(String),
     NoticeNotAcknowledged,
+    InvalidGaodeApiKey,
+    InvalidGaodeSecurityKey,
+    GaodeConnectionFailed(String),
+    InvalidExportLocation,
 }

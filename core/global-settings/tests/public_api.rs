@@ -64,6 +64,7 @@ fn public_api_types_exist() {
     ));
     let settings: SettingsSnapshot = manager.settings_snapshot().unwrap();
     assert_eq!(settings.settings, defaults);
+    assert!(!settings.default_export_location.is_empty());
 
     // 未勾选知情告知 → 拒绝完成（Error 可匹配，#[non_exhaustive]）
     let err = manager.complete_first_run(&setup).unwrap_err();
@@ -89,6 +90,19 @@ fn public_api_types_exist() {
 
     manager.set_language("zh-CN").unwrap();
     manager.set_minecraft_version("26.1.2").unwrap();
+
+    // 默认导出位置（ADR-0004）：读写与空路径拒绝
+    manager.set_default_export_location("D:/测试导出").unwrap();
+    assert_eq!(manager.default_export_location().unwrap(), "D:/测试导出");
+
+    // 高德密钥：保存后一次清除（ADR-0004）
+    manager.set_gaode_api_key("abc123DEF456ghi789").unwrap();
+    manager
+        .set_gaode_security_key("abc123DEF456ghi789")
+        .unwrap();
+    manager.clear_gaode_keys().unwrap();
+    assert_eq!(manager.gaode_api_key().unwrap(), None);
+    assert_eq!(manager.gaode_security_key().unwrap(), None);
 
     // 着陆流程（ADR-0006）：remember → landing；无记录时 None
     assert!(manager.landing_campus().unwrap().is_none());
