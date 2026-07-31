@@ -38,6 +38,9 @@ jobs:
   # ── 测试（含 xtask 内的执法测试：tidy 全量扫描 + 架构断言）────
   test:
     runs-on: windows-latest
+    # GitHub hosted Windows runners have no GPU/OpenGL; S1 UI acceptance tests must use software rendering
+    env:
+      SLINT_BACKEND: software
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable; rustup default stable
