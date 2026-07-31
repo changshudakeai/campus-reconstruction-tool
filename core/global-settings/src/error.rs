@@ -45,4 +45,7 @@ pub enum Error {
     /// T05：校区 ID 解析失败
     #[error("校区 ID 解析失败：{0}")]
     InvalidCampusId(String),
+    /// 最近使用校区列表的 JSON 编解码失败（ADR-0006 持久化格式损坏）
+    #[error("最近使用校区列表数据损坏：{0}")]
+    InvalidRecentCampuses(String),
 }

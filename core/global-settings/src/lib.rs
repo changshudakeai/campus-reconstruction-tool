@@ -24,7 +24,7 @@ mod landing;
 mod settings;
 
 pub use error::{Error, Result};
-pub use landing::LandingCampus;
+pub use landing::{LandingCampus, RecentCampus};
 pub use settings::{
     CompleteStartupResult, FirstRunSetup, GlobalSettings, SettingsManager, SettingsSnapshot,
     StartupDestination, StartupLandingContentProvider, StartupResultError, StartupSnapshot,

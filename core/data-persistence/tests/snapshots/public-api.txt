@@ -4,16 +4,32 @@
 # 本文件记录 B2 数据持久化的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 # 
-# 最后更新: 2026-07-26 (T11 实施)
+# 最后更新: 2026-07-31 (S1-04 校区地址/最近记录键/清空回收站)
 
 ## Constants
 
-pub const LATEST_SCHEMA_VERSION: u32 = 2
+pub const LATEST_SCHEMA_VERSION: u32 = 4
 pub const TRASH_RETENTION_DAYS: i64 = 30
 
 ## Structures
 
 pub struct Database { .. }                       (内部持有 rusqlite::Connection，不外泄)
+pub struct CampusEntity {
+    pub id: String,
+    pub name: String,
+    pub address: String,                         (S1-04：最近使用记录展示地址，ADR-0006)
+    pub anchor_lng: f64,
+    pub anchor_lat: f64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+pub struct PlanEntity {
+    pub id: String,
+    pub campus_id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
 pub struct RawObservation {
     pub id: String,
     pub plan_id: String,
@@ -47,6 +63,12 @@ pub struct TrashItem {
 
 ## Enums #[non_exhaustive]
 
+pub enum AppSettingKey {
+    LastUsedCampus, Language, MinecraftVersion, FirstRunCompleted,
+    CoverageAuditDecisions, OnboardingProgress, OnboardingCompletedAt,
+    GaodeApiKey, GaodeSecurityKey, DefaultExportLocation,
+    RecentCampuses,                           (S1-04：最近使用校区 ID JSON 列表，ADR-0006)
+}
 pub enum Error {
     Database(rusqlite::Error),
     MigrationFailed { version: u32, message: String },
@@ -55,6 +77,9 @@ pub enum Error {
     InvalidReviewState(String),
     InvalidTimestamp(String),
     TrashOperationRejected(String),
+    CampusNotFound(String),
+    PlanNotFound(String),
+    DuplicatePlanName(String),
 }
 
 ## Type Aliases
@@ -67,6 +92,9 @@ impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self>
     pub fn open_in_memory() -> Result<Self>
     pub fn schema_version(&self) -> Result<Option<u32>>
+    pub fn delete_plan_to_trash(&mut self, campus_id: &str, plan_id: &str) -> Result<TrashItem>
+    pub fn purge_plan_permanently(&mut self, trash_id: &str) -> Result<()>
+    pub fn purge_expired_plans(&mut self) -> Result<usize>
 }
 
 impl RawObservation {
@@ -96,12 +124,34 @@ pub trait ReviewDecisionsApi {                   (impl for Database)
     fn count_review_states(&self, plan_id: &str) -> Result<(usize, usize, usize)>
 }
 
+pub trait CampusCrudApi {                        (impl for Connection/Database)
+    fn list_campuses(&self) -> Result<Vec<CampusEntity>>
+    fn create_campus(&mut self, name: &str) -> Result<CampusEntity>
+    fn create_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> Result<CampusEntity>
+    fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>>
+    fn update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> Result<()>
+}
+
+pub trait AppSettingsApi {                       (impl for Connection/Database)
+    fn get_setting(&self, key: AppSettingKey) -> Result<Option<String>>
+    fn set_setting(&mut self, key: AppSettingKey, value: &str) -> Result<()>
+}
+
+pub trait PlanCrudApi {                          (impl for Connection/Database)
+    fn list_plans(&self, campus_id: &str) -> Result<Vec<PlanEntity>>
+    fn create_plan(&mut self, campus_id: &str, name: &str) -> Result<PlanEntity>
+    fn rename_plan(&mut self, plan_id: &str, new_name: &str) -> Result<()>
+    fn find_plan_by_id(&self, plan_id: &str) -> Result<Option<PlanEntity>>
+    fn touch_plan(&mut self, plan_id: &str) -> Result<()>
+}
+
 pub trait TrashApi {                             (impl for Database)
     fn insert_to_trash(&mut self, item: &TrashItem) -> Result<()>
     fn list_restorable_trash(&self, campus_id: &str) -> Result<Vec<TrashItem>>
     fn restore_from_trash(&mut self, id: &str) -> Result<TrashItem>
     fn permanently_delete(&mut self, id: &str) -> Result<()>
     fn purge_expired(&mut self) -> Result<usize>
+    fn purge_all_in_campus_trash(&mut self, campus_id: &str) -> Result<usize>   (S1-04：清空当前校区回收站)
 }
 
 impl std::error::Error for Error                 (thiserror)
@@ -110,6 +160,8 @@ impl std::fmt::Display for Error                 (thiserror)
 ## Derives
 
 Database: Debug (finish_non_exhaustive)
+CampusEntity: Debug, Clone, PartialEq
+PlanEntity: Debug, Clone, PartialEq, Eq
 RawObservation: Debug, Clone, PartialEq
 ReviewDecision: Debug, Clone, PartialEq, Eq
 TrashItem: Debug, Clone, PartialEq, Eq
@@ -120,6 +172,7 @@ Error: Debug, thiserror::Error
 - 数据粮仓：本 crate 不存在、也永不提供删除 raw_observations 的 API
 - 批量写回一律单事务原子提交（失败整批回滚）
 - 回收站到期清理只提供框架（purge_expired），调用时机由功能层决定
+- 清空回收站（purge_all_in_campus_trash）只清理当前校区的仍可恢复条目，不影响其他校区（ADR-0018 §三）
 
 ---
 END OF PUBLIC API SNAPSHOT

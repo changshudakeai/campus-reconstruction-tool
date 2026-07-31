@@ -4,7 +4,7 @@
 # 本文件记录 F1 应用全局设置的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 #
-# 最后更新: 2026-07-26 (T05 实施)
+# 最后更新: 2026-07-31 (S1-04 最近使用记录)
 
 ## Constants
 
@@ -32,6 +32,11 @@ impl Default for FirstRunSetup                                (默认未勾选�
 pub struct LandingCampus {
     pub id: CampusId,                                         (B1 共享类型，T02 复用)
     pub name: String,
+}
+pub struct RecentCampus {
+    pub id: CampusId,
+    pub name: String,
+    pub address: String,                                      (S1-04：最近记录卡片地址，ADR-0006)
 }
 
 pub enum StartupDestination { FirstRunSetup, CampusSelect, LastUsedCampus { name: String } }
@@ -76,7 +81,11 @@ pub fn set_language(&mut self, language: &str) -> Result<()>
 pub fn set_minecraft_version(&mut self, version: &str) -> Result<()>
 pub fn complete_first_run(&mut self, setup: &FirstRunSetup) -> Result<()>
 pub fn landing_campus(&self) -> Result<Option<LandingCampus>>  (ADR-0006：被删/未设置 → None)
-pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()>
+pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()>  (S1-04：同步维护最近列表，最近进入排最前)
+pub fn recent_campuses(&self) -> Result<Vec<RecentCampus>>     (S1-04：最近使用记录，ADR-0006)
+pub fn remove_recent_campus(&mut self, campus_id: &CampusId) -> Result<()>  (S1-04：右侧小叉移除快捷记录)
+pub fn select_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> Result<CampusId>  (S1-04：新增地址参数)
+pub fn update_campus_anchor(&self, campus_id: &CampusId, anchor_lng: f64, anchor_lat: f64) -> Result<()>
 pub fn gaode_api_key(&self) -> Result<Option<String>>
 pub fn gaode_security_key(&self) -> Result<Option<String>>
 pub fn set_gaode_api_key(&mut self, key: &str) -> Result<()>
@@ -96,4 +105,6 @@ pub enum Error {                                              (#[non_exhaustive]
     InvalidGaodeSecurityKey,
     GaodeConnectionFailed(String),
     InvalidExportLocation,
+    InvalidCampusId(String),
+    InvalidRecentCampuses(String),                            (S1-04：最近记录 JSON 损坏)
 }

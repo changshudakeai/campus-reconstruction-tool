@@ -23,6 +23,8 @@ shared-domain-types = { workspace = true }
 data-persistence = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
+# 最近使用校区 ID 列表的 JSON 编解码（ADR-0006，workspace 已有依赖）
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

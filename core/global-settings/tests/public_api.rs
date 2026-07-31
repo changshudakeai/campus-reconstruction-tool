@@ -6,10 +6,10 @@
 
 use data_persistence::Database;
 use global_settings::{
-    CompleteStartupResult, Error, FirstRunSetup, GlobalSettings, LandingCampus, SettingsManager,
-    SettingsSnapshot, StartupDestination, StartupLandingContentProvider, StartupResultError,
-    StartupSnapshot, DEFAULT_LANGUAGE, DEFAULT_MINECRAFT_VERSION, SUPPORTED_LANGUAGES,
-    SUPPORTED_MINECRAFT_VERSIONS, VERSION_NOTICE_TEXT,
+    CompleteStartupResult, Error, FirstRunSetup, GlobalSettings, LandingCampus, RecentCampus,
+    SettingsManager, SettingsSnapshot, StartupDestination, StartupLandingContentProvider,
+    StartupResultError, StartupSnapshot, DEFAULT_LANGUAGE, DEFAULT_MINECRAFT_VERSION,
+    SUPPORTED_LANGUAGES, SUPPORTED_MINECRAFT_VERSIONS, VERSION_NOTICE_TEXT,
 };
 use shared_domain_types::CampusId;
 
@@ -110,4 +110,25 @@ fn public_api_types_exist() {
     manager.remember_campus(&ghost).unwrap();
     let landed: Option<LandingCampus> = manager.landing_campus().unwrap();
     assert!(landed.is_none(), "校区不存在 → None（退回校区选择页）");
+
+    // 最近使用记录（ADR-0006）：remember 进入列表，remove 只清快捷记录
+    let campus = manager
+        .select_campus_with_anchor(
+            "华东师范大学(普陀校区)",
+            "B01",
+            "中山北路3663号",
+            121.406,
+            31.228,
+        )
+        .expect("创建带地址校区");
+    let recent: Vec<RecentCampus> = manager.recent_campuses().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].name, "华东师范大学(普陀校区)");
+    assert_eq!(recent[0].address, "中山北路3663号");
+    manager.remove_recent_campus(&campus).unwrap();
+    assert!(manager.recent_campuses().unwrap().is_empty());
+    assert!(
+        manager.landing_campus().unwrap().is_some(),
+        "移除最近记录不删除校区"
+    );
 }

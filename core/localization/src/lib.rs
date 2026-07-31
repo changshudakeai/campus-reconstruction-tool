@@ -121,6 +121,9 @@ struct ResourceBundle {
     /// 共同语言章名词定义（用于验证覆盖完整性）
     #[serde(default)]
     pub domain: HashMap<String, String>,
+    /// 校区搜索与最近使用记录（ADR-0006，S1-04 启用既有 campus 段）
+    #[serde(default)]
+    pub campus: HashMap<String, String>,
 }
 
 impl ResourceBundle {
@@ -129,6 +132,7 @@ impl ResourceBundle {
         let mut resources = HashMap::new();
         let categories = [
             ("domain", self.domain),
+            ("campus", self.campus),
             ("app", self.app),
             ("settings", self.settings),
             ("plan", self.plan),

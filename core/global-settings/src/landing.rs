@@ -22,6 +22,17 @@ pub struct LandingCampus {
     pub anchor_lat: f64,
 }
 
+/// 最近使用记录卡片视图（ADR-0006：卡片同时展示校区名称和地址）
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentCampus {
+    /// 校区 ID（B1 共享类型）
+    pub id: CampusId,
+    /// 校区名称
+    pub name: String,
+    /// 校区地址（无地址时为空串）
+    pub address: String,
+}
+
 impl LandingCampus {
     /// T05：按 ID 查找校区并组装着陆视图；校区不存在（已被删除）返回 `None`
     pub(crate) fn find(db: &Database, campus_id: &CampusId) -> Result<Option<Self>> {

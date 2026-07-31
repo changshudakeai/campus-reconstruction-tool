@@ -6,24 +6,27 @@
 use data_persistence::Database;
 use project_management::{
     CampusPlanSnapshot, CampusView, Error, PlanCardView, PlanProgress, ProjectManager,
-    TrashItemView, DUPLICATE_SUFFIX_KEY,
+    RestoredPlan, TrashItemView, DUPLICATE_SUFFIX_KEY, RESTORE_NAME_TEMPLATE_KEY,
 };
 use shared_domain_types::{CampusId, PlanId};
 
 #[test]
 fn public_api_types_exist() {
-    // 常量：副本后缀文本键（文案外置，ADR-0005）
+    // 常量：副本后缀与恢复名称模板文本键（文案外置，ADR-0005）
     assert_eq!(DUPLICATE_SUFFIX_KEY, "plan.duplicate_suffix");
+    assert_eq!(RESTORE_NAME_TEMPLATE_KEY, "plan.restore_name_template");
 
     // ProjectManager：用 B2 内存库创建
     let db = Database::open_in_memory().expect("内存库可打开");
     let mut manager = ProjectManager::new(db);
     assert!(format!("{manager:?}").contains("ProjectManager"));
 
-    // 校区 CRUD
+    // 校区 CRUD + 搜索（S1-04：名称包含匹配）
     let campus: CampusView = manager.create_campus("测试大学").unwrap();
     assert_eq!(campus.name, "测试大学");
     assert_eq!(manager.list_campuses().unwrap().len(), 1);
+    assert_eq!(manager.search_campuses("测试").unwrap().len(), 1);
+    assert!(manager.search_campuses("   ").unwrap().is_empty());
 
     // 着陆流程（ADR-0006）：记住/读取上次使用的校区
     let campus_id = CampusId::parse(&campus.id).unwrap();
@@ -36,6 +39,10 @@ fn public_api_types_exist() {
 
     // 方案轻创建（ADR-0010）与卡片三件套（ADR-0018）
     let plan_id: PlanId = manager.create_plan(&campus_id, "方案 1").unwrap();
+    assert_eq!(
+        manager.suggest_plan_name(&campus_id, "新方案").unwrap(),
+        "新方案 1"
+    );
     let cards: Vec<PlanCardView> = manager.list_plan_cards(&campus_id).unwrap();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].name, "方案 1");
@@ -53,15 +60,42 @@ fn public_api_types_exist() {
     let trash: TrashItemView = manager.delete_plan(&campus_id, &copy_id).unwrap();
     assert_eq!(trash.plan_id, copy_id.to_string());
 
-    // 回收站查询 / 恢复 / 到期清理框架
-    assert_eq!(manager.list_trash(&campus_id).unwrap().len(), 1);
-    manager.restore_plan(&campus_id, &trash.trash_id).unwrap();
-    assert_eq!(manager.purge_expired_trash().unwrap(), 0);
-
     // Error #[non_exhaustive]：带类型错误可匹配，同名冲突可判别
     let err: Error = manager
         .create_plan(&campus_id, "方案 1 - 全景复刻")
         .unwrap_err();
     assert!(err.is_duplicate_name());
     assert!(!err.to_string().is_empty());
+
+    // 回收站查询 / 恢复 / 到期清理框架
+    assert_eq!(manager.list_trash(&campus_id).unwrap().len(), 1);
+    manager
+        .restore_plan(&campus_id, &trash.trash_id, "（恢复 {n}）")
+        .unwrap();
+    assert_eq!(manager.purge_expired_trash().unwrap(), 0);
+
+    // 回收站视图带方案名/校区名/剩余天数（ADR-0018）
+    let trash2: TrashItemView = manager.delete_plan(&campus_id, &copy_id).unwrap();
+    let items: Vec<TrashItemView> = manager.list_trash(&campus_id).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, trash2.name);
+    assert!((0..=30).contains(&items[0].expires_in_days));
+    // 恢复自动后缀（ADR-0018 §五）
+    let restored: RestoredPlan = manager
+        .restore_plan(&campus_id, &trash2.trash_id, "（恢复 {n}）")
+        .unwrap();
+    assert!(!restored.name.is_empty());
+
+    // 清空回收站（确认后调用）：一次性清当前校区，不影响其他校区
+    let other = manager.create_campus("另一所大学").unwrap();
+    let other_id = CampusId::parse(&other.id).unwrap();
+    let other_plan = manager.create_plan(&other_id, "他人方案").unwrap();
+    let trash3 = manager.delete_plan(&campus_id, &plan_id).unwrap();
+    let trash4 = manager.delete_plan(&campus_id, &copy_id).unwrap();
+    manager.delete_plan(&other_id, &other_plan).unwrap();
+    assert_eq!(manager.purge_all_trash_confirmed(&campus_id).unwrap(), 2);
+    assert!(manager.list_trash(&campus_id).unwrap().is_empty());
+    assert_eq!(manager.list_trash(&other_id).unwrap().len(), 1);
+    assert!(manager.purge_plan_confirmed(&trash3.trash_id).is_err());
+    assert!(manager.purge_plan_confirmed(&trash4.trash_id).is_err());
 }
