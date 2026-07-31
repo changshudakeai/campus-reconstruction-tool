@@ -4,7 +4,6 @@
 //! 转发给一个功能模块。当前 `runtime` 的着陆组合以及 [`ViewModelInjector`] 对全部
 //! F 模块的持有与接线属于迁移期遗留，只为工单 01 的行为基线保留，不构成新增
 //! S1 业务协调的授权。Slint 绑定、B6 文案与 B7 Presenter 仍是呈现层能力。
-mod dispatch;
 mod injector;
 mod map_webview;
 mod presentation;
@@ -13,7 +12,6 @@ mod production;
 mod runtime;
 mod theme;
 
-pub use dispatch::report_callback_error;
 pub use injector::{ShellDatabases, ViewModelInjector};
 pub use presentation::{
     CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
@@ -22,8 +20,10 @@ pub use presentation::{
     NavigationDecision, NotificationFact, NotificationPageState, NotificationPresentationEntry,
     OpaqueNotificationAction, OperationState, Presentation, PresentationAdapter, Progress,
     ReviewPageState, ReviewPresentationEntry, Screen, SettingsPageState, SettingsPresentationEntry,
-    StartupPageState, StartupPresentationEntry, ToolbarPageState, WorkspacePageState,
+    SettingsRequest, StartupPageState, StartupPresentationEntry, StartupRequest, ToolbarPageState,
+    WorkspacePageState,
 };
+pub use presenter::report_callback_error;
 pub use presenter::ShellPresenter;
 pub use runtime::{
     assemble_application, landing_decision, run_dev, ApplicationRuntime, LandingDecision,

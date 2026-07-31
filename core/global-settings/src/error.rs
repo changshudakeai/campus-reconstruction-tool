@@ -38,6 +38,10 @@ pub enum Error {
     #[error("高德地图连通性测试失败：{0}")]
     GaodeConnectionFailed(String),
 
+    /// 默认导出位置为空（ADR-0004：必须给出可用的文件夹路径）
+    #[error("默认导出位置不能为空")]
+    InvalidExportLocation,
+
     /// T05：校区 ID 解析失败
     #[error("校区 ID 解析失败：{0}")]
     InvalidCampusId(String),

@@ -77,6 +77,25 @@
 > - 气泡位置为占位坐标（右上角，定稿归 T19 界面审核）
 > - 步骤条为固定像素布局（x 坐标绝对定位），窗口拉宽时不自适应
 
+### S1-03（启动与设置流程迁移到呈现入口，2026-07-31）
+
+- 启动入口（StartupRequest::Show / CompleteFirstRun）一次返回首次设置、校区
+  搜索或方案页的完整着陆结果；首次设置完成后重新取得着陆结果进入校区
+  搜索与最近记录页（ADR-0037）
+- 设置入口（SettingsRequest）覆盖常规设置读写（语言、Minecraft 版本、
+  默认导出位置）与高德密钥的保存、测试、清除（确认后一次清除）及
+  教程重播；保存/测试/清除按已确认规则返回成功或失败通知事实，由 B7
+  决定呈现方式（ADR-0004 / ADR-0021）
+- F1 公开接口最小化扩展：default_export_location / set_default_export_location /
+  clear_gaode_keys；B2 新增 AppSettingKey::DefaultExportLocation 键（
+  公开展开接口，手工快照同步）
+- 正式数据读取失败改为明确失败状态 + 错误通知，不再回退默认值/假首开页；
+  数据库无法打开时同样明确失败（基线文档同步更新）
+- 旧接线删除：injector 中的首跑完成、教程重播、高德保存/测试、设置页
+  返回与设置/向导文案注入全部移除；新绑定集中在 ProductionEntries
+- 测试：	ests/s1_03_startup_settings_flow.rs（新）、presentation_seams、
+  ui_bindings、s1_contract_baseline 与 F1 public_api 快照同步更新
+
 ### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
 
 - `ui/notice_board.slint`（新建）：公告栏页组件（屏 5）——ListView 公告列表 +

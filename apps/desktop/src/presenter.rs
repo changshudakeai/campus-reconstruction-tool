@@ -1,20 +1,20 @@
 //! B7 Presenter 的 Slint 壳实现（弹窗铁律 ADR-0021，T19B-2"装喇叭"）。
-//!
-//! [`ShellPresenter`] 把 B7 的分派结论变成看得见的界面：Error 级点亮
-//! 主窗口最顶层的模态遮罩（`error-dialog-*` 属性），遮罩吞掉全部输入，
-//! 用户点"知道了"前界面上什么都做不了——"点掉才能继续"的用户语义。
-//!
-//! ## 阻塞语义（诚实声明）
-//!
-//! - **非 UI 线程调用**（后台采集/导出线程）：经 `invoke_from_event_loop`
-//!   点亮遮罩后，真正阻塞调用线程直到用户点"知道了"（channel 等待）。
-//! - **UI 线程调用**（Slint 回调内报错）：点亮遮罩后立即返回。Slint 公共
-//!   API 不支持嵌套事件循环（官方路线图中的 Modal Windows 特性尚未落地），
-//!   在 UI 线程字面阻塞会死锁——遮罩已保证用户无法绕过弹窗操作界面，
-//!   模态语义由遮罩层承担。
-//!
-//! Warn 级 toast 与铃铛角标的 Slint 呈现随公告栏工单（T19B 后续）接线，
-//! 消息与未读数已由 B7 留底/维护，不丢。
+//
+// [`ShellPresenter`] 把 B7 的分派结论变成看得见的界面：Error 级点亮
+// 主窗口最顶层的模态遮罩（`error-dialog-*` 属性），遮罩吞掉全部输入，
+// 用户点"知道了"前界面上什么都做不了——"点掉才能继续"的用户语义。
+//
+// ## 阻塞语义（诚实声明）
+//
+// - **非 UI 线程调用**（后台采集/导出线程）：经 `invoke_from_event_loop`
+//   点亮遮罩后，真正阻塞调用线程直到用户点"知道了"（channel 等待）。
+// - **UI 线程调用**（Slint 回调内报错）：点亮遮罩后立即返回。Slint 公共
+//   API 不支持嵌套事件循环（官方路线图中的 Modal Windows 特性尚未落地），
+//   在 UI 线程字面阻塞会死锁——遮罩已保证用户无法绕过弹窗操作界面，
+//   模态语义由遮罩层承担。
+//
+// Warn 级 toast 与铃铛角标的 Slint 呈现随公告栏工单（T19B 后续）接线，
+// 消息与未读数已由 B7 留底/维护，不丢。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -199,3 +199,52 @@ impl Presenter for ShellPresenter {
 
 // 注意：本模块的行为测试在 tests/ui_bindings.rs（需要真 AppWindow，
 // 而 Slint 平台只能在一个线程初始化一次，单元测试并行创窗口必炸）。
+
+// ────────────────────────────────────────────────────────────────────────────
+// 回调错误统一出口（原 dispatch.rs，合并到呈现模块：错误出口与弹窗呈现同属 B7）
+// ────────────────────────────────────────────────────────────────────────────
+// T19B-1 —— 回调错误统一出口（壳内零业务逻辑的错误处理纪律）。
+//
+// Slint 回调闭包内调用 VM 方法返回的 `Result` 错误一律递到这里，
+// 按弹窗铁律（ADR-0021）经 B7 `error()` 模态弹窗 + 公告栏留底；
+// 壳不自行判断错误轻重、不静默吞错。B7 全局单例由
+// [`crate::run_dev`] 启动时初始化；Slint Presenter（弹窗/toast 声明）
+// 随后续 T19B 工单注册，注册前消息照常留底不丢。
+
+use localization::Localization;
+
+/// 把回调错误分派给 B7（模态弹窗 + 公告栏留底）。
+///
+/// `error` 是带类型错误的显示形式；来源标签与标题走 B6 文本键
+/// （`app.source_tag` / `dialog.error_title`），错误详情原样透传
+/// （不隐藏、不吞异常，ADR-0025 错误码转换行约束）。
+pub fn report_callback_error(l10n: &Localization, error: &dyn std::fmt::Display) {
+    notification_center::error(
+        l10n.t("app.source_tag"),
+        l10n.t("dialog.error_title"),
+        error.to_string(),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use localization::Language;
+    use notification_center::{NotificationCenter, PresenterRegistry};
+
+    use super::*;
+
+    #[test]
+    fn callback_error_reaches_b7_board() {
+        // init 幂等：测试进程内首次调用即建立全局一本账
+        let center = NotificationCenter::init(PresenterRegistry::new());
+        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+
+        let error_text = "演示错误：数据库暂不可用";
+        report_callback_error(&l10n, &error_text);
+
+        assert!(
+            center.board_snapshot().iter().any(|n| n.body == error_text),
+            "回调错误应留底进 B7 公告栏"
+        );
+    }
+}

@@ -130,8 +130,7 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
         "行为基线必须明确排除内部实现细节"
     );
     assert!(
-        baseline.contains("界面仍显示默认的校区选择页")
-            && baseline.contains("状态文案按首次设置显示")
+        baseline.contains("不切换到内存数据或假首开页")
             && baseline.contains("不存在失败后返回评审的行为"),
         "基线必须如实固定启动读取失败与导出占位的现有可观察行为"
     );
@@ -151,10 +150,10 @@ fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
 
     let settings_row = find_flow_row(&baseline, "设置");
     assert!(
-        settings_row.contains("当前没有默认导出位置、清空全部密钥或测试中状态")
-            && settings_row.contains("没有可观察的处理中状态")
-            && settings_row.contains("没有对应确认状态"),
-        "设置基线不得提前声明尚未存在的设置项或状态"
+        settings_row.contains("默认导出位置")
+            && settings_row.contains("清除全部密钥")
+            && settings_row.contains("没有可观察的处理中状态"),
+        "设置基线必须记录常规设置读写与清除密钥确认，且不声明处理中状态"
     );
     let campus_row = find_flow_row(&baseline, "校区与方案");
     assert!(

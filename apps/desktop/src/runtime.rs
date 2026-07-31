@@ -1,9 +1,8 @@
-//! S1 迁移期运行时：现有首开着陆组合 + Slint 主窗口装配。
+//! S1 迁移期运行时：Slint 主窗口装配与正式入口组合根。
 //!
-//! 当前行为仍按 ADR-0006 将首次运行、上次校区与校区选择组合成着陆去向，并由
-//! 工单 01 的用户可观察行为基线固定。ADR-0037 的目标是由 F1 返回单一着陆结果，
-//! S1 只负责呈现；本文件中的数据库打开、判定与模块装配是待迁出的现状，不构成
-//! 新增业务协调的授权。
+//! 启动与设置流程已经由呈现入口一次取得完整结果（工单 03），S1 只呈现返回的
+//! 页面、状态、导航与通知。landing_decision 等旧判定助手只保留给行为基线
+//! 测试与迁移期占位路径，生产启动不再自行组合着陆条件。
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +11,7 @@ use anyhow::Result;
 use data_persistence::Database;
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
-use notification_center::{NotificationCenter, PresenterRegistry};
+use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use slint::ComponentHandle;
 
 use crate::injector::{ShellDatabases, ViewModelInjector};
@@ -57,6 +56,7 @@ pub(crate) fn decide(settings: &SettingsManager) -> LandingDecision {
 }
 
 /// 着陆去向 → 状态栏文案（文本键见 zh-CN.json `app.*`）。
+#[cfg(test)]
 pub(crate) fn status_text(l10n: &Localization, decision: &LandingDecision) -> String {
     match decision {
         LandingDecision::FirstRunSetup => l10n.t("app.shell_status_first_run"),
@@ -111,7 +111,7 @@ pub fn run_dev() -> Result<()> {
         .registry()
         .set_presenter(ShellPresenter::install(&window));
 
-    // 库不可用视同首次运行（原兜底语义）：无注入器，直接填首开文案
+    // 库不可用时不进入假首开页：由下方失败分支明确提示（ADR-0037）
     let injector = match ShellDatabases::open(DEV_DB_FILE) {
         Ok(databases) => Some(ViewModelInjector::new(databases)?),
         Err(_) => None,
@@ -122,9 +122,16 @@ pub fn run_dev() -> Result<()> {
             window.run()?;
         }
         None => {
+            // 正式数据不可用：明确失败并提示重试，不切换到内存数据或假首开页（ADR-0037）
             let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
             window.set_app_title(l10n.t("app.welcome_title").into());
-            window.set_status_text(status_text(&l10n, &landing_decision(None)).into());
+            window.set_status_text(l10n.t("app.shell_status_load_failed").into());
+            window.set_operation_state(crate::OperationPresentationState::Failed);
+            center.publish(Notification::error(
+                l10n.t("app.source_tag"),
+                l10n.t("dialog.error_title"),
+                l10n.t("app.startup_failure_body"),
+            ));
             window.run()?;
         }
     }

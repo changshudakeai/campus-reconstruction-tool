@@ -352,12 +352,65 @@ impl WindowPageState for StartupPageState {
     }
 }
 
+/// 启动入口的一次请求：读取着陆结果或提交首次设置。
+#[derive(Debug, Clone)]
+pub enum StartupRequest {
+    /// 读取并显示启动着陆结果。
+    Show,
+    /// 提交首次设置（页面兼任知情告知）后重新取得着陆结果。
+    CompleteFirstRun {
+        language: String,
+        minecraft_version: String,
+        acknowledged: bool,
+    },
+}
+
+/// 设置入口的一次请求：读取页面或执行一次设置操作。
+#[derive(Debug, Clone)]
+pub enum SettingsRequest {
+    /// 读取并显示设置页。
+    Show,
+    /// 保存常规设置（语言、Minecraft 版本、默认导出位置）。
+    SaveGeneral {
+        language: String,
+        minecraft_version: String,
+        default_export_location: String,
+    },
+    /// 保存高德密钥（与测试连通性分开，ADR-0004）。
+    SaveKeys {
+        api_key: String,
+        security_key: String,
+    },
+    /// 测试高德连通性（使用页面当前输入）。
+    TestConnection {
+        api_key: String,
+        security_key: String,
+    },
+    /// 请求清除全部高德密钥（先返回确认窗）。
+    ClearKeys,
+    /// 用户确认后执行清除。
+    ConfirmClearKeys,
+    /// 重新查看新手教程（F2 进度清零）。
+    ReplayTutorial,
+}
+
 /// 设置入口一次返回的完整当前设置页状态。
 #[derive(Clone)]
 pub struct SettingsPageState {
     pub title: String,
     pub back_label: String,
     pub tutorial_replay_label: String,
+    pub general_group_title: String,
+    pub language_label: String,
+    pub language_options: Vec<String>,
+    pub selected_language: String,
+    pub version_label: String,
+    pub version_options: Vec<String>,
+    pub selected_version: String,
+    pub export_location_label: String,
+    pub export_location_placeholder: String,
+    pub default_export_location: String,
+    pub save_settings_label: String,
     pub gaode_group_title: String,
     pub api_key_label: String,
     pub api_key_placeholder: String,
@@ -367,6 +420,7 @@ pub struct SettingsPageState {
     pub security_key: String,
     pub save_label: String,
     pub test_label: String,
+    pub clear_keys_label: String,
     pub status_message: String,
 }
 
@@ -375,6 +429,19 @@ impl WindowPageState for SettingsPageState {
         window.set_settings_title(self.title.clone().into());
         window.set_settings_back_label(self.back_label.clone().into());
         window.set_tutorial_replay_label(self.tutorial_replay_label.clone().into());
+        window.set_settings_general_group_title(self.general_group_title.clone().into());
+        window.set_settings_language_label(self.language_label.clone().into());
+        window.set_settings_language_options(string_model(&self.language_options));
+        window.set_settings_language(self.selected_language.clone().into());
+        window.set_settings_version_label(self.version_label.clone().into());
+        window.set_settings_version_options(string_model(&self.version_options));
+        window.set_settings_version(self.selected_version.clone().into());
+        window.set_settings_export_location_label(self.export_location_label.clone().into());
+        window.set_settings_export_location_placeholder(
+            self.export_location_placeholder.clone().into(),
+        );
+        window.set_settings_export_location(self.default_export_location.clone().into());
+        window.set_settings_save_button_label(self.save_settings_label.clone().into());
         window.set_gaode_group_title(self.gaode_group_title.clone().into());
         window.set_gaode_api_key_label(self.api_key_label.clone().into());
         window.set_gaode_api_key_placeholder(self.api_key_placeholder.clone().into());
@@ -384,6 +451,7 @@ impl WindowPageState for SettingsPageState {
         window.set_gaode_security_key(self.security_key.clone().into());
         window.set_gaode_save_button_label(self.save_label.clone().into());
         window.set_gaode_test_button_label(self.test_label.clone().into());
+        window.set_gaode_clear_button_label(self.clear_keys_label.clone().into());
         window.set_gaode_status_message(self.status_message.clone().into());
     }
 }

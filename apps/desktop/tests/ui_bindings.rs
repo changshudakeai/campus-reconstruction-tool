@@ -91,7 +91,14 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
         l10n.t("app.shell_status_campus_select")
     );
 
-    // ── 场景 3：设置页"重新查看教程"（债务②，F2 规矩④）──
+    // ── 场景 3：设置页（经设置入口刷新）+ 重新查看教程（债务②，F2 规矩④）──
+    window.invoke_settings_toolbar_button_clicked();
+    assert_eq!(
+        window.get_settings_title().as_str(),
+        l10n.t("app.settings_title"),
+        "设置页文案必须经设置入口注入"
+    );
+    assert_eq!(window.get_active_screen(), 3, "设置入口应导航到设置页");
     window.invoke_replay_tutorial_clicked();
     let database = Database::open(&database_path).expect("重开引导库");
     let reloaded = OnboardingTutorial::load(&database).expect("重新装载引导进度");

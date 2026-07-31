@@ -113,6 +113,17 @@ fn settings(suffix: &str) -> SettingsPageState {
         title: format!("设置页-{suffix}"),
         back_label: format!("返回-{suffix}"),
         tutorial_replay_label: format!("重看-{suffix}"),
+        general_group_title: format!("常规-{suffix}"),
+        language_label: format!("语言-{suffix}"),
+        language_options: vec![format!("zh-{suffix}")],
+        selected_language: format!("zh-{suffix}"),
+        version_label: format!("版本-{suffix}"),
+        version_options: vec![format!("1-{suffix}")],
+        selected_version: format!("1-{suffix}"),
+        export_location_label: format!("导出-{suffix}"),
+        export_location_placeholder: format!("导出占位-{suffix}"),
+        default_export_location: format!("D:/导出-{suffix}"),
+        save_settings_label: format!("保存设置-{suffix}"),
         gaode_group_title: format!("地图-{suffix}"),
         api_key_label: format!("API-{suffix}"),
         api_key_placeholder: format!("API占位-{suffix}"),
@@ -122,6 +133,7 @@ fn settings(suffix: &str) -> SettingsPageState {
         security_key: format!("security{suffix}"),
         save_label: format!("保存-{suffix}"),
         test_label: format!("测试-{suffix}"),
+        clear_keys_label: format!("清除-{suffix}"),
         status_message: format!("设置状态-{suffix}"),
     }
 }
@@ -316,7 +328,11 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         .expect("正式模块装配");
     let _initial_runtime = assemble_application(&window, injector, Arc::clone(&center));
     assert!(!window.get_wizard_title().is_empty());
+    window.invoke_settings_toolbar_button_clicked();
     assert!(!window.get_settings_title().is_empty());
+    assert!(!window.get_settings_language().is_empty());
+    assert!(!window.get_settings_version().is_empty());
+    assert!(!window.get_settings_export_location().is_empty());
     assert!(!window.get_campus_select_title().is_empty());
     assert!(!window.get_workspace_stepper_collection_label().is_empty());
     assert!(!window.get_workspace_stepper_review_label().is_empty());

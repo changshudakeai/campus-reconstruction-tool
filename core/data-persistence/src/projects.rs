@@ -67,6 +67,8 @@ pub enum AppSettingKey {
     GaodeApiKey,
     /// 高德地图安全密钥（T22，经 F1 存储于本机明文）
     GaodeSecurityKey,
+    /// 默认导出位置（ADR-0004：所有方案默认导出到该文件夹）
+    DefaultExportLocation,
 }
 
 impl AppSettingKey {
@@ -82,6 +84,7 @@ impl AppSettingKey {
             AppSettingKey::OnboardingCompletedAt => "onboarding_completed_at",
             AppSettingKey::GaodeApiKey => "gaode_api_key",
             AppSettingKey::GaodeSecurityKey => "gaode_security_key",
+            AppSettingKey::DefaultExportLocation => "default_export_location",
         }
     }
 }
