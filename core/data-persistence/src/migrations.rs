@@ -32,10 +32,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "校区锚点列：anchor_lng/anchor_lat",
         sql: include_str!("../migrations/003_add_anchor_columns_to_campuses.sql"),
     },
+    Migration {
+        version: 4,
+        description: "校区地址列：address（最近使用记录展示校区地址，ADR-0006）",
+        sql: include_str!("../migrations/004_add_campus_address.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 3;
+pub const LATEST_SCHEMA_VERSION: u32 = 4;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

@@ -180,6 +180,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     let campuses = vec![CampusData {
         id: "campus-1".into(),
         name: "校园一".into(),
+        address: "中山路1号".into(),
     }];
     let plans = vec![PlanCardData {
         plan_id: "plan-1".into(),
@@ -194,6 +195,12 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         new_demo_campus_label: "新校区".into(),
         campus_settings_label: "校区设置".into(),
         campuses,
+        campus_search_query: "".into(),
+        campus_search_placeholder: "搜索占位".into(),
+        campus_search_button_label: "搜索".into(),
+        campus_recent_title: "最近使用的校区".into(),
+        campus_search_results: Vec::new(),
+        campus_show_results: false,
         plan_list_title: "方案标题".into(),
         campus_name: "校园一".into(),
         create_plan_label: "新方案".into(),
@@ -364,9 +371,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         .create_plan(&campus_id, "验收方案")
         .expect("创建正式方案");
     production_injector
-        .projects_mut()
+        .settings_mut()
         .remember_campus(&campus_id)
-        .expect("记录上次校区");
+        .expect("记录最近使用校区");
 
     let _production_runtime =
         assemble_application(&window, production_injector, Arc::clone(&center));

@@ -31,6 +31,11 @@ pub trait TrashApi {
     /// 到期清理框架：把所有超过保留期的未处理条目标记为已永久删除，
     /// 返回本次清理的条数。调用时机（启动时/定时）由功能层决定。
     fn purge_expired(&mut self) -> Result<usize>;
+
+    /// 清空当前校区回收站：一次性把全部仍可恢复的方案条目标记为已永久删除，
+    /// 并清理对应方案行（同一事务原子提交，不影响其他校区，ADR-0018 §三）。
+    /// 返回本次清空的条数；调用方必须先取得用户确认。
+    fn purge_all_in_campus_trash(&mut self, campus_id: &str) -> Result<usize>;
 }
 
 impl TrashApi for Database {
@@ -116,6 +121,44 @@ impl TrashApi for Database {
                AND deleted_at < ?2",
             params![timestamp_to_db(Utc::now()), timestamp_to_db(cutoff)],
         )?;
+        Ok(purged)
+    }
+
+    fn purge_all_in_campus_trash(&mut self, campus_id: &str) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let now = Utc::now();
+        let cutoff = now - chrono::Duration::days(TRASH_RETENTION_DAYS);
+        let mut stmt = tx.prepare(
+            "SELECT id FROM trash
+             WHERE campus_id = ?1 AND entity_type = 'plan'
+               AND restored_at IS NULL AND permanently_deleted_at IS NULL
+               AND deleted_at >= ?2",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map(params![campus_id, timestamp_to_db(cutoff)], |row| {
+                row.get(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let purged = ids.len();
+        for id in &ids {
+            tx.execute(
+                "UPDATE trash SET permanently_deleted_at = ?1 WHERE id = ?2",
+                params![timestamp_to_db(now), id],
+            )?;
+        }
+        if !ids.is_empty() {
+            // 幂等收尾：凡本校区已标记永久删除的方案行一律清掉
+            tx.execute(
+                "DELETE FROM plans WHERE id IN (
+                    SELECT entity_id FROM trash
+                    WHERE campus_id = ?1 AND entity_type = 'plan'
+                      AND permanently_deleted_at IS NOT NULL
+                )",
+                params![campus_id],
+            )?;
+        }
+        tx.commit()?;
         Ok(purged)
     }
 }

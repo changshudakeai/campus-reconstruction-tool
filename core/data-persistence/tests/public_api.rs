@@ -14,7 +14,7 @@ use shared_domain_types::{CandidateCategory, ReviewState};
 #[test]
 fn public_api_types_exist() {
     // T05：版本号升级到 3（新增校区锚点列）
-    assert_eq!(LATEST_SCHEMA_VERSION, 3);
+    assert_eq!(LATEST_SCHEMA_VERSION, 4);
     assert_eq!(TRASH_RETENTION_DAYS, 30);
 
     // Database：打开即迁移到最新版本
@@ -87,6 +87,33 @@ fn public_api_types_exist() {
     let dup = db.create_plan(&campus.id, "方案 1 改").unwrap_err();
     assert!(matches!(dup, Error::DuplicatePlanName(_)));
 
+    // 校区地址（ADR-0006 最近使用记录展示）：带地址创建与读回
+    let with_address = db
+        .create_campus_with_anchor(
+            "华东师范大学(普陀校区)",
+            "B01",
+            "中山北路3663号",
+            121.406,
+            31.228,
+        )
+        .unwrap();
+    assert_eq!(with_address.address, "中山北路3663号");
+    assert_eq!(
+        db.find_campus_by_id(&with_address.id)
+            .unwrap()
+            .map(|c| c.address),
+        Some("中山北路3663号".to_owned())
+    );
+    // 最近使用记录键（F1 持久化 JSON 校区 ID 列表，ADR-0006）
+    db.set_setting(AppSettingKey::RecentCampuses, "[\"campus-1\",\"campus-2\"]")
+        .unwrap();
+    assert_eq!(
+        db.get_setting(AppSettingKey::RecentCampuses)
+            .unwrap()
+            .as_deref(),
+        Some("[\"campus-1\",\"campus-2\"]")
+    );
+
     db.set_setting(AppSettingKey::LastUsedCampus, &campus.id)
         .unwrap();
     assert_eq!(
@@ -100,6 +127,27 @@ fn public_api_types_exist() {
     db.purge_plan_permanently(&trashed.id).unwrap();
     assert!(db.find_plan_by_id(&plan.id).unwrap().is_none());
     assert_eq!(db.purge_expired_plans().unwrap(), 0);
+
+    // 清空回收站：一次性永久删除当前校区全部仍可恢复的方案，不影响其他校区
+    let other_campus = db.create_campus("另一所大学").unwrap();
+    let other_plan = db.create_plan(&other_campus.id, "他人方案").unwrap();
+    let second = db.create_plan(&campus.id, "方案 2").unwrap();
+    db.delete_plan_to_trash(&campus.id, &second.id).unwrap();
+    db.delete_plan_to_trash(&other_campus.id, &other_plan.id)
+        .unwrap();
+    assert_eq!(db.purge_all_in_campus_trash(&campus.id).unwrap(), 1);
+    assert!(db.list_restorable_trash(&campus.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_restorable_trash(&other_campus.id).unwrap().len(),
+        1,
+        "其他校区回收站不受影响"
+    );
+    assert!(db.find_plan_by_id(&second.id).unwrap().is_none());
+    db.purge_all_in_campus_trash(&other_campus.id).unwrap();
+    assert!(db
+        .list_restorable_trash(&other_campus.id)
+        .unwrap()
+        .is_empty());
 }
 
 /// 测试内取当前时刻（避免直接依赖 chrono 的版本细节）

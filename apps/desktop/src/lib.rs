@@ -10,7 +10,6 @@ mod presentation;
 mod presenter;
 mod production;
 mod runtime;
-mod theme;
 
 pub use injector::{ShellDatabases, ViewModelInjector};
 pub use presentation::{
@@ -21,7 +20,7 @@ pub use presentation::{
     OpaqueNotificationAction, OperationState, Presentation, PresentationAdapter, Progress,
     ReviewPageState, ReviewPresentationEntry, Screen, SettingsPageState, SettingsPresentationEntry,
     SettingsRequest, StartupPageState, StartupPresentationEntry, StartupRequest, ToolbarPageState,
-    WorkspacePageState,
+    TrashPageState, TrashPresentationEntry, TrashRequest, WorkspacePageState,
 };
 pub use presenter::report_callback_error;
 pub use presenter::ShellPresenter;
@@ -45,5 +44,5 @@ mod generated {
 
 pub use generated::{
     AppWindow, BoundaryPointData, CampusData, NoticeData, OperationPresentationState,
-    OrientationPointData, PlanCardData, Theme,
+    OrientationPointData, PlanCardData, Theme, TrashItemData,
 };

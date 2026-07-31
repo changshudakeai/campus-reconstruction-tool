@@ -96,6 +96,27 @@
 - 测试：	ests/s1_03_startup_settings_flow.rs（新）、presentation_seams、
   ui_bindings、s1_contract_baseline 与 F1 public_api 快照同步更新
 
+### S1-04（校区搜索、最近记录、方案列表与回收站迁移到方案管理入口，2026-07-31）
+
+- 校区选择页按 ADR-0006 改为搜索框 + 最近使用的校区（名称+地址，最近进入排最前）；
+  搜索只在点击"搜索"或按回车时开始，输入期间不自动搜索；无记录时直接显示搜索框
+- 选择重复校区直接进入原校区方案页，并返回"该校区已添加，已为你切换"通知事实；
+  最近记录右侧小叉立即移除且不弹确认（只清快捷记录，不删校区）
+- 创建、改名（输入窗）、复制、删除（确认窗）与恢复均由方案管理入口完成；
+  恢复重名自动加"（恢复 N）"后缀（ADR-0018 §五，替换旧的 RestoreNameConflict 拒绝）
+- 回收站恢复/永久删除/清空均经入口：先确认（永久删除与清空），成功后停留回收站
+  并产生"方案已恢复/已永久删除/回收站已清空"提示事实（ADR-0018）
+- F1 公开接口扩展：RecentCampus / recent_campuses / remove_recent_campus /
+  remember_campus 维护最近列表、select_campus_with_anchor 增加地址参数；
+  F3 公开接口扩展：search_campuses / suggest_plan_name / restore_plan 模板后缀 /
+  purge_all_trash_confirmed / TrashItemView 增加名称、校区与剩余天数；
+  B2 扩展：campuses.address 列（迁移 4）、AppSettingKey::RecentCampuses、
+  TrashApi::purge_all_in_campus_trash；B6 ResourceBundle 启用 campus 文本段
+- 旧接线删除：injector 中校区选择、方案 CRUD、输入/确认窗、回收站原始跳转全部移除；
+  呈现入口 bind_actions 统一接线；tests/s1_04_campus_plan_trash_flow.rs（新）
+- 行为基线同步更新：校区与方案流程新增搜索/最近记录/回收站可观察结果（冲突点单列，
+  见交付说明）；F1/F3/B2 public_api 与手工快照同步
+
 ### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
 
 - `ui/notice_board.slint`（新建）：公告栏页组件（屏 5）——ListView 公告列表 +

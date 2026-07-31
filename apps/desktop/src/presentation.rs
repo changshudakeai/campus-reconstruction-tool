@@ -10,7 +10,9 @@ use std::marker::PhantomData;
 use notification_center::{NotificationCenter, NotificationRecord};
 use slint::{ModelRc, VecModel};
 
-use crate::{AppWindow, CampusData, NoticeData, OperationPresentationState, PlanCardData};
+use crate::{
+    AppWindow, CampusData, NoticeData, OperationPresentationState, PlanCardData, TrashItemData,
+};
 
 pub use notification_center::OpaqueNotificationAction;
 
@@ -73,10 +75,14 @@ pub enum OperationState {
     /// 操作成功完成。
     Succeeded,
     /// 耗时操作已经开始并立即返回进度。
-    Processing { progress: Progress },
+    Processing {
+        progress: Progress,
+    },
     /// 操作失败；反馈由随结果返回的 B7 通知决定。
     Failed,
     /// 操作尚未提交，必须先由用户确认。
+    /// 操作需要用户输入（新建/改名输入窗），页面已就绪等待提交。
+    NeedsInput,
     NeedsConfirmation,
 }
 
@@ -148,6 +154,38 @@ impl ConfirmationPresentation {
     }
 }
 
+/// 输入窗呈现数据（新建/改名共用；`text` 为预填默认值或失败后回显的用户草稿）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputDialogPresentation {
+    title: String,
+    label: String,
+    text: String,
+    confirm_label: String,
+    cancel_label: String,
+    /// 输入窗模式：0 = 新建方案，1 = 改名（Rust 侧据此分派提交逻辑）
+    mode: i32,
+}
+
+impl InputDialogPresentation {
+    /// 建立一份输入窗呈现数据。
+    pub fn new(
+        title: impl Into<String>,
+        label: impl Into<String>,
+        text: impl Into<String>,
+        confirm_label: impl Into<String>,
+        cancel_label: impl Into<String>,
+        mode: i32,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            label: label.into(),
+            text: text.into(),
+            confirm_label: confirm_label.into(),
+            cancel_label: cancel_label.into(),
+            mode,
+        }
+    }
+}
 /// 一个入口一次返回的完整呈现结果。
 #[derive(Debug, Clone)]
 pub struct Presentation<Page> {
@@ -155,6 +193,7 @@ pub struct Presentation<Page> {
     operation: OperationState,
     navigation: NavigationDecision,
     confirmation: Option<ConfirmationPresentation>,
+    input: Option<InputDialogPresentation>,
     notifications: Vec<NotificationFact>,
 }
 
@@ -186,12 +225,20 @@ impl<Page> Presentation<Page> {
         result
     }
 
+    /// 返回等待用户输入的页面与完整输入窗内容。
+    pub fn needs_input(page: Page, input: InputDialogPresentation) -> Self {
+        let mut result = Self::new(page, OperationState::NeedsInput);
+        result.input = Some(input);
+        result
+    }
+
     fn new(page: Page, operation: OperationState) -> Self {
         Self {
             page,
             operation,
             navigation: NavigationDecision::Stay,
             confirmation: None,
+            input: None,
             notifications: Vec::new(),
         }
     }
@@ -202,6 +249,11 @@ impl<Page> Presentation<Page> {
         self
     }
 
+    /// 附加输入窗内容（失败后回显用户草稿时使用）。
+    pub fn with_input(mut self, input: InputDialogPresentation) -> Self {
+        self.input = Some(input);
+        self
+    }
     /// 附加一条通知事实，供 B7 统一留存和呈现。
     pub fn with_notification(mut self, notification: NotificationFact) -> Self {
         self.notifications.push(notification);
@@ -227,6 +279,11 @@ impl<Page> Presentation<Page> {
     pub fn notifications(&self) -> &[NotificationFact] {
         &self.notifications
     }
+
+    /// 本次操作要求用户填写的输入窗内容（无则返回 None）。
+    pub fn input(&self) -> Option<&InputDialogPresentation> {
+        self.input.as_ref()
+    }
 }
 
 trait WindowPageState {
@@ -248,6 +305,10 @@ fn render_presentation<Page>(
     window.set_confirm_dialog_body("".into());
     window.set_confirm_dialog_confirm_label("".into());
     window.set_confirm_dialog_cancel_label("".into());
+    window.set_input_dialog_visible(false);
+    window.set_input_dialog_title("".into());
+    window.set_input_dialog_text("".into());
+    window.set_input_dialog_mode(0);
     presentation.page.render(window);
 
     if let NavigationDecision::Show(screen) = presentation.navigation {
@@ -270,6 +331,13 @@ fn render_presentation<Page>(
         window.set_confirm_dialog_cancel_label(confirmation.cancel_label.clone().into());
         window.set_confirm_dialog_visible(true);
     }
+
+    if let Some(input) = &presentation.input {
+        window.set_input_dialog_title(input.title.clone().into());
+        window.set_input_dialog_text(input.text.clone().into());
+        window.set_input_dialog_mode(input.mode);
+        window.set_input_dialog_visible(true);
+    }
 }
 
 fn operation_presentation(operation: &OperationState) -> (OperationPresentationState, i32) {
@@ -282,6 +350,7 @@ fn operation_presentation(operation: &OperationState) -> (OperationPresentationS
         ),
         OperationState::Failed => (OperationPresentationState::Failed, 0),
         OperationState::NeedsConfirmation => (OperationPresentationState::NeedsConfirmation, 0),
+        OperationState::NeedsInput => (OperationPresentationState::NeedsInput, 0),
     }
 }
 
@@ -465,6 +534,18 @@ pub struct CampusPlanPageState {
     pub new_demo_campus_label: String,
     pub campus_settings_label: String,
     pub campuses: Vec<CampusData>,
+    /// 校区搜索框当前文本（S1 未提交页面临时状态）
+    pub campus_search_query: String,
+    /// 搜索框占位文案（ADR-0006）
+    pub campus_search_placeholder: String,
+    /// "搜索"按钮文案
+    pub campus_search_button_label: String,
+    /// "最近使用的校区"区块标题（ADR-0006）
+    pub campus_recent_title: String,
+    /// 搜索结果（只在用户点击搜索/回车后填充）
+    pub campus_search_results: Vec<CampusData>,
+    /// 是否正在展示搜索结果（否则展示最近使用记录）
+    pub campus_show_results: bool,
     pub plan_list_title: String,
     pub campus_name: String,
     pub create_plan_label: String,
@@ -490,14 +571,14 @@ impl WindowPageState for CampusPlanPageState {
         );
         window.set_campus_select_settings_button_text(self.campus_settings_label.clone().into());
         window.set_campus_select_model(ModelRc::new(VecModel::from(self.campuses.clone())));
-        window.set_plan_list_title(self.plan_list_title.clone().into());
-        window.set_plan_list_campus_name(self.campus_name.clone().into());
-        window.set_plan_list_create_button_text(self.create_plan_label.clone().into());
-        window.set_plan_list_back_button_text(self.back_to_campus_label.clone().into());
-        window.set_plan_list_empty_text(self.plan_empty_text.clone().into());
-        window.set_plan_list_rename_label(self.rename_label.clone().into());
-        window.set_plan_list_duplicate_label(self.duplicate_label.clone().into());
-        window.set_plan_list_delete_label(self.delete_label.clone().into());
+        window.set_campus_search_text(self.campus_search_query.clone().into());
+        window.set_campus_search_placeholder(self.campus_search_placeholder.clone().into());
+        window.set_campus_search_button_text(self.campus_search_button_label.clone().into());
+        window.set_campus_recent_title(self.campus_recent_title.clone().into());
+        window.set_campus_search_results_model(ModelRc::new(VecModel::from(
+            self.campus_search_results.clone(),
+        )));
+        window.set_campus_show_results(self.campus_show_results);
         window.set_plan_list_model(ModelRc::new(VecModel::from(self.plans.clone())));
         window.set_plan_list_tutorial_visible(self.tutorial_visible);
         window.set_plan_list_tutorial_text(self.tutorial_text.clone().into());
@@ -601,6 +682,49 @@ impl WindowPageState for NotificationPageState {
     }
 }
 
+/// 回收站入口一次返回的完整回收站页状态。
+#[derive(Clone)]
+pub struct TrashPageState {
+    pub toolbar: ToolbarPageState,
+    pub title: String,
+    pub empty_list_text: String,
+    pub restore_button_text: String,
+    pub purge_button_text: String,
+    pub retention_notice_text: String,
+    pub campus_prefix: String,
+    pub items: Vec<TrashItemData>,
+}
+
+impl WindowPageState for TrashPageState {
+    fn render(&self, window: &AppWindow) {
+        self.toolbar.render(window);
+        window.set_trash_page_title(self.title.clone().into());
+        window.set_trash_page_empty_list_text(self.empty_list_text.clone().into());
+        window.set_trash_page_restore_button_text(self.restore_button_text.clone().into());
+        window.set_trash_page_purge_button_text(self.purge_button_text.clone().into());
+        window.set_trash_page_retention_notice_text(self.retention_notice_text.clone().into());
+        window.set_trash_page_campus_prefix(self.campus_prefix.clone().into());
+        window.set_trash_page_model(ModelRc::new(VecModel::from(self.items.clone())));
+    }
+}
+
+/// 回收站入口的一次请求：读取页面或执行一次回收站操作。
+#[derive(Debug, Clone)]
+pub enum TrashRequest {
+    /// 读取并显示回收站页。
+    Show,
+    /// 恢复方案（同名自动加"（恢复 N）"后缀，ADR-0018 §五）。
+    Restore { trash_id: String },
+    /// 请求立即永久删除（先返回确认窗）。
+    RequestPurge { trash_id: String },
+    /// 用户确认后执行永久删除。
+    ConfirmPurge { trash_id: String },
+    /// 请求清空回收站（先返回确认窗）。
+    RequestClearAll,
+    /// 用户确认后执行清空。
+    ConfirmClearAll,
+}
+
 macro_rules! presentation_entry {
     ($name:ident, $page:ty, $doc:literal) => {
         #[doc = $doc]
@@ -656,6 +780,7 @@ presentation_entry!(
     CampusPlanPageState,
     "校区与方案呈现入口。"
 );
+presentation_entry!(TrashPresentationEntry, TrashPageState, "回收站呈现入口。");
 presentation_entry!(
     CollectionPresentationEntry,
     CollectionPageState,

@@ -5,7 +5,7 @@
 //! - 卡片三件套与最近修改倒序、复制加"副本"后缀、恢复冲突
 
 use data_persistence::{Database, TrashApi};
-use project_management::{Error, PlanProgress, ProjectManager};
+use project_management::{PlanProgress, ProjectManager};
 use shared_domain_types::CampusId;
 
 /// 建一个带校区的 manager，返回 (manager, campus_id)
@@ -112,7 +112,9 @@ fn restore_plan_returns_it_to_list() {
     let plan_id = manager.create_plan(&campus_id, "方案 1").unwrap();
     let trash = manager.delete_plan(&campus_id, &plan_id).unwrap();
 
-    manager.restore_plan(&campus_id, &trash.trash_id).unwrap();
+    manager
+        .restore_plan(&campus_id, &trash.trash_id, "（恢复 {n}）")
+        .unwrap();
     let cards = manager.list_plan_cards(&campus_id).unwrap();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].name, "方案 1");
@@ -120,17 +122,22 @@ fn restore_plan_returns_it_to_list() {
 }
 
 #[test]
-fn restore_conflict_with_same_name_is_rejected() {
+fn restore_conflict_auto_renames_with_suffix() {
     let (mut manager, campus_id) = manager_with_campus();
     let plan_id = manager.create_plan(&campus_id, "方案 1").unwrap();
     let trash = manager.delete_plan(&campus_id, &plan_id).unwrap();
 
-    // 站外又建了一个同名方案 → 恢复必须报冲突
+    // 同名与"（恢复 1）"都被占用 → 恢复不阻断，自动依次使用"（恢复 2）"
     manager.create_plan(&campus_id, "方案 1").unwrap();
-    let err = manager
-        .restore_plan(&campus_id, &trash.trash_id)
-        .unwrap_err();
-    assert!(matches!(err, Error::RestoreNameConflict(name) if name == "方案 1"));
+    manager.create_plan(&campus_id, "方案 1（恢复 1）").unwrap();
+    let restored = manager
+        .restore_plan(&campus_id, &trash.trash_id, "（恢复 {n}）")
+        .unwrap();
+    assert_eq!(restored.name, "方案 1（恢复 2）");
+    let cards = manager.list_plan_cards(&campus_id).unwrap();
+    assert!(cards.iter().any(|card| card.name == "方案 1"));
+    assert!(cards.iter().any(|card| card.name == "方案 1（恢复 1）"));
+    assert!(cards.iter().any(|card| card.name == "方案 1（恢复 2）"));
 }
 
 #[test]
@@ -143,7 +150,71 @@ fn purge_confirmed_removes_from_trash_for_good() {
     manager.purge_plan_confirmed(&trash.trash_id).unwrap();
     assert!(manager.list_trash(&campus_id).unwrap().is_empty());
     // 永久删除后不可恢复
-    assert!(manager.restore_plan(&campus_id, &trash.trash_id).is_err());
+    assert!(manager
+        .restore_plan(&campus_id, &trash.trash_id, "（恢复 {n}）")
+        .is_err());
+}
+
+#[test]
+fn search_campuses_matches_name_case_insensitively() {
+    let (mut manager, _) = manager_with_campus();
+    manager.create_campus("华东师范大学(普陀校区)").unwrap();
+    let results = manager.search_campuses("华东师范").unwrap();
+    assert!(
+        results.iter().any(|c| c.name.contains("华东师范大学")),
+        "按连续名称片段搜索"
+    );
+    assert!(manager.search_campuses("不存在的学校").unwrap().is_empty());
+    assert!(
+        manager.search_campuses("   ").unwrap().is_empty(),
+        "空关键词不搜索"
+    );
+}
+#[test]
+fn suggest_plan_name_skips_existing_names() {
+    let (mut manager, campus_id) = manager_with_campus();
+    manager.create_plan(&campus_id, "新方案 1").unwrap();
+    manager.create_plan(&campus_id, "新方案 2").unwrap();
+    let suggested = manager.suggest_plan_name(&campus_id, "新方案").unwrap();
+    assert_eq!(suggested, "新方案 3");
+}
+
+#[test]
+fn trash_list_views_carry_name_campus_and_remaining_days() {
+    let (mut manager, campus_id) = manager_with_campus();
+    let plan_id = manager.create_plan(&campus_id, "待恢复方案").unwrap();
+    manager.delete_plan(&campus_id, &plan_id).unwrap();
+
+    let items = manager.list_trash(&campus_id).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "待恢复方案");
+    assert_eq!(items[0].campus_name, "测试大学");
+    assert!(
+        (0..=30).contains(&items[0].expires_in_days),
+        "剩余保留天数应在 0～30"
+    );
+    assert!(!items[0].deleted_at.is_empty());
+}
+
+#[test]
+fn purge_all_trash_confirmed_clears_only_current_campus() {
+    let (mut manager, campus_id) = manager_with_campus();
+    let other = manager.create_campus("另一所大学").unwrap();
+    let other_id = CampusId::parse(&other.id).unwrap();
+    let p1 = manager.create_plan(&campus_id, "方案 1").unwrap();
+    let p2 = manager.create_plan(&campus_id, "方案 2").unwrap();
+    let other_plan = manager.create_plan(&other_id, "他人方案").unwrap();
+    manager.delete_plan(&campus_id, &p1).unwrap();
+    manager.delete_plan(&campus_id, &p2).unwrap();
+    manager.delete_plan(&other_id, &other_plan).unwrap();
+
+    assert_eq!(manager.purge_all_trash_confirmed(&campus_id).unwrap(), 2);
+    assert!(manager.list_trash(&campus_id).unwrap().is_empty());
+    assert_eq!(
+        manager.list_trash(&other_id).unwrap().len(),
+        1,
+        "其他校区不受影响"
+    );
 }
 
 #[test]

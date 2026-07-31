@@ -11,7 +11,7 @@ use data_persistence::{AppSettingKey, AppSettingsApi, CampusCrudApi, Database};
 use shared_domain_types::CampusId;
 
 use crate::error::{Error, Result};
-use crate::landing::LandingCampus;
+use crate::landing::{LandingCampus, RecentCampus};
 
 /// 高德地图 API key 格式校验（仅字母数字）
 pub(crate) fn validate_gaode_key(key: &str) -> Result<()> {
@@ -295,10 +295,65 @@ impl SettingsManager {
         LandingCampus::find(&self.db, &campus_id)
     }
 
-    /// 记录"上次使用的校区"（切换校区/选定校区后调用，ADR-0006）
+    /// 记录"上次使用的校区"（切换校区/选定校区后调用，ADR-0006）。
+    ///
+    /// 同时维护"最近使用的校区"列表：最近进入的排最前，重复进入不产生重复记录。
     pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()> {
         self.db
             .set_setting(AppSettingKey::LastUsedCampus, &campus_id.to_string())?;
+        let mut ids = self.recent_campus_ids()?;
+        ids.retain(|id| id != campus_id);
+        ids.insert(0, *campus_id);
+        self.save_recent_campus_ids(&ids)
+    }
+
+    /// 最近使用的校区记录（ADR-0006）：按最近进入时间倒序，校区已被删除时跳过。
+    pub fn recent_campuses(&self) -> Result<Vec<RecentCampus>> {
+        let mut result = Vec::new();
+        for id in self.recent_campus_ids()? {
+            let Some(campus) = self.db.find_campus_by_id(&id.to_string())? else {
+                continue;
+            };
+            let Ok(parsed) = CampusId::parse(&campus.id) else {
+                continue;
+            };
+            result.push(RecentCampus {
+                id: parsed,
+                name: campus.name,
+                address: campus.address,
+            });
+        }
+        Ok(result)
+    }
+
+    /// 从最近使用记录中移除一条（右侧小叉，不删除校区及其方案，ADR-0006）。
+    pub fn remove_recent_campus(&mut self, campus_id: &CampusId) -> Result<()> {
+        let ids = self.recent_campus_ids()?;
+        let filtered: Vec<CampusId> = ids.into_iter().filter(|id| id != campus_id).collect();
+        self.save_recent_campus_ids(&filtered)
+    }
+
+    /// 读取持久化的最近校区 ID 列表（损坏或缺失按空列表处理，与
+    /// `last_used_campus` 的容错语义一致）。
+    fn recent_campus_ids(&self) -> Result<Vec<CampusId>> {
+        let Some(stored) = self.db.get_setting(AppSettingKey::RecentCampuses)? else {
+            return Ok(Vec::new());
+        };
+        let Ok(ids) = serde_json::from_str::<Vec<String>>(&stored) else {
+            return Ok(Vec::new());
+        };
+        Ok(ids
+            .iter()
+            .filter_map(|id| CampusId::parse(id).ok())
+            .collect())
+    }
+
+    /// 持久化最近校区 ID 列表（JSON 数组，最近进入排最前）。
+    fn save_recent_campus_ids(&mut self, ids: &[CampusId]) -> Result<()> {
+        let values: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        let json = serde_json::to_string(&values)
+            .map_err(|error| Error::InvalidRecentCampuses(error.to_string()))?;
+        self.db.set_setting(AppSettingKey::RecentCampuses, &json)?;
         Ok(())
     }
 
@@ -307,13 +362,14 @@ impl SettingsManager {
         &mut self,
         name: &str,
         poi_id: &str,
+        address: &str,
         anchor_lng: f64,
         anchor_lat: f64,
     ) -> Result<CampusId> {
         // 1. 创建校区（带锚点）
         let campus = self
             .db
-            .create_campus_with_anchor(name, poi_id, anchor_lng, anchor_lat)?;
+            .create_campus_with_anchor(name, poi_id, address, anchor_lng, anchor_lat)?;
 
         // 2. 解析 CampusId
         let campus_id =
@@ -552,6 +608,7 @@ mod tests {
             .select_campus_with_anchor(
                 "北京大学",
                 "239494",
+                "海淀区颐和园路5号",
                 116.308, // 经度
                 39.995,  // 纬度
             )
@@ -581,7 +638,7 @@ mod tests {
 
         // 先创建校区
         let campus_id = manager
-            .select_campus_with_anchor("清华大学", "239495", 116.320, 39.998)
+            .select_campus_with_anchor("清华大学", "239495", "海淀区清华园1号", 116.320, 39.998)
             .expect("创建校区");
 
         // 更新锚点坐标
@@ -593,6 +650,65 @@ mod tests {
         let campuses = manager.db.list_campuses().unwrap();
         assert_eq!(campuses[0].anchor_lng, 116.330);
         assert_eq!(campuses[0].anchor_lat, 40.000);
+    }
+
+    #[test]
+    fn recent_campuses_keep_most_recent_first_and_dedupe() {
+        let mut db = Database::open_in_memory().unwrap();
+        let first = db.create_campus("第一大学").unwrap();
+        let second = db.create_campus("第二大学").unwrap();
+        let first_id = CampusId::parse(&first.id).unwrap();
+        let second_id = CampusId::parse(&second.id).unwrap();
+
+        let mut manager = SettingsManager::new(db);
+        manager.remember_campus(&first_id).unwrap();
+        manager.remember_campus(&second_id).unwrap();
+        manager.remember_campus(&first_id).unwrap();
+
+        let recent = manager.recent_campuses().unwrap();
+        assert_eq!(recent.len(), 2, "重复进入不产生重复记录");
+        assert_eq!(recent[0].id, first_id, "最近进入的排最前");
+        assert_eq!(recent[1].id, second_id);
+        assert_eq!(recent[0].name, "第一大学");
+        assert_eq!(manager.landing_campus().unwrap().unwrap().name, "第一大学");
+    }
+
+    #[test]
+    fn recent_campus_records_show_address_and_can_be_removed() {
+        let mut manager = manager();
+        let campus_id = manager
+            .select_campus_with_anchor(
+                "华东师范大学(普陀校区)",
+                "B01",
+                "中山北路3663号",
+                121.406,
+                31.228,
+            )
+            .expect("创建校区");
+
+        let recent = manager.recent_campuses().unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].address, "中山北路3663号");
+
+        // 小叉移除：只清快捷记录，不删除校区，不弹确认（确认由 S1 呈现层保证）
+        manager.remove_recent_campus(&campus_id).unwrap();
+        assert!(manager.recent_campuses().unwrap().is_empty());
+        assert!(
+            manager.landing_campus().unwrap().is_some(),
+            "校区及其方案不受影响"
+        );
+        assert_eq!(manager.db.list_campuses().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recent_campus_skips_missing_campuses() {
+        let mut manager = manager();
+        let ghost = CampusId::generate();
+        manager.remember_campus(&ghost).unwrap();
+        assert!(
+            manager.recent_campuses().unwrap().is_empty(),
+            "校区不存在时跳过该记录"
+        );
     }
 
     #[test]

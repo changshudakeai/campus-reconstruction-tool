@@ -11,6 +11,8 @@ import { Theme } from "theme.slint";
 
 /// 回收站项视图数据（由 F3 recycle_bin_api 产出）
 export struct TrashItemData {
+    /// 回收站条目 ID（恢复/永久删除操作使用）
+    trash-id: string,
     /// 方案 ID
     plan-id: string,
     /// 方案名
@@ -36,9 +38,6 @@ export component Trash inherits Rectangle {
     in property <string> retention_notice_text;
     // 校区前缀（Rust 侧注入，如"校区："）
     in property <string> campus-prefix;
-    // 日期显示
-    in property <string> date_today;
-    in property <string> date_yesterday;
 
     // ── 数据模型 ──────────────────────────────────────
     in property <[TrashItemData]> trash-model;
@@ -123,7 +122,7 @@ export component Trash inherits Rectangle {
                             spacing: 12px;
 
                             Text {
-                                text: root.date_today; // 根据实际日期判断
+                                text: item.deleted-at;
                                 font-size: 11px;
                                 color: Theme.text-faint;
                             }
@@ -143,12 +142,12 @@ export component Trash inherits Rectangle {
 
                         Button {
                             text: root.restore_button_text;
-                            clicked => { root.restore-clicked(item.plan-id); }
+                            clicked => { root.restore-clicked(item.trash-id); }
                         }
 
                         Button {
                             text: root.purge_button_text;
-                            clicked => { root.purge-clicked(item.plan-id); }
+                            clicked => { root.purge-clicked(item.trash-id); }
                         }
                     }
                 }

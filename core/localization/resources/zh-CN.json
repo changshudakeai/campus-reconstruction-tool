@@ -1,6 +1,12 @@
 {
   "campus": {
-    "demo_name": "演示大学"
+    "demo_name": "演示大学",
+    "search_button": "搜索",
+    "recent_section": "最近使用的校区",
+    "already_added_title": "校区已切换",
+    "already_added": "该校区已添加，已为你切换",
+    "recent_removed_title": "最近使用记录",
+    "recent_removed": "已从最近使用中移除"
   },
   "domain": {
     "campus": "校区",
@@ -84,6 +90,7 @@
     "list_header": "方案列表",
     "create": "新建方案",
     "name_label": "方案名",
+    "default_name": "新方案",
     "name_placeholder": "输入方案名称",
     "duplicate_name": "同一校区内已存在同名方案",
     "boundary_not_set": "尚未确定范围",
@@ -99,7 +106,8 @@
     "recycle_bin_notice": "删除的方案在回收站保留 30 天",
     "purge_confirm": "确定要立即永久删除吗？此操作不可恢复。",
     "empty_list": "还没有方案——点上方“新建方案”开始你的第一个方案",
-    "delete_confirm": "确定要删除吗？方案将在回收站保留 30 天"
+    "delete_confirm": "确定要删除吗？方案将在回收站保留 30 天",
+    "restore_name_template": "（恢复 {n}）"
   },
   "review": {
     "workbench_title": "评审工作台",
@@ -292,6 +300,15 @@
     "conflict_body": "该名称已在当前校区存在，请选择处理方式",
     "conflict_option_replace": "覆盖同名方案",
     "conflict_option_rename": "保留原名并重命名",
-    "retention_notice": "回收站保留 30 天"
+    "retention_notice": "回收站保留 30 天",
+    "remaining_days": "剩余 {0} 天",
+    "restored_title": "方案已恢复",
+    "restored_body": "方案已恢复到原校区",
+    "purged_title": "方案已永久删除",
+    "purged_body": "该方案已从回收站永久删除",
+    "cleared_title": "回收站已清空",
+    "cleared_body": "当前校区的回收站已清空",
+    "clear_confirm_title": "清空回收站",
+    "clear_confirm_body": "确定要清空回收站吗？清空后所有方案将不可恢复。"
   }
 }
