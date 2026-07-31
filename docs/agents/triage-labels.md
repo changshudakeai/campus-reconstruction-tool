@@ -1,7 +1,7 @@
 # Triage Label Vocabulary
 
 > **位置**: `docs/agents/triage-labels.md`  
-> **用途**: 定义 triage skill 使用的五个标准化标签
+> **用途**: 定义 triage skill 使用的五个标准化标签`r`n> `r`n> **注意**：本项目工单以本地 `.scratch/` 为准（GitHub Issues 不用于工单追踪）；以下五个标签作为本地工单的状态字段使用。
 
 ---
 
@@ -37,7 +37,7 @@ graph TD
 
 ## 使用方式
 
-### 在 GitHub 上添加标签
+### （参考）若未来启用 GitHub Issues
 
 ```bash
 # 添加标签到 issue

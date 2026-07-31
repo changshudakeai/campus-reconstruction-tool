@@ -59,7 +59,7 @@ Cargo 解析器要求包依赖图无环，出现环时直接报错 `error: cycli
 
 - 来源：https://doc.rust-lang.org/reference/attributes/type_system.html#the-non_exhaustive-attribute
 
-**对本项目**：`core/domain`（B1）的共享枚举（候选类别、审核状态等）加 `#[non_exhaustive]` 后，未来加变体不会破坏 7 个功能 crate；下游被编译器强制写兜底分支。
+**对本项目**：`core/shared-domain-types`（B1）的共享枚举（候选类别、审核状态等）加 `#[non_exhaustive]` 后，未来加变体不会破坏 7 个功能 crate；下游被编译器强制写兜底分支。
 
 ### 1.5 sealed trait：trait 接口只许官方实现
 
@@ -237,6 +237,8 @@ Rust 没有 ArchUnit（Java）那样的统一架构测试框架；社区讨论�
 
 ### 4.1 cargo-public-api：公开 API 快照测试
 
+> 命名说明：cargo-public-api 是 public-api crate 的 CLI 形态；本项目按 enforcement.md 采用其库模式（assert_eq_or_update）做快照测试。
+
 官方 README（全文核实）给出的 CI 模式：把下面这个测试加进项目，公开 API 的**每一次增删改**都会让 `cargo test` 失败，必须显式运行 `UPDATE_SNAPSHOTS=yes cargo test` 更新快照文件并把 diff 提交进 git——**API 膨胀从"悄悄发生"变成"必须在 PR diff 里现形"**：
 
 ```rust
@@ -250,7 +252,7 @@ fn public_api() {
 }
 ```
 
-README 原话："a regular `cargo test` will fail if your public API is accidentally or deliberately changed."（注意：构建 rustdoc JSON 需安装 nightly 工具链，测试代码会自动安装，主工具链仍是 stable。）
+README 原话："a regular `cargo test` will fail if your public API is accidentally or deliberately changed."（注意：构建 rustdoc JSON 需显式安装 nightly 工具链——rustdoc-json 0.9.x 不会自动安装；本项目在 CI test job 显式安装 nightly-2025-08-02，实测记录见 docs/developer-guide/enforcement.md。）
 
 - 来源：https://github.com/cargo-public-api/cargo-public-api
 
@@ -336,7 +338,7 @@ rust-analyzer 的 conclusion job（§2.6）与 zed 的 tests_pass job 是同一�
 | 1.1 | `[dependencies]` 白名单 | 30 个 crate 各自的 Cargo.toml（依赖严格按 ADR-0017 依赖图声明） | 未声明的 crate 无法 `use` | 编译失败 | ✅（隐含；建议在 ARCHITECTURE.md 点明"Cargo.toml 即执法文件"） |
 | 1.2 | `[workspace.dependencies]` 版本单点 | 根 Cargo.toml 集中声明 + 成员 `workspace = true` | 版本漂移 | 由 2.3 的 cargo-deny `workspace-dependencies.duplicates = 'deny'` 兜底 | 🆕 |
 | 1.3 | 默认私有 + `pub(crate)` + `unreachable_pub` | 根 Cargo.toml：`[workspace.lints.rust] unreachable_pub = "warn"`（CI `-D`） | 写了 pub 但外部够不到 | 编译警告→CI 失败 | 🆕（落实十戒第 4 条"pub 符号表最小化"） |
-| 1.4 | `#[non_exhaustive]` | `core/domain` 的共享枚举/配置结构体 | 下游绕过构造器、match 不写兜底 | 编译失败 | 🆕 |
+| 1.4 | `#[non_exhaustive]` | `core/shared-domain-types` 的共享枚举/配置结构体 | 下游绕过构造器、match 不写兜底 | 编译失败 | 🆕 |
 | 1.5 | sealed trait | 需要封闭实现的 trait（逐个评审决定，如 B4 导出器内部 trait） | 下游私自实现内部 trait | 编译失败 | 🆕 |
 | 1.6 | `[workspace.lints]` 门禁 | 根 Cargo.toml：clippy `dbg_macro/todo/print_stdout/print_stderr = "deny"`、`wildcard_imports = "warn"`、rust `unsafe_code = "deny"` | 调试残留、通配导入、unsafe | CI 失败 | 🆕（抄 zed/ra/bevy 三家并集） |
 | 1.7 | clippy.toml `disallowed-types/methods` | 根 clippy.toml：如禁 `rusqlite::Connection`（replacement 指向 `core/data` API）、禁 `std::process::Command`（本项目 ADR 有安静哨兵纪律） | 越过底座 crate 直呼底层库 | clippy deny → CI 失败 | 🆕（zed 模式，每条带 reason） |
@@ -359,7 +361,7 @@ rust-analyzer 的 conclusion job（§2.6）与 zed 的 tests_pass job 是同一�
 | # | 机制 | 要写的配置 | 检查内容 | 违规后果 | 状态 |
 |---|---|---|---|---|---|
 | 3.1 | 分支保护/ruleset | 仓库设置：main 必须走 PR；required status check = conclusion job；require branches up to date | CI 不绿、分支落后 | 无法合并（GitHub 拒绝按钮） | 🆕 |
-| 3.2 | CODEOWNERS | `.github/CODEOWNERS`：`**/Cargo.toml`、`deny.toml`、`clippy.toml`、`xtask/**`、`core/domain/**`、快照文件 `**/public-api.txt` 指定 owner | 改依赖声明/门禁配置/共享类型/API 快照必须专人批 | 无 owner 批准无法合并 | 🆕（vscode 三模式：门禁有门神、API 有门神、**豁免白名单有门神**） |
+| 3.2 | CODEOWNERS | `.github/CODEOWNERS`：`**/Cargo.toml`、`deny.toml`、`clippy.toml`、`xtask/**`、`core/shared-domain-types/**`、快照文件 `**/public-api.txt` 指定 owner | 改依赖声明/门禁配置/共享类型/API 快照必须专人批 | 无 owner 批准无法合并 | 🆕（vscode 三模式：门禁有门神、API 有门神、**豁免白名单有门神**） |
 | 3.3 | 豁免留痕纪律 | 约定：任何 `#[allow(...)]`/`ignore-tidy-*`/machete-ignored 必须带 reason（bevy 有 lint `allow_attributes_without_reason` 可机器化） | 无理由豁免 | clippy warn/评审拒绝 | 🆕 |
 
 **落地顺序建议**：1.1/1.6/1.7 + 2.6（一天内可完成，纯配置）→ 2.1/2.2（xtask 两个检查，两三天）→ 2.3/2.4/2.5 + 2.8（CI 完整化）→ 3.1/3.2（仓库设置，十分钟，但依赖 2.8 先存在）。
