@@ -5,8 +5,8 @@
 
 use data_persistence::Database;
 use project_management::{
-    CampusPlanSnapshot, CampusView, Error, PlanCardView, PlanProgress, ProjectManager,
-    RestoredPlan, TrashItemView, DUPLICATE_SUFFIX_KEY, RESTORE_NAME_TEMPLATE_KEY,
+    CampusPlanSnapshot, CampusView, Error, PlanCardView, PlanContextView, PlanProgress,
+    ProjectManager, RestoredPlan, TrashItemView, DUPLICATE_SUFFIX_KEY, RESTORE_NAME_TEMPLATE_KEY,
 };
 use shared_domain_types::{CampusId, PlanId};
 
@@ -39,6 +39,15 @@ fn public_api_types_exist() {
 
     // 方案轻创建（ADR-0010）与卡片三件套（ADR-0018）
     let plan_id: PlanId = manager.create_plan(&campus_id, "方案 1").unwrap();
+    // 工作区上下文（S1-05）：方案名/校区名/锚点一次返回；不存在的方案返回 None
+    let context: PlanContextView = manager.plan_context(&plan_id).unwrap().unwrap();
+    assert_eq!(context.plan_id, plan_id.to_string());
+    assert_eq!(context.plan_name, "方案 1");
+    assert_eq!(context.campus_id, campus_id.to_string());
+    assert_eq!(context.campus_name, "测试大学");
+    assert!(context.anchor_lng.is_finite() && context.anchor_lat.is_finite());
+    let missing = PlanId::parse("00000000-0000-4000-8000-000000000000").unwrap();
+    assert!(manager.plan_context(&missing).unwrap().is_none());
     assert_eq!(
         manager.suggest_plan_name(&campus_id, "新方案").unwrap(),
         "新方案 1"

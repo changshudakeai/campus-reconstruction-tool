@@ -14,6 +14,8 @@ use crate::presentation::{
 };
 use crate::runtime::format_relative_time;
 use crate::{CampusData, PlanCardData, ViewModelInjector};
+
+use super::workspace_boundary::WorkspaceProductionContext;
 use global_settings::{
     FirstRunSetup, SettingsSnapshot, StartupDestination, StartupLandingContentProvider,
     StartupSnapshot,
@@ -38,6 +40,7 @@ impl StartupLandingContentProvider for CampusPlanLandingProvider<'_> {
 
 pub(crate) struct StartupProductionAdapter {
     pub(crate) injector: Rc<RefCell<ViewModelInjector>>,
+    pub(crate) workspace: WorkspaceProductionContext,
 }
 
 impl PresentationAdapter<StartupRequest, StartupPageState> for StartupProductionAdapter {
@@ -75,7 +78,7 @@ impl PresentationAdapter<StartupRequest, StartupPageState> for StartupProduction
                         &snapshot.destination,
                         StartupDestination::LastUsedCampus { .. }
                     );
-                    campus_plan_page(&injector, campus_plan, show_plan_list)
+                    campus_plan_page(&injector, &self.workspace, campus_plan, show_plan_list)
                 });
                 let (page, destination) = startup_landing(injector.l10n(), snapshot, landing_page);
                 let presentation = if matches!(request, StartupRequest::CompleteFirstRun { .. }) {
@@ -406,6 +409,7 @@ fn error_fact(l10n: &Localization, body: &str) -> NotificationFact {
 
 pub(crate) fn campus_plan_page(
     injector: &ViewModelInjector,
+    workspace: &WorkspaceProductionContext,
     snapshot: CampusPlanSnapshot,
     toolbar_visible: bool,
 ) -> CampusPlanPageState {
@@ -423,7 +427,7 @@ pub(crate) fn campus_plan_page(
         .plans
         .into_iter()
         .map(|card| PlanCardData {
-            progress_desc: injector
+            progress_desc: workspace
                 .plan_card_progress_text(&card.plan_id, &l10n.t(card.progress.text_key()))
                 .into(),
             plan_id: card.plan_id.into(),

@@ -160,6 +160,7 @@
     "osm_not_found_title": "OSM 未查询到边界",
     "osm_not_found_body": "未能在 OSM 匹配到此校区边界，请人工圈画",
     "map_notice_title": "地图提示",
+    "map_load_failed": "地图加载失败，地图相关操作暂时不可用；设置、方案列表与已有正式数据仍可正常使用",
     "error_too_few_points": "边界至少需要 3 个点才能闭合",
     "error_convert_failed": "坐标换算失败：未设参考原点",
     "unknown_campus": "未命名校区"
@@ -270,6 +271,10 @@
     "date_display": "{0}"
   },
   "workspace": {
+    "context_campus_plan": "{0} / {1}",
+    "plan_not_found": "方案不存在或已删除，请返回方案列表重试",
+    "leave_discard_title": "离开边界页",
+    "leave_discard_body": "当前边界尚未确认，离开将丢弃已绘制的点。确定离开吗？",
     "placeholder_title": "① 圈边界 → ② 定朝向 → ③ 采集 → ④ 评审 → ⑤ 导出",
     "placeholder_subtitle": "（步骤条骨架待 T19B-5B 完整实现）",
     "step_pending_notice": "（待 Phase 2 Step B/C 实现）"

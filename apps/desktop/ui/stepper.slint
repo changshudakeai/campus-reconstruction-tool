@@ -80,11 +80,15 @@ component StepButton inherits Rectangle {
 }
 
 /// 五步步骤条：①圈边界 → ②定朝向 → ③采集 → ④评审 → ⑤导出
-/// 状态：当前高亮 / 已完成打勾 / 未锁定置灰不可点
+/// 状态：当前高亮 / 已完成打勾 / 未解锁置灰不可点。
+/// 锁定与完成状态由功能入口经 Rust 侧注入（S1 不自行判断步骤门控）。
 export component Stepper inherits Rectangle {
     in property <int> active-step: 0;
-    in property <int> completed-steps: 0;
+    in property <[bool]> step-locked;
+    in property <[bool]> step-completed;
     in property <string> stepper-title-label;
+    // ADR-0027：五个步骤顶部始终同时显示“校区名 / 方案名”（合成文案由 Rust 侧注入）
+    in property <string> stepper-context-label;
     in property <string> stepper-boundary-label;
     in property <string> stepper-orientation-label;
     in property <string> stepper-collection-label;
@@ -104,7 +108,15 @@ export component Stepper inherits Rectangle {
         font-weight: 700;
         color: Theme.text-primary;
         x: 16px;
-        y: 20px;
+        y: 8px;
+    }
+    
+    Text {
+        text: root.stepper-context-label;
+        font-size: 12px;
+        color: Theme.text-tertiary;
+        x: 16px;
+        y: 30px;
     }
     
     // 步骤①：圈边界 - 永远解锁
@@ -112,8 +124,8 @@ export component Stepper inherits Rectangle {
         step-index: 0;
         step-label: root.stepper-boundary-label;
         is-current: (root.active-step == 0);
-        is-completed: (root.completed-steps > 0);
-        is-locked: false;
+        is-completed: root.step-completed[0];
+        is-locked: root.step-locked[0];
         clicked => { root.step-clicked(0); }
         x: 200px;
         y: 8px;
@@ -126,8 +138,8 @@ export component Stepper inherits Rectangle {
         step-index: 1;
         step-label: root.stepper-orientation-label;
         is-current: (root.active-step == 1);
-        is-completed: (root.completed-steps > 1);
-        is-locked: (root.completed-steps <= 0);
+        is-completed: root.step-completed[1];
+        is-locked: root.step-locked[1];
         clicked => { root.step-clicked(1); }
         x: 300px;
         y: 8px;
@@ -140,8 +152,8 @@ export component Stepper inherits Rectangle {
         step-index: 2;
         step-label: root.stepper-collection-label;
         is-current: (root.active-step == 2);
-        is-completed: (root.completed-steps > 2);
-        is-locked: (root.completed-steps <= 1);
+        is-completed: root.step-completed[2];
+        is-locked: root.step-locked[2];
         clicked => { root.step-clicked(2); }
         x: 400px;
         y: 8px;
@@ -154,8 +166,8 @@ export component Stepper inherits Rectangle {
         step-index: 3;
         step-label: root.stepper-review-label;
         is-current: (root.active-step == 3);
-        is-completed: (root.completed-steps > 3);
-        is-locked: (root.completed-steps <= 2);
+        is-completed: root.step-completed[3];
+        is-locked: root.step-locked[3];
         clicked => { root.step-clicked(3); }
         x: 500px;
         y: 8px;
@@ -168,8 +180,8 @@ export component Stepper inherits Rectangle {
         step-index: 4;
         step-label: root.stepper-export-label;
         is-current: (root.active-step == 4);
-        is-completed: (root.completed-steps >= 5);
-        is-locked: (root.completed-steps <= 3);
+        is-completed: root.step-completed[4];
+        is-locked: root.step-locked[4];
         clicked => { root.step-clicked(4); }
         x: 600px;
         y: 8px;

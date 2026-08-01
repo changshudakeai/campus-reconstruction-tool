@@ -83,6 +83,25 @@ pub struct RestoredPlan {
     pub name: String,
 }
 
+/// 方案工作区上下文（S1-05）：打开方案时一次取得校区名、方案名与地图锚点。
+/// 五个步骤顶部始终同时显示校区名与方案名（ADR-0027），锚点用于地图定位
+/// （ADR-0008：地图直接定位到校区锚点）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanContextView {
+    /// 方案 ID
+    pub plan_id: String,
+    /// 方案名
+    pub plan_name: String,
+    /// 所属校区 ID
+    pub campus_id: String,
+    /// 所属校区名
+    pub campus_name: String,
+    /// 校区锚点经度（GCJ-02）
+    pub anchor_lng: f64,
+    /// 校区锚点纬度（GCJ-02）
+    pub anchor_lat: f64,
+}
+
 /// F3 一次返回校区选择与当前方案列表所需的全部正式状态。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CampusPlanSnapshot {

@@ -17,6 +17,7 @@ use crate::presentation::{
     NotificationFact, Presentation, PresentationAdapter, Screen, TrashPageState, TrashRequest,
 };
 use crate::production::startup_settings::campus_plan_page;
+use crate::production::workspace_boundary::WorkspaceProductionContext;
 use crate::production::{PendingConfirmation, PendingInput, ProductionEntries};
 use crate::runtime::format_relative_time;
 use crate::{AppWindow, CampusData, TrashItemData, ViewModelInjector};
@@ -57,6 +58,7 @@ pub(crate) enum CampusPlanRequest {
 /// 校区与方案生产适配器：一次请求调用 F1/F3 公开接口并返回完整呈现结果。
 pub(crate) struct CampusPlanProductionAdapter {
     pub(crate) injector: Rc<RefCell<ViewModelInjector>>,
+    pub(crate) workspace: WorkspaceProductionContext,
 }
 
 impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanProductionAdapter {
@@ -64,36 +66,42 @@ impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanP
         #[cfg(test)]
         record_entry_call(2);
         match request {
-            CampusPlanRequest::CampusSelect => present_campus_select(&self.injector),
+            CampusPlanRequest::CampusSelect => {
+                present_campus_select(&self.injector, &self.workspace)
+            }
 
             CampusPlanRequest::SearchCampus { query } => {
-                present_campus_search(&self.injector, &query)
+                present_campus_search(&self.injector, &self.workspace, &query)
             }
             CampusPlanRequest::SelectCampus { campus_id } => {
-                present_select_campus(&self.injector, &campus_id)
+                present_select_campus(&self.injector, &self.workspace, &campus_id)
             }
             CampusPlanRequest::RemoveRecentCampus { campus_id } => {
-                present_remove_recent_campus(&self.injector, &campus_id)
+                present_remove_recent_campus(&self.injector, &self.workspace, &campus_id)
             }
-            CampusPlanRequest::CreateDemoCampus => present_create_demo_campus(&self.injector),
-            CampusPlanRequest::RequestCreatePlan => present_request_create_plan(&self.injector),
+            CampusPlanRequest::CreateDemoCampus => {
+                present_create_demo_campus(&self.injector, &self.workspace)
+            }
+            CampusPlanRequest::RequestCreatePlan => {
+                present_request_create_plan(&self.injector, &self.workspace)
+            }
             CampusPlanRequest::ConfirmCreatePlan { name } => {
-                present_confirm_create_plan(&self.injector, &name)
+                present_confirm_create_plan(&self.injector, &self.workspace, &name)
             }
             CampusPlanRequest::RequestRenamePlan { plan_id } => {
-                present_request_rename_plan(&self.injector, &plan_id)
+                present_request_rename_plan(&self.injector, &self.workspace, &plan_id)
             }
             CampusPlanRequest::ConfirmRenamePlan { plan_id, name } => {
-                present_confirm_rename_plan(&self.injector, &plan_id, &name)
+                present_confirm_rename_plan(&self.injector, &self.workspace, &plan_id, &name)
             }
             CampusPlanRequest::DuplicatePlan { plan_id } => {
-                present_duplicate_plan(&self.injector, &plan_id)
+                present_duplicate_plan(&self.injector, &self.workspace, &plan_id)
             }
             CampusPlanRequest::RequestDeletePlan { plan_id } => {
-                present_request_delete_plan(&self.injector, &plan_id)
+                present_request_delete_plan(&self.injector, &self.workspace, &plan_id)
             }
             CampusPlanRequest::ConfirmDeletePlan { plan_id } => {
-                present_confirm_delete_plan(&self.injector, &plan_id)
+                present_confirm_delete_plan(&self.injector, &self.workspace, &plan_id)
             }
         }
     }
@@ -101,27 +109,29 @@ impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanP
 
 fn present_campus_select(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
 ) -> Presentation<CampusPlanPageState> {
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    match campus_select_page(&injector) {
+    match campus_select_page(&injector, workspace) {
         Ok(page) => Presentation::ready(page)
             .with_navigation(NavigationDecision::Show(Screen::CampusSelect)),
-        Err(error) => Presentation::failed(campus_page_fallback(&injector))
+        Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_campus_search(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     query: &str,
 ) -> Presentation<CampusPlanPageState> {
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let mut page = match campus_select_page(&injector) {
+    let mut page = match campus_select_page(&injector, workspace) {
         Ok(page) => page,
         Err(error) => {
-            return Presentation::failed(campus_page_fallback(&injector))
+            return Presentation::failed(campus_page_fallback(&injector, workspace))
                 .with_notification(campus_error_fact(l10n, &error.to_string()))
         }
     };
@@ -147,6 +157,7 @@ fn present_campus_search(
 
 fn present_select_campus(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     campus_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     // 阶段 1：可变操作（记住校区），错误归一为文本
@@ -155,7 +166,7 @@ fn present_select_campus(
         let parsed = match CampusId::parse(campus_id) {
             Ok(id) => id,
             Err(error) => {
-                let page = campus_page_fallback(&injector);
+                let page = campus_page_fallback(&injector, workspace);
                 return Presentation::failed(page)
                     .with_notification(plan_error_fact(injector.l10n(), &error.to_string()));
             }
@@ -175,7 +186,7 @@ fn present_select_campus(
     // 阶段 2：只读构建完整方案列表页
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (remembered, page) {
         (Ok(()), Ok(page)) => {
             let mut result = Presentation::succeeded(page)
@@ -189,15 +200,16 @@ fn present_select_campus(
             }
             result
         }
-        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector))
+        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_remove_recent_campus(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     campus_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     let removed = {
@@ -205,7 +217,7 @@ fn present_remove_recent_campus(
         let parsed = match CampusId::parse(campus_id) {
             Ok(id) => id,
             Err(error) => {
-                let page = campus_page_fallback(&injector);
+                let page = campus_page_fallback(&injector, workspace);
                 return Presentation::failed(page)
                     .with_notification(campus_error_fact(injector.l10n(), &error.to_string()));
             }
@@ -217,22 +229,23 @@ fn present_remove_recent_campus(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = campus_select_page(&injector);
+    let page = campus_select_page(&injector, workspace);
     match (removed, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page).with_notification(campus_info_fact(
             l10n,
             "campus.recent_removed_title",
             "campus.recent_removed",
         )),
-        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector))
+        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_create_demo_campus(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
 ) -> Presentation<CampusPlanPageState> {
     let entered = {
         let mut injector = injector.borrow_mut();
@@ -252,23 +265,24 @@ fn present_create_demo_campus(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (entered, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page)
             .with_navigation(NavigationDecision::Show(Screen::PlanList)),
-        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector))
+        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_request_create_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
 ) -> Presentation<CampusPlanPageState> {
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     let default_name = current_campus_id(&injector)
         .map(|campus_id| {
             injector
@@ -285,13 +299,14 @@ fn present_request_create_plan(
         (Ok(page), Err(error)) => {
             Presentation::failed(page).with_notification(plan_error_fact(l10n, &error.to_string()))
         }
-        (Err(error), _) => Presentation::failed(campus_page_fallback(&injector))
+        (Err(error), _) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_confirm_create_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     name: &str,
 ) -> Presentation<CampusPlanPageState> {
     let created = {
@@ -299,11 +314,11 @@ fn present_confirm_create_plan(
         if name.trim().is_empty() {
             // 空名不提交：输入窗保持打开（既有行为）
             let l10n = injector.l10n();
-            let page = plan_list_page(&injector);
+            let page = plan_list_page(&injector, workspace);
             let page = match page {
                 Ok(page) => page,
                 Err(error) => {
-                    return Presentation::failed(campus_page_fallback(&injector))
+                    return Presentation::failed(campus_page_fallback(&injector, workspace))
                         .with_notification(plan_error_fact(l10n, &error.to_string()))
                 }
             };
@@ -326,24 +341,25 @@ fn present_confirm_create_plan(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (created, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page),
         (Err(message), Ok(page)) => Presentation::failed(page)
             .with_input(create_plan_input(l10n, name.to_owned()))
             .with_notification(plan_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_request_rename_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     plan_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match page {
         Ok(page) => {
             let current_name = page
@@ -354,13 +370,14 @@ fn present_request_rename_plan(
                 .unwrap_or_default();
             Presentation::needs_input(page, rename_plan_input(l10n, current_name))
         }
-        Err(error) => Presentation::failed(campus_page_fallback(&injector))
+        Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_confirm_rename_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     plan_id: &str,
     name: &str,
 ) -> Presentation<CampusPlanPageState> {
@@ -368,11 +385,11 @@ fn present_confirm_rename_plan(
         let mut injector = injector.borrow_mut();
         if name.trim().is_empty() {
             let l10n = injector.l10n();
-            let page = plan_list_page(&injector);
+            let page = plan_list_page(&injector, workspace);
             let page = match page {
                 Ok(page) => page,
                 Err(error) => {
-                    return Presentation::failed(campus_page_fallback(&injector))
+                    return Presentation::failed(campus_page_fallback(&injector, workspace))
                         .with_notification(plan_error_fact(l10n, &error.to_string()))
                 }
             };
@@ -385,19 +402,20 @@ fn present_confirm_rename_plan(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (renamed, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page),
         (Err(message), Ok(page)) => Presentation::failed(page)
             .with_input(rename_plan_input(l10n, name.to_owned()))
             .with_notification(plan_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_duplicate_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     plan_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     let duplicated = {
@@ -414,24 +432,25 @@ fn present_duplicate_plan(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (duplicated, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page),
         (Err(message), Ok(page)) => {
             Presentation::failed(page).with_notification(plan_error_fact(l10n, &message))
         }
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_request_delete_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     _plan_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match page {
         Ok(page) => Presentation::needs_confirmation(
             page,
@@ -442,13 +461,14 @@ fn present_request_delete_plan(
                 l10n.t("dialog.cancel_button"),
             ),
         ),
-        Err(error) => Presentation::failed(campus_page_fallback(&injector))
+        Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
 fn present_confirm_delete_plan(
     injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
     plan_id: &str,
 ) -> Presentation<CampusPlanPageState> {
     let deleted = {
@@ -466,13 +486,13 @@ fn present_confirm_delete_plan(
     };
     let injector = injector.borrow();
     let l10n = injector.l10n();
-    let page = plan_list_page(&injector);
+    let page = plan_list_page(&injector, workspace);
     match (deleted, page) {
         (Ok(()), Ok(page)) => Presentation::succeeded(page),
         (Err(message), Ok(page)) => {
             Presentation::failed(page).with_notification(plan_error_fact(l10n, &message))
         }
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector))
+        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
@@ -671,12 +691,15 @@ fn present_trash_confirm_clear(
 }
 
 /// 校区选择页完整状态（最近使用记录 + 搜索输入）。
-fn campus_select_page(injector: &ViewModelInjector) -> Result<CampusPlanPageState, TrashPageError> {
+fn campus_select_page(
+    injector: &ViewModelInjector,
+    workspace: &WorkspaceProductionContext,
+) -> Result<CampusPlanPageState, TrashPageError> {
     let snapshot = injector
         .projects()
         .campus_plan_snapshot()
         .map_err(TrashPageError::Load)?;
-    let mut page = campus_plan_page(injector, snapshot, false);
+    let mut page = campus_plan_page(injector, workspace, snapshot, false);
     let recents = injector
         .settings()
         .recent_campuses()
@@ -693,12 +716,15 @@ fn campus_select_page(injector: &ViewModelInjector) -> Result<CampusPlanPageStat
 }
 
 /// 当前校区方案列表页完整状态。
-fn plan_list_page(injector: &ViewModelInjector) -> Result<CampusPlanPageState, TrashPageError> {
+fn plan_list_page(
+    injector: &ViewModelInjector,
+    workspace: &WorkspaceProductionContext,
+) -> Result<CampusPlanPageState, TrashPageError> {
     let snapshot = injector
         .projects()
         .campus_plan_snapshot()
         .map_err(TrashPageError::Load)?;
-    Ok(campus_plan_page(injector, snapshot, true))
+    Ok(campus_plan_page(injector, workspace, snapshot, true))
 }
 
 /// 回收站页完整状态。
@@ -735,9 +761,13 @@ fn trash_page(injector: &ViewModelInjector) -> Result<TrashPageState, TrashPageE
 }
 
 /// 校区页数据不可读时的失败页（不显示内存默认数据）。
-fn campus_page_fallback(injector: &ViewModelInjector) -> CampusPlanPageState {
+fn campus_page_fallback(
+    injector: &ViewModelInjector,
+    workspace: &WorkspaceProductionContext,
+) -> CampusPlanPageState {
     campus_plan_page(
         injector,
+        workspace,
         CampusPlanSnapshot {
             campuses: Vec::new(),
             landing_campus: None,

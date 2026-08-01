@@ -11,7 +11,9 @@ use data_persistence::{
 };
 use shared_domain_types::{CampusId, PlanId};
 
-use crate::entities::{CampusView, PlanCardView, PlanProgress, RestoredPlan, TrashItemView};
+use crate::entities::{
+    CampusView, PlanCardView, PlanContextView, PlanProgress, RestoredPlan, TrashItemView,
+};
 use crate::error::{Error, Result};
 
 /// "副本"后缀的文本键（文案本身在 zh-CN.json 的 plan.duplicate_suffix，
@@ -86,6 +88,23 @@ impl ProjectManager {
             id: campus.id,
             name: campus.name,
             address: campus.address,
+            anchor_lng: campus.anchor_lng,
+            anchor_lat: campus.anchor_lat,
+        }))
+    }
+
+    /// 打开方案工作区所需的一次完整上下文：方案名、所属校区名与地图锚点
+    /// （S1-05；方案不存在时返回 None，由功能入口如实呈现失败）。
+    pub fn plan_context(&self, plan_id: &PlanId) -> Result<Option<PlanContextView>> {
+        let Some(plan) = self.db.find_plan_by_id(&plan_id.to_string())? else {
+            return Ok(None);
+        };
+        let campus = self.db.find_campus_by_id(&plan.campus_id)?;
+        Ok(campus.map(|campus| PlanContextView {
+            plan_id: plan.id,
+            plan_name: plan.name,
+            campus_id: campus.id,
+            campus_name: campus.name,
             anchor_lng: campus.anchor_lng,
             anchor_lat: campus.anchor_lat,
         }))
