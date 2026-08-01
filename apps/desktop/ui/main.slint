@@ -17,6 +17,7 @@ import { Trash, TrashItemData } from "trash.slint";
 import { Stepper } from "stepper.slint";
 import { BoundaryEditor, BoundaryPointData } from "boundary_edit.slint";
 import { OrientationView, OrientationPointData } from "orientation.slint";
+import { CollectionView } from "collection.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -198,6 +199,18 @@ export component AppWindow inherits Window {
     // P2-7: 删除死回调
     callback workspace-orientation-submit-clicked();
     callback workspace-orientation-reset-clicked();
+
+    in property <string> collection-source-label;
+    in property <string> collection-collect-label;
+    in property <string> collection-progress-label;
+    in property <[string]> collection-category-labels;
+    in property <[string]> collection-category-statuses;
+    in property <string> collection-category-skip-label;
+    in property <string> collection-diff-summary;
+    in property <string> collection-report-entry-label;
+    in property <string> collection-report-body;
+    callback collection-start-clicked();
+    callback collection-report-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -862,8 +875,23 @@ export component AppWindow inherits Window {
                 }
             }
                 
-            // 步骤③+: 占位 (Phase 2 Step C 后续实现)
-            if root.workspace-active-step >= 2 && root.workspace-active-step <= 4: Rectangle {
+            if root.workspace-active-step == 2: CollectionView {
+                x: 16px; y: 72px;
+                source-label: root.collection-source-label;
+                collect-label: root.collection-collect-label;
+                progress-label: root.collection-progress-label;
+                category-labels: root.collection-category-labels;
+                category-statuses: root.collection-category-statuses;
+                category-skip-label: root.collection-category-skip-label;
+                diff-summary: root.collection-diff-summary;
+                report-entry-label: root.collection-report-entry-label;
+                report-body: root.collection-report-body;
+                start-clicked => { root.collection-start-clicked(); }
+                report-clicked => { root.collection-report-clicked(); }
+            }
+
+            // 步骤④+: 占位 (Phase 2 Step C 后续实现)
+            if root.workspace-active-step >= 3 && root.workspace-active-step <= 4: Rectangle {
                 x: 16px;
                 y: 120px;
                 width: parent.width - 32px;

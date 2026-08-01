@@ -282,6 +282,15 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
             Presentation::processing(
                 CollectionPageState {
                     workspace: workspace(suffix),
+                    source_label: format!("来源-{suffix}"),
+                    collect_label: format!("采集-{suffix}"),
+                    progress_label: format!("进度-{suffix}"),
+                    category_labels: vec![format!("类别-{suffix}")],
+                    category_statuses: vec![format!("待定-{suffix}")],
+                    category_skip_label: format!("可跳过-{suffix}"),
+                    diff_summary: format!("摘要-{suffix}"),
+                    report_entry_label: format!("报告-{suffix}"),
+                    report_body: String::new(),
                 },
                 progress,
             )

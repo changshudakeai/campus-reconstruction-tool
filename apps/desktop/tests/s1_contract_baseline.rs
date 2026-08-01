@@ -140,11 +140,24 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
 fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
     let baseline =
         read_workspace_file("docs/behavior-baselines/s1-current-user-observable-behavior.md");
-    for flow in ["采集", "评审", "导出"] {
+    for flow in ["评审", "导出"] {
         let row = find_flow_row(&baseline, flow);
         assert!(
             row.contains("当前仅显示占位页") && row.contains("没有可观察的"),
             "{flow} 必须记录提交树中的占位现状，不能提前冻结后续工单行为"
+        );
+    }
+
+    let collection_row = find_flow_row(&baseline, "采集");
+    for observable in [
+        "初始“待定”状态",
+        "正在从地图平台拉数据……",
+        "无疑点时静默通过",
+        "合并为一扇",
+    ] {
+        assert!(
+            collection_row.contains(observable),
+            "采集基线必须记录 s1-07 的可观察行为：{observable}"
         );
     }
 

@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
-use coverage_audit::QuietSentinel;
-use data_acquisition::AcquisitionPipeline;
+use coverage_audit::{AuditOutcome, QuietSentinel};
+use data_acquisition::{AcquisitionPipeline, CollectionReport, DataSource};
 use data_persistence::Database;
 use export_console::{ExportConsole, MockSealGate};
 use global_settings::SettingsManager;
@@ -19,7 +19,7 @@ use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::PlanId;
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::presenter::report_callback_error;
@@ -428,6 +428,44 @@ impl ViewModelInjector {
     /// F3 方案管理（可变：CRUD 与借出 B2 句柄给 F2/F5/F7 落库）
     pub fn projects_mut(&mut self) -> &mut ProjectManager {
         &mut self.projects
+    }
+
+    /// S1-07: 由采集功能入口协调 F4 采集与 F7 体检；F4/F7 彼此保持零依赖。
+    pub(crate) fn collect_and_audit(
+        &mut self,
+        plan_id: &PlanId,
+        boundary: &Boundary,
+        source: &dyn DataSource,
+    ) -> Result<(CollectionReport, AuditOutcome)> {
+        let Self {
+            acquisition,
+            sentinel,
+            projects,
+            l10n,
+            ..
+        } = self;
+        let report = acquisition.collect(projects.database_mut(), plan_id, boundary, source)?;
+        let mut counts = [0_u32; 6];
+        for (category, count) in &report.category_counts {
+            let index = match category {
+                CandidateCategory::Building => 0,
+                CandidateCategory::Road => 1,
+                CandidateCategory::Water => 2,
+                CandidateCategory::Vegetation => 3,
+                CandidateCategory::Sports => 4,
+                CandidateCategory::Other => 5,
+                _ => 5,
+            };
+            counts[index] = u32::try_from(*count).unwrap_or(u32::MAX);
+        }
+        let outcome = sentinel.after_collection(
+            projects.database_mut(),
+            plan_id,
+            &counts,
+            Vec::new(),
+            l10n,
+        )?;
+        Ok((report, outcome))
     }
 
     /// F4 采集流水线

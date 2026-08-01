@@ -8,8 +8,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use coverage_audit::AuditResult;
+use data_acquisition::GaodeDataSource;
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
@@ -18,8 +21,8 @@ use crate::presentation::{
     NavigationDecision, NotificationPageState, NotificationPresentationEntry, OperationState,
     Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
     SettingsPresentationEntry, SettingsRequest, StartupPresentationEntry, StartupRequest,
-    ToolbarPageState, TrashPresentationEntry, TrashRequest, WorkspacePresentationEntry,
-    WorkspaceRequest,
+    ToolbarPageState, TrashPresentationEntry, TrashRequest, WindowPageState,
+    WorkspacePresentationEntry, WorkspaceRequest,
 };
 mod campus_plan_trash;
 mod startup_settings;
@@ -53,17 +56,281 @@ pub(crate) fn entry_calls() -> [usize; 10] {
     std::array::from_fn(|index| ENTRY_CALLS[index].load(std::sync::atomic::Ordering::SeqCst))
 }
 
-struct CollectionProductionAdapter(WorkspaceProductionContext);
+struct CollectionProductionAdapter(CollectionCoordinator);
 
 impl PresentationAdapter<(), CollectionPageState> for CollectionProductionAdapter {
     fn present(&mut self, (): ()) -> Presentation<CollectionPageState> {
         #[cfg(test)]
         record_entry_call(3);
-        Presentation::ready(CollectionPageState {
-            workspace: self.0.page(),
-        })
-        .with_navigation(NavigationDecision::Show(Screen::Workspace))
+        Presentation::ready(self.0.page())
+            .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
+}
+
+const COLLECTION_CATEGORIES: [CandidateCategory; 6] = [
+    CandidateCategory::Building,
+    CandidateCategory::Road,
+    CandidateCategory::Water,
+    CandidateCategory::Vegetation,
+    CandidateCategory::Sports,
+    CandidateCategory::Other,
+];
+
+const COLLECTION_CATEGORY_KEYS: [&str; 6] = [
+    "collection.category_building",
+    "collection.category_road",
+    "collection.category_water",
+    "collection.category_vegetation",
+    "collection.category_sports",
+    "collection.category_other",
+];
+
+#[derive(Clone, Default)]
+enum CollectionPhase {
+    #[default]
+    Pending,
+    Fetching,
+    Failed,
+    Completed,
+}
+
+#[derive(Clone, Default)]
+struct CollectionState {
+    phase: CollectionPhase,
+    request_id: u64,
+    category_counts: [u32; 6],
+    diff_summary: String,
+    audit: Option<AuditResult>,
+    report_visible: bool,
+}
+
+/// S1-07 采集功能入口：F4 流水线与 F7 安静哨兵只在壳层协调。
+#[derive(Clone)]
+struct CollectionCoordinator {
+    context: WorkspaceProductionContext,
+    state: Rc<RefCell<CollectionState>>,
+}
+
+impl CollectionCoordinator {
+    fn new(context: WorkspaceProductionContext) -> Self {
+        Self {
+            context,
+            state: Rc::new(RefCell::new(CollectionState::default())),
+        }
+    }
+
+    fn page(&self) -> CollectionPageState {
+        let state = self.state.borrow();
+        let injector = self.context.injector();
+        let injector = injector.borrow();
+        let l10n = injector.l10n();
+        let statuses = match state.phase {
+            CollectionPhase::Pending => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
+            CollectionPhase::Fetching => {
+                vec![l10n.t("collection.progress_fetching"); COLLECTION_CATEGORIES.len()]
+            }
+            CollectionPhase::Failed => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
+            CollectionPhase::Completed => state
+                .category_counts
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        };
+        let report_body = state.audit.as_ref().map_or_else(String::new, |result| {
+            if !state.report_visible {
+                return String::new();
+            }
+            let view = injector.sentinel().report_view(result, l10n);
+            let mut lines = view.category_lines;
+            lines.extend(view.issue_lines);
+            if let Some(no_issues) = view.no_issues_line {
+                lines.push(no_issues);
+            }
+            lines.join("\n")
+        });
+        let progress_label = match state.phase {
+            CollectionPhase::Pending | CollectionPhase::Failed => {
+                l10n.t("collection.progress_title")
+            }
+            CollectionPhase::Fetching => l10n.t("collection.progress_fetching"),
+            CollectionPhase::Completed => l10n.t_with_args(
+                "collection.progress_done",
+                serde_json::json!({ "count": state.category_counts.iter().sum::<u32>() }),
+            ),
+        };
+        let source_label = l10n.t("collection.source_gaode");
+        let collect_label = l10n.t("collection.collect_button");
+        let category_labels = COLLECTION_CATEGORY_KEYS
+            .iter()
+            .map(|key| l10n.t(key))
+            .collect();
+        let category_skip_label = l10n.t("collection.skippable");
+        let report_entry_label = l10n.t("audit.report_entry");
+        drop(injector);
+        CollectionPageState {
+            workspace: self.context.page(),
+            source_label,
+            collect_label,
+            progress_label,
+            category_labels,
+            category_statuses: statuses,
+            category_skip_label,
+            diff_summary: state.diff_summary.clone(),
+            report_entry_label,
+            report_body,
+        }
+    }
+
+    fn start(&self, window: &AppWindow) {
+        let Some((_, boundary)) = self.collection_target() else {
+            self.fail();
+            self.page().render(window);
+            return;
+        };
+        let request_id = {
+            let mut state = self.state.borrow_mut();
+            state.request_id = state.request_id.wrapping_add(1);
+            state.phase = CollectionPhase::Fetching;
+            state.audit = None;
+            state.report_visible = false;
+            state.diff_summary.clear();
+            state.request_id
+        };
+        self.page().render(window);
+        let center = collection_centroid(&boundary.coordinates).unwrap_or((116.397, 39.916));
+        crate::map_webview::evaluate_script(&collection_request_script(request_id, center));
+    }
+
+    fn handle_map_response(&self, window: &AppWindow, message: &str) -> bool {
+        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(message) else {
+            return false;
+        };
+        if envelope.get("type").and_then(serde_json::Value::as_str) != Some("collection_response") {
+            return false;
+        }
+        let Some(request_id) = envelope
+            .get("request_id")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return true;
+        };
+        let Some(payload) = envelope.get("payload").and_then(serde_json::Value::as_str) else {
+            self.fail();
+            self.page().render(window);
+            return true;
+        };
+        if self.state.borrow().request_id != request_id {
+            return true;
+        }
+        let Some((plan_id, boundary)) = self.collection_target() else {
+            self.fail();
+            self.page().render(window);
+            return true;
+        };
+        let response = payload.to_owned();
+        let source = GaodeDataSource::new(Box::new(move |_| Ok(response.clone())));
+        let result = {
+            let injector = self.context.injector();
+            let result = injector
+                .borrow_mut()
+                .collect_and_audit(&plan_id, &boundary, &source);
+            result
+        };
+        match result {
+            Ok((report, outcome)) => {
+                let counts = COLLECTION_CATEGORIES.map(|category| {
+                    u32::try_from(*report.category_counts.get(&category).unwrap_or(&0))
+                        .unwrap_or(u32::MAX)
+                });
+                let categories = COLLECTION_CATEGORIES
+                    .iter()
+                    .zip(counts)
+                    .map(|(category, count)| (*category, count as usize))
+                    .collect::<Vec<_>>();
+                self.record_collection(&categories);
+                let injector = self.context.injector();
+                let l10n = injector.borrow();
+                let mut state = self.state.borrow_mut();
+                state.phase = CollectionPhase::Completed;
+                state.category_counts = counts;
+                state.diff_summary = l10n.l10n().t_with_args(report.diff.summary_key(), serde_json::json!({ "added": report.diff.added_count(), "updated": report.diff.updated_count(), "unchanged": report.diff.unchanged_count() }));
+                state.audit = Some(outcome.result);
+            }
+            Err(_) => self.fail(),
+        }
+        self.page().render(window);
+        true
+    }
+
+    fn show_report(&self, window: &AppWindow) {
+        self.state.borrow_mut().report_visible = true;
+        self.page().render(window);
+    }
+    fn fail(&self) {
+        self.state.borrow_mut().phase = CollectionPhase::Failed;
+        let injector = self.context.injector();
+        let l10n = injector.borrow();
+        notification_center::error(
+            l10n.l10n().t("collection.source_gaode"),
+            l10n.l10n().t("dialog.error_title"),
+            l10n.l10n().t("collection.error_failed"),
+        );
+    }
+
+    fn collection_target(&self) -> Option<(PlanId, Boundary)> {
+        let session = self.context.session.borrow();
+        let plan_id = PlanId::parse(session.active_plan_id.as_ref()?).ok()?;
+        let coordinates = session
+            .plans
+            .get(&plan_id.to_string())?
+            .boundary_gcj02
+            .clone()
+            .or_else(|| {
+                let context = session.active_context.as_ref()?;
+                let delta = 0.0001;
+                Some(vec![
+                    [context.anchor_lng - delta, context.anchor_lat - delta],
+                    [context.anchor_lng + delta, context.anchor_lat - delta],
+                    [context.anchor_lng + delta, context.anchor_lat + delta],
+                    [context.anchor_lng - delta, context.anchor_lat + delta],
+                    [context.anchor_lng - delta, context.anchor_lat - delta],
+                ])
+            })?;
+        Some((
+            plan_id,
+            Boundary {
+                r#type: "Polygon".to_owned(),
+                coordinates: serde_json::json!([coordinates]),
+            },
+        ))
+    }
+
+    fn record_collection(&self, counts: &[(CandidateCategory, usize)]) {
+        let mut session = self.context.session.borrow_mut();
+        let Some(plan_id) = session.active_plan_id.clone() else {
+            return;
+        };
+        let state = session.plans.entry(plan_id).or_default();
+        state.has_collection = true;
+        state.generated_category_counts = counts.iter().copied().collect();
+    }
+}
+
+fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
+    let points = coordinates.as_array()?.first()?.as_array()?;
+    let mut total = (0.0, 0.0);
+    let mut count = 0.0;
+    for point in points {
+        let pair = point.as_array()?;
+        total.0 += pair.first()?.as_f64()?;
+        total.1 += pair.get(1)?.as_f64()?;
+        count += 1.0;
+    }
+    (count > 0.0).then_some((total.0 / count, total.1 / count))
+}
+
+fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
+    format!("(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();", lon = center.0, lat = center.1)
 }
 
 struct ReviewProductionAdapter(WorkspaceProductionContext);
@@ -251,6 +518,7 @@ pub(crate) struct ProductionEntries {
     settings: SettingsPresentationEntry<'static, SettingsRequest>,
     campus_plan: CampusPlanPresentationEntry<'static, CampusPlanRequest>,
     collection: CollectionPresentationEntry<'static, ()>,
+    collection_coordinator: CollectionCoordinator,
     workspace: WorkspacePresentationEntry<'static, WorkspaceRequest>,
     review: ReviewPresentationEntry<'static, ()>,
     _coverage: CoveragePresentationEntry<'static, ()>,
@@ -280,6 +548,7 @@ impl ProductionEntries {
             }
         };
         let workspace = WorkspaceProductionContext::new(Rc::clone(&injector), window);
+        let collection_coordinator = CollectionCoordinator::new(workspace.clone());
         Self {
             startup: StartupPresentationEntry::new(StartupProductionAdapter {
                 injector: Rc::clone(&injector),
@@ -293,8 +562,9 @@ impl ProductionEntries {
                 workspace: workspace.clone(),
             }),
             collection: CollectionPresentationEntry::new(CollectionProductionAdapter(
-                workspace.clone(),
+                collection_coordinator.clone(),
             )),
+            collection_coordinator,
             workspace: WorkspacePresentationEntry::new(WorkspaceProductionAdapter {
                 context: workspace.clone(),
             }),
@@ -487,6 +757,14 @@ impl ProductionEntries {
         self.collection.show(window, &self.center, ());
     }
 
+    pub(crate) fn start_collection(&mut self, window: &AppWindow) {
+        self.collection_coordinator.start(window);
+    }
+
+    pub(crate) fn show_collection_report(&mut self, window: &AppWindow) {
+        self.collection_coordinator.show_report(window);
+    }
+
     pub(crate) fn show_review(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.review.show(window, &self.center, ());
@@ -626,6 +904,12 @@ impl ProductionEntries {
 
     /// 地图 WebView 转交的原始 IPC 消息：由工作区功能入口解析并应用规则。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
+        if self
+            .collection_coordinator
+            .handle_map_response(window, message)
+        {
+            return;
+        }
         let presentation = self.workspace.show(
             window,
             &self.center,
@@ -1008,6 +1292,22 @@ impl ProductionEntries {
                 shared
                     .borrow_mut()
                     .handle_orientation_mode_changed(&window, &mode);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_collection_start_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().start_collection(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_collection_report_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().show_collection_report(&window);
             }
         });
 

@@ -42,6 +42,7 @@ use super::record_entry_call;
 pub(crate) struct PlanProgressState {
     pub(crate) has_boundary: bool,
     pub(crate) has_orientation: bool,
+    pub(crate) has_collection: bool,
     pub(crate) orientation_angle: Option<f32>,
     pub(crate) boundary_gcj02: Option<Vec<[f64; 2]>>,
     /// 已生成数据分布（F5 重算影响报告的输入；采集/评审迁出后填充，当前为空）。
@@ -50,16 +51,16 @@ pub(crate) struct PlanProgressState {
 
 impl PlanProgressState {
     fn completed_steps(&self) -> u8 {
-        self.has_boundary as u8 + self.has_orientation as u8
+        self.has_boundary as u8 + self.has_orientation as u8 + self.has_collection as u8
     }
 }
 
 /// 工作区会话状态：全部由功能入口持有，S1 呈现层不保存业务副本。
 #[derive(Default)]
 pub(crate) struct WorkspaceSessionState {
-    pub(crate) active_plan_id: Option<String>,
-    active_context: Option<project_management::PlanContextView>,
-    plans: HashMap<String, PlanProgressState>,
+    pub(super) active_plan_id: Option<String>,
+    pub(super) active_context: Option<project_management::PlanContextView>,
+    pub(super) plans: HashMap<String, PlanProgressState>,
     drawer: BoundaryDrawer,
     orientation_points: Vec<(f64, f64)>,
     orientation_angle: Option<f32>,
@@ -119,7 +120,7 @@ impl WorkspaceSessionState {
 pub(crate) struct WorkspaceProductionContext {
     injector: Rc<RefCell<ViewModelInjector>>,
     window: slint::Weak<crate::AppWindow>,
-    session: Rc<RefCell<WorkspaceSessionState>>,
+    pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
 }
 
 impl WorkspaceProductionContext {
@@ -134,6 +135,10 @@ impl WorkspaceProductionContext {
                 ..Default::default()
             })),
         }
+    }
+
+    pub(super) fn injector(&self) -> Rc<RefCell<ViewModelInjector>> {
+        Rc::clone(&self.injector)
     }
 
     /// 当前工作区页完整可观察状态（由功能入口侧状态派生，S1 只绘制）。
@@ -184,6 +189,9 @@ impl WorkspaceProductionContext {
     pub(crate) fn plan_card_progress_text(&self, plan_id: &str, fallback: &str) -> String {
         let session = self.session.borrow();
         match session.plans.get(plan_id) {
+            Some(state) if state.has_collection => {
+                self.injector.borrow().l10n().t("plan.progress_next_review")
+            }
             Some(state) if state.has_boundary && state.has_orientation => self
                 .injector
                 .borrow()
@@ -1082,7 +1090,7 @@ impl WorkspaceProductionAdapter {
         Presentation::ready(self.context.page())
     }
 
-    fn l10n(&self) -> std::cell::Ref<'_, Localization> {
+    pub(crate) fn l10n(&self) -> std::cell::Ref<'_, Localization> {
         std::cell::Ref::map(self.context.injector.borrow(), |injector| injector.l10n())
     }
 }
