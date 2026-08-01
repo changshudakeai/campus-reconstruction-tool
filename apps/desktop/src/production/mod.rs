@@ -626,13 +626,17 @@ impl ProductionEntries {
 
     /// 地图 WebView 转交的原始 IPC 消息：由工作区功能入口解析并应用规则。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
-        self.workspace.show(
+        let presentation = self.workspace.show(
             window,
             &self.center,
             WorkspaceRequest::MapIpc {
                 message: message.to_string(),
             },
         );
+        if presentation.operation() == &OperationState::NeedsConfirmation {
+            // 地图确认朝向覆盖既有朝向：与方位角输入提交走同一确认路径
+            self.pending_confirmation = Some(PendingConfirmation::OrientationRecalc);
+        }
     }
 
     /// 离开工作区前先经功能入口判定；需要确认时挂起目标页等待确认。

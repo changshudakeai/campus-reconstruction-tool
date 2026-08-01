@@ -181,7 +181,9 @@
     "error_invalid_angle": "请输入有效的数字",
     "error_angle_out_of_range": "角度超出范围，请输入 0-360 之间的值",
     "mode_two_points": "两点定朝向",
-    "mode_bearing_angle": "方位角输入"
+    "mode_bearing_angle": "方位角输入",
+    "impact_item_line": "{0}：{1} 项",
+    "error_save_failed": "朝向保存失败，正式状态未改变，请重试"
   },
   "collection": {
     "title": "数据采集",

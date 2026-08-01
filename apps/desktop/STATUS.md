@@ -127,6 +127,15 @@
 - F3 公开接口最小化扩展：`plan_context`（方案名/校区名/锚点一次返回）；B6 ResourceBundle 启用既有 boundary/orientation/map 文本段（此前被 serde 忽略，键名直接显示）
 - 旧接线删除：injector 中步骤/边界/朝向/工具栏/方案卡片打开工作区全部移除（injector 并入 runtime 组合根）；测试：tests/s1_05_workspace_boundary_flow.rs（新）、presentation_seams、runtime 入口计数、s1_contract_baseline 同步
 
+### S1-06（朝向流程迁移到功能入口，2026-08-01）
+
+- 朝向流程完整迁移到工作区功能入口（workspace_boundary.rs）：地图两点参考线（orientation_points/confirm_orientation IPC）经通用地图通道转交，F5 OrientationCalculator 计算角度并回填路径/箭头/角度/状态；方位角输入经 F5 normalize_angle 归一化（NaN/∞ 拒绝，越界值按 F5 语义折回 0~360），S1 不重复计算
+- 覆盖已有朝向统一走“影响说明 + 确认”决策：F5 check_orientation_change_impact 报告按类别列出重算影响（orientation.impact_item_line，B6 本地化），确认后应用、取消不落库
+- 确认/取消/重置/保存全部由功能入口返回完整 OrientationViewState + 导航决策，S1 不再手工拼装；地图“清除重来”（orientation_clear）只清草稿，不清已保存朝向
+- 朝向保存失败（无活动方案等）返回 Failed + 明确错误通知，正式状态（has_orientation/orientation_angle）保持不变可重试；地图故障只暂停地图操作（公告留底），已保存边界/朝向与方案列表不丢失
+- 旧接线删除：runtime 中朝向页静态文案注入全部移除（由 OrientationViewState 渲染）；tests/s1_06_orientation_flow.rs（新）覆盖全流程验收
+- 行为基线同步：两点模式中间态（计算后未确认）与“清除重来不清正式状态”已补入 docs/behavior-baselines（冲突点单列，见 PR 交付说明）
+
 
 ### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
 

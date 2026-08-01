@@ -1,10 +1,12 @@
-//! S1-05 生产呈现装配：方案工作区、步骤导航与边界流程。
-// ignore-tidy-filelength: 工作区功能入口的单一呈现接口（步骤导航/边界/朝向门控/地图 IPC）；拆文件会触发 crate 源文件数上限，随工单 06/07 迁出后收窄
+//! S1-05/06 生产呈现装配：方案工作区、步骤导航、边界与朝向流程。
+// ignore-tidy-filelength: 工作区功能入口的单一呈现接口（步骤导航/边界/朝向全流程/地图 IPC），朝向流程于工单 06 迁入后仍超 1000 行；拆文件会触发 desktop-shell crate 源文件数上限（10/10），随工单 07/08/09 迁出后收窄
 //!
 //! 本模块是工作区面向 S1 的功能入口：步骤点击/“下一步”返回允许进入、条件不足
 //! 或需要确认的导航决定；边界闭合、有效性、重置与保存全部经 B5 foundation-mode
-//! 完成；地图通道只负责显示与转交原始动作（map_webview / B3 页面），S1 不掺入
-//! 边界业务规则。离开边界页的可以离开/需要确认/必须停留也由本入口判定。
+//! 完成；朝向两点参考线与方位角输入的校验、影响说明与保存也全部由本入口
+//! 完成（F5 OrientationCalculator / B1 Orientation）；地图通道只负责显示与
+//! 转交原始动作（map_webview / B3 页面），S1 不掺入边界或朝向业务规则。
+//! 离开边界页的可以离开/需要确认/必须停留也由本入口判定。
 //!
 //! 方案进度沿用 S1-04 前已确认的内存模型（本工单不改变数据结果；正式持久化
 //! 归后续数据工单），状态由功能入口侧持有，S1 呈现层不保存业务副本。
@@ -14,14 +16,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use foundation_mode::{
-    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, CoordinateConverter,
-    EventResult, MercatorCoord, OrientationCalculator, OrientationLine, Point2D, Vertex,
+    check_orientation_change_impact, validate_polygon_closure, BoundaryDrawer, BoundaryState,
+    BoundaryUiEvent, CoordinateConverter, EventResult, MercatorCoord, Orientation,
+    OrientationCalculator, OrientationImpactReport, OrientationLine, Point2D, Vertex,
 };
 use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, BoundarySorter, IpcMessage};
 use localization::Localization;
 use notification_center::Notification;
 use onboarding_tutorial::TutorialStep;
-use shared_domain_types::PlanId;
+use shared_domain_types::{CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
@@ -41,6 +44,8 @@ pub(crate) struct PlanProgressState {
     pub(crate) has_orientation: bool,
     pub(crate) orientation_angle: Option<f32>,
     pub(crate) boundary_gcj02: Option<Vec<[f64; 2]>>,
+    /// 已生成数据分布（F5 重算影响报告的输入；采集/评审迁出后填充，当前为空）。
+    pub(crate) generated_category_counts: HashMap<CandidateCategory, usize>,
 }
 
 impl PlanProgressState {
@@ -92,6 +97,20 @@ impl WorkspaceSessionState {
             self.drawer.state(),
             BoundaryState::Drawing | BoundaryState::Editing { .. }
         ) && !self.drawer.vertices().is_empty()
+    }
+
+    /// 把计算好的朝向写入方案正式状态（工作区会话内正式状态；正式持久化归
+    /// 后续数据工单）。没有已打开方案时拒绝保存，正式状态保持原状。
+    fn commit_orientation(&mut self, angle: f32) -> Result<(), ()> {
+        let Some(plan_id) = self.active_plan_id.clone() else {
+            return Err(());
+        };
+        self.orientation_angle = Some(angle);
+        self.pending_orientation_angle = None;
+        let state = self.plans.entry(plan_id).or_default();
+        state.has_orientation = true;
+        state.orientation_angle = Some(angle);
+        Ok(())
     }
 }
 
@@ -665,61 +684,173 @@ impl WorkspaceProductionAdapter {
                     &l10n.t("orientation.error_angle_out_of_range"),
                 ));
             };
-            let has_orientation = {
-                let session = self.context.session.borrow();
-                session
-                    .active_plan_id
-                    .as_ref()
-                    .and_then(|plan_id| session.plans.get(plan_id))
-                    .map(|state| state.has_orientation)
-                    .unwrap_or(false)
-            };
-            if has_orientation {
-                self.context.session.borrow_mut().pending_orientation_angle =
-                    Some(orientation.degree());
-                let l10n = self.l10n();
-                return Presentation::needs_confirmation(
-                    self.context.page(),
-                    ConfirmationPresentation::new(
-                        l10n.t("orientation.recalc_title"),
-                        l10n.t("collection.orientation_recalc_notice"),
-                        l10n.t("dialog.confirm_button"),
-                        l10n.t("dialog.cancel_button"),
-                    ),
-                );
-            }
-            let degree = orientation.degree();
-            {
-                let mut session = self.context.session.borrow_mut();
-                session.orientation_angle = Some(degree);
-                if let Some(plan_id) = session.active_plan_id.clone() {
-                    let state = session.plans.entry(plan_id).or_default();
-                    state.has_orientation = true;
-                    state.orientation_angle = Some(degree);
-                }
-            }
-            return Presentation::ready(self.context.page());
+            return self.apply_orientation(orientation.degree());
         }
         if mode == "two-points" {
-            let (has_two, angle) = {
+            let angle = {
                 let session = self.context.session.borrow();
-                (
-                    session.orientation_points.len() == 2,
-                    session.orientation_angle,
-                )
-            };
-            if has_two {
-                if let Some(angle) = angle {
-                    let mut session = self.context.session.borrow_mut();
-                    if let Some(plan_id) = session.active_plan_id.clone() {
-                        let state = session.plans.entry(plan_id).or_default();
-                        state.has_orientation = true;
-                        state.orientation_angle = Some(angle);
-                    }
+                if session.orientation_points.len() == 2 {
+                    session.orientation_angle
+                } else {
+                    None
                 }
+            };
+            if let Some(angle) = angle {
+                return self.apply_orientation(angle);
             }
         }
         Presentation::ready(self.context.page())
+    }
+
+    /// 两点模式或方位角模式提交的统一决策：首次设定直接保存；覆盖已有朝向
+    /// 时先返回 F5 影响报告驱动的确认请求，确认后才落库（ADR-0027）。
+    fn apply_orientation(&mut self, angle: f32) -> Presentation<WorkspacePageState> {
+        let (has_orientation, old_angle, counts) = {
+            let session = self.context.session.borrow();
+            match session
+                .active_plan_id
+                .as_ref()
+                .and_then(|plan_id| session.plans.get(plan_id))
+            {
+                Some(state) => (
+                    state.has_orientation,
+                    state.orientation_angle,
+                    state.generated_category_counts.clone(),
+                ),
+                None => (false, None, HashMap::new()),
+            }
+        };
+        if has_orientation {
+            let Some(old) = old_angle.and_then(Orientation::new) else {
+                return self.orientation_save_failed();
+            };
+            let Some(new_orientation) = Orientation::new(angle) else {
+                return self.orientation_save_failed();
+            };
+            let report = check_orientation_change_impact(&counts, Some(old), new_orientation);
+            self.context.session.borrow_mut().pending_orientation_angle = Some(angle);
+            let l10n = self.l10n();
+            return Presentation::needs_confirmation(
+                self.context.page(),
+                ConfirmationPresentation::new(
+                    l10n.t("orientation.recalc_title"),
+                    orientation_recalc_body(&l10n, &report),
+                    l10n.t("dialog.confirm_button"),
+                    l10n.t("dialog.cancel_button"),
+                ),
+            );
+        }
+        self.commit_orientation(angle)
+    }
+
+    /// 保存朝向到方案正式状态；保存失败时正式状态保持不变并显示明确错误。
+    fn commit_orientation(&mut self, angle: f32) -> Presentation<WorkspacePageState> {
+        let result = self.context.session.borrow_mut().commit_orientation(angle);
+        match result {
+            Ok(()) => Presentation::ready(self.context.page()),
+            Err(()) => self.orientation_save_failed(),
+        }
+    }
+
+    fn orientation_save_failed(&mut self) -> Presentation<WorkspacePageState> {
+        let l10n = self.l10n();
+        Presentation::failed(self.context.page())
+            .with_notification(error_fact(&l10n, &l10n.t("orientation.error_save_failed")))
+    }
+
+    /// 地图两点参考线（orientation_points IPC）：F5 计算并把路径/箭头/角度
+    /// 回填页面，尚未保存。
+    fn orientation_points(&mut self, points: [[f64; 2]; 2]) -> Presentation<WorkspacePageState> {
+        if self.orientation_draft_from_points(points).is_err() {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page()).with_notification(error_fact(
+                &l10n,
+                &l10n.t("orientation.error_coincident_points"),
+            ));
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    /// 地图确认朝向（confirm_orientation IPC）：先回填草稿，再走统一的
+    /// 首次保存/覆盖确认决策。
+    fn confirm_orientation_points(
+        &mut self,
+        points: [[f64; 2]; 2],
+    ) -> Presentation<WorkspacePageState> {
+        let degree = match self.orientation_draft_from_points(points) {
+            Ok(degree) => degree,
+            Err(()) => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("orientation.error_coincident_points"),
+                ));
+            }
+        };
+        self.apply_orientation(degree)
+    }
+
+    /// 计算并回填两点草稿（点/角度）；重合或不可计算时清空草稿并返回错误。
+    fn orientation_draft_from_points(&mut self, points: [[f64; 2]; 2]) -> Result<f32, ()> {
+        let Some(degree) = calculate_orientation_angle(points) else {
+            self.clear_orientation_draft();
+            return Err(());
+        };
+        let overlay = self.orientation_overlay_points(points);
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.orientation_points = overlay;
+            session.orientation_angle = Some(degree);
+        }
+        Ok(degree)
+    }
+
+    /// 地图“清除重来”（orientation_clear IPC）：只清草稿，不清已保存的
+    /// 正式状态。
+    fn orientation_clear(&mut self) -> Presentation<WorkspacePageState> {
+        self.clear_orientation_draft();
+        Presentation::ready(self.context.page())
+    }
+
+    /// 只清朝向草稿（点/计算角度/待定角度），不清方案正式状态。
+    fn clear_orientation_draft(&self) {
+        let mut session = self.context.session.borrow_mut();
+        session.orientation_points.clear();
+        session.orientation_angle = None;
+        session.pending_orientation_angle = None;
+    }
+
+    /// 把地图经纬度两点换算成画布平面坐标（原点取已确认边界重心，否则取
+    /// 校区锚点；与边界顶点同一坐标系）。
+    fn orientation_overlay_points(&self, points: [[f64; 2]; 2]) -> Vec<(f64, f64)> {
+        let center = {
+            let session = self.context.session.borrow();
+            let boundary_center = session
+                .active_plan_id
+                .as_ref()
+                .and_then(|plan_id| session.plans.get(plan_id))
+                .and_then(|state| state.boundary_gcj02.as_ref())
+                .and_then(|coords| centroid(coords));
+            boundary_center.or_else(|| {
+                session
+                    .active_context
+                    .as_ref()
+                    .map(|context| (context.anchor_lng, context.anchor_lat))
+            })
+        };
+        let Some((center_lon, center_lat)) = center else {
+            return Vec::new();
+        };
+        let mut converter = CoordinateConverter::default();
+        converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
+        points
+            .iter()
+            .filter_map(|[lon, lat]| {
+                converter
+                    .mercator_to_plane(MercatorCoord::from_lat_lon(*lat, *lon))
+                    .map(|plane| (plane.x, plane.y))
+            })
+            .collect()
     }
 
     fn orientation_reset(&mut self) -> Presentation<WorkspacePageState> {
@@ -727,11 +858,13 @@ impl WorkspaceProductionAdapter {
             let mut session = self.context.session.borrow_mut();
             session.orientation_points.clear();
             session.orientation_angle = None;
+            session.pending_orientation_angle = None;
             session.orientation_input_text.clear();
             if let Some(plan_id) = session.active_plan_id.clone() {
                 let state = session.plans.entry(plan_id).or_default();
                 state.has_orientation = false;
                 state.orientation_angle = None;
+                state.generated_category_counts.clear();
             }
         }
         Presentation::ready(self.context.page())
@@ -744,16 +877,10 @@ impl WorkspaceProductionAdapter {
             .borrow_mut()
             .pending_orientation_angle
             .take();
-        if let Some(angle) = pending {
-            let mut session = self.context.session.borrow_mut();
-            session.orientation_angle = Some(angle);
-            if let Some(plan_id) = session.active_plan_id.clone() {
-                let state = session.plans.entry(plan_id).or_default();
-                state.has_orientation = true;
-                state.orientation_angle = Some(angle);
-            }
+        match pending {
+            Some(angle) => self.commit_orientation(angle),
+            None => Presentation::ready(self.context.page()),
         }
-        Presentation::ready(self.context.page())
     }
 
     fn tutorial_dismiss(&mut self) -> Presentation<WorkspacePageState> {
@@ -818,22 +945,10 @@ impl WorkspaceProductionAdapter {
             | IpcMessage::ManualPoint { .. }
             | IpcMessage::ManualCancel
             | IpcMessage::ManualClear
-            | IpcMessage::Coordinate { .. }
-            | IpcMessage::OrientationPoints { .. } => Presentation::ready(self.context.page()),
+            | IpcMessage::Coordinate { .. } => Presentation::ready(self.context.page()),
+            IpcMessage::OrientationPoints { points } => self.orientation_points(points),
             IpcMessage::ConfirmOrientation { points } => self.confirm_orientation_points(points),
-            IpcMessage::OrientationClear => {
-                {
-                    let mut session = self.context.session.borrow_mut();
-                    session.orientation_points.clear();
-                    session.orientation_angle = None;
-                    if let Some(plan_id) = session.active_plan_id.clone() {
-                        let state = session.plans.entry(plan_id).or_default();
-                        state.has_orientation = false;
-                        state.orientation_angle = None;
-                    }
-                }
-                Presentation::ready(self.context.page())
-            }
+            IpcMessage::OrientationClear => self.orientation_clear(),
             IpcMessage::Error { message } => {
                 let l10n = self.l10n();
                 Presentation::ready(self.context.page()).with_notification(info_fact(
@@ -930,13 +1045,11 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &l10n.t("boundary.error_too_few_points")));
         }
-        let (sum_lon, sum_lat) = coords
-            .iter()
-            .fold((0.0_f64, 0.0_f64), |(slon, slat), point| {
-                (slon + point[0], slat + point[1])
-            });
-        let count = coords.len() as f64;
-        let (center_lon, center_lat) = (sum_lon / count, sum_lat / count);
+        let Some((center_lon, center_lat)) = centroid(coords) else {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.error_convert_failed")));
+        };
         let mut converter = CoordinateConverter::default();
         converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
         let mut vertices = Vec::with_capacity(coords.len());
@@ -969,41 +1082,58 @@ impl WorkspaceProductionAdapter {
         Presentation::ready(self.context.page())
     }
 
-    fn confirm_orientation_points(
-        &mut self,
-        points: [[f64; 2]; 2],
-    ) -> Presentation<WorkspacePageState> {
-        let (x0, y0) = (points[0][0], points[0][1]);
-        let (x1, y1) = (points[1][0], points[1][1]);
-        let degree = match OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
-            .and_then(|line| OrientationCalculator::calculate(&line))
-        {
-            Some(orientation) => orientation.degree(),
-            None => {
-                let l10n = self.l10n();
-                return Presentation::failed(self.context.page()).with_notification(error_fact(
-                    &l10n,
-                    &l10n.t("orientation.error_coincident_points"),
-                ));
-            }
-        };
-        {
-            let mut session = self.context.session.borrow_mut();
-            if let Some(plan_id) = session.active_plan_id.clone() {
-                let state = session.plans.entry(plan_id).or_default();
-                state.has_orientation = true;
-                state.orientation_angle = Some(degree);
-            }
-        }
-        crate::map_webview::evaluate_script(&format!(
-            "window.calculatedOrientationAngle = {};",
-            degree
-        ));
-        Presentation::ready(self.context.page())
-    }
-
     fn l10n(&self) -> std::cell::Ref<'_, Localization> {
         std::cell::Ref::map(self.context.injector.borrow(), |injector| injector.l10n())
+    }
+}
+
+/// 由 F5 计算地图两点的朝向角（正北为 0°、顺时针增加；重合两点返回 None）。
+fn calculate_orientation_angle(points: [[f64; 2]; 2]) -> Option<f32> {
+    let (x0, y0) = (points[0][0], points[0][1]);
+    let (x1, y1) = (points[1][0], points[1][1]);
+    OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
+        .and_then(|line| OrientationCalculator::calculate(&line))
+        .map(|orientation| orientation.degree())
+}
+
+/// 坐标数组的简单重心（经纬度平均值）。
+fn centroid(coords: &[[f64; 2]]) -> Option<(f64, f64)> {
+    if coords.is_empty() {
+        return None;
+    }
+    let (sum_lon, sum_lat) = coords
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |(slon, slat), point| {
+            (slon + point[0], slat + point[1])
+        });
+    let count = coords.len() as f64;
+    Some((sum_lon / count, sum_lat / count))
+}
+
+/// 重算确认窗正文：沿用既有重算提示（collection.orientation_recalc_notice），
+/// 并按 F5 影响报告逐项列出已生成数据（类别名经 B6 本地化，ADR-0005）。
+fn orientation_recalc_body(l10n: &Localization, report: &OrientationImpactReport) -> String {
+    let mut body = l10n.t("collection.orientation_recalc_notice");
+    for item in &report.items {
+        let count = item.count.to_string();
+        body.push('\n');
+        body.push_str(&l10n.t_with_array(
+            "orientation.impact_item_line",
+            &[&l10n.t(category_key(item.category)), &count],
+        ));
+    }
+    body
+}
+
+/// B1 六类别 → B6 本地化键（与 collection.category_* 文案一致）。
+fn category_key(category: CandidateCategory) -> &'static str {
+    match category {
+        CandidateCategory::Building => "collection.category_building",
+        CandidateCategory::Road => "collection.category_road",
+        CandidateCategory::Water => "collection.category_water",
+        CandidateCategory::Vegetation => "collection.category_vegetation",
+        CandidateCategory::Sports => "collection.category_sports",
+        _ => "collection.category_other",
     }
 }
 
@@ -1061,4 +1191,45 @@ fn error_fact(l10n: &Localization, body: &str) -> NotificationFact {
         l10n.t("dialog.error_title"),
         body.to_owned(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use localization::Language;
+
+    #[test]
+    fn commit_orientation_requires_active_plan_and_keeps_formal_state() {
+        let mut session = WorkspaceSessionState::default();
+        assert!(session.commit_orientation(90.0).is_err());
+        assert!(session.plans.is_empty());
+        assert!(session.orientation_angle.is_none());
+
+        session.active_plan_id = Some("plan-1".to_string());
+        assert!(session.commit_orientation(90.0).is_ok());
+        let state = session.plans.get("plan-1").expect("方案正式状态");
+        assert!(state.has_orientation);
+        assert_eq!(state.orientation_angle, Some(90.0));
+        assert_eq!(session.orientation_angle, Some(90.0));
+    }
+
+    #[test]
+    fn recalc_body_lists_impact_items_with_localized_category_names() {
+        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+        let mut existing = HashMap::new();
+        existing.insert(CandidateCategory::Building, 3);
+        let report = check_orientation_change_impact(
+            &existing,
+            Some(Orientation::new(0.0).expect("合法角度")),
+            Orientation::new(90.0).expect("合法角度"),
+        );
+        let body = orientation_recalc_body(&l10n, &report);
+        let count = 3usize.to_string();
+        let expected_line = l10n.t_with_array(
+            "orientation.impact_item_line",
+            &[&l10n.t("collection.category_building"), &count],
+        );
+        assert!(body.contains(&l10n.t("collection.orientation_recalc_notice")));
+        assert!(body.contains(&expected_line));
+    }
 }
