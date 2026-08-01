@@ -1,10 +1,10 @@
 //! 候选对象内存模型
 //!
-//! 缝 4 契约：候选集在进台时从 B2 原始观测表一次性读入本模型，
+//! 缝 4 契约：候选集在进台时从 B2 已发布的可评审投影一次性读入本模型，
 //! 评审期间所有状态都在这里改，不碰数据库。
 //! 类别与三态复用 B1 共享领域类型（不重新定义）。
 
-use data_persistence::RawObservation;
+use data_persistence::{CandidateProjection, RawObservation};
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 /// 候选对象的稳定标识：类别 + 真实世界对象 ID
@@ -51,7 +51,20 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// 从 B2 原始观测行构建候选（初始态"待定"、未勾选）
+    /// 从 B2 已发布的可评审投影构建候选（初始态"待定"、未勾选）。
+    pub fn from_projection(projection: &CandidateProjection) -> Self {
+        let tags = Vec::new();
+        let title = projection.candidate_id.clone();
+        Self {
+            key: CandidateKey::new(projection.category, projection.candidate_id.clone()),
+            title,
+            tags,
+            state: ReviewState::Pending,
+            selected: false,
+        }
+    }
+
+    /// 兼容旧测试的原始观测投影；生产进台只使用 [`Self::from_projection`].
     pub fn from_observation(observation: &RawObservation) -> Self {
         let tags = flatten_source_data(&observation.source_data);
         let title = tags

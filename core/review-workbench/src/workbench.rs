@@ -6,7 +6,7 @@
 //! - [`ReviewWorkbench::seal`] 封账时把最终三态一次性批量写回 B2，
 //!   写回失败则封账不生效（评审状态保持可改）。
 
-use data_persistence::{Database, RawObservationsApi, ReviewDecision, ReviewDecisionsApi};
+use data_persistence::{CandidateProjectionsApi, Database, ReviewDecision, ReviewDecisionsApi};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::path::Path;
 
@@ -46,15 +46,13 @@ impl ReviewWorkbench {
 
     /// 进入评审台：向 B2 一次性读入候选集到内存。
     ///
-    /// 候选来自原始观测表（数据粮仓），初始态一律"待定"（ADR-0022）；
+    /// 候选只来自当前已发布且可评审的 B2 投影，初始态一律"待定"（ADR-0022）；
     /// 若评审终态表已有本方案的记录（上一轮封账结果），按候选标识对回。
     pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self> {
         let plan_key = plan_id.to_string();
-        let observations = db.list_raw_observations(&plan_key)?;
-        let mut candidates: Vec<Candidate> = observations
-            .iter()
-            .map(Candidate::from_observation)
-            .collect();
+        let projections = db.list_reviewable_candidate_projections(&plan_key)?;
+        let mut candidates: Vec<Candidate> =
+            projections.iter().map(Candidate::from_projection).collect();
 
         // 上一轮封账写回的终态对回内存（没有记录的保持"待定"）
         for decision in db.list_review_decisions(&plan_key)? {

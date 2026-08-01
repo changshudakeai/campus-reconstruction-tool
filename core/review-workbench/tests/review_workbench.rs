@@ -3,14 +3,17 @@
 //! 覆盖缝 4 全流程：一次性读入 → 纯内存三态评审（状态变更操作）→
 //! 批量确认闸 → 暂停/恢复 → 封账批量写回。
 
-use data_persistence::{Database, RawObservation, RawObservationsApi, ReviewDecisionsApi};
+use data_persistence::{
+    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, RawObservation, RawObservationsApi, ReviewDecisionsApi,
+};
 use review_workbench::CandidateKey;
 use review_workbench::{
     CommandOutcome, Error, ReviewWorkbench, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 
-/// 在内存库里种入一批候选：6 栋建筑 + 2 条道路 + 1 处水域
+/// 在内存库里种入原始观测与一批已发布的可评审候选：6 栋建筑 + 2 条道路 + 1 处水域。
 fn fixture() -> (Database, PlanId) {
     let mut db = Database::open_in_memory().expect("内存库可打开");
     let plan_id = PlanId::generate();
@@ -44,6 +47,35 @@ fn fixture() -> (Database, PlanId) {
     ));
     db.write_raw_observations(&observations)
         .expect("种子观测写入成功");
+    let batch = db
+        .prepare_candidate_batch(&plan_key)
+        .expect("候选批次准备成功");
+    let projections: Vec<_> = observations
+        .iter()
+        .map(|observation| {
+            CandidateProjection::new(
+                &observation.entity_id,
+                &plan_key,
+                &observation.id,
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+                observation.entity_type,
+                CandidateShape::polygon(serde_json::json!([
+                    [121.4, 31.2],
+                    [121.5, 31.2],
+                    [121.4, 31.3],
+                    [121.4, 31.2]
+                ])),
+                CandidateValidation::Retained,
+                CandidateEligibility::Reviewable,
+            )
+        })
+        .collect();
+    db.write_candidate_projections(&batch.id, &projections)
+        .expect("候选投影写入成功");
+    db.publish_candidate_batch(&batch.id)
+        .expect("候选批次发布成功");
     (db, plan_id)
 }
 
@@ -216,11 +248,9 @@ fn highlight_links_map_and_cards_both_ways() {
 
     // 右栏信息面板展示高亮候选的详情（类别、标签、状态）
     let info = view.info_panel.expect("高亮时信息面板可见");
-    assert_eq!(info.title, "教学楼 2");
+    assert_eq!(info.title, "way/b2");
     assert_eq!(info.category_key, "collection.category_building");
-    assert!(info
-        .tags
-        .contains(&("building".to_owned(), "school".to_owned())));
+    assert!(info.tags.is_empty());
 
     workbench.clear_highlight();
     assert!(workbench.view().info_panel.is_none());
@@ -252,7 +282,7 @@ fn three_pane_view_reflects_active_category() {
     workbench.set_active_category(CandidateCategory::Water);
     let view = workbench.view();
     assert_eq!(view.cards.len(), 1);
-    assert_eq!(view.cards[0].title, "游泳池");
+    assert_eq!(view.cards[0].title, "way/w0");
 }
 
 #[test]

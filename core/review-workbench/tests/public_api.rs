@@ -4,7 +4,10 @@
 //! PR diff 可见。附带 B6 国际化验收：本 crate 产出的全部文本键必须在
 //! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
 
-use data_persistence::{Database, RawObservation, RawObservationsApi};
+use data_persistence::{
+    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, RawObservation, RawObservationsApi,
+};
 use localization::{Language, Localization};
 use review_workbench::{
     text_keys, Candidate, CandidateKey, CommandOutcome, ConfirmationRequest, Error,
@@ -31,7 +34,10 @@ fn public_api_types_exist() {
     assert_eq!(candidate.state, ReviewState::Pending);
 
     // StateChange：明确的状态变更操作（B8 接口预留，ADR-0022）
-    let change = StateChange::single(key.clone(), ReviewState::Keep);
+    let change = StateChange::single(
+        CandidateKey::new(CandidateCategory::Building, "candidate/way/1"),
+        ReviewState::Keep,
+    );
     assert!(!change.needs_confirmation());
 
     // ReviewWorkbench：进台一次性读入（缝 4）
@@ -45,6 +51,27 @@ fn public_api_types_exist() {
         "overpass",
     )])
     .unwrap();
+    let batch = db.prepare_candidate_batch(&plan_id.to_string()).unwrap();
+    let projection = CandidateProjection::new(
+        "candidate/way/1",
+        plan_id.to_string(),
+        "raw",
+        "overpass",
+        "way/1",
+        "default",
+        CandidateCategory::Building,
+        CandidateShape::polygon(serde_json::json!([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0]
+        ])),
+        CandidateValidation::Retained,
+        CandidateEligibility::Reviewable,
+    );
+    db.write_candidate_projections(&batch.id, &[projection])
+        .unwrap();
+    db.publish_candidate_batch(&batch.id).unwrap();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
     assert_eq!(workbench.plan_id(), plan_id.to_string());
     assert_eq!(workbench.candidate_count(), 1);
