@@ -1,0 +1,1064 @@
+//! S1-05 生产呈现装配：方案工作区、步骤导航与边界流程。
+// ignore-tidy-filelength: 工作区功能入口的单一呈现接口（步骤导航/边界/朝向门控/地图 IPC）；拆文件会触发 crate 源文件数上限，随工单 06/07 迁出后收窄
+//!
+//! 本模块是工作区面向 S1 的功能入口：步骤点击/“下一步”返回允许进入、条件不足
+//! 或需要确认的导航决定；边界闭合、有效性、重置与保存全部经 B5 foundation-mode
+//! 完成；地图通道只负责显示与转交原始动作（map_webview / B3 页面），S1 不掺入
+//! 边界业务规则。离开边界页的可以离开/需要确认/必须停留也由本入口判定。
+//!
+//! 方案进度沿用 S1-04 前已确认的内存模型（本工单不改变数据结果；正式持久化
+//! 归后续数据工单），状态由功能入口侧持有，S1 呈现层不保存业务副本。
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use foundation_mode::{
+    validate_polygon_closure, BoundaryDrawer, BoundaryState, BoundaryUiEvent, CoordinateConverter,
+    EventResult, MercatorCoord, OrientationCalculator, OrientationLine, Point2D, Vertex,
+};
+use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, BoundarySorter, IpcMessage};
+use localization::Localization;
+use notification_center::Notification;
+use onboarding_tutorial::TutorialStep;
+use shared_domain_types::PlanId;
+use slint::ComponentHandle;
+
+use crate::presentation::{
+    BoundaryViewState, ConfirmationPresentation, NavigationDecision, NotificationFact,
+    OrientationViewState, Presentation, PresentationAdapter, Progress, Screen, WorkspacePageState,
+    WorkspaceRequest,
+};
+use crate::ViewModelInjector;
+
+#[cfg(test)]
+use super::record_entry_call;
+
+/// 单方案进度状态（工作区功能入口持有；正式持久化归后续数据工单）。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PlanProgressState {
+    pub(crate) has_boundary: bool,
+    pub(crate) has_orientation: bool,
+    pub(crate) orientation_angle: Option<f32>,
+    pub(crate) boundary_gcj02: Option<Vec<[f64; 2]>>,
+}
+
+impl PlanProgressState {
+    fn completed_steps(&self) -> u8 {
+        self.has_boundary as u8 + self.has_orientation as u8
+    }
+}
+
+/// 工作区会话状态：全部由功能入口持有，S1 呈现层不保存业务副本。
+#[derive(Default)]
+pub(crate) struct WorkspaceSessionState {
+    pub(crate) active_plan_id: Option<String>,
+    active_context: Option<project_management::PlanContextView>,
+    plans: HashMap<String, PlanProgressState>,
+    drawer: BoundaryDrawer,
+    orientation_points: Vec<(f64, f64)>,
+    orientation_angle: Option<f32>,
+    orientation_input_text: String,
+    orientation_mode: String,
+    pending_orientation_angle: Option<f32>,
+    active_step: i32,
+    /// 迁移期兼容：无已打开方案时按窗口当前呈现的已完成步数判定（旧行为基线）。
+    adopted_completed_steps: Option<u8>,
+    map_processing: bool,
+    tutorial_visible: bool,
+    tutorial_text: String,
+    tutorial_dismiss_label: String,
+    tutorial_skip_all_label: String,
+}
+
+impl WorkspaceSessionState {
+    fn completed_steps(&self) -> u8 {
+        match &self.active_plan_id {
+            Some(plan_id) => self
+                .plans
+                .get(plan_id)
+                .map(PlanProgressState::completed_steps)
+                .unwrap_or(0),
+            None => self.adopted_completed_steps.unwrap_or(0),
+        }
+    }
+
+    fn adopt(&mut self, completed: i32) {
+        self.adopted_completed_steps = Some(completed.clamp(0, 5) as u8);
+    }
+
+    fn boundary_unsaved(&self) -> bool {
+        matches!(
+            self.drawer.state(),
+            BoundaryState::Drawing | BoundaryState::Editing { .. }
+        ) && !self.drawer.vertices().is_empty()
+    }
+}
+
+/// 工作区功能入口上下文：呈现适配器与占位步骤页共用。
+#[derive(Clone)]
+pub(crate) struct WorkspaceProductionContext {
+    injector: Rc<RefCell<ViewModelInjector>>,
+    window: slint::Weak<crate::AppWindow>,
+    session: Rc<RefCell<WorkspaceSessionState>>,
+}
+
+impl WorkspaceProductionContext {
+    pub(crate) fn new(injector: Rc<RefCell<ViewModelInjector>>, window: &crate::AppWindow) -> Self {
+        let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
+        Self {
+            injector,
+            window: window.as_weak(),
+            session: Rc::new(RefCell::new(WorkspaceSessionState {
+                orientation_mode: "two-points".to_string(),
+                tutorial_dismiss_label,
+                ..Default::default()
+            })),
+        }
+    }
+
+    /// 当前工作区页完整可观察状态（由功能入口侧状态派生，S1 只绘制）。
+    pub(crate) fn page(&self) -> WorkspacePageState {
+        let injector = self.injector.borrow();
+        let l10n = injector.l10n();
+        let session = self.session.borrow();
+        let completed = session.completed_steps();
+        let (campus_name, plan_name) = session
+            .active_context
+            .as_ref()
+            .map(|context| (context.campus_name.clone(), context.plan_name.clone()))
+            .unwrap_or_default();
+        let context_label = if campus_name.is_empty() || plan_name.is_empty() {
+            String::new()
+        } else {
+            l10n.t_with_array("workspace.context_campus_plan", &[&campus_name, &plan_name])
+        };
+        WorkspacePageState {
+            toolbar: super::toolbar(l10n, true),
+            campus_name,
+            plan_name,
+            context_label,
+            active_step: session.active_step,
+            completed_steps: i32::from(completed),
+            step_locked: (0..5).map(|index| index > completed).collect(),
+            step_completed: (0..5).map(|index| index < completed).collect(),
+            placeholder_title: l10n.t("workspace.placeholder_title"),
+            placeholder_subtitle: l10n.t("workspace.placeholder_subtitle"),
+            pending_notice: l10n.t("workspace.step_pending_notice"),
+            title_step_label: l10n.t("collection.title"),
+            boundary_step_label: l10n.t("collection.boundary_step"),
+            orientation_step_label: l10n.t("collection.orientation_step"),
+            collection_step_label: l10n.t("collection.collect_button"),
+            review_step_label: l10n.t("review.workbench_title"),
+            export_step_label: l10n.t("export.confirm_title"),
+            boundary: self.boundary_view(l10n, &session),
+            orientation: self.orientation_view(l10n, &session),
+            tutorial_visible: session.tutorial_visible,
+            tutorial_text: session.tutorial_text.clone(),
+            tutorial_dismiss_label: session.tutorial_dismiss_label.clone(),
+            tutorial_skip_all_label: session.tutorial_skip_all_label.clone(),
+        }
+    }
+
+    /// 方案卡片进度文案（S1-04 前由注入器内存进度覆盖；本工单把该状态迁到
+    /// 功能入口侧，数据结果不变）。
+    pub(crate) fn plan_card_progress_text(&self, plan_id: &str, fallback: &str) -> String {
+        let session = self.session.borrow();
+        match session.plans.get(plan_id) {
+            Some(state) if state.has_boundary && state.has_orientation => self
+                .injector
+                .borrow()
+                .l10n()
+                .t("plan.progress_next_collection"),
+            Some(state) if state.has_boundary => self
+                .injector
+                .borrow()
+                .l10n()
+                .t("plan.progress_boundary_done"),
+            _ => fallback.to_owned(),
+        }
+    }
+
+    fn boundary_view(
+        &self,
+        l10n: &Localization,
+        session: &WorkspaceSessionState,
+    ) -> BoundaryViewState {
+        let vertices = session.drawer.vertices();
+        let is_closed = matches!(session.drawer.state(), BoundaryState::Determined);
+        let points = vertices
+            .iter()
+            .map(|vertex| crate::BoundaryPointData {
+                x: vertex.x as f32 - 5.0,
+                y: vertex.y as f32 - 5.0,
+            })
+            .collect();
+        let path_commands = build_path_commands(vertices, is_closed);
+        let status = match session.drawer.state() {
+            BoundaryState::Idle => l10n.t("boundary.status_idle"),
+            BoundaryState::Drawing => {
+                l10n.t_with_array("boundary.status_drawing", &[&vertices.len().to_string()])
+            }
+            BoundaryState::Determined => l10n.t("boundary.status_determined"),
+            BoundaryState::Editing { .. } => l10n.t("boundary.status_editing"),
+        };
+        BoundaryViewState {
+            points,
+            path_commands,
+            title: l10n.t("boundary.step_title"),
+            hint: l10n.t("boundary.hint"),
+            undo_label: l10n.t("boundary.undo_button"),
+            confirm_label: l10n.t("boundary.confirm_button"),
+            reset_label: l10n.t("boundary.reset_button"),
+            status,
+            map_placeholder: l10n.t("boundary.map_placeholder"),
+            is_determined: is_closed,
+            point_count: vertices.len() as i32,
+        }
+    }
+
+    fn orientation_view(
+        &self,
+        l10n: &Localization,
+        session: &WorkspaceSessionState,
+    ) -> OrientationViewState {
+        let points: Vec<crate::OrientationPointData> = session
+            .orientation_points
+            .iter()
+            .map(|(x, y)| crate::OrientationPointData {
+                x: *x as f32 - 6.0,
+                y: *y as f32 - 6.0,
+            })
+            .collect();
+        let path = if session.orientation_points.len() >= 2 {
+            let (x0, y0) = session.orientation_points[0];
+            let (x1, y1) = session.orientation_points[1];
+            format!("M {x0} {y0} L {x1} {y1}")
+        } else {
+            String::new()
+        };
+        let confirmed_angle = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .and_then(|state| state.orientation_angle);
+        let angle = confirmed_angle
+            .or(session.orientation_angle)
+            .unwrap_or(-1.0);
+        let is_determined = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .map(|state| state.has_orientation)
+            .unwrap_or(false);
+        let angle_display = if angle >= 0.0 {
+            format!("{angle:.1}\u{00b0}")
+        } else {
+            String::new()
+        };
+        let arrow_commands = if angle >= 0.0 {
+            build_arrow_commands(angle)
+        } else {
+            String::new()
+        };
+        let status = if is_determined {
+            l10n.t("orientation.status_determined")
+        } else if session.orientation_points.is_empty() {
+            l10n.t("orientation.status_idle")
+        } else if session.orientation_points.len() == 1 {
+            l10n.t("orientation.status_first_point")
+        } else {
+            l10n.t("orientation.status_calculated")
+        };
+        OrientationViewState {
+            points,
+            path_commands: path,
+            arrow_commands,
+            mode: session.orientation_mode.clone(),
+            angle,
+            is_determined,
+            title: l10n.t("orientation.step_title"),
+            two_points_hint: l10n.t("orientation.two_points_hint"),
+            bearing_angle_hint: l10n.t("orientation.bearing_angle_hint"),
+            angle_input_placeholder: l10n.t("orientation.angle_input_placeholder"),
+            angle_display,
+            input_text: session.orientation_input_text.clone(),
+            submit_label: l10n.t("orientation.submit_button"),
+            reset_label: l10n.t("orientation.reset_button"),
+            status,
+            mode_two_points_label: l10n.t("orientation.mode_two_points"),
+            mode_bearing_angle_label: l10n.t("orientation.mode_bearing_angle"),
+        }
+    }
+
+    /// 地图密钥与校区锚点（锚点优先取当前方案的校区；兜底取上次校区/默认点）。
+    fn map_credentials(&self) -> ((String, String), (f64, f64)) {
+        let injector = self.injector.borrow();
+        let api_key = injector
+            .settings()
+            .gaode_api_key()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let security_key = injector
+            .settings()
+            .gaode_security_key()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let anchor = self
+            .session
+            .borrow()
+            .active_context
+            .as_ref()
+            .map(|context| (context.anchor_lng, context.anchor_lat))
+            .unwrap_or_else(|| {
+                injector
+                    .projects()
+                    .landing_campus()
+                    .ok()
+                    .flatten()
+                    .map(|campus| (campus.anchor_lng, campus.anchor_lat))
+                    .unwrap_or((116.397, 39.916))
+            });
+        ((api_key, security_key), anchor)
+    }
+
+    fn mark_map_loading(&self) {
+        let mut session = self.session.borrow_mut();
+        session.map_processing = true;
+    }
+}
+
+/// 工作区生产适配器：一次请求一次完整呈现（导航决定、边界动作、离开判定）。
+pub(crate) struct WorkspaceProductionAdapter {
+    pub(crate) context: WorkspaceProductionContext,
+}
+
+impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProductionAdapter {
+    fn present(&mut self, request: WorkspaceRequest) -> Presentation<WorkspacePageState> {
+        #[cfg(test)]
+        record_entry_call(9);
+        match request {
+            WorkspaceRequest::OpenPlan { plan_id } => self.open_plan(&plan_id),
+            WorkspaceRequest::Navigate { step } => self.navigate(step),
+            WorkspaceRequest::Leave { target } => self.leave(target),
+            WorkspaceRequest::BoundaryCanvasClick { x, y } => self.boundary_canvas_click(x, y),
+            WorkspaceRequest::BoundaryUndo => self.boundary_undo(),
+            WorkspaceRequest::BoundaryConfirm => self.boundary_confirm(),
+            WorkspaceRequest::BoundaryReset => self.boundary_reset(),
+            WorkspaceRequest::OrientationSubmit { mode, angle_text } => {
+                self.orientation_submit(&mode, &angle_text)
+            }
+            WorkspaceRequest::OrientationReset => self.orientation_reset(),
+            WorkspaceRequest::OrientationModeChanged { mode } => {
+                self.context.session.borrow_mut().orientation_mode = mode;
+                Presentation::ready(self.context.page())
+            }
+            WorkspaceRequest::ConfirmOrientation => self.confirm_orientation(),
+            WorkspaceRequest::CancelConfirmation => {
+                self.context.session.borrow_mut().pending_orientation_angle = None;
+                Presentation::ready(self.context.page())
+            }
+            WorkspaceRequest::TutorialDismiss => self.tutorial_dismiss(),
+            WorkspaceRequest::TutorialSkipAll => self.tutorial_skip_all(),
+            WorkspaceRequest::MapStatus { available } => self.map_status(available),
+            WorkspaceRequest::MapIpc { message } => self.map_ipc(&message),
+        }
+    }
+}
+
+impl WorkspaceProductionAdapter {
+    fn open_plan(&mut self, plan_id: &str) -> Presentation<WorkspacePageState> {
+        let parsed = match PlanId::parse(plan_id) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &l10n.t("workspace.plan_not_found")));
+            }
+        };
+        let context = match self
+            .context
+            .injector
+            .borrow()
+            .projects()
+            .plan_context(&parsed)
+        {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &l10n.t("workspace.plan_not_found")));
+            }
+            Err(error) => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &error.to_string()));
+            }
+        };
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.active_plan_id = Some(plan_id.to_string());
+            session.active_context = Some(context);
+            session.orientation_points.clear();
+            session.orientation_angle = None;
+            session.pending_orientation_angle = None;
+            session.orientation_input_text.clear();
+            session.adopted_completed_steps = None;
+            session.active_step = 0;
+            let injector = self.context.injector.borrow();
+            match injector
+                .tutorial()
+                .bubble_for(TutorialStep::StepperIntro, injector.l10n())
+            {
+                Some(bubble) => {
+                    session.tutorial_visible = true;
+                    session.tutorial_text = bubble.message;
+                    session.tutorial_dismiss_label = bubble.dismiss_label;
+                    session.tutorial_skip_all_label = bubble.skip_all_label.unwrap_or_default();
+                }
+                None => {
+                    session.tutorial_visible = false;
+                    session.tutorial_text.clear();
+                    session.tutorial_skip_all_label.clear();
+                    session.tutorial_dismiss_label = injector.l10n().t("tutorial.dismiss_button");
+                }
+            }
+        }
+        let (keys, anchor) = self.context.map_credentials();
+        let page = self.context.page();
+        let presentation = if keys.0.is_empty() || crate::map_webview::is_visible() {
+            Presentation::ready(page)
+        } else {
+            crate::map_webview::show(
+                self.context.window.clone(),
+                keys.0,
+                keys.1,
+                anchor.0,
+                anchor.1,
+            );
+            self.context.mark_map_loading();
+            Presentation::processing(self.context.page(), Progress::ZERO)
+        };
+        presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
+    }
+
+    fn navigate(&mut self, step: i32) -> Presentation<WorkspacePageState> {
+        if !(0..=4).contains(&step) {
+            return Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Blocked);
+        }
+        {
+            let mut session = self.context.session.borrow_mut();
+            if session.active_plan_id.is_none() {
+                let completed = self
+                    .context
+                    .window
+                    .upgrade()
+                    .map(|window| window.get_workspace_completed_steps())
+                    .unwrap_or(0);
+                session.adopt(completed);
+            }
+        }
+        let completed = self.context.session.borrow().completed_steps();
+        // 前跳上锁（ADR-0027）：第①格永远解锁
+        if step > i32::from(completed) && step != 0 {
+            return Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Blocked);
+        }
+        if step == 0 {
+            let (keys, anchor) = self.context.map_credentials();
+            if keys.0.is_empty() {
+                let l10n = self.l10n();
+                return Presentation::needs_confirmation(
+                    self.context.page(),
+                    ConfirmationPresentation::new(
+                        l10n.t("settings.gaode_empty_key_title"),
+                        l10n.t("settings.gaode_empty_key_body"),
+                        l10n.t("settings.gaode_go_to_settings"),
+                        l10n.t("app.cancel_button"),
+                    ),
+                );
+            }
+            self.context.session.borrow_mut().active_step = 0;
+            let presentation = if crate::map_webview::is_visible() {
+                Presentation::ready(self.context.page())
+            } else {
+                crate::map_webview::show(
+                    self.context.window.clone(),
+                    keys.0,
+                    keys.1,
+                    anchor.0,
+                    anchor.1,
+                );
+                self.context.mark_map_loading();
+                Presentation::processing(self.context.page(), Progress::ZERO)
+            };
+            return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
+        }
+        if step == 1 {
+            let (keys, anchor) = self.context.map_credentials();
+            self.context.session.borrow_mut().active_step = 1;
+            let presentation = if keys.0.is_empty() {
+                Presentation::ready(self.context.page())
+            } else {
+                crate::map_webview::hide();
+                let existing_boundary_gcj02 = self
+                    .context
+                    .session
+                    .borrow()
+                    .active_plan_id
+                    .as_ref()
+                    .and_then(|plan_id| {
+                        self.context
+                            .session
+                            .borrow()
+                            .plans
+                            .get(plan_id)
+                            .and_then(|state| state.boundary_gcj02.clone())
+                    });
+                let config = BoundaryEditPageConfig::new(&keys.0, &keys.1)
+                    .with_anchor(anchor.0, anchor.1)
+                    .with_orientation_mode(true)
+                    .with_existing_boundary(existing_boundary_gcj02);
+                crate::map_webview::show_with_config(self.context.window.clone(), config);
+                self.context.mark_map_loading();
+                Presentation::processing(self.context.page(), Progress::ZERO)
+            };
+            return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
+        }
+        self.context.session.borrow_mut().active_step = step;
+        Presentation::ready(self.context.page())
+            .with_navigation(NavigationDecision::Show(Screen::Workspace))
+    }
+
+    fn leave(&mut self, target: Screen) -> Presentation<WorkspacePageState> {
+        let session = self.context.session.borrow();
+        // 地图加载中离开边界页：必须停留（ADR-0037 用户故事 18）
+        if session.map_processing && session.active_step == 0 {
+            return Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Blocked);
+        }
+        // 存在未确认的边界绘制：需要确认后再离开
+        if session.boundary_unsaved() {
+            let l10n = self.l10n();
+            return Presentation::needs_confirmation(
+                self.context.page(),
+                ConfirmationPresentation::new(
+                    l10n.t("workspace.leave_discard_title"),
+                    l10n.t("workspace.leave_discard_body"),
+                    l10n.t("dialog.confirm_button"),
+                    l10n.t("dialog.cancel_button"),
+                ),
+            );
+        }
+        Presentation::ready(self.context.page()).with_navigation(NavigationDecision::Show(target))
+    }
+
+    fn boundary_canvas_click(&mut self, x: f32, y: f32) -> Presentation<WorkspacePageState> {
+        let rejected = {
+            let mut session = self.context.session.borrow_mut();
+            match session.drawer.handle_event(BoundaryUiEvent::ClickAt {
+                x: f64::from(x),
+                y: f64::from(y),
+            }) {
+                EventResult::Rejected(message) => Some(message),
+                EventResult::Accepted | EventResult::Ignored => None,
+            }
+        };
+        if let Some(message) = rejected {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &message));
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn boundary_undo(&mut self) -> Presentation<WorkspacePageState> {
+        let rejected = {
+            let mut session = self.context.session.borrow_mut();
+            match session.drawer.handle_event(BoundaryUiEvent::Cancel) {
+                EventResult::Rejected(message) => Some(message),
+                EventResult::Accepted | EventResult::Ignored => None,
+            }
+        };
+        if let Some(message) = rejected {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &message));
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn boundary_confirm(&mut self) -> Presentation<WorkspacePageState> {
+        let invalid = {
+            let session = self.context.session.borrow();
+            let vertices = session.drawer.vertices().to_vec();
+            let result = validate_polygon_closure(&vertices);
+            if !result.is_valid {
+                Some(validation_detail(&result))
+            } else {
+                None
+            }
+        };
+        if let Some(detail) = invalid {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &detail));
+        }
+        let rejected = {
+            let mut session = self.context.session.borrow_mut();
+            match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
+                EventResult::Accepted => {
+                    if let Some(plan_id) = session.active_plan_id.clone() {
+                        let state = session.plans.entry(plan_id).or_default();
+                        state.has_boundary = true;
+                    }
+                    None
+                }
+                EventResult::Rejected(message) => Some(message),
+                EventResult::Ignored => None,
+            }
+        };
+        if let Some(message) = rejected {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &message));
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn boundary_reset(&mut self) -> Presentation<WorkspacePageState> {
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.drawer.reset();
+            if let Some(plan_id) = session.active_plan_id.clone() {
+                let state = session.plans.entry(plan_id).or_default();
+                state.has_boundary = false;
+                state.boundary_gcj02 = None;
+            }
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn orientation_submit(
+        &mut self,
+        mode: &str,
+        angle_text: &str,
+    ) -> Presentation<WorkspacePageState> {
+        self.context.session.borrow_mut().orientation_input_text = angle_text.to_string();
+        if mode == "bearing-angle" {
+            let angle: f32 = match angle_text.trim().parse() {
+                Ok(angle) => angle,
+                Err(_) => {
+                    let l10n = self.l10n();
+                    return Presentation::failed(self.context.page()).with_notification(
+                        error_fact(&l10n, &l10n.t("orientation.error_invalid_angle")),
+                    );
+                }
+            };
+            let Some(orientation) = OrientationCalculator::normalize_angle(angle) else {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("orientation.error_angle_out_of_range"),
+                ));
+            };
+            let has_orientation = {
+                let session = self.context.session.borrow();
+                session
+                    .active_plan_id
+                    .as_ref()
+                    .and_then(|plan_id| session.plans.get(plan_id))
+                    .map(|state| state.has_orientation)
+                    .unwrap_or(false)
+            };
+            if has_orientation {
+                self.context.session.borrow_mut().pending_orientation_angle =
+                    Some(orientation.degree());
+                let l10n = self.l10n();
+                return Presentation::needs_confirmation(
+                    self.context.page(),
+                    ConfirmationPresentation::new(
+                        l10n.t("orientation.recalc_title"),
+                        l10n.t("collection.orientation_recalc_notice"),
+                        l10n.t("dialog.confirm_button"),
+                        l10n.t("dialog.cancel_button"),
+                    ),
+                );
+            }
+            let degree = orientation.degree();
+            {
+                let mut session = self.context.session.borrow_mut();
+                session.orientation_angle = Some(degree);
+                if let Some(plan_id) = session.active_plan_id.clone() {
+                    let state = session.plans.entry(plan_id).or_default();
+                    state.has_orientation = true;
+                    state.orientation_angle = Some(degree);
+                }
+            }
+            return Presentation::ready(self.context.page());
+        }
+        if mode == "two-points" {
+            let (has_two, angle) = {
+                let session = self.context.session.borrow();
+                (
+                    session.orientation_points.len() == 2,
+                    session.orientation_angle,
+                )
+            };
+            if has_two {
+                if let Some(angle) = angle {
+                    let mut session = self.context.session.borrow_mut();
+                    if let Some(plan_id) = session.active_plan_id.clone() {
+                        let state = session.plans.entry(plan_id).or_default();
+                        state.has_orientation = true;
+                        state.orientation_angle = Some(angle);
+                    }
+                }
+            }
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn orientation_reset(&mut self) -> Presentation<WorkspacePageState> {
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.orientation_points.clear();
+            session.orientation_angle = None;
+            session.orientation_input_text.clear();
+            if let Some(plan_id) = session.active_plan_id.clone() {
+                let state = session.plans.entry(plan_id).or_default();
+                state.has_orientation = false;
+                state.orientation_angle = None;
+            }
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn confirm_orientation(&mut self) -> Presentation<WorkspacePageState> {
+        let pending = self
+            .context
+            .session
+            .borrow_mut()
+            .pending_orientation_angle
+            .take();
+        if let Some(angle) = pending {
+            let mut session = self.context.session.borrow_mut();
+            session.orientation_angle = Some(angle);
+            if let Some(plan_id) = session.active_plan_id.clone() {
+                let state = session.plans.entry(plan_id).or_default();
+                state.has_orientation = true;
+                state.orientation_angle = Some(angle);
+            }
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn tutorial_dismiss(&mut self) -> Presentation<WorkspacePageState> {
+        let result = self
+            .context
+            .injector
+            .borrow_mut()
+            .dismiss_tutorial_step(TutorialStep::StepperIntro);
+        match result {
+            Ok(()) => {
+                self.context.session.borrow_mut().tutorial_visible = false;
+                Presentation::ready(self.context.page())
+            }
+            Err(error) => {
+                let l10n = self.l10n();
+                Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &error.to_string()))
+            }
+        }
+    }
+
+    fn tutorial_skip_all(&mut self) -> Presentation<WorkspacePageState> {
+        let result = self.context.injector.borrow_mut().skip_all_tutorial();
+        match result {
+            Ok(()) => {
+                self.context.session.borrow_mut().tutorial_visible = false;
+                Presentation::ready(self.context.page())
+            }
+            Err(error) => {
+                let l10n = self.l10n();
+                Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &error.to_string()))
+            }
+        }
+    }
+
+    fn map_status(&mut self, available: bool) -> Presentation<WorkspacePageState> {
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.map_processing = false;
+        }
+        let mut presentation = Presentation::ready(self.context.page());
+        if !available {
+            let l10n = self.l10n();
+            presentation = presentation.with_notification(info_fact(
+                &l10n,
+                "boundary.map_notice_title",
+                &l10n.t("boundary.map_load_failed"),
+            ));
+        }
+        presentation
+    }
+
+    fn map_ipc(&mut self, message: &str) -> Presentation<WorkspacePageState> {
+        let Ok(parsed) = parse_ipc_message(message) else {
+            return Presentation::ready(self.context.page());
+        };
+        match parsed {
+            IpcMessage::OsmElements { elements } => self.osm_elements(elements),
+            IpcMessage::ConfirmBoundary { coords } => self.confirm_map_boundary(&coords),
+            IpcMessage::BoundaryUpdate { .. }
+            | IpcMessage::ManualPoint { .. }
+            | IpcMessage::ManualCancel
+            | IpcMessage::ManualClear
+            | IpcMessage::Coordinate { .. }
+            | IpcMessage::OrientationPoints { .. } => Presentation::ready(self.context.page()),
+            IpcMessage::ConfirmOrientation { points } => self.confirm_orientation_points(points),
+            IpcMessage::OrientationClear => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.orientation_points.clear();
+                    session.orientation_angle = None;
+                    if let Some(plan_id) = session.active_plan_id.clone() {
+                        let state = session.plans.entry(plan_id).or_default();
+                        state.has_orientation = false;
+                        state.orientation_angle = None;
+                    }
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::Error { message } => {
+                let l10n = self.l10n();
+                Presentation::ready(self.context.page()).with_notification(info_fact(
+                    &l10n,
+                    "boundary.map_notice_title",
+                    &message,
+                ))
+            }
+        }
+    }
+
+    fn osm_elements(
+        &mut self,
+        elements: Vec<gaode_client::OsmElement>,
+    ) -> Presentation<WorkspacePageState> {
+        let (anchor_lon, anchor_lat, campus_name) = {
+            let session = self.context.session.borrow();
+            match &session.active_context {
+                Some(context) => (
+                    context.anchor_lng,
+                    context.anchor_lat,
+                    Some(context.campus_name.clone()),
+                ),
+                None => {
+                    let injector = self.context.injector.borrow();
+                    match injector.projects().landing_campus().ok().flatten() {
+                        Some(campus) => (campus.anchor_lng, campus.anchor_lat, Some(campus.name)),
+                        None => (116.397, 39.916, None),
+                    }
+                }
+            }
+        };
+        let sorted = BoundarySorter::sort_candidates(
+            elements,
+            anchor_lon,
+            anchor_lat,
+            campus_name.as_deref(),
+        );
+        let l10n = self.l10n();
+        let mut presentation = Presentation::ready(self.context.page());
+        match sorted.into_iter().next() {
+            Some(best) => {
+                let name = best
+                    .element
+                    .tags
+                    .get("name")
+                    .cloned()
+                    .unwrap_or_else(|| l10n.t("boundary.unknown_campus"));
+                match best.element.geometry {
+                    Some(coords) => {
+                        let count = coords.len();
+                        let coords_json =
+                            serde_json::to_string(&coords).unwrap_or_else(|_| "[]".to_string());
+                        let name_json = serde_json::to_string(&name)
+                            .unwrap_or_else(|_| "\"未知校区\"".to_string());
+                        crate::map_webview::evaluate_script(&format!(
+                            "convertAndDraw({coords_json}, {name_json});"
+                        ));
+                        let body = l10n.t_with_array(
+                            "boundary.osm_auto_selected_body",
+                            &[&name, &count.to_string()],
+                        );
+                        presentation = presentation.with_notification(info_fact(
+                            &l10n,
+                            "boundary.osm_auto_selected_title",
+                            &body,
+                        ));
+                    }
+                    None => {
+                        crate::map_webview::evaluate_script("enableManualMode();");
+                        presentation = presentation.with_notification(info_fact(
+                            &l10n,
+                            "boundary.osm_no_geometry_title",
+                            &l10n.t("boundary.osm_no_geometry_body"),
+                        ));
+                    }
+                }
+            }
+            None => {
+                crate::map_webview::evaluate_script("enableManualMode();");
+                presentation = presentation.with_notification(info_fact(
+                    &l10n,
+                    "boundary.osm_not_found_title",
+                    &l10n.t("boundary.osm_not_found_body"),
+                ));
+            }
+        }
+        presentation
+    }
+
+    fn confirm_map_boundary(&mut self, coords: &[[f64; 2]]) -> Presentation<WorkspacePageState> {
+        if coords.len() < 3 {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.error_too_few_points")));
+        }
+        let (sum_lon, sum_lat) = coords
+            .iter()
+            .fold((0.0_f64, 0.0_f64), |(slon, slat), point| {
+                (slon + point[0], slat + point[1])
+            });
+        let count = coords.len() as f64;
+        let (center_lon, center_lat) = (sum_lon / count, sum_lat / count);
+        let mut converter = CoordinateConverter::default();
+        converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
+        let mut vertices = Vec::with_capacity(coords.len());
+        for [lon, lat] in coords {
+            let mercator = MercatorCoord::from_lat_lon(*lat, *lon);
+            let Some(plane) = converter.mercator_to_plane(mercator) else {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("boundary.error_convert_failed"),
+                ));
+            };
+            vertices.push(Vertex::new(plane.x, plane.y));
+        }
+        let validation = validate_polygon_closure(&vertices);
+        if !validation.is_valid {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &validation_detail(&validation)));
+        }
+        {
+            let mut session = self.context.session.borrow_mut();
+            if let Some(plan_id) = session.active_plan_id.clone() {
+                let state = session.plans.entry(plan_id).or_default();
+                state.boundary_gcj02 = Some(coords.to_vec());
+                state.has_boundary = true;
+            }
+            session.drawer.load_determined(vertices);
+        }
+        Presentation::ready(self.context.page())
+    }
+
+    fn confirm_orientation_points(
+        &mut self,
+        points: [[f64; 2]; 2],
+    ) -> Presentation<WorkspacePageState> {
+        let (x0, y0) = (points[0][0], points[0][1]);
+        let (x1, y1) = (points[1][0], points[1][1]);
+        let degree = match OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
+            .and_then(|line| OrientationCalculator::calculate(&line))
+        {
+            Some(orientation) => orientation.degree(),
+            None => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("orientation.error_coincident_points"),
+                ));
+            }
+        };
+        {
+            let mut session = self.context.session.borrow_mut();
+            if let Some(plan_id) = session.active_plan_id.clone() {
+                let state = session.plans.entry(plan_id).or_default();
+                state.has_orientation = true;
+                state.orientation_angle = Some(degree);
+            }
+        }
+        crate::map_webview::evaluate_script(&format!(
+            "window.calculatedOrientationAngle = {};",
+            degree
+        ));
+        Presentation::ready(self.context.page())
+    }
+
+    fn l10n(&self) -> std::cell::Ref<'_, Localization> {
+        std::cell::Ref::map(self.context.injector.borrow(), |injector| injector.l10n())
+    }
+}
+
+fn validation_detail(result: &foundation_mode::ValidationResult) -> String {
+    result
+        .errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// 构建 SVG path 命令字符串（用于 Slint Path 元素渲染连线）。
+fn build_path_commands(vertices: &[Vertex], is_closed: bool) -> String {
+    if vertices.is_empty() {
+        return String::new();
+    }
+    let mut commands = format!("M {} {}", vertices[0].x, vertices[0].y);
+    for vertex in &vertices[1..] {
+        commands.push_str(&format!(" L {} {}", vertex.x, vertex.y));
+    }
+    if is_closed && vertices.len() >= 3 {
+        commands.push_str(" Z");
+    }
+    commands
+}
+
+/// 构建方向箭头 Path commands（三角形，按角度旋转；罗盘中心 (50, 50)）。
+fn build_arrow_commands(angle: f32) -> String {
+    let rad = angle.to_radians();
+    let (cx, cy) = (50.0_f32, 50.0_f32);
+    let radius = 40.0_f32;
+    let base_radius = 25.0_f32;
+    let half_width = 8.0_f32;
+    let tip_x = cx + radius * rad.sin();
+    let tip_y = cy - radius * rad.cos();
+    let base_left_x = cx + base_radius * rad.sin() + half_width * rad.cos();
+    let base_left_y = cy - base_radius * rad.cos() + half_width * rad.sin();
+    let base_right_x = cx + base_radius * rad.sin() - half_width * rad.cos();
+    let base_right_y = cy - base_radius * rad.cos() - half_width * rad.sin();
+    format!("M {tip_x:.1} {tip_y:.1} L {base_left_x:.1} {base_left_y:.1} L {base_right_x:.1} {base_right_y:.1} Z")
+}
+
+fn info_fact(l10n: &Localization, title_key: &str, body: &str) -> NotificationFact {
+    NotificationFact::new(Notification::info(
+        l10n.t("app.source_tag"),
+        l10n.t(title_key),
+        body.to_owned(),
+    ))
+}
+
+fn error_fact(l10n: &Localization, body: &str) -> NotificationFact {
+    NotificationFact::new(Notification::error(
+        l10n.t("app.source_tag"),
+        l10n.t("dialog.error_title"),
+        body.to_owned(),
+    ))
+}

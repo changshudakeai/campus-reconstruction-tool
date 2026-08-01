@@ -23,14 +23,20 @@ use slint::ComponentHandle;
 use slint::{winit_030::WinitWindowAccessor, Weak};
 
 /// IPC 消息处理器签名：输入原始消息文本，输出是否已识别处理。
-/// 由注入器注册；返回值仅用于诊断记录。
+/// 由功能入口注册；返回值仅用于诊断记录。
 pub(crate) type IpcHandler = Rc<dyn Fn(&str)>;
+
+/// 地图加载完成状态处理器：true = WebView 创建成功，false = 创建失败。
+/// 由功能入口注册；故障只暂停地图相关操作，不阻塞其他页面（ADR-0037）。
+pub(crate) type MapStatusHandler = Rc<dyn Fn(bool)>;
 
 struct WebViewState {
     /// 活跃 WebView（None = 已隐藏/未创建）
     webview: Option<wry::WebView>,
-    /// 注入器注册的 IPC 处理器
+    /// 功能入口注册的 IPC 处理器
     ipc_handler: Option<IpcHandler>,
+    /// 功能入口注册的地图加载状态处理器
+    status_handler: Option<MapStatusHandler>,
     /// 上次使用的密钥（recreate 时复用）
     last_api_key: String,
     last_security_key: String,
@@ -48,6 +54,7 @@ thread_local! {
         RefCell::new(WebViewState {
             webview: None,
             ipc_handler: None,
+            status_handler: None,
             last_api_key: String::new(),
             last_security_key: String::new(),
             last_anchor: (116.397, 39.916),
@@ -57,9 +64,23 @@ thread_local! {
     };
 }
 
-/// 注册 IPC 处理器（注入器在 bind 时调用一次）
+/// 注册 IPC 处理器（功能入口在 bind 时调用一次）
 pub(crate) fn register_ipc_handler(handler: IpcHandler) {
     STATE.with(|s| s.borrow_mut().ipc_handler = Some(handler));
+}
+
+/// 注册地图加载完成状态处理器（功能入口在 bind 时调用一次）
+pub(crate) fn register_status_handler(handler: MapStatusHandler) {
+    STATE.with(|s| s.borrow_mut().status_handler = Some(handler));
+}
+
+/// 通知地图加载完成状态（WebView 创建成功或失败后调用一次）
+fn notify_status(available: bool) {
+    STATE.with(|s| {
+        if let Some(handler) = s.borrow().status_handler.clone() {
+            handler(available);
+        }
+    });
 }
 
 /// 是否已有活跃 WebView
@@ -165,6 +186,7 @@ pub(crate) fn show(
             })
             .build_as_child(&*winit_win);
 
+        let map_created = result.is_ok();
         if let Ok(webview) = result {
             STATE.with(|s| {
                 let mut state = s.borrow_mut();
@@ -174,6 +196,8 @@ pub(crate) fn show(
             // resize 跟随（先静态 bounds 验证位置正确，再轮询跟随）
             start_resize_timer(weak_for_timer);
         }
+        // 创建成功或失败都如实回报：故障只暂停地图相关操作
+        notify_status(map_created);
     });
 }
 
@@ -224,6 +248,7 @@ pub(crate) fn show_with_config(
             })
             .build_as_child(&*winit_win);
 
+        let map_created = result.is_ok();
         if let Ok(webview) = result {
             STATE.with(|s| {
                 let mut state = s.borrow_mut();
@@ -232,6 +257,8 @@ pub(crate) fn show_with_config(
             });
             start_resize_timer(weak_for_timer);
         }
+        // 创建成功或失败都如实回报：故障只暂停地图相关操作
+        notify_status(map_created);
     });
 }
 

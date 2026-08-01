@@ -4,29 +4,30 @@
 //! 转发给一个功能模块。当前 `runtime` 的着陆组合以及 [`ViewModelInjector`] 对全部
 //! F 模块的持有与接线属于迁移期遗留，只为工单 01 的行为基线保留，不构成新增
 //! S1 业务协调的授权。Slint 绑定、B6 文案与 B7 Presenter 仍是呈现层能力。
-mod injector;
 mod map_webview;
 mod presentation;
 mod presenter;
 mod production;
 mod runtime;
 
-pub use injector::{ShellDatabases, ViewModelInjector};
 pub use presentation::{
-    CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
+    BoundaryViewState, CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
     CollectionPresentationEntry, ConfirmationPresentation, CoveragePageState,
     CoveragePresentationEntry, ExportPageState, ExportPresentationEntry, InvalidProgress,
     NavigationDecision, NotificationFact, NotificationPageState, NotificationPresentationEntry,
-    OpaqueNotificationAction, OperationState, Presentation, PresentationAdapter, Progress,
-    ReviewPageState, ReviewPresentationEntry, Screen, SettingsPageState, SettingsPresentationEntry,
-    SettingsRequest, StartupPageState, StartupPresentationEntry, StartupRequest, ToolbarPageState,
-    TrashPageState, TrashPresentationEntry, TrashRequest, WorkspacePageState,
+    OpaqueNotificationAction, OperationState, OrientationViewState, Presentation,
+    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
+    SettingsPageState, SettingsPresentationEntry, SettingsRequest, StartupPageState,
+    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPageState,
+    TrashPresentationEntry, TrashRequest, WorkspacePageState, WorkspacePresentationEntry,
+    WorkspaceRequest,
 };
 pub use presenter::report_callback_error;
 pub use presenter::ShellPresenter;
 pub use runtime::{
     assemble_application, landing_decision, run_dev, ApplicationRuntime, LandingDecision,
 };
+pub use runtime::{ShellDatabases, ViewModelInjector};
 
 // ui/main.slint 生成的 AppWindow 绑定（build.rs 产出）。生成代码的可见性
 // 与属性由 Slint 生成器决定，不受本库 lint 约束，故在模块内豁免。

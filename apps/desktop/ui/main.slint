@@ -1,3 +1,4 @@
+// ignore-tidy-filelength: 主窗口单文件承载全部页面布局与接线声明（T19B 系列骨架设计），拆分需先立 UI 重构工单
 // T19 — S1 薄壳主窗口。
 // 薄壳原则（ADR-0017）：此处零业务逻辑，只声明属性与布局；
 // 全部文案由 Rust 侧经 B6 l10n 注入（文本外置铁律 ADR-0005），
@@ -133,6 +134,13 @@ export component AppWindow inherits Window {
     in property <string> workspace-stepper-collection-label;
     in property <string> workspace-stepper-review-label;
     in property <string> workspace-stepper-export-label;
+    // ADR-0027：五个步骤顶部始终同时显示校区名与方案名（合成文案由 Rust 侧注入）
+    in property <string> workspace-campus-name;
+    in property <string> workspace-plan-name;
+    in property <string> workspace-context-label;
+    // 步骤锁定与完成状态由功能入口注入（S1 不自行判断步骤门控）
+    in property <[bool]> workspace-step-locked;
+    in property <[bool]> workspace-step-completed;
     // 步骤条教程气泡 (F2 钩子，ADR-0028 三泡之二)
     in property <bool> workspace-tutorial-visible;
     in property <string> workspace-tutorial-text;
@@ -141,6 +149,10 @@ export component AppWindow inherits Window {
     callback workspace-step-clicked(step-index: int);
     callback workspace-tutorial-dismiss-clicked();
     callback workspace-tutorial-skip-all-clicked();
+    // 地图加载完成状态（成功/故障；S1 只呈现，不判断地图业务规则）
+    callback workspace-map-status-changed(available: bool);
+    // 地图 WebView 转交的原始 IPC 消息（由工作区功能入口解析）
+    callback workspace-map-ipc(message: string);
         
     // ── 屏 4 步骤①：圈边界编辑器属性（T19B-5B Phase 2 Step A）────────
     in property <[BoundaryPointData]> workspace-boundary-points;
@@ -769,17 +781,19 @@ export component AppWindow inherits Window {
             x: 16px;
             y: 8px;
             active-step: root.workspace-active-step;
-                completed-steps: root.workspace-completed-steps;
-                stepper-title-label: root.workspace-stepper-title-label;
-                stepper-boundary-label: root.workspace-stepper-boundary-label;
-                stepper-orientation-label: root.workspace-stepper-orientation-label;
-                stepper-collection-label: root.workspace-stepper-collection-label;
-                stepper-review-label: root.workspace-stepper-review-label;
-                stepper-export-label: root.workspace-stepper-export-label;
-                step-clicked(index) => { 
-                    root.workspace-step-clicked(index);
-                }
+            step-locked: root.workspace-step-locked;
+            step-completed: root.workspace-step-completed;
+            stepper-title-label: root.workspace-stepper-title-label;
+            stepper-context-label: root.workspace-context-label;
+            stepper-boundary-label: root.workspace-stepper-boundary-label;
+            stepper-orientation-label: root.workspace-stepper-orientation-label;
+            stepper-collection-label: root.workspace-stepper-collection-label;
+            stepper-review-label: root.workspace-stepper-review-label;
+            stepper-export-label: root.workspace-stepper-export-label;
+            step-clicked(index) => { 
+                root.workspace-step-clicked(index);
             }
+        }
     
             // 步骤①：圈边界编辑器 (Phase 2 Step A)
             if root.workspace-active-step == 0: BoundaryEditor {

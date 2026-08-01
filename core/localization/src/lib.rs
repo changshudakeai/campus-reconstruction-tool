@@ -118,6 +118,15 @@ struct ResourceBundle {
     /// 回收站页面。
     #[serde(default)]
     pub trash: HashMap<String, String>,
+    /// 边界绘制页（S1-05：启用既有 boundary 段，此前被 serde 忽略）
+    #[serde(default)]
+    pub boundary: HashMap<String, String>,
+    /// 朝向设定页（S1-05：启用既有 orientation 段，此前被 serde 忽略）
+    #[serde(default)]
+    pub orientation: HashMap<String, String>,
+    /// 地图页
+    #[serde(default)]
+    pub map: HashMap<String, String>,
     /// 共同语言章名词定义（用于验证覆盖完整性）
     #[serde(default)]
     pub domain: HashMap<String, String>,
@@ -148,6 +157,9 @@ impl ResourceBundle {
             ("workspace", self.workspace),
             ("notice", self.notice),
             ("trash", self.trash),
+            ("boundary", self.boundary),
+            ("orientation", self.orientation),
+            ("map", self.map),
         ];
         for (prefix, table) in categories {
             for (key, value) in table {

@@ -116,6 +116,17 @@
   呈现入口 bind_actions 统一接线；tests/s1_04_campus_plan_trash_flow.rs（新）
 - 行为基线同步更新：校区与方案流程新增搜索/最近记录/回收站可观察结果（冲突点单列，
   见交付说明）；F1/F3/B2 public_api 与手工快照同步
+### S1-05（方案工作区、步骤导航与边界流程迁移到功能入口，2026-08-01）
+
+- 方案工作区经工作区功能入口一次返回完整页面状态与导航决定：步骤点击/“下一步”统一返回允许进入/条件不足/需要确认（`WorkspaceRequest::Navigate`），S1 不再自行判断步骤门控
+- 五个步骤顶部始终同时显示校区名与方案名（ADR-0027）；步骤锁定/完成状态由功能入口注入（Stepper 不再按 completed-steps 自行推导）
+- 边界闭合、有效性、重置与保存全部经工作区功能入口调用 B5（BoundaryDrawer/validate_polygon_closure/CoordinateConverter）并返回完整结果；地图通道（map_webview/B3 页面）只显示地图并转交原始 IPC 消息
+- 地图加载立即呈现处理中状态且不冻结；高德地图故障只暂停地图相关操作（公告留底），设置、方案列表与已有正式数据仍可访问
+- 离开边界页由功能入口判定可以离开/需要确认（未保存绘制）/必须停留（地图加载中），删除旧的壳内直接跳转
+- 朝向门控（提交/重置/重算确认）随工作区入口迁移，交互细节归工单 06
+- F3 公开接口最小化扩展：`plan_context`（方案名/校区名/锚点一次返回）；B6 ResourceBundle 启用既有 boundary/orientation/map 文本段（此前被 serde 忽略，键名直接显示）
+- 旧接线删除：injector 中步骤/边界/朝向/工具栏/方案卡片打开工作区全部移除（injector 并入 runtime 组合根）；测试：tests/s1_05_workspace_boundary_flow.rs（新）、presentation_seams、runtime 入口计数、s1_contract_baseline 同步
+
 
 ### T19B-9（右上角四入口工具栏 + 公告栏页 + 回收站页，2026-07-27）
 

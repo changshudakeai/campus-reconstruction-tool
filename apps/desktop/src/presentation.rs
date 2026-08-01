@@ -11,7 +11,8 @@ use notification_center::{NotificationCenter, NotificationRecord};
 use slint::{ModelRc, VecModel};
 
 use crate::{
-    AppWindow, CampusData, NoticeData, OperationPresentationState, PlanCardData, TrashItemData,
+    AppWindow, BoundaryPointData, CampusData, NoticeData, OperationPresentationState,
+    OrientationPointData, PlanCardData, TrashItemData,
 };
 
 pub use notification_center::OpaqueNotificationAction;
@@ -124,6 +125,8 @@ impl Screen {
 pub enum NavigationDecision {
     /// 留在当前页面。
     Stay,
+    /// 条件不足：功能入口拒绝进入，留在当前页面且不改变页面内容。
+    Blocked,
     /// 显示指定页面。
     Show(Screen),
 }
@@ -587,11 +590,147 @@ impl WindowPageState for CampusPlanPageState {
     }
 }
 
-/// 当前五步工作区占位页的全部可观察状态。
+/// 边界步骤的完整可观察状态（S1-05：由功能入口返回，S1 只绘制）。
+#[derive(Clone)]
+pub struct BoundaryViewState {
+    pub points: Vec<BoundaryPointData>,
+    pub path_commands: String,
+    pub title: String,
+    pub hint: String,
+    pub undo_label: String,
+    pub confirm_label: String,
+    pub reset_label: String,
+    pub status: String,
+    pub map_placeholder: String,
+    pub is_determined: bool,
+    pub point_count: i32,
+}
+
+impl BoundaryViewState {
+    fn render(&self, window: &AppWindow) {
+        window.set_workspace_boundary_points(ModelRc::new(VecModel::from(self.points.clone())));
+        window.set_workspace_boundary_path_commands(self.path_commands.clone().into());
+        window.set_workspace_boundary_title(self.title.clone().into());
+        window.set_workspace_boundary_hint(self.hint.clone().into());
+        window.set_workspace_boundary_undo_label(self.undo_label.clone().into());
+        window.set_workspace_boundary_confirm_label(self.confirm_label.clone().into());
+        window.set_workspace_boundary_reset_label(self.reset_label.clone().into());
+        window.set_workspace_boundary_status(self.status.clone().into());
+        window.set_workspace_boundary_map_placeholder(self.map_placeholder.clone().into());
+        window.set_workspace_boundary_is_determined(self.is_determined);
+        window.set_workspace_boundary_point_count(self.point_count);
+    }
+}
+
+/// 朝向步骤的完整可观察状态（S1-05 必要的朝向门控；交互迁移归工单 06）。
+#[derive(Clone)]
+pub struct OrientationViewState {
+    pub points: Vec<OrientationPointData>,
+    pub path_commands: String,
+    pub arrow_commands: String,
+    pub mode: String,
+    pub angle: f32,
+    pub is_determined: bool,
+    pub title: String,
+    pub two_points_hint: String,
+    pub bearing_angle_hint: String,
+    pub angle_input_placeholder: String,
+    pub angle_display: String,
+    pub input_text: String,
+    pub submit_label: String,
+    pub reset_label: String,
+    pub status: String,
+    pub mode_two_points_label: String,
+    pub mode_bearing_angle_label: String,
+}
+
+impl OrientationViewState {
+    fn render(&self, window: &AppWindow) {
+        window.set_workspace_orientation_points(ModelRc::new(VecModel::from(self.points.clone())));
+        window.set_workspace_orientation_path_commands(self.path_commands.clone().into());
+        window.set_workspace_orientation_arrow_commands(self.arrow_commands.clone().into());
+        window.set_workspace_orientation_mode(self.mode.clone().into());
+        window.set_workspace_orientation_angle(self.angle);
+        window.set_workspace_orientation_is_determined(self.is_determined);
+        window.set_workspace_orientation_title(self.title.clone().into());
+        window.set_workspace_orientation_two_points_hint(self.two_points_hint.clone().into());
+        window.set_workspace_orientation_bearing_angle_hint(self.bearing_angle_hint.clone().into());
+        window.set_workspace_orientation_angle_input_placeholder(
+            self.angle_input_placeholder.clone().into(),
+        );
+        window.set_workspace_orientation_angle_display(self.angle_display.clone().into());
+        window.set_workspace_orientation_input_text(self.input_text.clone().into());
+        window.set_workspace_orientation_submit_label(self.submit_label.clone().into());
+        window.set_workspace_orientation_reset_label(self.reset_label.clone().into());
+        window.set_workspace_orientation_status(self.status.clone().into());
+        window.set_workspace_orientation_mode_two_points_label(
+            self.mode_two_points_label.clone().into(),
+        );
+        window.set_workspace_orientation_mode_bearing_angle_label(
+            self.mode_bearing_angle_label.clone().into(),
+        );
+    }
+}
+
+/// 方案工作区入口的一次请求（S1-05）。
+///
+/// 步骤点击/“下一步”统一走 [`WorkspaceRequest::Navigate`]；边界闭合、有效性、
+/// 重置与保存走 [`WorkspaceRequest::BoundaryConfirm`] 等请求；离开边界页走
+/// [`WorkspaceRequest::Leave`]。S1 只转交动作并绘制返回状态，不判断业务条件。
+#[derive(Debug, Clone)]
+pub enum WorkspaceRequest {
+    /// 从方案列表打开方案工作区（新方案首次打开即第①步，ADR-0027 第 6 轮）。
+    OpenPlan { plan_id: String },
+    /// 点击步骤（或“下一步”）：功能入口返回允许进入 / 条件不足 / 需要确认。
+    Navigate { step: i32 },
+    /// 离开边界页面：功能入口判断可以离开、需要确认或必须停留。
+    Leave { target: Screen },
+    /// 边界画布原始绘制动作转交（S1 不掺入边界规则）。
+    BoundaryCanvasClick { x: f32, y: f32 },
+    /// 撤销最后一个绘制点。
+    BoundaryUndo,
+    /// 边界闭合 + 有效性校验 + 保存（B5 状态机与校验）。
+    BoundaryConfirm,
+    /// 重置边界并清除已保存的方案边界。
+    BoundaryReset,
+    /// 朝向提交（方位角输入模式；两点模式由地图 IPC 计算，见工单 06）。
+    OrientationSubmit { mode: String, angle_text: String },
+    /// 重置朝向并清除已保存的方案朝向。
+    OrientationReset,
+    /// 用户在修改朝向的重算确认窗中点了“确认”。
+    ConfirmOrientation,
+    /// 用户取消确认窗：功能入口清除待定状态（S1-05）。
+    CancelConfirmation,
+    /// 步骤条教程气泡“知道了”（F2 规矩①）。
+    TutorialDismiss,
+    /// 步骤条教程气泡“跳过全部引导”（F2 规矩②）。
+    TutorialSkipAll,
+    /// 地图加载完成状态（成功或故障；故障只暂停地图相关操作）。
+    MapStatus { available: bool },
+    /// 地图 WebView 转交的原始 IPC 消息（由功能入口解析并应用业务规则）。
+    #[doc(hidden)]
+    MapIpc { message: String },
+    /// 朝向模式切换（两点/方位角；S1 未提交页面临时状态）。
+    OrientationModeChanged { mode: String },
+}
+
+/// 当前五步工作区页的全部可观察状态。
 #[derive(Clone)]
 pub struct WorkspacePageState {
     pub toolbar: ToolbarPageState,
+    /// 校区名（五个步骤顶部始终同时显示，ADR-0027）
+    pub campus_name: String,
+    /// 方案名（五个步骤顶部始终同时显示，ADR-0027）
+    pub plan_name: String,
+    /// 顶部上下文合成文案（“校区名 / 方案名”，经 B6 文本键生成）
+    pub context_label: String,
+    /// 当前步骤索引（由功能入口决定，S1 只绘制）
+    pub active_step: i32,
     pub completed_steps: i32,
+    /// 每个步骤是否锁定（由功能入口判定，S1 只绘制）
+    pub step_locked: Vec<bool>,
+    /// 每个步骤是否已完成（由功能入口判定，S1 只绘制）
+    pub step_completed: Vec<bool>,
     pub placeholder_title: String,
     pub placeholder_subtitle: String,
     pub pending_notice: String,
@@ -601,6 +740,8 @@ pub struct WorkspacePageState {
     pub collection_step_label: String,
     pub review_step_label: String,
     pub export_step_label: String,
+    pub boundary: BoundaryViewState,
+    pub orientation: OrientationViewState,
     pub tutorial_visible: bool,
     pub tutorial_text: String,
     pub tutorial_dismiss_label: String,
@@ -608,10 +749,17 @@ pub struct WorkspacePageState {
 }
 
 impl WorkspacePageState {
-    fn render(&self, window: &AppWindow, active_step: i32) {
+    fn render_with_step(&self, window: &AppWindow, active_step: i32) {
         self.toolbar.render(window);
         window.set_workspace_active_step(active_step);
         window.set_workspace_completed_steps(self.completed_steps);
+        window.set_workspace_campus_name(self.campus_name.clone().into());
+        window.set_workspace_plan_name(self.plan_name.clone().into());
+        window.set_workspace_context_label(self.context_label.clone().into());
+        window.set_workspace_step_locked(ModelRc::new(VecModel::from(self.step_locked.clone())));
+        window.set_workspace_step_completed(ModelRc::new(VecModel::from(
+            self.step_completed.clone(),
+        )));
         window.set_workspace_placeholder_title(self.placeholder_title.clone().into());
         window.set_workspace_placeholder_subtitle(self.placeholder_subtitle.clone().into());
         window.set_workspace_step_pending_notice(self.pending_notice.clone().into());
@@ -625,9 +773,16 @@ impl WorkspacePageState {
         window.set_workspace_tutorial_text(self.tutorial_text.clone().into());
         window.set_workspace_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());
         window.set_workspace_tutorial_skip_all_label(self.tutorial_skip_all_label.clone().into());
+        self.boundary.render(window);
+        self.orientation.render(window);
     }
 }
 
+impl WindowPageState for WorkspacePageState {
+    fn render(&self, window: &AppWindow) {
+        self.render_with_step(window, self.active_step);
+    }
+}
 macro_rules! workspace_page_state {
     ($name:ident, $step:expr, $doc:literal) => {
         #[doc = $doc]
@@ -638,7 +793,7 @@ macro_rules! workspace_page_state {
 
         impl WindowPageState for $name {
             fn render(&self, window: &AppWindow) {
-                self.workspace.render(window, $step);
+                self.workspace.render_with_step(window, $step);
             }
         }
     };
@@ -781,6 +936,11 @@ presentation_entry!(
     "校区与方案呈现入口。"
 );
 presentation_entry!(TrashPresentationEntry, TrashPageState, "回收站呈现入口。");
+presentation_entry!(
+    WorkspacePresentationEntry,
+    WorkspacePageState,
+    "方案工作区呈现入口（步骤导航、边界与朝向门控）。"
+);
 presentation_entry!(
     CollectionPresentationEntry,
     CollectionPageState,
