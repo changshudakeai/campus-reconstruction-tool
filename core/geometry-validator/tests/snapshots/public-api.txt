@@ -1,15 +1,16 @@
 ---
 # geometry-validator Public API Snapshot
 
-pub struct CandidateGeometry { pub candidate_id: String, pub coordinates: Vec<(f64, f64)> }
+pub struct CandidateGeometry { pub candidate_id: String, pub shape: GeometryShape, pub coordinates: Vec<(f64, f64)> }
 pub struct GeometryOutcome { pub candidate_id: String, pub disposition: ValidationDisposition, pub geometry: Option<CandidateGeometry> }
 pub struct GeometryValidation { pub outcomes: Vec<GeometryOutcome>, pub automatically_repaired_count: usize, pub rejected_count: usize }
 pub struct GeometryValidator
 
-pub enum RejectionReason { InsufficientPoints, InvalidCoordinates, ZeroArea, SelfIntersecting }
+pub enum GeometryShape { Point((f64, f64)), LineString(Vec<(f64, f64)>), Polygon }
+pub enum RejectionReason { InsufficientPoints, InvalidCoordinates, ZeroArea, SelfIntersecting, ZeroLengthSegment }
 pub enum ValidationDisposition { Retained, Repaired, Rejected(RejectionReason) }
 
-impl CandidateGeometry { pub fn new(candidate_id: impl Into<String>, coordinates: Vec<(f64, f64)>) -> Self }
+impl CandidateGeometry { pub fn new(candidate_id: impl Into<String>, coordinates: Vec<(f64, f64)>) -> Self; pub fn with_shape(candidate_id: impl Into<String>, shape: GeometryShape) -> Self }
 impl GeometryValidation { pub fn retained(&self) -> Vec<&CandidateGeometry> }
 impl GeometryValidator { pub fn new() -> Self; pub fn validate(&self, candidate: CandidateGeometry) -> GeometryOutcome; pub fn validate_batch(&self, candidates: Vec<CandidateGeometry>) -> GeometryValidation }
 ---

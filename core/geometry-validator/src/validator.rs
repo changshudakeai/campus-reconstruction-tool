@@ -9,8 +9,22 @@ use thiserror::Error;
 pub struct CandidateGeometry {
     /// 上层用来关联原始观测或候选的稳定标识。
     pub candidate_id: String,
+    /// 数据源明确给出的形状；B14 从不按标签或原始 JSON 猜测几何。
+    pub shape: GeometryShape,
     /// 环的坐标点；验证成功后恰有一个闭合终点。
     pub coordinates: Vec<(f64, f64)>,
+}
+
+/// 来源声明的候选形状。
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum GeometryShape {
+    /// 单一坐标点，例如高德 POI 的位置证据。
+    Point((f64, f64)),
+    /// 有序线段，例如道路中心线。
+    LineString(Vec<(f64, f64)>),
+    /// 面环；未闭合输入可由 B14 安全补齐。
+    Polygon,
 }
 
 impl CandidateGeometry {
@@ -18,6 +32,21 @@ impl CandidateGeometry {
     pub fn new(candidate_id: impl Into<String>, coordinates: Vec<(f64, f64)>) -> Self {
         Self {
             candidate_id: candidate_id.into(),
+            shape: GeometryShape::Polygon,
+            coordinates,
+        }
+    }
+
+    /// 以来源声明的形状建立候选，Point 不会被伪造为面环。
+    pub fn with_shape(candidate_id: impl Into<String>, shape: GeometryShape) -> Self {
+        let coordinates = match &shape {
+            GeometryShape::Point(point) => vec![*point],
+            GeometryShape::LineString(points) => points.clone(),
+            GeometryShape::Polygon => Vec::new(),
+        };
+        Self {
+            candidate_id: candidate_id.into(),
+            shape,
             coordinates,
         }
     }
@@ -39,6 +68,9 @@ pub enum RejectionReason {
     /// 非相邻边相交。
     #[error("自相交")]
     SelfIntersecting,
+    /// 线对象含有零长度连续段。
+    #[error("零长度线段")]
+    ZeroLengthSegment,
 }
 
 /// 一项验证的最后去向。
@@ -91,6 +123,20 @@ impl GeometryValidator {
     /// 独立验证一个候选；无效对象不会影响同批其它对象。
     pub fn validate(&self, candidate: CandidateGeometry) -> GeometryOutcome {
         let candidate_id = candidate.candidate_id.clone();
+        if let GeometryShape::Point(point) = &candidate.shape {
+            return if valid_coordinate(*point) {
+                GeometryOutcome {
+                    candidate_id,
+                    disposition: ValidationDisposition::Retained,
+                    geometry: Some(candidate),
+                }
+            } else {
+                rejected(candidate_id, RejectionReason::InvalidCoordinates)
+            };
+        }
+        if let GeometryShape::LineString(points) = &candidate.shape {
+            return validate_line(candidate_id, points);
+        }
         let original = candidate.coordinates.clone();
         let mut points = candidate.coordinates;
         if points.iter().any(|point| !valid_coordinate(*point)) {
@@ -128,6 +174,7 @@ impl GeometryValidator {
             disposition,
             geometry: Some(CandidateGeometry {
                 candidate_id,
+                shape: GeometryShape::Polygon,
                 coordinates: points,
             }),
         }
@@ -152,6 +199,27 @@ impl GeometryValidator {
             automatically_repaired_count,
             rejected_count,
         }
+    }
+}
+
+fn validate_line(candidate_id: String, points: &[(f64, f64)]) -> GeometryOutcome {
+    if points.iter().any(|point| !valid_coordinate(*point)) {
+        return rejected(candidate_id, RejectionReason::InvalidCoordinates);
+    }
+    if points.len() < 2 || unique_point_count(points) < 2 {
+        return rejected(candidate_id, RejectionReason::InsufficientPoints);
+    }
+    if points.windows(2).any(|segment| segment[0] == segment[1]) {
+        return rejected(candidate_id, RejectionReason::ZeroLengthSegment);
+    }
+    GeometryOutcome {
+        candidate_id: candidate_id.clone(),
+        disposition: ValidationDisposition::Retained,
+        geometry: Some(CandidateGeometry {
+            candidate_id,
+            shape: GeometryShape::LineString(points.to_vec()),
+            coordinates: points.to_vec(),
+        }),
     }
 }
 

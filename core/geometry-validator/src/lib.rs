@@ -9,6 +9,6 @@
 mod validator;
 
 pub use validator::{
-    CandidateGeometry, GeometryOutcome, GeometryValidation, GeometryValidator, RejectionReason,
-    ValidationDisposition,
+    CandidateGeometry, GeometryOutcome, GeometryShape, GeometryValidation, GeometryValidator,
+    RejectionReason, ValidationDisposition,
 };
