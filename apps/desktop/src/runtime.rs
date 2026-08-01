@@ -254,35 +254,6 @@ impl ViewModelInjector {
         window.set_workspace_boundary_is_determined(false);
         window.set_workspace_boundary_point_count(0);
 
-        // 屏 4 步骤②：定朝向交互页静态文案（动态状态由工作区入口渲染）
-        window.set_workspace_orientation_points(ModelRc::new(VecModel::default()));
-        window.set_workspace_orientation_path_commands(SharedString::new());
-        window.set_workspace_orientation_arrow_commands(SharedString::new());
-        window.set_workspace_orientation_mode("two-points".into());
-        window.set_workspace_orientation_angle(-1.0);
-        window.set_workspace_orientation_is_determined(false);
-        window.set_workspace_orientation_title(l10n.t("orientation.step_title").into());
-        window.set_workspace_orientation_two_points_hint(
-            l10n.t("orientation.two_points_hint").into(),
-        );
-        window.set_workspace_orientation_bearing_angle_hint(
-            l10n.t("orientation.bearing_angle_hint").into(),
-        );
-        window.set_workspace_orientation_angle_input_placeholder(
-            l10n.t("orientation.angle_input_placeholder").into(),
-        );
-        window.set_workspace_orientation_angle_display(SharedString::new());
-        window.set_workspace_orientation_input_text("".into());
-        window.set_workspace_orientation_submit_label(l10n.t("orientation.submit_button").into());
-        window.set_workspace_orientation_reset_label(l10n.t("orientation.reset_button").into());
-        window.set_workspace_orientation_status(l10n.t("orientation.status_idle").into());
-        window.set_workspace_orientation_mode_two_points_label(
-            l10n.t("orientation.mode_two_points").into(),
-        );
-        window.set_workspace_orientation_mode_bearing_angle_label(
-            l10n.t("orientation.mode_bearing_angle").into(),
-        );
-
         // B7 错误弹窗的静态文案（动态内容由 ShellPresenter 每次填入）
         window.set_error_dialog_ok_label(l10n.t("dialog.ok_button").into());
 
