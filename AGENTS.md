@@ -2,12 +2,12 @@
 
 ## 项目状态
 
-**实施期（ADR 驱动）**。产品与架构决策逐条记录于 `docs/adr/`（ADR-0001 起连续编号至 0039）。代码实施以工单为单位推进；模块目录建立并通过接口评审后，才加入 `Cargo.toml` 的 members 列表。
+**实施期（ADR 驱动）**。产品与架构决策逐条记录于 `docs/adr/`（ADR-0001 起连续编号至 0040）。代码实施以工单为单位推进；模块目录建立并通过接口评审后，才加入 `Cargo.toml` 的 members 列表。
 
 ## 开工前必读（按此顺序）
 
 1. **`README.md`** — 项目概述 + 全部 ADR 索引
-2. **`CONTEXT.md`** — 领域术语表（45 个中英对照术语；引用术语以它为准）
+2. **`CONTEXT.md`** — 领域术语表（47 个中英对照术语；引用术语以它为准）
 3. **`docs/agents/`** — issue tracker / triage labels / domain docs 规则
 4. **`docs/adr/`** — 与任务相关的 ADR 原文（出题与验收前必须重读）
 5. **`docs/module-decisions.md`** — 按模块归类的决策索引
