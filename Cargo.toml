@@ -52,6 +52,8 @@ members = [
     "core/generation-engine",
     # T16：F7 覆盖率审计（安静哨兵 + 两条疑点规则）
     "core/coverage-audit",
+    # s1-21: B14 候选几何校验（仅采集候选，不接管 B5 方案边界）
+    "core/geometry-validator",
     # T17：F2 新手教程（跟练式气泡引导 + 四条规矩）
     "core/onboarding-tutorial",
     # T19: S1 主程序应用壳（Slint UI 薄壳）
