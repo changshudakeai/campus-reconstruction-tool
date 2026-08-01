@@ -1,3 +1,5 @@
+//! B14 的形状校验实现：只规范化可唯一修复的候选几何，并逐项隔离不可靠对象。
+
 use std::collections::HashSet;
 
 use thiserror::Error;
