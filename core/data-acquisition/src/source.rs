@@ -15,6 +15,18 @@ use shared_domain_types::Boundary;
 
 use crate::error::{AcquisitionError, Result};
 
+/// 数据源明确提供的几何，不由 F4 根据标签或类别推测。
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SourceGeometry {
+    /// 单一位置点。
+    Point((f64, f64)),
+    /// 有序折线。
+    LineString(Vec<(f64, f64)>),
+    /// 来源提供的面环。
+    Polygon(Vec<(f64, f64)>),
+}
+
 /// 一个从数据源拉回的原始对象（带完整标签，等待 B13 归类）
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawEntity {
@@ -26,6 +38,10 @@ pub struct RawEntity {
     pub tags: TagMap,
     /// 数据源原始载荷（原样保全，数据粮仓的"完整原始标签"要求）
     pub source_payload: serde_json::Value,
+    /// 来源几何；缺失时仍保留该原始对象，交由后续流程显式隔离。
+    pub source_geometry: Option<SourceGeometry>,
+    /// 同一来源对象的稳定几何分片标识。
+    pub geometry_part_id: String,
 }
 
 impl RawEntity {
@@ -41,6 +57,27 @@ impl RawEntity {
             name: name.into(),
             tags,
             source_payload,
+            source_geometry: None,
+            geometry_part_id: "default".to_owned(),
+        }
+    }
+
+    /// 用来源明确提供的几何建立原始对象。
+    pub fn with_geometry(
+        entity_id: impl Into<String>,
+        name: impl Into<String>,
+        tags: TagMap,
+        source_payload: serde_json::Value,
+        source_geometry: Option<SourceGeometry>,
+        geometry_part_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            entity_id: entity_id.into(),
+            name: name.into(),
+            tags,
+            source_payload,
+            source_geometry,
+            geometry_part_id: geometry_part_id.into(),
         }
     }
 
@@ -51,6 +88,8 @@ impl RawEntity {
             "name": self.name,
             "tags": self.tags,
             "payload": self.source_payload,
+            "source_geometry": self.source_geometry.as_ref().map(source_geometry_json),
+            "geometry_part_id": self.geometry_part_id,
         })
     }
 }
@@ -72,6 +111,91 @@ pub trait DataSource {
 /// 壳层注入真实桥接闭包，测试注入罐头 JSON——离线可测。
 pub type BridgeTransport =
     Box<dyn Fn(&Boundary) -> std::result::Result<String, String> + Send + Sync>;
+
+/// 可注入的 Overpass `out geom` 传输；生产网络由外部适配器提供。
+pub type OverpassTransport = BridgeTransport;
+
+/// OSM/Overpass 来源适配器，保留 node/way 的原始几何，不拼接 relation。
+pub struct OverpassDataSource {
+    transport: OverpassTransport,
+}
+
+impl OverpassDataSource {
+    pub const SOURCE_TAG: &'static str = "overpass";
+    pub fn new(transport: OverpassTransport) -> Self {
+        Self { transport }
+    }
+}
+
+impl DataSource for OverpassDataSource {
+    fn source_tag(&self) -> &str {
+        Self::SOURCE_TAG
+    }
+    fn fetch_raw_entities(&self, boundary: &Boundary) -> Result<Vec<RawEntity>> {
+        let payload =
+            (self.transport)(boundary).map_err(|message| AcquisitionError::SourceUnreachable {
+                source_tag: Self::SOURCE_TAG.to_owned(),
+                message,
+            })?;
+        let value: serde_json::Value = serde_json::from_str(&payload).map_err(|error| {
+            AcquisitionError::Source(gaode_client::Error::MalformedResponse(error.to_string()))
+        })?;
+        let elements = value
+            .get("elements")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(elements.into_iter().filter_map(overpass_entity).collect())
+    }
+}
+
+fn overpass_entity(value: serde_json::Value) -> Option<RawEntity> {
+    let kind = value.get("type")?.as_str()?;
+    let id = value.get("id")?.as_i64()?;
+    let entity_id = format!("{kind}/{id}");
+    let tags: TagMap = value
+        .get("tags")
+        .and_then(serde_json::Value::as_object)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let name = tags
+        .get("name")
+        .cloned()
+        .unwrap_or_else(|| entity_id.clone());
+    let geometry = match kind {
+        "node" => Some(SourceGeometry::Point((
+            value.get("lon")?.as_f64()?,
+            value.get("lat")?.as_f64()?,
+        ))),
+        "way" => value
+            .get("geometry")
+            .and_then(serde_json::Value::as_array)
+            .map(|points| {
+                points
+                    .iter()
+                    .filter_map(|point| {
+                        Some((point.get("lon")?.as_f64()?, point.get("lat")?.as_f64()?))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|points| !points.is_empty())
+            .map(|points| {
+                if points.len() > 2 && points.first() == points.last() {
+                    SourceGeometry::Polygon(points)
+                } else {
+                    SourceGeometry::LineString(points)
+                }
+            }),
+        _ => None,
+    };
+    Some(RawEntity::with_geometry(
+        entity_id, name, tags, value, geometry, "default",
+    ))
+}
 
 /// 高德 typecode 前缀 → 标签的翻译词典（适配器方言转换，非归类逻辑）。
 ///
@@ -161,9 +285,38 @@ impl GaodeDataSource {
                 .unwrap_or_default();
             let tags = Self::typecode_to_tags(typecode);
             seen_ids.push(id.clone());
-            entities.push(RawEntity::new(id, name, tags, poi));
+            let geometry = poi
+                .get("location")
+                .and_then(serde_json::Value::as_str)
+                .and_then(parse_gaode_location)
+                .map(SourceGeometry::Point);
+            entities.push(RawEntity::with_geometry(
+                id, name, tags, poi, geometry, "point",
+            ));
         }
         Ok(entities)
+    }
+}
+
+fn parse_gaode_location(text: &str) -> Option<(f64, f64)> {
+    let (longitude, latitude) = text.split_once(',')?;
+    Some((
+        longitude.trim().parse().ok()?,
+        latitude.trim().parse().ok()?,
+    ))
+}
+
+fn source_geometry_json(geometry: &SourceGeometry) -> serde_json::Value {
+    match geometry {
+        SourceGeometry::Point(point) => {
+            serde_json::json!({"kind":"point","coordinates":[point.0, point.1]})
+        }
+        SourceGeometry::LineString(points) => {
+            serde_json::json!({"kind":"line_string","coordinates":points})
+        }
+        SourceGeometry::Polygon(points) => {
+            serde_json::json!({"kind":"polygon","coordinates":points})
+        }
     }
 }
 

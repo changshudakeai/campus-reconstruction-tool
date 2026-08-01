@@ -7,8 +7,55 @@
 use data_acquisition::{
     category_text_key, text_keys, AcquisitionError, AcquisitionPipeline, CategoryProgress,
     CollectionProgressView, DataSource, DiffEntry, DiffKind, GaodeDataSource, RawEntity,
-    RefreshDiff, ALL_CATEGORIES,
+    RefreshDiff, SourceGeometry, ALL_CATEGORIES,
 };
+
+#[test]
+fn source_geometry_keeps_a_point_as_source_evidence() {
+    let entity = RawEntity::with_geometry(
+        "node/1",
+        "图书馆",
+        TagMap::new(),
+        serde_json::json!({"location": "121.4,31.2"}),
+        Some(SourceGeometry::Point((121.4, 31.2))),
+        "point",
+    );
+    assert!(matches!(
+        entity.source_geometry,
+        Some(SourceGeometry::Point((121.4, 31.2)))
+    ));
+}
+
+#[test]
+fn acquisition_batch_returns_raw_evidence_and_geometry_drafts_without_publishing() {
+    let pipeline = AcquisitionPipeline::new().unwrap();
+    let source = GaodeDataSource::new(Box::new(|_| {
+        Ok(r#"{"status":"1","pois":[{"id":"B1","name":"教学楼","typecode":"141201","location":"121.4,31.2"}]}"#.to_owned())
+    }));
+    let mut db = data_persistence::Database::open_in_memory().unwrap();
+    let batch = pipeline
+        .acquire_batch(
+            &mut db,
+            &shared_domain_types::PlanId::generate(),
+            &Boundary {
+                r#type: "Polygon".to_owned(),
+                coordinates: serde_json::json!([[
+                    [121.4, 31.2],
+                    [121.5, 31.2],
+                    [121.4, 31.3],
+                    [121.4, 31.2]
+                ]]),
+            },
+            &source,
+        )
+        .unwrap();
+    assert_eq!(batch.raw_observations.len(), 1);
+    assert_eq!(batch.candidate_drafts.len(), 1);
+    assert!(matches!(
+        batch.candidate_drafts[0].source_geometry,
+        Some(SourceGeometry::Point(_))
+    ));
+}
 use data_transformers::TagMap;
 use localization::{Language, Localization};
 use shared_domain_types::{Boundary, CandidateCategory};
