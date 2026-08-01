@@ -4,11 +4,11 @@
 # 本文件记录 B2 数据持久化的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 # 
-# 最后更新: 2026-07-31 (S1-04 校区地址/最近记录键/清空回收站)
+# 最后更新: 2026-08-01 (ADR-0040 候选投影与批次发布)
 
 ## Constants
 
-pub const LATEST_SCHEMA_VERSION: u32 = 4
+pub const LATEST_SCHEMA_VERSION: u32 = 5
 pub const TRASH_RETENTION_DAYS: i64 = 30
 
 ## Structures
@@ -60,6 +60,10 @@ pub struct TrashItem {
     pub restored_at: Option<DateTime<Utc>>,
     pub permanently_deleted_at: Option<DateTime<Utc>>,
 }
+pub struct CandidateShape { pub kind: String, pub coordinates: serde_json::Value }
+pub struct CandidateProjection { pub candidate_id: String, pub plan_id: String, pub collection_batch_id: Option<String>, pub raw_observation_id: String, pub data_source_tag: String, pub source_entity_id: String, pub geometry_part_id: String, pub category: CandidateCategory, pub shape: CandidateShape, pub validation: CandidateValidation, pub eligibility: CandidateEligibility, pub isolation_reason: Option<String>, pub automatically_repaired: bool, pub missing_in_latest_batch: bool, pub created_at: DateTime<Utc>, pub updated_at: DateTime<Utc> }
+pub struct CandidateBatch { pub id: String, pub plan_id: String, pub status: CandidateBatchStatus, pub created_at: DateTime<Utc>, pub published_at: Option<DateTime<Utc>> }
+pub struct CandidateBatchSummary { pub batch: CandidateBatch, pub projection_count: usize, pub reviewable_count: usize, pub isolated_count: usize, pub repaired_count: usize, pub missing_count: usize }
 
 ## Enums #[non_exhaustive]
 
@@ -80,7 +84,11 @@ pub enum Error {
     CampusNotFound(String),
     PlanNotFound(String),
     DuplicatePlanName(String),
+    CandidateBatchRejected(String),
 }
+pub enum CandidateEligibility { Reviewable, Isolated }
+pub enum CandidateValidation { Retained, Repaired, Rejected }
+pub enum CandidateBatchStatus { Building, Published }
 
 ## Type Aliases
 
@@ -110,6 +118,8 @@ impl TrashItem {
     pub fn new_plan(campus_id, plan_id, deleted_by: Option<String>) -> Self
     pub fn is_restorable(&self, now: DateTime<Utc>) -> bool
 }
+impl CandidateShape { pub fn point(coordinates: serde_json::Value) -> Self; pub fn line_string(coordinates: serde_json::Value) -> Self; pub fn polygon(coordinates: serde_json::Value) -> Self }
+impl CandidateProjection { pub fn new(...) -> Self; pub fn isolated_reason(self, reason: impl Into<String>) -> Self; pub fn missing_in_latest_batch(self) -> Self }
 
 pub trait RawObservationsApi {                   (impl for Database)
     fn write_raw_observations(&mut self, observations: &[RawObservation]) -> Result<usize>
@@ -122,6 +132,16 @@ pub trait ReviewDecisionsApi {                   (impl for Database)
     fn batch_update_review_decisions(&mut self, decisions: &[ReviewDecision]) -> Result<()>
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>>
     fn count_review_states(&self, plan_id: &str) -> Result<(usize, usize, usize)>
+}
+
+pub trait CandidateProjectionsApi {              (impl for Database)
+    fn prepare_candidate_batch(&mut self, plan_id: &str) -> Result<CandidateBatch>
+    fn write_candidate_projections(&mut self, batch_id: &str, projections: &[CandidateProjection]) -> Result<()>
+    fn carry_forward_missing_candidate_projections(&mut self, batch_id: &str) -> Result<()>
+    fn publish_candidate_batch(&mut self, batch_id: &str) -> Result<()>
+    fn list_reviewable_candidate_projections(&self, plan_id: &str) -> Result<Vec<CandidateProjection>>
+    fn get_current_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> Result<Option<CandidateProjection>>
+    fn candidate_batch_summary(&self, batch_id: &str) -> Result<CandidateBatchSummary>
 }
 
 pub trait CampusCrudApi {                        (impl for Connection/Database)

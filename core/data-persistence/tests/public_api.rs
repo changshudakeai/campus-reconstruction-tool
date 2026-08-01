@@ -5,16 +5,17 @@
 //! 简单方式：检查所有公开类型可实例化、三组 trait 的关键行为可调用。
 
 use data_persistence::{
-    AppSettingKey, AppSettingsApi, CampusCrudApi, Database, Error, PlanCrudApi, RawObservation,
-    RawObservationsApi, ReviewDecision, ReviewDecisionsApi, TrashApi, TrashItem,
-    LATEST_SCHEMA_VERSION, TRASH_RETENTION_DAYS,
+    AppSettingKey, AppSettingsApi, CampusCrudApi, CandidateBatchStatus, CandidateEligibility,
+    CandidateProjection, CandidateProjectionsApi, CandidateShape, CandidateValidation, Database,
+    Error, PlanCrudApi, RawObservation, RawObservationsApi, ReviewDecision, ReviewDecisionsApi,
+    TrashApi, TrashItem, LATEST_SCHEMA_VERSION, TRASH_RETENTION_DAYS,
 };
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 #[test]
 fn public_api_types_exist() {
     // T05：版本号升级到 3（新增校区锚点列）
-    assert_eq!(LATEST_SCHEMA_VERSION, 4);
+    assert_eq!(LATEST_SCHEMA_VERSION, 5);
     assert_eq!(TRASH_RETENTION_DAYS, 30);
 
     // Database：打开即迁移到最新版本
@@ -48,6 +49,44 @@ fn public_api_types_exist() {
         .find_raw_observation("plan-1", CandidateCategory::Building, "way/1")
         .unwrap()
         .is_some());
+
+    // ADR-0040：候选投影只能在完整批次发布后对评审入口可见。
+    let batch = db.prepare_candidate_batch("plan-1").unwrap();
+    assert_eq!(batch.status, CandidateBatchStatus::Building);
+    let projection = CandidateProjection::new(
+        "overpass:way/1:outer",
+        "plan-1",
+        "raw-1",
+        "overpass",
+        "way/1",
+        "outer",
+        CandidateCategory::Building,
+        CandidateShape::polygon(serde_json::json!([
+            [121.4, 31.2],
+            [121.5, 31.2],
+            [121.4, 31.3],
+            [121.4, 31.2]
+        ])),
+        CandidateValidation::Retained,
+        CandidateEligibility::Reviewable,
+    );
+    db.write_candidate_projections(&batch.id, &[projection])
+        .unwrap();
+    assert!(db
+        .list_reviewable_candidate_projections("plan-1")
+        .unwrap()
+        .is_empty());
+    db.publish_candidate_batch(&batch.id).unwrap();
+    assert!(db
+        .get_current_candidate_projection("plan-1", "overpass:way/1:outer")
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        db.candidate_batch_summary(&batch.id)
+            .unwrap()
+            .reviewable_count,
+        1
+    );
 
     // ReviewDecision + ReviewDecisionsApi trait
     let decision = ReviewDecision::new(

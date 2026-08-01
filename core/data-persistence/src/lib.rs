@@ -27,6 +27,7 @@
 )]
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
+mod candidate_projections;
 mod database;
 mod entities;
 mod error;
@@ -36,6 +37,10 @@ mod raw_observations;
 mod review_decisions;
 mod trash;
 
+pub use candidate_projections::{
+    CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateEligibility,
+    CandidateProjection, CandidateProjectionsApi, CandidateShape, CandidateValidation,
+};
 pub use database::Database;
 pub use entities::{RawObservation, ReviewDecision, TrashItem, TRASH_RETENTION_DAYS};
 pub use error::{Error, Result};

@@ -53,6 +53,10 @@ pub enum Error {
     /// 同校区内计划名重复
     #[error("同名计划冲突：{0}")]
     DuplicatePlanName(String),
+
+    /// 候选批次不在允许状态，不能写入或发布。
+    #[error("候选批次操作被拒：{0}")]
+    CandidateBatchRejected(String),
 }
 
 /// B2 持久化层结果别名

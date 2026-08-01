@@ -37,10 +37,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "校区地址列：address（最近使用记录展示校区地址，ADR-0006）",
         sql: include_str!("../migrations/004_add_campus_address.sql"),
     },
+    Migration {
+        version: 5,
+        description: "候选投影与完整采集批次（ADR-0040）",
+        sql: include_str!("../migrations/005_add_candidate_projections.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 4;
+pub const LATEST_SCHEMA_VERSION: u32 = 5;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
