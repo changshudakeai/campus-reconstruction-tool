@@ -56,7 +56,7 @@ impl ReviewWorkbench {
 
         // 上一轮封账写回的终态对回内存（没有记录的保持"待定"）
         for decision in db.list_review_decisions(&plan_key)? {
-            let key = CandidateKey::new(decision.category, decision.candidate_id.clone());
+            let key = CandidateKey::new(decision.candidate_id.clone());
             if let Some(candidate) = candidates.iter_mut().find(|c| c.key == key) {
                 candidate.state = decision.review_state;
             }
@@ -64,7 +64,7 @@ impl ReviewWorkbench {
 
         let active_category = CATEGORY_ORDER
             .into_iter()
-            .find(|category| candidates.iter().any(|c| c.key.category == *category))
+            .find(|category| candidates.iter().any(|c| c.category == *category))
             .unwrap_or(CandidateCategory::Building);
 
         Ok(Self {
@@ -188,7 +188,7 @@ impl ReviewWorkbench {
     pub fn select_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
-            if candidate.key.category == category {
+            if candidate.category == category {
                 candidate.selected = true;
             }
         }
@@ -198,7 +198,7 @@ impl ReviewWorkbench {
     pub fn deselect_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
-            if candidate.key.category == category {
+            if candidate.category == category {
                 candidate.selected = false;
             }
         }
@@ -291,7 +291,7 @@ impl ReviewWorkbench {
         if self
             .candidates
             .iter()
-            .any(|candidate| candidate.key.category == snapshot.active_category)
+            .any(|candidate| candidate.category == snapshot.active_category)
         {
             self.active_category = snapshot.active_category;
         }
@@ -307,7 +307,7 @@ impl ReviewWorkbench {
             let count = self
                 .candidates
                 .iter()
-                .filter(|c| c.key.category == category && c.state.is_keep())
+                .filter(|c| c.category == category && c.state.is_keep())
                 .count();
             if count > 0 {
                 keep_by_category.push((category, count));
@@ -341,7 +341,7 @@ impl ReviewWorkbench {
             .map(|c| {
                 ReviewDecision::new(
                     self.plan_id.clone(),
-                    c.key.category,
+                    c.category,
                     c.key.candidate_id.clone(),
                     c.state,
                 )
@@ -370,7 +370,7 @@ impl ReviewWorkbench {
                 count: self
                     .candidates
                     .iter()
-                    .filter(|c| c.key.category == category)
+                    .filter(|c| c.category == category)
                     .count(),
                 active: category == self.active_category,
             })
@@ -379,7 +379,7 @@ impl ReviewWorkbench {
         let cards = self
             .candidates
             .iter()
-            .filter(|c| c.key.category == self.active_category)
+            .filter(|c| c.category == self.active_category)
             .map(|c| CandidateCardView {
                 candidate_id: c.key.candidate_id.clone(),
                 title: c.title.clone(),
@@ -395,7 +395,7 @@ impl ReviewWorkbench {
             .iter()
             .map(|c| MapObjectView {
                 candidate_id: c.key.candidate_id.clone(),
-                category: c.key.category,
+                category: c.category,
                 state: c.state,
                 highlighted: self.highlighted.as_ref() == Some(&c.key),
             })
@@ -408,7 +408,7 @@ impl ReviewWorkbench {
                 .map(|c| InfoPanelView {
                     title: c.title.clone(),
                     category_label_key: text_keys::INFO_CATEGORY,
-                    category_key: category_text_key(c.key.category),
+                    category_key: category_text_key(c.category),
                     tags_label_key: text_keys::INFO_TAGS,
                     tags: c.tags.clone(),
                     state_label_key: text_keys::STATE_LABEL,

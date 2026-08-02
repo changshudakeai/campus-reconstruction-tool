@@ -3,6 +3,20 @@
 ALTER TABLE candidate_projections RENAME TO candidate_projections_without_display;
 DROP INDEX idx_candidate_projections_batch_eligibility;
 
+-- 记录哪些行确实由本次 v6 迁移生成展示属性。后续修复只能依赖该审计事实，
+-- 不得通过展示内容反推来源，以免覆盖 v6 后由新 API 写入的合法数据。
+CREATE TABLE candidate_display_backfill_audit (
+    collection_batch_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    repaired_at TEXT,
+    PRIMARY KEY(collection_batch_id, candidate_id)
+);
+
+INSERT INTO candidate_display_backfill_audit (collection_batch_id, candidate_id)
+SELECT collection_batch_id, candidate_id
+FROM candidate_projections_without_display;
+
 CREATE TABLE candidate_projections (
     collection_batch_id TEXT NOT NULL,
     candidate_id TEXT NOT NULL,

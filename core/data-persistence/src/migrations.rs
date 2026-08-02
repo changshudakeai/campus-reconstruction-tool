@@ -89,6 +89,12 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
         }
 
         let tx = conn.transaction()?;
+        if migration.version == 7 {
+            validate_review_decision_identity(&tx).map_err(|message| Error::MigrationFailed {
+                version: migration.version,
+                message,
+            })?;
+        }
         tx.execute_batch(migration.sql)
             .map_err(|err| Error::MigrationFailed {
                 version: migration.version,
@@ -105,6 +111,50 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
             rusqlite::params![migration.version, migration.description],
         )?;
         tx.commit()?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LegacyReviewDecision {
+    category: String,
+    review_state: String,
+    reviewer_id: Option<String>,
+    updated_at: String,
+}
+
+fn validate_review_decision_identity(tx: &Transaction<'_>) -> std::result::Result<(), String> {
+    let mut statement = tx
+        .prepare(
+            "SELECT plan_id, entity_id, entity_type, review_state, reviewer_id, updated_at
+             FROM review_decisions
+             ORDER BY plan_id, entity_id, rowid",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query([]).map_err(|error| error.to_string())?;
+    let mut previous: Option<(String, String, LegacyReviewDecision)> = None;
+
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let plan_id: String = row.get(0).map_err(|error| error.to_string())?;
+        let candidate_id: String = row.get(1).map_err(|error| error.to_string())?;
+        let decision = LegacyReviewDecision {
+            category: row.get(2).map_err(|error| error.to_string())?,
+            review_state: row.get(3).map_err(|error| error.to_string())?,
+            reviewer_id: row.get(4).map_err(|error| error.to_string())?,
+            updated_at: row.get(5).map_err(|error| error.to_string())?,
+        };
+
+        if let Some((previous_plan_id, previous_candidate_id, previous_decision)) = &previous {
+            if previous_plan_id == &plan_id
+                && previous_candidate_id == &candidate_id
+                && previous_decision != &decision
+            {
+                return Err(format!(
+                    "conflicting legacy review decisions for plan '{plan_id}', candidate '{candidate_id}'; category, review_state, reviewer_id, and updated_at must be identical"
+                ));
+            }
+        }
+        previous = Some((plan_id, candidate_id, decision));
     }
     Ok(())
 }
@@ -214,6 +264,39 @@ mod tests {
 }
 
 fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), String> {
+    let audit_table_exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_schema
+                 WHERE type = 'table' AND name = 'candidate_display_backfill_audit'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !audit_table_exists {
+        let projection_count: usize = tx
+            .query_row("SELECT COUNT(*) FROM candidate_projections", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?;
+        if projection_count > 0 {
+            return Err(format!(
+                "cannot safely repair {projection_count} candidate display row(s): version 6 backfill provenance is missing"
+            ));
+        }
+        tx.execute_batch(
+            "CREATE TABLE candidate_display_backfill_audit (
+                 collection_batch_id TEXT NOT NULL,
+                 candidate_id TEXT NOT NULL,
+                 recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 repaired_at TEXT,
+                 PRIMARY KEY(collection_batch_id, candidate_id)
+             );",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
     let mut statement = tx
         .prepare(
             "SELECT projection.collection_batch_id,
@@ -223,9 +306,13 @@ fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), Str
                     projection.display_title,
                     projection.display_tags,
                     observation.source_data
-             FROM candidate_projections AS projection
+             FROM candidate_display_backfill_audit AS audit
+             JOIN candidate_projections AS projection
+               ON projection.collection_batch_id = audit.collection_batch_id
+              AND projection.candidate_id = audit.candidate_id
              LEFT JOIN raw_observations AS observation
                ON observation.id = projection.raw_observation_id
+             WHERE audit.repaired_at IS NULL
              ORDER BY projection.collection_batch_id, projection.candidate_id",
         )
         .map_err(|error| error.to_string())?;
@@ -236,7 +323,7 @@ fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), Str
         let candidate_id: String = row.get(1).map_err(|error| error.to_string())?;
         let raw_observation_id: String = row.get(2).map_err(|error| error.to_string())?;
         let source_entity_id: String = row.get(3).map_err(|error| error.to_string())?;
-        let display_title: String = row.get(4).map_err(|error| error.to_string())?;
+        let _display_title: String = row.get(4).map_err(|error| error.to_string())?;
         let display_tags_json: String = row.get(5).map_err(|error| error.to_string())?;
         let source_data_json: Option<String> = row.get(6).map_err(|error| error.to_string())?;
         let source_data_json = source_data_json.ok_or_else(|| {
@@ -249,19 +336,12 @@ fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), Str
                 "candidate '{candidate_id}' references invalid raw observation '{raw_observation_id}': {error}"
             )
         })?;
-        let current_tags: Vec<(String, String)> = serde_json::from_str(&display_tags_json)
+        let _current_tags: Vec<(String, String)> = serde_json::from_str(&display_tags_json)
             .map_err(|error| {
                 format!("candidate '{candidate_id}' has invalid display tags: {error}")
             })?;
-        let (legacy_title, mut legacy_tags) =
-            legacy_version_six_display(&source_data, &source_entity_id);
         let (repaired_title, repaired_tags) = complete_display(&source_data, &source_entity_id);
-        let mut normalized_current_tags = current_tags;
-        normalized_current_tags.sort();
-        legacy_tags.sort();
-        if display_title == legacy_title && normalized_current_tags == legacy_tags {
-            updates.push((batch_id, candidate_id, repaired_title, repaired_tags));
-        }
+        updates.push((batch_id, candidate_id, repaired_title, repaired_tags));
     }
     drop(rows);
     drop(statement);
@@ -278,27 +358,15 @@ fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), Str
         update
             .execute(params![batch_id, candidate_id, title, tags])
             .map_err(|error| error.to_string())?;
+        tx.execute(
+            "UPDATE candidate_display_backfill_audit
+             SET repaired_at = datetime('now')
+             WHERE collection_batch_id = ?1 AND candidate_id = ?2",
+            params![batch_id, candidate_id],
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-fn legacy_version_six_display(
-    source_data: &serde_json::Value,
-    source_entity_id: &str,
-) -> (String, Vec<(String, String)>) {
-    let tags = source_data
-        .get("tags")
-        .and_then(serde_json::Value::as_object);
-    let title = tags
-        .and_then(|values| values.get("name"))
-        .and_then(scalar_text)
-        .unwrap_or_else(|| source_entity_id.to_owned());
-    let tags = tags
-        .into_iter()
-        .flat_map(|values| values.iter())
-        .filter_map(|(key, value)| scalar_text(value).map(|text| (key.clone(), text)))
-        .collect();
-    (title, tags)
 }
 
 fn complete_display(

@@ -11,8 +11,9 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 
-/// 会话快照文件格式版本（不兼容变更时递增，旧文件按损坏处理）
+/// 当前写出版本；读取器同时兼容仍按稳定 candidate_id 对回的 v2。
 const SNAPSHOT_FORMAT_VERSION: u32 = 3;
+const COMPATIBLE_SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 /// 快照里的一条候选状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,13 +61,16 @@ impl SessionSnapshot {
         std::fs::write(path, json).map_err(|err| Error::SessionIo(err.to_string()))
     }
 
-    /// 从临时文件读回（格式版本不符按损坏处理）
+    /// 从临时文件读回；v2 中多余的 category 身份字段由 Serde 忽略。
     pub(crate) fn load_from_file(path: &Path) -> Result<Self> {
         let json =
             std::fs::read_to_string(path).map_err(|err| Error::SessionIo(err.to_string()))?;
         let snapshot: Self =
             serde_json::from_str(&json).map_err(|err| Error::SessionCorrupt(err.to_string()))?;
-        if snapshot.version != SNAPSHOT_FORMAT_VERSION {
+        if !matches!(
+            snapshot.version,
+            COMPATIBLE_SNAPSHOT_FORMAT_VERSION | SNAPSHOT_FORMAT_VERSION
+        ) {
             return Err(Error::SessionCorrupt(format!(
                 "不支持的会话文件版本 {}（当前 {SNAPSHOT_FORMAT_VERSION}）",
                 snapshot.version

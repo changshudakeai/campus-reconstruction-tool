@@ -4,8 +4,6 @@
 //! 评审期间所有状态都在这里改，不碰数据库。
 //! 类别与三态复用 B1 共享领域类型（不重新定义）。
 
-use std::hash::{Hash, Hasher};
-
 use data_persistence::CandidateProjection;
 use shared_domain_types::{CandidateCategory, ReviewState};
 
@@ -13,45 +11,16 @@ use shared_domain_types::{CandidateCategory, ReviewState};
 ///
 /// 身份只由 `candidate_id` 决定；category 是可随新投影变化的当前属性。
 /// `candidate_id` 区分数据源与几何分片，不等同于 `source_entity_id`（ADR-0040）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CandidateKey {
-    /// 实体类别（六类别之一）
-    pub category: CandidateCategory,
     /// B2 候选投影的稳定 ID。
     pub candidate_id: String,
 }
 
-impl PartialEq for CandidateKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.candidate_id == other.candidate_id
-    }
-}
-
-impl Eq for CandidateKey {}
-
-impl Hash for CandidateKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.candidate_id.hash(state);
-    }
-}
-
-impl PartialOrd for CandidateKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for CandidateKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.candidate_id.cmp(&other.candidate_id)
-    }
-}
-
 impl CandidateKey {
     /// 构建候选标识
-    pub fn new(category: CandidateCategory, candidate_id: impl Into<String>) -> Self {
+    pub fn new(candidate_id: impl Into<String>) -> Self {
         Self {
-            category,
             candidate_id: candidate_id.into(),
         }
     }
@@ -59,7 +28,7 @@ impl CandidateKey {
 
 impl std::fmt::Display for CandidateKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}/{}", self.category, self.candidate_id)
+        f.write_str(&self.candidate_id)
     }
 }
 
@@ -68,6 +37,8 @@ impl std::fmt::Display for CandidateKey {
 pub struct Candidate {
     /// 稳定候选标识。
     pub key: CandidateKey,
+    /// 候选投影当前的六类别属性。
+    pub category: CandidateCategory,
     /// 卡片标题：原始标签里的 `name`，没有则回落到实体 ID
     pub title: String,
     /// 标签与属性（key=value 对，信息面板展示用）
@@ -82,7 +53,8 @@ impl Candidate {
     /// 从 B2 已发布的可评审投影构建候选（初始态"待定"、未勾选）。
     pub fn from_projection(projection: &CandidateProjection) -> Self {
         Self {
-            key: CandidateKey::new(projection.category, projection.candidate_id.clone()),
+            key: CandidateKey::new(projection.candidate_id.clone()),
+            category: projection.category,
             title: projection.display.title.clone(),
             tags: projection.display.tags.clone(),
             state: ReviewState::Pending,
@@ -126,6 +98,7 @@ mod tests {
     fn projection_display_and_stable_candidate_id_are_preserved() {
         let candidate = Candidate::from_projection(&projection());
         assert_eq!(candidate.key.candidate_id, "overpass:way/100:outer");
+        assert_eq!(candidate.category, CandidateCategory::Building);
         assert_eq!(candidate.title, "体育馆");
         assert_eq!(
             candidate.tags,
@@ -133,5 +106,11 @@ mod tests {
         );
         assert_eq!(candidate.state, ReviewState::Pending);
         assert!(!candidate.selected);
+    }
+
+    #[test]
+    fn candidate_key_carries_only_the_stable_candidate_id() {
+        let key = CandidateKey::new("overpass:way/100:outer");
+        assert_eq!(key.candidate_id, "overpass:way/100:outer");
     }
 }

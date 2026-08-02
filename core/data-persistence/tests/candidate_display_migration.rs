@@ -184,6 +184,17 @@ fn insert_v6_projection(
         .unwrap();
 }
 
+fn mark_as_version_six_backfill(connection: &Connection, candidate_id: &str) {
+    connection
+        .execute(
+            "INSERT INTO candidate_display_backfill_audit (
+                 collection_batch_id, candidate_id, recorded_at
+             ) VALUES ('batch-1', ?1, '2026-08-01T00:00:00Z')",
+            [candidate_id],
+        )
+        .unwrap();
+}
+
 #[test]
 fn version_five_upgrade_preserves_top_level_name_scalars_and_geometry_parts() {
     let (_directory, path, connection) = legacy_database(5);
@@ -262,6 +273,7 @@ fn applied_version_six_repairs_legacy_rows_without_overwriting_complete_display(
         "poi/7",
         r#"[["leisure","swimming_pool"]]"#,
     );
+    mark_as_version_six_backfill(&connection, "gaode:poi/7:footprint");
     insert_v6_projection(
         &connection,
         "overpass:way/9:outer",
@@ -301,6 +313,97 @@ fn applied_version_six_repairs_legacy_rows_without_overwriting_complete_display(
             ("name".to_owned(), "人工确认的完整标题".to_owned()),
         ]
     );
+}
+
+#[test]
+fn applied_version_six_does_not_rewrite_new_display_that_matches_legacy_signature() {
+    let (_directory, path, connection) = legacy_database(6);
+    insert_raw_observation(
+        &connection,
+        "raw-collision",
+        "way/collision",
+        r#"{"name":"top-level-name","tags":{"name":"nested-name","building":"school"}}"#,
+        "overpass",
+    );
+    insert_published_batch(&connection);
+    insert_v6_projection(
+        &connection,
+        "overpass:way/collision:outer",
+        "raw-collision",
+        "overpass",
+        "way/collision",
+        "outer",
+        "nested-name",
+        r#"[["building","school"],["name","nested-name"]]"#,
+    );
+    drop(connection);
+
+    let database = Database::open(&path).unwrap();
+    let projection = database
+        .get_current_candidate_projection("plan-1", "overpass:way/collision:outer")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.display.title, "nested-name");
+    assert_eq!(
+        projection.display.tags,
+        vec![
+            ("building".to_owned(), "school".to_owned()),
+            ("name".to_owned(), "nested-name".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn applied_version_six_without_backfill_audit_fails_instead_of_guessing() {
+    let (_directory, path, connection) = legacy_database(6);
+    insert_raw_observation(
+        &connection,
+        "raw-ambiguous",
+        "way/ambiguous",
+        r#"{"name":"top-level-name","tags":{"name":"nested-name"}}"#,
+        "overpass",
+    );
+    insert_published_batch(&connection);
+    insert_v6_projection(
+        &connection,
+        "overpass:way/ambiguous:outer",
+        "raw-ambiguous",
+        "overpass",
+        "way/ambiguous",
+        "outer",
+        "nested-name",
+        r#"[["name","nested-name"]]"#,
+    );
+    connection
+        .execute_batch("DROP TABLE candidate_display_backfill_audit;")
+        .unwrap();
+    drop(connection);
+
+    let error = Database::open(&path).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::MigrationFailed {
+            version: 8,
+            ref message
+        } if message.contains("provenance") && message.contains("1 candidate display row")
+    ));
+
+    let connection = Connection::open(&path).unwrap();
+    let version: u32 = connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 7);
+    let title: String = connection
+        .query_row(
+            "SELECT display_title FROM candidate_projections
+             WHERE candidate_id = 'overpass:way/ambiguous:outer'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(title, "nested-name");
 }
 
 #[test]
@@ -382,6 +485,7 @@ fn applied_version_six_upgrade_rejects_damaged_raw_json() {
         "way/damaged",
         r#"[["building","yes"]]"#,
     );
+    mark_as_version_six_backfill(&connection, "overpass:way/damaged:outer");
     connection
         .execute(
             "UPDATE raw_observations SET source_data = '{damaged' WHERE id = 'raw-damaged'",
@@ -398,6 +502,28 @@ fn applied_version_six_upgrade_rejects_damaged_raw_json() {
             ref message
         } if message.contains("raw-damaged") && message.contains("invalid")
     ));
+
+    let connection = Connection::open(&path).unwrap();
+    let version: u32 = connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 7);
+    let (title, repaired_at): (String, Option<String>) = connection
+        .query_row(
+            "SELECT projection.display_title, audit.repaired_at
+             FROM candidate_projections AS projection
+             JOIN candidate_display_backfill_audit AS audit
+               ON audit.collection_batch_id = projection.collection_batch_id
+              AND audit.candidate_id = projection.candidate_id
+             WHERE projection.candidate_id = 'overpass:way/damaged:outer'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(title, "way/damaged");
+    assert_eq!(repaired_at, None);
 }
 
 #[test]
@@ -456,31 +582,147 @@ fn new_install_reaches_latest_and_preserves_new_candidate_display() {
     );
 }
 
+fn allow_duplicate_legacy_review_decisions(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP INDEX idx_review_decisions_state;
+             DROP TABLE review_decisions;
+             CREATE TABLE review_decisions (
+                 plan_id TEXT NOT NULL,
+                 entity_type TEXT NOT NULL,
+                 entity_id TEXT NOT NULL,
+                 review_state TEXT NOT NULL,
+                 reviewer_id TEXT,
+                 updated_at TEXT NOT NULL
+             );
+             CREATE INDEX idx_review_decisions_state
+                 ON review_decisions(review_state);",
+        )
+        .unwrap();
+}
+
+fn insert_legacy_review_decision(
+    connection: &Connection,
+    category: &str,
+    state: &str,
+    reviewer_id: Option<&str>,
+    updated_at: &str,
+) {
+    connection
+        .execute(
+            "INSERT INTO review_decisions (
+                plan_id, entity_type, entity_id, review_state, reviewer_id, updated_at
+             ) VALUES ('plan-1', ?1, 'overpass:way/1:outer', ?2, ?3, ?4)",
+            params![category, state, reviewer_id, updated_at],
+        )
+        .unwrap();
+}
+
+fn assert_version_seven_conflict_rolls_back(path: &std::path::Path, expected_rows: usize) {
+    let error = Database::open(path).unwrap_err();
+    match error {
+        Error::MigrationFailed { version, message } => {
+            assert_eq!(version, 7);
+            assert!(message.contains("plan-1"));
+            assert!(message.contains("overpass:way/1:outer"));
+        }
+        other => panic!("expected version 7 migration failure, got {other:?}"),
+    }
+
+    let connection = Connection::open(path).unwrap();
+    let version: u32 = connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 6);
+    let rows: usize = connection
+        .query_row("SELECT COUNT(*) FROM review_decisions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(rows, expected_rows);
+    let legacy_column_count: usize = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('review_decisions')
+             WHERE name IN ('entity_type', 'entity_id')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_column_count, 2);
+}
+
 #[test]
-fn version_six_review_decisions_collapse_category_duplicates_by_candidate_id() {
+fn version_six_review_decisions_collapse_only_equivalent_duplicates() {
     let (_directory, path, connection) = legacy_database(6);
-    connection
-        .execute(
-            "INSERT INTO review_decisions (
-                plan_id, entity_type, entity_id, review_state, updated_at
-             ) VALUES ('plan-1', 'Building', 'overpass:way/1:outer', 'keep', ?1)",
-            ["2026-08-01T00:00:00Z"],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO review_decisions (
-                plan_id, entity_type, entity_id, review_state, updated_at
-             ) VALUES ('plan-1', 'Road', 'overpass:way/1:outer', 'remove', ?1)",
-            ["2026-08-02T00:00:00Z"],
-        )
-        .unwrap();
+    allow_duplicate_legacy_review_decisions(&connection);
+    insert_legacy_review_decision(
+        &connection,
+        "Building",
+        "keep",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
+    insert_legacy_review_decision(
+        &connection,
+        "Building",
+        "keep",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
     drop(connection);
 
     let database = Database::open(&path).unwrap();
     let decisions = database.list_review_decisions("plan-1").unwrap();
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].candidate_id, "overpass:way/1:outer");
-    assert_eq!(decisions[0].category, CandidateCategory::Road);
-    assert!(decisions[0].review_state.is_remove());
+    assert_eq!(decisions[0].category, CandidateCategory::Building);
+    assert!(decisions[0].review_state.is_keep());
+    assert_eq!(decisions[0].reviewer_id.as_deref(), Some("reviewer-1"));
+}
+
+#[test]
+fn version_six_review_decision_state_conflict_fails_and_rolls_back() {
+    let (_directory, path, connection) = legacy_database(6);
+    allow_duplicate_legacy_review_decisions(&connection);
+    insert_legacy_review_decision(
+        &connection,
+        "Building",
+        "keep",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
+    insert_legacy_review_decision(
+        &connection,
+        "Building",
+        "remove",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
+    drop(connection);
+
+    assert_version_seven_conflict_rolls_back(&path, 2);
+}
+
+#[test]
+fn version_six_review_decision_category_conflict_fails_and_rolls_back() {
+    let (_directory, path, connection) = legacy_database(6);
+    insert_legacy_review_decision(
+        &connection,
+        "Building",
+        "keep",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
+    insert_legacy_review_decision(
+        &connection,
+        "Road",
+        "keep",
+        Some("reviewer-1"),
+        "2026-08-01T00:00:00Z",
+    );
+    drop(connection);
+
+    assert_version_seven_conflict_rolls_back(&path, 2);
 }

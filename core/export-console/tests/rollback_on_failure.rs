@@ -80,7 +80,7 @@ fn seal_marks_review_done_and_immutable() {
     assert!(!workbench.is_sealed());
 
     // 把候选改为保留后封账
-    let key = CandidateKey::new(CandidateCategory::Building, CANDIDATE_ID);
+    let key = CandidateKey::new(CANDIDATE_ID);
     workbench
         .submit(StateChange::single(key.clone(), ReviewState::Keep))
         .unwrap();
@@ -162,7 +162,7 @@ fn export_failure_rolls_back_seal_and_review_is_editable_again() {
     let db_guard = db.lock().unwrap();
     let mut workbench = ReviewWorkbench::load(&db_guard, &plan_id).unwrap();
     assert!(!workbench.is_sealed());
-    let key = CandidateKey::new(CandidateCategory::Building, CANDIDATE_ID);
+    let key = CandidateKey::new(CANDIDATE_ID);
     let outcome = workbench
         .submit(StateChange::single(key, ReviewState::Pending))
         .expect("回滚后评审状态必须可改");

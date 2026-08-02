@@ -116,6 +116,7 @@ impl<T> typenum::type_operators::Same for review_workbench::Error
 pub type review_workbench::Error::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::Error where T: ?core::marker::Sized
 pub struct review_workbench::Candidate
+pub review_workbench::Candidate::category: shared_domain_types::category::CandidateCategory
 pub review_workbench::Candidate::key: review_workbench::CandidateKey
 pub review_workbench::Candidate::selected: bool
 pub review_workbench::Candidate::state: shared_domain_types::review::ReviewState
@@ -218,24 +219,24 @@ pub type review_workbench::CandidateCardView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::CandidateCardView where T: ?core::marker::Sized
 pub struct review_workbench::CandidateKey
 pub review_workbench::CandidateKey::candidate_id: alloc::string::String
-pub review_workbench::CandidateKey::category: shared_domain_types::category::CandidateCategory
 impl review_workbench::CandidateKey
-pub fn review_workbench::CandidateKey::new(category: shared_domain_types::category::CandidateCategory, candidate_id: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn review_workbench::CandidateKey::new(candidate_id: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for review_workbench::CandidateKey
 pub fn review_workbench::CandidateKey::clone(&self) -> review_workbench::CandidateKey
 impl core::cmp::Eq for review_workbench::CandidateKey
 impl core::cmp::Ord for review_workbench::CandidateKey
-pub fn review_workbench::CandidateKey::cmp(&self, other: &Self) -> core::cmp::Ordering
+pub fn review_workbench::CandidateKey::cmp(&self, other: &review_workbench::CandidateKey) -> core::cmp::Ordering
 impl core::cmp::PartialEq for review_workbench::CandidateKey
-pub fn review_workbench::CandidateKey::eq(&self, other: &Self) -> bool
+pub fn review_workbench::CandidateKey::eq(&self, other: &review_workbench::CandidateKey) -> bool
 impl core::cmp::PartialOrd for review_workbench::CandidateKey
-pub fn review_workbench::CandidateKey::partial_cmp(&self, other: &Self) -> core::option::Option<core::cmp::Ordering>
+pub fn review_workbench::CandidateKey::partial_cmp(&self, other: &review_workbench::CandidateKey) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for review_workbench::CandidateKey
 pub fn review_workbench::CandidateKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for review_workbench::CandidateKey
 pub fn review_workbench::CandidateKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for review_workbench::CandidateKey
-pub fn review_workbench::CandidateKey::hash<H: core::hash::Hasher>(&self, state: &mut H)
+pub fn review_workbench::CandidateKey::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for review_workbench::CandidateKey
 impl core::marker::Freeze for review_workbench::CandidateKey
 impl core::marker::Send for review_workbench::CandidateKey
 impl core::marker::Sync for review_workbench::CandidateKey

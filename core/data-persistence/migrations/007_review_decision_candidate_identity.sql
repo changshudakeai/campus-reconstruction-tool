@@ -18,14 +18,10 @@ INSERT INTO review_decisions (
 )
 SELECT plan_id, entity_type, entity_id, review_state, reviewer_id, updated_at
 FROM (
-    SELECT legacy.*,
-           ROW_NUMBER() OVER (
-               PARTITION BY plan_id, entity_id
-               ORDER BY updated_at DESC, rowid DESC
-           ) AS identity_rank
-    FROM review_decisions_with_category_identity AS legacy
-)
-WHERE identity_rank = 1;
+    SELECT DISTINCT
+        plan_id, entity_type, entity_id, review_state, reviewer_id, updated_at
+    FROM review_decisions_with_category_identity
+);
 
 DROP TABLE review_decisions_with_category_identity;
 CREATE INDEX idx_review_decisions_state ON review_decisions(review_state);
