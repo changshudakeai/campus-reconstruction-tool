@@ -7,24 +7,55 @@
 
 use std::sync::{Arc, Mutex};
 
-use data_persistence::{Database, RawObservation, RawObservationsApi};
+use data_persistence::{
+    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
+    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
+};
 use export_console::{ExportConsole, ExportRequest, NavigationTarget, SealGate};
 use generation_engine::{BlockModel, BlockPosition};
 use review_workbench::{CandidateKey, CommandOutcome, ReviewWorkbench, StateChange};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 
-/// 写入一条建筑候选观测，返回 (db, plan_id)
+const CANDIDATE_ID: &str = "overpass:way/1:outer";
+
+/// 写入一条原始观测并发布对应 Reviewable 候选投影，返回 (db, plan_id)。
 fn seed_database() -> (Database, PlanId) {
     let mut db = Database::open_in_memory().expect("内存库可打开");
     let plan_id = PlanId::generate();
-    db.write_raw_observations(&[RawObservation::new(
+    let observation = RawObservation::new(
         plan_id.to_string(),
         CandidateCategory::Building,
         "way/1",
         serde_json::json!({ "tags": { "name": "教学楼" } }),
         "overpass",
-    )])
-    .expect("观测写入成功");
+    );
+    db.write_raw_observations(std::slice::from_ref(&observation))
+        .expect("观测写入成功");
+    let batch = db
+        .prepare_candidate_batch(&plan_id.to_string())
+        .expect("候选批次准备成功");
+    let projection = CandidateProjection::new(
+        CANDIDATE_ID,
+        plan_id.to_string(),
+        observation.id,
+        "overpass",
+        "way/1",
+        "outer",
+        CandidateCategory::Building,
+        CandidateDisplay::new("教学楼", vec![("name".to_owned(), "教学楼".to_owned())]),
+        CandidateShape::polygon(serde_json::json!([
+            [121.4, 31.2],
+            [121.5, 31.2],
+            [121.4, 31.3],
+            [121.4, 31.2]
+        ])),
+        CandidateValidation::Retained,
+        CandidateEligibility::Reviewable,
+    );
+    db.write_candidate_projections(&batch.id, &[projection])
+        .expect("候选投影写入成功");
+    db.publish_candidate_batch(&batch.id)
+        .expect("候选批次发布成功");
     (db, plan_id)
 }
 
@@ -36,7 +67,7 @@ fn export_request(plan_id: &PlanId) -> ExportRequest {
         1,
         0,
         0,
-        vec!["Building/way/1".to_owned()],
+        vec![format!("Building/{CANDIDATE_ID}")],
     )
 }
 
@@ -49,7 +80,7 @@ fn seal_marks_review_done_and_immutable() {
     assert!(!workbench.is_sealed());
 
     // 把候选改为保留后封账
-    let key = CandidateKey::new(CandidateCategory::Building, "way/1");
+    let key = CandidateKey::new(CandidateCategory::Building, CANDIDATE_ID);
     workbench
         .submit(StateChange::single(key.clone(), ReviewState::Keep))
         .unwrap();
@@ -131,7 +162,7 @@ fn export_failure_rolls_back_seal_and_review_is_editable_again() {
     let db_guard = db.lock().unwrap();
     let mut workbench = ReviewWorkbench::load(&db_guard, &plan_id).unwrap();
     assert!(!workbench.is_sealed());
-    let key = CandidateKey::new(CandidateCategory::Building, "way/1");
+    let key = CandidateKey::new(CandidateCategory::Building, CANDIDATE_ID);
     let outcome = workbench
         .submit(StateChange::single(key, ReviewState::Pending))
         .expect("回滚后评审状态必须可改");

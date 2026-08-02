@@ -8,7 +8,7 @@
 
 ## Constants
 
-pub const LATEST_SCHEMA_VERSION: u32 = 5
+pub const LATEST_SCHEMA_VERSION: u32 = 6
 pub const TRASH_RETENTION_DAYS: i64 = 30
 
 ## Structures
@@ -61,7 +61,8 @@ pub struct TrashItem {
     pub permanently_deleted_at: Option<DateTime<Utc>>,
 }
 pub struct CandidateShape { pub kind: String, pub coordinates: serde_json::Value }
-pub struct CandidateProjection { pub candidate_id: String, pub plan_id: String, pub collection_batch_id: Option<String>, pub raw_observation_id: String, pub data_source_tag: String, pub source_entity_id: String, pub geometry_part_id: String, pub category: CandidateCategory, pub shape: CandidateShape, pub validation: CandidateValidation, pub eligibility: CandidateEligibility, pub isolation_reason: Option<String>, pub automatically_repaired: bool, pub missing_in_latest_batch: bool, pub created_at: DateTime<Utc>, pub updated_at: DateTime<Utc> }
+pub struct CandidateDisplay { pub title: String, pub tags: Vec<(String, String)> }
+pub struct CandidateProjection { pub candidate_id: String, pub plan_id: String, pub collection_batch_id: Option<String>, pub raw_observation_id: String, pub data_source_tag: String, pub source_entity_id: String, pub geometry_part_id: String, pub category: CandidateCategory, pub display: CandidateDisplay, pub shape: CandidateShape, pub validation: CandidateValidation, pub eligibility: CandidateEligibility, pub isolation_reason: Option<String>, pub automatically_repaired: bool, pub missing_in_latest_batch: bool, pub created_at: DateTime<Utc>, pub updated_at: DateTime<Utc> }
 pub struct CandidateBatch { pub id: String, pub plan_id: String, pub status: CandidateBatchStatus, pub created_at: DateTime<Utc>, pub published_at: Option<DateTime<Utc>> }
 pub struct CandidateBatchSummary { pub batch: CandidateBatch, pub projection_count: usize, pub reviewable_count: usize, pub isolated_count: usize, pub repaired_count: usize, pub missing_count: usize }
 
@@ -119,7 +120,8 @@ impl TrashItem {
     pub fn is_restorable(&self, now: DateTime<Utc>) -> bool
 }
 impl CandidateShape { pub fn point(coordinates: serde_json::Value) -> Self; pub fn line_string(coordinates: serde_json::Value) -> Self; pub fn polygon(coordinates: serde_json::Value) -> Self }
-impl CandidateProjection { pub fn new(...) -> Self; pub fn isolated_reason(self, reason: impl Into<String>) -> Self; pub fn missing_in_latest_batch(self) -> Self }
+impl CandidateDisplay { pub fn new(title: impl Into<String>, tags: Vec<(String, String)>) -> Self }
+impl CandidateProjection { pub fn new(..., display: CandidateDisplay, ...) -> Self; pub fn isolated_reason(self, reason: impl Into<String>) -> Self; pub fn missing_in_latest_batch(self) -> Self }
 
 pub trait RawObservationsApi {                   (impl for Database)
     fn write_raw_observations(&mut self, observations: &[RawObservation]) -> Result<usize>
@@ -186,6 +188,8 @@ RawObservation: Debug, Clone, PartialEq
 ReviewDecision: Debug, Clone, PartialEq, Eq
 TrashItem: Debug, Clone, PartialEq, Eq
 Error: Debug, thiserror::Error
+CandidateDisplay: Debug, Clone, PartialEq, Eq
+CandidateProjection: Debug, Clone, PartialEq
 
 ## 铁律备注
 

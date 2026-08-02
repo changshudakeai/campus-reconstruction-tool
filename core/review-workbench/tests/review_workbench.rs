@@ -4,8 +4,9 @@
 //! 批量确认闸 → 暂停/恢复 → 封账批量写回。
 
 use data_persistence::{
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservation, RawObservationsApi, ReviewDecisionsApi,
+    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
+    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
+    ReviewDecisionsApi,
 };
 use review_workbench::CandidateKey;
 use review_workbench::{
@@ -53,14 +54,45 @@ fn fixture() -> (Database, PlanId) {
     let projections: Vec<_> = observations
         .iter()
         .map(|observation| {
+            let display = match observation.entity_type {
+                CandidateCategory::Building => CandidateDisplay::new(
+                    observation.source_data["tags"]["name"]
+                        .as_str()
+                        .expect("建筑夹具名称")
+                        .to_owned(),
+                    vec![
+                        ("building".to_owned(), "school".to_owned()),
+                        (
+                            "name".to_owned(),
+                            observation.source_data["tags"]["name"]
+                                .as_str()
+                                .expect("建筑夹具名称")
+                                .to_owned(),
+                        ),
+                    ],
+                ),
+                CandidateCategory::Road => CandidateDisplay::new(
+                    &observation.entity_id,
+                    vec![("highway".to_owned(), "footway".to_owned())],
+                ),
+                CandidateCategory::Water => CandidateDisplay::new(
+                    "游泳池",
+                    vec![
+                        ("leisure".to_owned(), "swimming_pool".to_owned()),
+                        ("name".to_owned(), "游泳池".to_owned()),
+                    ],
+                ),
+                _ => unreachable!("夹具只含建筑、道路和水体"),
+            };
             CandidateProjection::new(
-                &observation.entity_id,
+                format!("overpass:{}:outer", observation.entity_id),
                 &plan_key,
                 &observation.id,
                 &observation.data_source_tag,
                 &observation.entity_id,
                 "default",
                 observation.entity_type,
+                display,
                 CandidateShape::polygon(serde_json::json!([
                     [121.4, 31.2],
                     [121.5, 31.2],
@@ -80,7 +112,153 @@ fn fixture() -> (Database, PlanId) {
 }
 
 fn building_key(index: usize) -> CandidateKey {
-    CandidateKey::new(CandidateCategory::Building, format!("way/b{index}"))
+    CandidateKey::new(
+        CandidateCategory::Building,
+        format!("overpass:way/b{index}:outer"),
+    )
+}
+
+fn reviewable_projection(
+    plan_id: &PlanId,
+    candidate_id: &str,
+    source_entity_id: &str,
+    title: &str,
+) -> CandidateProjection {
+    CandidateProjection::new(
+        candidate_id,
+        plan_id.to_string(),
+        format!("raw:{source_entity_id}"),
+        "overpass",
+        source_entity_id,
+        "outer",
+        CandidateCategory::Building,
+        CandidateDisplay::new(
+            title,
+            vec![
+                ("building".to_owned(), "school".to_owned()),
+                ("name".to_owned(), title.to_owned()),
+            ],
+        ),
+        CandidateShape::polygon(serde_json::json!([
+            [121.4, 31.2],
+            [121.5, 31.2],
+            [121.4, 31.3],
+            [121.4, 31.2]
+        ])),
+        CandidateValidation::Retained,
+        CandidateEligibility::Reviewable,
+    )
+}
+
+#[test]
+fn load_accepts_only_published_reviewable_projections_and_keeps_display_attributes() {
+    let mut db = Database::open_in_memory().expect("内存库可打开");
+    let plan_id = PlanId::generate();
+    let plan_key = plan_id.to_string();
+    db.write_raw_observations(&[RawObservation::new(
+        &plan_key,
+        CandidateCategory::Building,
+        "way/1",
+        serde_json::json!({ "tags": { "name": "原始观测名称" } }),
+        "overpass",
+    )])
+    .expect("原始观测写入");
+
+    assert_eq!(
+        ReviewWorkbench::load(&db, &plan_id)
+            .expect("只有原始观测也能进台")
+            .candidate_count(),
+        0,
+        "RawObservation 不能旁路候选投影进入 F5"
+    );
+
+    let batch = db.prepare_candidate_batch(&plan_key).expect("准备批次");
+    let reviewable = reviewable_projection(&plan_id, "overpass:way/1:outer", "way/1", "第一教学楼");
+    let mut isolated = reviewable_projection(&plan_id, "overpass:way/2:outer", "way/2", "隔离建筑");
+    isolated.eligibility = CandidateEligibility::Isolated;
+    isolated.isolation_reason = Some("self_intersecting".to_owned());
+    db.write_candidate_projections(&batch.id, &[reviewable, isolated])
+        .expect("投影写入");
+
+    assert_eq!(
+        ReviewWorkbench::load(&db, &plan_id)
+            .expect("未发布批次不影响进台")
+            .candidate_count(),
+        0,
+        "未发布批次不能进入 F5"
+    );
+
+    db.publish_candidate_batch(&batch.id).expect("发布批次");
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).expect("加载已发布候选");
+    assert_eq!(workbench.candidate_count(), 1, "Isolated 投影不能进入 F5");
+    let key = CandidateKey::new(CandidateCategory::Building, "overpass:way/1:outer");
+    workbench.highlight(&key).expect("按稳定 candidate_id 高亮");
+    let info = workbench.view().info_panel.expect("展示属性可见");
+    assert_eq!(info.title, "第一教学楼");
+    assert!(info
+        .tags
+        .contains(&("building".to_owned(), "school".to_owned())));
+    assert!(matches!(
+        workbench.highlight(&CandidateKey::new(CandidateCategory::Building, "way/1")),
+        Err(Error::CandidateNotFound(_))
+    ));
+}
+
+#[test]
+fn stable_candidate_id_roundtrips_through_session_seal_and_reload() {
+    let mut db = Database::open_in_memory().expect("内存库可打开");
+    let plan_id = PlanId::generate();
+    let batch = db
+        .prepare_candidate_batch(&plan_id.to_string())
+        .expect("准备批次");
+    db.write_candidate_projections(
+        &batch.id,
+        &[reviewable_projection(
+            &plan_id,
+            "overpass:way/1:outer",
+            "way/1",
+            "第一教学楼",
+        )],
+    )
+    .expect("投影写入");
+    db.publish_candidate_batch(&batch.id).expect("发布批次");
+    let stored = db
+        .get_current_candidate_projection(&plan_id.to_string(), "overpass:way/1:outer")
+        .expect("读取当前投影")
+        .expect("当前投影存在");
+    assert_eq!(stored.candidate_id, "overpass:way/1:outer");
+    assert_eq!(stored.source_entity_id, "way/1");
+    assert_ne!(stored.candidate_id, stored.source_entity_id);
+
+    let key = CandidateKey::new(CandidateCategory::Building, "overpass:way/1:outer");
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).expect("加载候选");
+    workbench
+        .submit(StateChange::single(key.clone(), ReviewState::Keep))
+        .expect("按 candidate_id 修改状态");
+    workbench
+        .toggle_selected(&key)
+        .expect("按 candidate_id 勾选");
+
+    let session_path =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("stable-candidate-session.json");
+    workbench.save_session(&session_path).expect("保存会话");
+    let mut resumed = ReviewWorkbench::load(&db, &plan_id).expect("重新加载候选");
+    resumed.restore_session(&session_path).expect("恢复会话");
+    assert_eq!(resumed.state_of(&key), Some(ReviewState::Keep));
+    assert_eq!(resumed.selected_count(), 1);
+
+    resumed.seal(&mut db).expect("按 candidate_id 封账");
+    let decisions = db.list_review_decisions(&plan_id.to_string()).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].entity_id, "overpass:way/1:outer");
+
+    let reloaded = ReviewWorkbench::load(&db, &plan_id).expect("封账后重新加载");
+    assert_eq!(reloaded.state_of(&key), Some(ReviewState::Keep));
+    assert_eq!(
+        reloaded.state_of(&CandidateKey::new(CandidateCategory::Building, "way/1")),
+        None,
+        "source_entity_id 不能冒充稳定 candidate_id"
+    );
 }
 
 #[test]
@@ -241,16 +419,18 @@ fn highlight_links_map_and_cards_both_ways() {
     let view = workbench.view();
     let highlighted_cards: Vec<_> = view.cards.iter().filter(|c| c.highlighted).collect();
     assert_eq!(highlighted_cards.len(), 1);
-    assert_eq!(highlighted_cards[0].entity_id, "way/b2");
+    assert_eq!(highlighted_cards[0].entity_id, "overpass:way/b2:outer");
     let highlighted_objects: Vec<_> = view.map_objects.iter().filter(|o| o.highlighted).collect();
     assert_eq!(highlighted_objects.len(), 1);
-    assert_eq!(highlighted_objects[0].entity_id, "way/b2");
+    assert_eq!(highlighted_objects[0].entity_id, "overpass:way/b2:outer");
 
     // 右栏信息面板展示高亮候选的详情（类别、标签、状态）
     let info = view.info_panel.expect("高亮时信息面板可见");
-    assert_eq!(info.title, "way/b2");
+    assert_eq!(info.title, "教学楼 2");
     assert_eq!(info.category_key, "collection.category_building");
-    assert!(info.tags.is_empty());
+    assert!(info
+        .tags
+        .contains(&("building".to_owned(), "school".to_owned())));
 
     workbench.clear_highlight();
     assert!(workbench.view().info_panel.is_none());
@@ -282,7 +462,7 @@ fn three_pane_view_reflects_active_category() {
     workbench.set_active_category(CandidateCategory::Water);
     let view = workbench.view();
     assert_eq!(view.cards.len(), 1);
-    assert_eq!(view.cards[0].title, "way/w0");
+    assert_eq!(view.cards[0].title, "游泳池");
 }
 
 #[test]
@@ -343,7 +523,7 @@ fn seal_batch_writes_back_and_freezes_review() {
         .unwrap();
     workbench
         .submit(StateChange::single(
-            CandidateKey::new(CandidateCategory::Road, "way/r0"),
+            CandidateKey::new(CandidateCategory::Road, "overpass:way/r0:outer"),
             ReviewState::Remove,
         ))
         .unwrap();

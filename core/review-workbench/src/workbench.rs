@@ -255,7 +255,7 @@ impl ReviewWorkbench {
             .iter()
             .map(|c| SessionEntry {
                 category: c.key.category,
-                entity_id: c.key.entity_id.clone(),
+                candidate_id: c.key.candidate_id.clone(),
                 state: c.state.to_identifier().to_owned(),
                 selected: c.selected,
             })
@@ -266,7 +266,7 @@ impl ReviewWorkbench {
     /// 恢复评审：从临时文件把状态对回内存。
     ///
     /// 方案 ID 不匹配时拒绝（防串档）；文件里对不上现有候选的条目安静跳过
-    ///（候选集以原始观测为事实来源）。
+    ///（候选集以 B2 已发布投影为事实来源）。
     pub fn restore_session(&mut self, path: &Path) -> Result<()> {
         self.ensure_not_sealed()?;
         let snapshot = SessionSnapshot::load_from_file(path)?;
@@ -278,7 +278,7 @@ impl ReviewWorkbench {
         }
         for entry in &snapshot.entries {
             let state = SessionSnapshot::parse_state(entry)?;
-            let key = CandidateKey::new(entry.category, entry.entity_id.clone());
+            let key = CandidateKey::new(entry.category, entry.candidate_id.clone());
             if let Some(candidate) = self.candidates.iter_mut().find(|c| c.key == key) {
                 candidate.state = state;
                 candidate.selected = entry.selected;
@@ -332,7 +332,7 @@ impl ReviewWorkbench {
                 ReviewDecision::new(
                     self.plan_id.clone(),
                     c.key.category,
-                    c.key.entity_id.clone(),
+                    c.key.candidate_id.clone(),
                     c.state,
                 )
             })
@@ -371,7 +371,7 @@ impl ReviewWorkbench {
             .iter()
             .filter(|c| c.key.category == self.active_category)
             .map(|c| CandidateCardView {
-                entity_id: c.key.entity_id.clone(),
+                entity_id: c.key.candidate_id.clone(),
                 title: c.title.clone(),
                 state: c.state,
                 state_key: state_text_key(c.state),
@@ -384,7 +384,7 @@ impl ReviewWorkbench {
             .candidates
             .iter()
             .map(|c| MapObjectView {
-                entity_id: c.key.entity_id.clone(),
+                entity_id: c.key.candidate_id.clone(),
                 category: c.key.category,
                 state: c.state,
                 highlighted: self.highlighted.as_ref() == Some(&c.key),

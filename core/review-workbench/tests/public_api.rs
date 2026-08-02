@@ -5,8 +5,8 @@
 //! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
 
 use data_persistence::{
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservation, RawObservationsApi,
+    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
+    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
 };
 use localization::{Language, Localization};
 use review_workbench::{
@@ -21,23 +21,39 @@ fn public_api_types_exist() {
     assert_eq!(BATCH_REMOVE_CONFIRM_THRESHOLD, 5);
 
     // CandidateKey / Candidate：复用 B1 的类别与三态枚举（不重新定义）
-    let key = CandidateKey::new(CandidateCategory::Building, "way/1");
-    assert_eq!(key.category, CandidateCategory::Building);
-    let observation = RawObservation::new(
+    let projection = CandidateProjection::new(
+        "overpass:way/1:outer",
         "plan",
-        CandidateCategory::Building,
-        "way/1",
-        serde_json::json!({ "tags": { "name": "教学楼" } }),
+        "raw-1",
         "overpass",
+        "way/1",
+        "outer",
+        CandidateCategory::Building,
+        CandidateDisplay::new(
+            "教学楼",
+            vec![
+                ("building".to_owned(), "school".to_owned()),
+                ("name".to_owned(), "教学楼".to_owned()),
+            ],
+        ),
+        CandidateShape::polygon(serde_json::json!([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0]
+        ])),
+        CandidateValidation::Retained,
+        CandidateEligibility::Reviewable,
     );
-    let candidate = Candidate::from_observation(&observation);
+    let key = CandidateKey::new(CandidateCategory::Building, &projection.candidate_id);
+    assert_eq!(key.category, CandidateCategory::Building);
+    assert_eq!(key.candidate_id, "overpass:way/1:outer");
+    let candidate = Candidate::from_projection(&projection);
+    assert_eq!(candidate.title, "教学楼");
     assert_eq!(candidate.state, ReviewState::Pending);
 
     // StateChange：明确的状态变更操作（B8 接口预留，ADR-0022）
-    let change = StateChange::single(
-        CandidateKey::new(CandidateCategory::Building, "candidate/way/1"),
-        ReviewState::Keep,
-    );
+    let change = StateChange::single(key.clone(), ReviewState::Keep);
     assert!(!change.needs_confirmation());
 
     // ReviewWorkbench：进台一次性读入（缝 4）
@@ -52,23 +68,8 @@ fn public_api_types_exist() {
     )])
     .unwrap();
     let batch = db.prepare_candidate_batch(&plan_id.to_string()).unwrap();
-    let projection = CandidateProjection::new(
-        "candidate/way/1",
-        plan_id.to_string(),
-        "raw",
-        "overpass",
-        "way/1",
-        "default",
-        CandidateCategory::Building,
-        CandidateShape::polygon(serde_json::json!([
-            [0.0, 0.0],
-            [1.0, 0.0],
-            [0.0, 1.0],
-            [0.0, 0.0]
-        ])),
-        CandidateValidation::Retained,
-        CandidateEligibility::Reviewable,
-    );
+    let mut projection = projection;
+    projection.plan_id = plan_id.to_string();
     db.write_candidate_projections(&batch.id, &[projection])
         .unwrap();
     db.publish_candidate_batch(&batch.id).unwrap();

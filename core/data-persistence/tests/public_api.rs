@@ -5,17 +5,18 @@
 //! 简单方式：检查所有公开类型可实例化、三组 trait 的关键行为可调用。
 
 use data_persistence::{
-    AppSettingKey, AppSettingsApi, CampusCrudApi, CandidateBatchStatus, CandidateEligibility,
-    CandidateProjection, CandidateProjectionsApi, CandidateShape, CandidateValidation, Database,
-    Error, PlanCrudApi, RawObservation, RawObservationsApi, ReviewDecision, ReviewDecisionsApi,
-    TrashApi, TrashItem, LATEST_SCHEMA_VERSION, TRASH_RETENTION_DAYS,
+    AppSettingKey, AppSettingsApi, CampusCrudApi, CandidateBatchStatus, CandidateDisplay,
+    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, Error, PlanCrudApi, RawObservation, RawObservationsApi,
+    ReviewDecision, ReviewDecisionsApi, TrashApi, TrashItem, LATEST_SCHEMA_VERSION,
+    TRASH_RETENTION_DAYS,
 };
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 #[test]
 fn public_api_types_exist() {
-    // T05：版本号升级到 3（新增校区锚点列）
-    assert_eq!(LATEST_SCHEMA_VERSION, 5);
+    // ADR-0040：版本号升级到 6（候选投影展示属性）
+    assert_eq!(LATEST_SCHEMA_VERSION, 6);
     assert_eq!(TRASH_RETENTION_DAYS, 30);
 
     // Database：打开即迁移到最新版本
@@ -61,6 +62,13 @@ fn public_api_types_exist() {
         "way/1",
         "outer",
         CandidateCategory::Building,
+        CandidateDisplay::new(
+            "第一教学楼",
+            vec![
+                ("building".to_owned(), "school".to_owned()),
+                ("name".to_owned(), "第一教学楼".to_owned()),
+            ],
+        ),
         CandidateShape::polygon(serde_json::json!([
             [121.4, 31.2],
             [121.5, 31.2],

@@ -1,7 +1,7 @@
 //! B2 数据持久化核心
 //!
 //! SQLite 数据库唯一入口：迁移脚本、原始观测表（数据粮仓）、
-//! 评审终态批量写回、校园级回收站。
+//! 候选投影、评审终态批量写回、校园级回收站。
 //!
 //! ## 架构边界（ADR-0002/0017）
 //!
@@ -14,6 +14,7 @@
 //!
 //! - [`Database`]：数据库句柄，打开即自动迁移到最新 schema 版本；
 //! - [`RawObservationsApi`]：原始观测写入与查询（缝 3，F4 采集当场落库）；
+//! - [`CandidateProjectionsApi`]：完整候选批次发布与 Reviewable 投影查询；
 //! - [`ReviewDecisionsApi`]：评审终态批量写回（缝 4，封账时一次性原子事务）；
 //! - [`TrashApi`]：回收站进站/恢复/到期清理/确认后永久删除（缝 2，F3 调用）；
 //! - [`CampusCrudApi`] / [`PlanCrudApi`] / [`AppSettingsApi`]：校区/方案 CRUD 与
@@ -38,8 +39,9 @@ mod review_decisions;
 mod trash;
 
 pub use candidate_projections::{
-    CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateEligibility,
-    CandidateProjection, CandidateProjectionsApi, CandidateShape, CandidateValidation,
+    CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateDisplay,
+    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation,
 };
 pub use database::Database;
 pub use entities::{RawObservation, ReviewDecision, TrashItem, TRASH_RETENTION_DAYS};

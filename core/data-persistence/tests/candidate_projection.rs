@@ -1,8 +1,8 @@
 //! B2 候选投影公开契约测试：只通过批次接口观察资格与可见性。
 
 use data_persistence::{
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservation, RawObservationsApi,
+    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
+    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
 };
 use shared_domain_types::CandidateCategory;
 
@@ -15,6 +15,10 @@ fn projection(id: &str, eligibility: CandidateEligibility) -> CandidateProjectio
         "way/1",
         "outer",
         CandidateCategory::Building,
+        CandidateDisplay::new(
+            "第一教学楼",
+            vec![("building".to_owned(), "school".to_owned())],
+        ),
         CandidateShape::polygon(serde_json::json!([
             [121.4, 31.2],
             [121.5, 31.2],

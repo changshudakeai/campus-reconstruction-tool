@@ -3,7 +3,7 @@
 //! ADR-0016：可随时暂停、保存项目、退出再回来继续。评审期间零写库
 //! （缝 4 契约），所以暂停进度不进 SQLite，而是序列化成 JSON 临时文件；
 //! 恢复时按候选标识逐条对回内存，文件里多出来的条目（候选集已变化）
-//! 安静跳过——原始观测才是事实来源。
+//! 安静跳过——已发布候选投影才是本次评审的事实来源。
 
 use serde::{Deserialize, Serialize};
 use shared_domain_types::{CandidateCategory, ReviewState};
@@ -12,15 +12,15 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 /// 会话快照文件格式版本（不兼容变更时递增，旧文件按损坏处理）
-const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 /// 快照里的一条候选状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SessionEntry {
     /// 实体类别
     pub(crate) category: CandidateCategory,
-    /// 实体 ID
-    pub(crate) entity_id: String,
+    /// B2 候选投影的稳定 ID
+    pub(crate) candidate_id: String,
     /// 三态标识符（B1 `ReviewState::to_identifier` 的取值）
     pub(crate) state: String,
     /// 复选框勾选状态
@@ -95,7 +95,7 @@ mod tests {
             CandidateCategory::Sports,
             vec![SessionEntry {
                 category: CandidateCategory::Building,
-                entity_id: "way/1".to_owned(),
+                candidate_id: "overpass:way/1:outer".to_owned(),
                 state: ReviewState::Keep.to_identifier().to_owned(),
                 selected: true,
             }],
@@ -115,7 +115,7 @@ mod tests {
     fn unknown_state_identifier_is_rejected() {
         let entry = SessionEntry {
             category: CandidateCategory::Other,
-            entity_id: "way/2".to_owned(),
+            candidate_id: "overpass:way/2:outer".to_owned(),
             state: "definitely-not-a-state".to_owned(),
             selected: false,
         };

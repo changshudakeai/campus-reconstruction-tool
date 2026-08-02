@@ -4,7 +4,7 @@
 # 本文件记录 F5 候选审核工作台的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 # 
-# 最后更新: 2026-07-26 (T06 实施)
+# 最后更新: 2026-08-01 (ADR-0040 候选身份与展示契约迁移)
 
 ## Constants
 
@@ -36,7 +36,7 @@ CANCEL_BUTTON = "app.cancel_button"
 
 ## Structures
 
-pub struct CandidateKey { pub category: CandidateCategory, pub entity_id: String }
+pub struct CandidateKey { pub category: CandidateCategory, pub candidate_id: String }
 pub struct Candidate { pub key: CandidateKey, pub title: String, pub tags: Vec<(String, String)>, pub state: ReviewState, pub selected: bool }
 pub struct StateChange { pub targets: Vec<CandidateKey>, pub to: ReviewState }
 pub struct ConfirmationRequest { pub title_key: &'static str, pub body_key: &'static str, pub count: usize, pub confirm_key: &'static str, pub cancel_key: &'static str }   #[non_exhaustive]
@@ -72,11 +72,11 @@ pub enum Error {
 ## Traits & Implementations
 
 impl CandidateKey {
-    pub fn new(category: CandidateCategory, entity_id: impl Into<String>) -> Self
+    pub fn new(category: CandidateCategory, candidate_id: impl Into<String>) -> Self
 }
 
 impl Candidate {
-    pub fn from_observation(observation: &RawObservation) -> Self
+    pub fn from_projection(projection: &CandidateProjection) -> Self
 }
 
 impl StateChange {

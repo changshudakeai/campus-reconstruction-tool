@@ -45,6 +45,25 @@ impl CandidateShape {
         }
     }
 }
+
+/// F5 展示候选所需的最小投影属性。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateDisplay {
+    /// 候选卡片标题。
+    pub title: String,
+    /// 用于展示的来源标签与属性。
+    pub tags: Vec<(String, String)>,
+}
+
+impl CandidateDisplay {
+    pub fn new(title: impl Into<String>, tags: Vec<(String, String)>) -> Self {
+        Self {
+            title: title.into(),
+            tags,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateProjection {
     pub candidate_id: String,
@@ -55,6 +74,7 @@ pub struct CandidateProjection {
     pub source_entity_id: String,
     pub geometry_part_id: String,
     pub category: CandidateCategory,
+    pub display: CandidateDisplay,
     pub shape: CandidateShape,
     pub validation: CandidateValidation,
     pub eligibility: CandidateEligibility,
@@ -77,6 +97,7 @@ impl CandidateProjection {
         source_entity_id: impl Into<String>,
         geometry_part_id: impl Into<String>,
         category: CandidateCategory,
+        display: CandidateDisplay,
         shape: CandidateShape,
         validation: CandidateValidation,
         eligibility: CandidateEligibility,
@@ -91,6 +112,7 @@ impl CandidateProjection {
             source_entity_id: source_entity_id.into(),
             geometry_part_id: geometry_part_id.into(),
             category,
+            display,
             shape,
             validation,
             eligibility,
@@ -180,7 +202,7 @@ impl CandidateProjectionsApi for Database {
         }
         let tx = self.conn.transaction()?;
         {
-            let mut statement=tx.prepare("INSERT INTO candidate_projections (collection_batch_id,candidate_id,plan_id,raw_observation_id,data_source_tag,source_entity_id,geometry_part_id,category,geometry_kind,normalized_geometry,validation,eligibility,isolation_reason,automatically_repaired,missing_in_latest_batch,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)")?;
+            let mut statement=tx.prepare("INSERT INTO candidate_projections (collection_batch_id,candidate_id,plan_id,raw_observation_id,data_source_tag,source_entity_id,geometry_part_id,category,display_title,display_tags,geometry_kind,normalized_geometry,validation,eligibility,isolation_reason,automatically_repaired,missing_in_latest_batch,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)")?;
             for projection in projections {
                 if projection.plan_id != batch.plan_id {
                     return Err(Error::CandidateBatchRejected(
@@ -196,6 +218,8 @@ impl CandidateProjectionsApi for Database {
                     projection.source_entity_id,
                     projection.geometry_part_id,
                     category_to_db(projection.category)?,
+                    projection.display.title,
+                    serde_json::to_string(&projection.display.tags)?,
                     projection.shape.kind,
                     projection.shape.coordinates.to_string(),
                     validation_db(projection.validation),
@@ -246,14 +270,14 @@ impl CandidateProjectionsApi for Database {
         &self,
         plan_id: &str,
     ) -> Result<Vec<CandidateProjection>> {
-        self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.eligibility='reviewable' ORDER BY p.candidate_id",params![plan_id])
+        self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.eligibility='reviewable' ORDER BY p.candidate_id",params![plan_id])
     }
     fn get_current_candidate_projection(
         &self,
         plan_id: &str,
         candidate_id: &str,
     ) -> Result<Option<CandidateProjection>> {
-        Ok(self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.candidate_id=?2",params![plan_id,candidate_id])?.into_iter().next())
+        Ok(self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.candidate_id=?2",params![plan_id,candidate_id])?.into_iter().next())
     }
     fn candidate_batch_summary(&self, batch_id: &str) -> Result<CandidateBatchSummary> {
         let batch = self.batch(batch_id)?;
@@ -285,18 +309,18 @@ impl Database {
 
     fn current_projections(&self, plan_id: &str) -> Result<Vec<CandidateProjection>> {
         self.read_projections(
-            "SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1",
+            "SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1",
             params![plan_id],
         )
     }
 }
 fn projection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CandidateProjection> {
-    let validation = match row.get::<_, String>(10)?.as_str() {
+    let validation = match row.get::<_, String>(12)?.as_str() {
         "retained" => CandidateValidation::Retained,
         "repaired" => CandidateValidation::Repaired,
         _ => CandidateValidation::Rejected,
     };
-    let eligibility = if row.get::<_, String>(11)? == "reviewable" {
+    let eligibility = if row.get::<_, String>(13)? == "reviewable" {
         CandidateEligibility::Reviewable
     } else {
         CandidateEligibility::Isolated
@@ -310,18 +334,23 @@ fn projection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CandidatePro
         source_entity_id: row.get(5)?,
         geometry_part_id: row.get(6)?,
         category: category_from_db(&row.get::<_, String>(7)?).map_err(to_sql_error)?,
+        display: CandidateDisplay {
+            title: row.get(8)?,
+            tags: serde_json::from_str(&row.get::<_, String>(9)?)
+                .map_err(|error| to_sql_error(Error::from(error)))?,
+        },
         shape: CandidateShape {
-            kind: row.get(8)?,
-            coordinates: serde_json::from_str(&row.get::<_, String>(9)?)
+            kind: row.get(10)?,
+            coordinates: serde_json::from_str(&row.get::<_, String>(11)?)
                 .map_err(|error| to_sql_error(Error::from(error)))?,
         },
         validation,
         eligibility,
-        isolation_reason: row.get(12)?,
-        automatically_repaired: row.get(13)?,
-        missing_in_latest_batch: row.get(14)?,
-        created_at: timestamp_from_db(&row.get::<_, String>(15)?).map_err(to_sql_error)?,
-        updated_at: timestamp_from_db(&row.get::<_, String>(16)?).map_err(to_sql_error)?,
+        isolation_reason: row.get(14)?,
+        automatically_repaired: row.get(15)?,
+        missing_in_latest_batch: row.get(16)?,
+        created_at: timestamp_from_db(&row.get::<_, String>(17)?).map_err(to_sql_error)?,
+        updated_at: timestamp_from_db(&row.get::<_, String>(18)?).map_err(to_sql_error)?,
     })
 }
 fn validation_db(value: CandidateValidation) -> &'static str {
