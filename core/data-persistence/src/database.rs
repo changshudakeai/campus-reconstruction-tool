@@ -59,9 +59,16 @@ mod tests {
     }
 
     #[test]
-    fn all_three_tables_exist_after_open() {
+    fn fresh_database_has_final_schema_without_dev_repair_artifacts() {
         let db = Database::open_in_memory().unwrap();
-        for table in ["raw_observations", "review_decisions", "trash"] {
+        for table in [
+            "raw_observations",
+            "review_decisions",
+            "trash",
+            "candidate_batches",
+            "candidate_projections",
+            "current_candidate_batches",
+        ] {
             let exists: bool = db
                 .conn
                 .query_row(
@@ -72,5 +79,43 @@ mod tests {
                 .unwrap();
             assert!(exists, "表 {table} 应在迁移后存在");
         }
+
+        let audit_exists: bool = db
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type='table' AND name='candidate_display_backfill_audit'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!audit_exists, "新装 schema 不应包含开发期回填审计表");
+
+        let projection_columns = table_columns(&db.conn, "candidate_projections");
+        assert!(projection_columns.contains(&("display_title".to_owned(), true, 0)));
+        assert!(projection_columns.contains(&("display_tags".to_owned(), true, 0)));
+
+        let decision_columns = table_columns(&db.conn, "review_decisions");
+        assert!(decision_columns.contains(&("plan_id".to_owned(), true, 1)));
+        assert!(decision_columns.contains(&("candidate_id".to_owned(), true, 2)));
+        assert!(decision_columns.contains(&("category".to_owned(), true, 0)));
+        assert!(!decision_columns
+            .iter()
+            .any(|(name, _, _)| name == "entity_id"));
+    }
+
+    fn table_columns(connection: &Connection, table: &str) -> Vec<(String, bool, usize)> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((row.get(1)?, row.get::<_, usize>(3)? == 1, row.get(5)?))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
     }
 }

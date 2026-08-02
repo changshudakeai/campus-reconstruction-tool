@@ -17,6 +17,8 @@ CREATE TABLE candidate_projections (
     source_entity_id TEXT NOT NULL,
     geometry_part_id TEXT NOT NULL,
     category TEXT NOT NULL CHECK(category IN ('Building', 'Road', 'Water', 'Vegetation', 'Sports', 'Other')),
+    display_title TEXT NOT NULL,
+    display_tags TEXT NOT NULL,
     geometry_kind TEXT NOT NULL CHECK(geometry_kind IN ('point', 'line_string', 'polygon')),
     normalized_geometry TEXT NOT NULL,
     validation TEXT NOT NULL CHECK(validation IN ('retained', 'repaired', 'rejected')),

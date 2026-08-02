@@ -1,3 +1,0 @@
--- Candidate display repair is implemented by the versioned Rust migration step.
--- Keeping this migration file makes the append-only schema history explicit while
--- allowing malformed or missing source evidence to return a precise migration error.
