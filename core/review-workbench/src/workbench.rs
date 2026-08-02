@@ -56,7 +56,7 @@ impl ReviewWorkbench {
 
         // 上一轮封账写回的终态对回内存（没有记录的保持"待定"）
         for decision in db.list_review_decisions(&plan_key)? {
-            let key = CandidateKey::new(decision.entity_type, decision.entity_id.clone());
+            let key = CandidateKey::new(decision.category, decision.candidate_id.clone());
             if let Some(candidate) = candidates.iter_mut().find(|c| c.key == key) {
                 candidate.state = decision.review_state;
             }
@@ -184,7 +184,7 @@ impl ReviewWorkbench {
         Ok(candidate.selected)
     }
 
-    /// 点"[全选]"：当前激活类别的所有卡片勾选
+    /// 点“全选”：当前激活类别的所有卡片勾选。
     pub fn select_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
@@ -194,7 +194,7 @@ impl ReviewWorkbench {
         }
     }
 
-    /// 点"[取消全选]"：当前激活类别的所有卡片取消勾选
+    /// 点“取消全选”：当前激活类别的所有卡片取消勾选。
     pub fn deselect_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
@@ -209,7 +209,7 @@ impl ReviewWorkbench {
         self.candidates.iter().filter(|c| c.selected).count()
     }
 
-    /// 勾选 ≥2 个时自动浮现"[全选][取消全选]"按钮（ADR-0016 交互规则）
+    /// 勾选 ≥2 个时自动浮现“全选/取消全选”按钮（ADR-0016 交互规则）。
     pub fn bulk_buttons_visible(&self) -> bool {
         self.selected_count() >= 2
     }
@@ -229,10 +229,12 @@ impl ReviewWorkbench {
     /// 高亮一个候选：点地图上的对象高亮对应卡片，点卡片高亮地图对象——
     /// 两个方向共用同一份高亮状态（双向联动）。
     pub fn highlight(&mut self, key: &CandidateKey) -> Result<()> {
-        if !self.candidates.iter().any(|c| &c.key == key) {
-            return Err(Error::CandidateNotFound(key.to_string()));
-        }
-        self.highlighted = Some(key.clone());
+        let candidate = self
+            .candidates
+            .iter()
+            .find(|candidate| &candidate.key == key)
+            .ok_or_else(|| Error::CandidateNotFound(key.to_string()))?;
+        self.highlighted = Some(candidate.key.clone());
         Ok(())
     }
 
@@ -254,7 +256,6 @@ impl ReviewWorkbench {
             .candidates
             .iter()
             .map(|c| SessionEntry {
-                category: c.key.category,
                 candidate_id: c.key.candidate_id.clone(),
                 state: c.state.to_identifier().to_owned(),
                 selected: c.selected,
@@ -278,13 +279,22 @@ impl ReviewWorkbench {
         }
         for entry in &snapshot.entries {
             let state = SessionSnapshot::parse_state(entry)?;
-            let key = CandidateKey::new(entry.category, entry.candidate_id.clone());
-            if let Some(candidate) = self.candidates.iter_mut().find(|c| c.key == key) {
+            if let Some(candidate) = self
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.key.candidate_id == entry.candidate_id)
+            {
                 candidate.state = state;
                 candidate.selected = entry.selected;
             }
         }
-        self.active_category = snapshot.active_category;
+        if self
+            .candidates
+            .iter()
+            .any(|candidate| candidate.key.category == snapshot.active_category)
+        {
+            self.active_category = snapshot.active_category;
+        }
         Ok(())
     }
 
@@ -371,7 +381,7 @@ impl ReviewWorkbench {
             .iter()
             .filter(|c| c.key.category == self.active_category)
             .map(|c| CandidateCardView {
-                entity_id: c.key.candidate_id.clone(),
+                candidate_id: c.key.candidate_id.clone(),
                 title: c.title.clone(),
                 state: c.state,
                 state_key: state_text_key(c.state),
@@ -384,7 +394,7 @@ impl ReviewWorkbench {
             .candidates
             .iter()
             .map(|c| MapObjectView {
-                entity_id: c.key.candidate_id.clone(),
+                candidate_id: c.key.candidate_id.clone(),
                 category: c.key.category,
                 state: c.state,
                 highlighted: self.highlighted.as_ref() == Some(&c.key),

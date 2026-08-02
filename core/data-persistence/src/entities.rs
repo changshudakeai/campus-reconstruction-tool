@@ -79,9 +79,9 @@ pub struct ReviewDecision {
     /// 所属方案 ID
     pub plan_id: String,
     /// 实体类别（六类别之一）
-    pub entity_type: CandidateCategory,
-    /// 实体 ID
-    pub entity_id: String,
+    pub category: CandidateCategory,
+    /// B2 候选投影的稳定 ID。
+    pub candidate_id: String,
     /// 评审三态
     pub review_state: ReviewState,
     /// 评审人（当前版本填 "system" 或留空）
@@ -94,14 +94,14 @@ impl ReviewDecision {
     /// 构建一条评审终态，时间戳取当前时刻
     pub fn new(
         plan_id: impl Into<String>,
-        entity_type: CandidateCategory,
-        entity_id: impl Into<String>,
+        category: CandidateCategory,
+        candidate_id: impl Into<String>,
         review_state: ReviewState,
     ) -> Self {
         Self {
             plan_id: plan_id.into(),
-            entity_type,
-            entity_id: entity_id.into(),
+            category,
+            candidate_id: candidate_id.into(),
             review_state,
             reviewer_id: None,
             updated_at: Utc::now(),

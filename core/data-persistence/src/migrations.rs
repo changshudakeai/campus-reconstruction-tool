@@ -4,7 +4,12 @@
 //! 每个版本在一个事务内完成（脚本 + schema_migrations 记账原子提交）。
 //! 已应用的版本跳过，重复打开数据库是幂等操作。
 
-use rusqlite::Connection;
+#![allow(
+    clippy::items_after_test_module,
+    reason = "existing migration-runner tests stay adjacent to the runner while the v8 repair helpers remain grouped below"
+)]
+
+use rusqlite::{params, Connection, Transaction};
 
 use crate::error::{Error, Result};
 
@@ -47,10 +52,20 @@ const MIGRATIONS: &[Migration] = &[
         description: "候选投影展示属性（ADR-0040）",
         sql: include_str!("../migrations/006_add_candidate_display.sql"),
     },
+    Migration {
+        version: 7,
+        description: "评审决定使用稳定候选 ID 作为唯一身份（ADR-0040）",
+        sql: include_str!("../migrations/007_review_decision_candidate_identity.sql"),
+    },
+    Migration {
+        version: 8,
+        description: "修复候选投影展示属性回填（ADR-0040）",
+        sql: include_str!("../migrations/008_repair_candidate_display.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 6;
+pub const LATEST_SCHEMA_VERSION: u32 = 8;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
@@ -79,6 +94,12 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
                 version: migration.version,
                 message: err.to_string(),
             })?;
+        if migration.version == 8 {
+            repair_candidate_display(&tx).map_err(|message| Error::MigrationFailed {
+                version: migration.version,
+                message,
+            })?;
+        }
         tx.execute(
             "INSERT INTO schema_migrations (version, description) VALUES (?1, ?2)",
             rusqlite::params![migration.version, migration.description],
@@ -189,5 +210,141 @@ mod tests {
         let tags: Vec<(String, String)> = serde_json::from_str(&tags).unwrap();
         assert!(tags.contains(&("building".to_owned(), "school".to_owned())));
         assert!(tags.contains(&("name".to_owned(), "第一教学楼".to_owned())));
+    }
+}
+
+fn repair_candidate_display(tx: &Transaction<'_>) -> std::result::Result<(), String> {
+    let mut statement = tx
+        .prepare(
+            "SELECT projection.collection_batch_id,
+                    projection.candidate_id,
+                    projection.raw_observation_id,
+                    projection.source_entity_id,
+                    projection.display_title,
+                    projection.display_tags,
+                    observation.source_data
+             FROM candidate_projections AS projection
+             LEFT JOIN raw_observations AS observation
+               ON observation.id = projection.raw_observation_id
+             ORDER BY projection.collection_batch_id, projection.candidate_id",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement.query([]).map_err(|error| error.to_string())?;
+    let mut updates = Vec::new();
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let batch_id: String = row.get(0).map_err(|error| error.to_string())?;
+        let candidate_id: String = row.get(1).map_err(|error| error.to_string())?;
+        let raw_observation_id: String = row.get(2).map_err(|error| error.to_string())?;
+        let source_entity_id: String = row.get(3).map_err(|error| error.to_string())?;
+        let display_title: String = row.get(4).map_err(|error| error.to_string())?;
+        let display_tags_json: String = row.get(5).map_err(|error| error.to_string())?;
+        let source_data_json: Option<String> = row.get(6).map_err(|error| error.to_string())?;
+        let source_data_json = source_data_json.ok_or_else(|| {
+            format!(
+                "candidate '{candidate_id}' references missing raw observation '{raw_observation_id}'"
+            )
+        })?;
+        let source_data: serde_json::Value = serde_json::from_str(&source_data_json).map_err(|error| {
+            format!(
+                "candidate '{candidate_id}' references invalid raw observation '{raw_observation_id}': {error}"
+            )
+        })?;
+        let current_tags: Vec<(String, String)> = serde_json::from_str(&display_tags_json)
+            .map_err(|error| {
+                format!("candidate '{candidate_id}' has invalid display tags: {error}")
+            })?;
+        let (legacy_title, mut legacy_tags) =
+            legacy_version_six_display(&source_data, &source_entity_id);
+        let (repaired_title, repaired_tags) = complete_display(&source_data, &source_entity_id);
+        let mut normalized_current_tags = current_tags;
+        normalized_current_tags.sort();
+        legacy_tags.sort();
+        if display_title == legacy_title && normalized_current_tags == legacy_tags {
+            updates.push((batch_id, candidate_id, repaired_title, repaired_tags));
+        }
+    }
+    drop(rows);
+    drop(statement);
+
+    let mut update = tx
+        .prepare(
+            "UPDATE candidate_projections
+             SET display_title = ?3, display_tags = ?4
+             WHERE collection_batch_id = ?1 AND candidate_id = ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    for (batch_id, candidate_id, title, tags) in updates {
+        let tags = serde_json::to_string(&tags).map_err(|error| error.to_string())?;
+        update
+            .execute(params![batch_id, candidate_id, title, tags])
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn legacy_version_six_display(
+    source_data: &serde_json::Value,
+    source_entity_id: &str,
+) -> (String, Vec<(String, String)>) {
+    let tags = source_data
+        .get("tags")
+        .and_then(serde_json::Value::as_object);
+    let title = tags
+        .and_then(|values| values.get("name"))
+        .and_then(scalar_text)
+        .unwrap_or_else(|| source_entity_id.to_owned());
+    let tags = tags
+        .into_iter()
+        .flat_map(|values| values.iter())
+        .filter_map(|(key, value)| scalar_text(value).map(|text| (key.clone(), text)))
+        .collect();
+    (title, tags)
+}
+
+fn complete_display(
+    source_data: &serde_json::Value,
+    source_entity_id: &str,
+) -> (String, Vec<(String, String)>) {
+    let top_level = source_data.as_object();
+    let nested_tags = top_level
+        .and_then(|values| values.get("tags"))
+        .and_then(serde_json::Value::as_object);
+    let title = top_level
+        .and_then(|values| values.get("name"))
+        .and_then(scalar_text)
+        .or_else(|| {
+            nested_tags
+                .and_then(|values| values.get("name"))
+                .and_then(scalar_text)
+        })
+        .unwrap_or_else(|| source_entity_id.to_owned());
+
+    let mut tags = Vec::new();
+    if let Some(values) = top_level {
+        for (key, value) in values {
+            if key != "tags" {
+                if let Some(text) = scalar_text(value) {
+                    tags.push((key.clone(), text));
+                }
+            }
+        }
+    }
+    if let Some(values) = nested_tags {
+        for (key, value) in values {
+            if let Some(text) = scalar_text(value) {
+                tags.push((key.clone(), text));
+            }
+        }
+    }
+    tags.sort();
+    (title, tags)
+}
+
+fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
     }
 }

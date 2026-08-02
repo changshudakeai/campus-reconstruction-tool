@@ -37,3 +37,4 @@ workspace = true
 localization = { workspace = true }
 # public-api snapshot testing
 public-api.workspace = true
+rustdoc-json.workspace = true

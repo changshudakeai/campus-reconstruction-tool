@@ -4,19 +4,47 @@
 //! 评审期间所有状态都在这里改，不碰数据库。
 //! 类别与三态复用 B1 共享领域类型（不重新定义）。
 
+use std::hash::{Hash, Hasher};
+
 use data_persistence::CandidateProjection;
 use shared_domain_types::{CandidateCategory, ReviewState};
 
-/// 候选对象的稳定标识：类别 + 候选投影 ID。
+/// 候选对象的稳定标识。
 ///
-/// `candidate_id` 区分数据源与几何分片，不等同于来源对象的
-/// `source_entity_id`（ADR-0040）。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// 身份只由 `candidate_id` 决定；category 是可随新投影变化的当前属性。
+/// `candidate_id` 区分数据源与几何分片，不等同于 `source_entity_id`（ADR-0040）。
+#[derive(Debug, Clone)]
 pub struct CandidateKey {
     /// 实体类别（六类别之一）
     pub category: CandidateCategory,
     /// B2 候选投影的稳定 ID。
     pub candidate_id: String,
+}
+
+impl PartialEq for CandidateKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.candidate_id == other.candidate_id
+    }
+}
+
+impl Eq for CandidateKey {}
+
+impl Hash for CandidateKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.candidate_id.hash(state);
+    }
+}
+
+impl PartialOrd for CandidateKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CandidateKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.candidate_id.cmp(&other.candidate_id)
+    }
 }
 
 impl CandidateKey {
@@ -38,7 +66,7 @@ impl std::fmt::Display for CandidateKey {
 /// 评审台上的一个候选（纯内存状态）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
-    /// 稳定标识（类别 + 实体 ID）
+    /// 稳定候选标识。
     pub key: CandidateKey,
     /// 卡片标题：原始标签里的 `name`，没有则回落到实体 ID
     pub title: String,

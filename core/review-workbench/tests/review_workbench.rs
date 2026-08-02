@@ -13,6 +13,7 @@ use review_workbench::{
     CommandOutcome, Error, ReviewWorkbench, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
+use std::collections::HashSet;
 
 /// 在内存库里种入原始观测与一批已发布的可评审候选：6 栋建筑 + 2 条道路 + 1 处水域。
 fn fixture() -> (Database, PlanId) {
@@ -123,6 +124,7 @@ fn reviewable_projection(
     candidate_id: &str,
     source_entity_id: &str,
     title: &str,
+    category: CandidateCategory,
 ) -> CandidateProjection {
     CandidateProjection::new(
         candidate_id,
@@ -131,7 +133,7 @@ fn reviewable_projection(
         "overpass",
         source_entity_id,
         "outer",
-        CandidateCategory::Building,
+        category,
         CandidateDisplay::new(
             title,
             vec![
@@ -148,6 +150,15 @@ fn reviewable_projection(
         CandidateValidation::Retained,
         CandidateEligibility::Reviewable,
     )
+}
+
+#[test]
+fn candidate_key_identity_is_only_the_stable_candidate_id() {
+    let building = CandidateKey::new(CandidateCategory::Building, "overpass:way/1:outer");
+    let road = CandidateKey::new(CandidateCategory::Road, "overpass:way/1:outer");
+
+    assert_eq!(building, road);
+    assert_eq!(HashSet::from([building, road]).len(), 1);
 }
 
 #[test]
@@ -173,8 +184,20 @@ fn load_accepts_only_published_reviewable_projections_and_keeps_display_attribut
     );
 
     let batch = db.prepare_candidate_batch(&plan_key).expect("准备批次");
-    let reviewable = reviewable_projection(&plan_id, "overpass:way/1:outer", "way/1", "第一教学楼");
-    let mut isolated = reviewable_projection(&plan_id, "overpass:way/2:outer", "way/2", "隔离建筑");
+    let reviewable = reviewable_projection(
+        &plan_id,
+        "overpass:way/1:outer",
+        "way/1",
+        "第一教学楼",
+        CandidateCategory::Building,
+    );
+    let mut isolated = reviewable_projection(
+        &plan_id,
+        "overpass:way/2:outer",
+        "way/2",
+        "隔离建筑",
+        CandidateCategory::Building,
+    );
     isolated.eligibility = CandidateEligibility::Isolated;
     isolated.isolation_reason = Some("self_intersecting".to_owned());
     db.write_candidate_projections(&batch.id, &[reviewable, isolated])
@@ -218,6 +241,7 @@ fn stable_candidate_id_roundtrips_through_session_seal_and_reload() {
             "overpass:way/1:outer",
             "way/1",
             "第一教学楼",
+            CandidateCategory::Building,
         )],
     )
     .expect("投影写入");
@@ -250,7 +274,7 @@ fn stable_candidate_id_roundtrips_through_session_seal_and_reload() {
     resumed.seal(&mut db).expect("按 candidate_id 封账");
     let decisions = db.list_review_decisions(&plan_id.to_string()).unwrap();
     assert_eq!(decisions.len(), 1);
-    assert_eq!(decisions[0].entity_id, "overpass:way/1:outer");
+    assert_eq!(decisions[0].candidate_id, "overpass:way/1:outer");
 
     let reloaded = ReviewWorkbench::load(&db, &plan_id).expect("封账后重新加载");
     assert_eq!(reloaded.state_of(&key), Some(ReviewState::Keep));
@@ -259,6 +283,87 @@ fn stable_candidate_id_roundtrips_through_session_seal_and_reload() {
         None,
         "source_entity_id 不能冒充稳定 candidate_id"
     );
+}
+
+#[test]
+fn category_change_keeps_one_candidate_identity_through_session_seal_and_reload() {
+    let mut db = Database::open_in_memory().unwrap();
+    let plan_id = PlanId::generate();
+    let candidate_id = "overpass:way/1:outer";
+    let building_key = CandidateKey::new(CandidateCategory::Building, candidate_id);
+    let road_key = CandidateKey::new(CandidateCategory::Road, candidate_id);
+
+    let first_batch = db.prepare_candidate_batch(&plan_id.to_string()).unwrap();
+    db.write_candidate_projections(
+        &first_batch.id,
+        &[reviewable_projection(
+            &plan_id,
+            candidate_id,
+            "way/1",
+            "第一教学楼",
+            CandidateCategory::Building,
+        )],
+    )
+    .unwrap();
+    db.publish_candidate_batch(&first_batch.id).unwrap();
+
+    let mut first_review = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    first_review
+        .submit(StateChange::single(building_key.clone(), ReviewState::Keep))
+        .unwrap();
+    first_review.toggle_selected(&building_key).unwrap();
+    first_review.highlight(&building_key).unwrap();
+    let session_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("candidate-category-change-session.json");
+    first_review.save_session(&session_path).unwrap();
+    first_review.seal(&mut db).unwrap();
+
+    let second_batch = db.prepare_candidate_batch(&plan_id.to_string()).unwrap();
+    db.write_candidate_projections(
+        &second_batch.id,
+        &[reviewable_projection(
+            &plan_id,
+            candidate_id,
+            "way/1",
+            "校园主路",
+            CandidateCategory::Road,
+        )],
+    )
+    .unwrap();
+    db.publish_candidate_batch(&second_batch.id).unwrap();
+
+    let mut second_review = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    assert_eq!(second_review.state_of(&road_key), Some(ReviewState::Keep));
+    second_review.restore_session(&session_path).unwrap();
+    assert_eq!(second_review.state_of(&road_key), Some(ReviewState::Keep));
+    assert_eq!(second_review.selected_count(), 1);
+    assert_eq!(second_review.active_category(), CandidateCategory::Road);
+    second_review.highlight(&building_key).unwrap();
+    assert_eq!(second_review.highlighted(), Some(&road_key));
+    let highlighted = second_review.view().map_objects;
+    assert_eq!(highlighted.len(), 1);
+    assert_eq!(highlighted[0].candidate_id, candidate_id);
+    assert_eq!(highlighted[0].category, CandidateCategory::Road);
+    assert!(highlighted[0].highlighted);
+    second_review
+        .submit(StateChange::single(
+            building_key.clone(),
+            ReviewState::Remove,
+        ))
+        .unwrap();
+    assert_eq!(second_review.state_of(&road_key), Some(ReviewState::Remove));
+    second_review.seal(&mut db).unwrap();
+
+    let decisions = db.list_review_decisions(&plan_id.to_string()).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].candidate_id, candidate_id);
+    assert_eq!(decisions[0].category, CandidateCategory::Road);
+    assert_eq!(decisions[0].review_state, ReviewState::Remove);
+
+    let reloaded = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    assert_eq!(reloaded.candidate_count(), 1);
+    assert_eq!(reloaded.state_of(&road_key), Some(ReviewState::Remove));
+    assert_eq!(reloaded.state_of(&building_key), Some(ReviewState::Remove));
 }
 
 #[test]
@@ -419,10 +524,10 @@ fn highlight_links_map_and_cards_both_ways() {
     let view = workbench.view();
     let highlighted_cards: Vec<_> = view.cards.iter().filter(|c| c.highlighted).collect();
     assert_eq!(highlighted_cards.len(), 1);
-    assert_eq!(highlighted_cards[0].entity_id, "overpass:way/b2:outer");
+    assert_eq!(highlighted_cards[0].candidate_id, "overpass:way/b2:outer");
     let highlighted_objects: Vec<_> = view.map_objects.iter().filter(|o| o.highlighted).collect();
     assert_eq!(highlighted_objects.len(), 1);
-    assert_eq!(highlighted_objects[0].entity_id, "overpass:way/b2:outer");
+    assert_eq!(highlighted_objects[0].candidate_id, "overpass:way/b2:outer");
 
     // 右栏信息面板展示高亮候选的详情（类别、标签、状态）
     let info = view.info_panel.expect("高亮时信息面板可见");

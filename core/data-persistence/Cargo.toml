@@ -38,3 +38,5 @@ workspace = true
 [dev-dependencies]
 # public-api snapshot testing (public API surface monitoring)
 public-api.workspace = true
+rustdoc-json.workspace = true
+tempfile.workspace = true

@@ -12,13 +12,11 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 /// 会话快照文件格式版本（不兼容变更时递增，旧文件按损坏处理）
-const SNAPSHOT_FORMAT_VERSION: u32 = 2;
+const SNAPSHOT_FORMAT_VERSION: u32 = 3;
 
 /// 快照里的一条候选状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SessionEntry {
-    /// 实体类别
-    pub(crate) category: CandidateCategory,
     /// B2 候选投影的稳定 ID
     pub(crate) candidate_id: String,
     /// 三态标识符（B1 `ReviewState::to_identifier` 的取值）
@@ -94,7 +92,6 @@ mod tests {
             "plan-1".to_owned(),
             CandidateCategory::Sports,
             vec![SessionEntry {
-                category: CandidateCategory::Building,
                 candidate_id: "overpass:way/1:outer".to_owned(),
                 state: ReviewState::Keep.to_identifier().to_owned(),
                 selected: true,
@@ -114,7 +111,6 @@ mod tests {
     #[test]
     fn unknown_state_identifier_is_rejected() {
         let entry = SessionEntry {
-            category: CandidateCategory::Other,
             candidate_id: "overpass:way/2:outer".to_owned(),
             state: "definitely-not-a-state".to_owned(),
             selected: false,

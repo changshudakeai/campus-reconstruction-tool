@@ -1,140 +1,687 @@
----
-# review-workbench Public API Snapshot
-# 
-# 本文件记录 F5 候选审核工作台的公开 API 结构
-# 任何增删都会在此文件中体现，PR diff 可见
-# 
-# 最后更新: 2026-08-01 (ADR-0040 候选身份与展示契约迁移)
-
-## Constants
-
-pub const BATCH_REMOVE_CONFIRM_THRESHOLD: usize = 5
-
-## Text Keys (pub mod text_keys)
-
-WORKBENCH_TITLE = "review.workbench_title"
-STATE_PENDING = "review.pending"
-STATE_KEEP = "review.keep"
-STATE_REJECT = "review.reject"
-STATE_LABEL = "review.state_label"
-SELECT_ALL = "review.select_all"
-DESELECT_ALL = "review.deselect_all"
-SET_KEEP = "review.set_keep"
-SET_REJECT = "review.set_reject"
-SET_PENDING = "review.set_pending"
-BATCH_REJECT_CONFIRM_TITLE = "review.batch_reject_confirm_title"
-BATCH_REJECT_CONFIRM_BODY = "review.batch_reject_confirm_body"
-SELECTED_COUNT = "review.selected_count"
-ITEM_COUNT = "review.item_count"
-PENDING_COUNT = "review.pending_count"
-INFO_CATEGORY = "review.info_category"
-INFO_TAGS = "review.info_tags"
-PAUSE = "review.pause"
-RESUME = "review.resume"
-CONFIRM_BUTTON = "app.confirm_button"
-CANCEL_BUTTON = "app.cancel_button"
-
-## Structures
-
-pub struct CandidateKey { pub category: CandidateCategory, pub candidate_id: String }
-pub struct Candidate { pub key: CandidateKey, pub title: String, pub tags: Vec<(String, String)>, pub state: ReviewState, pub selected: bool }
-pub struct StateChange { pub targets: Vec<CandidateKey>, pub to: ReviewState }
-pub struct ConfirmationRequest { pub title_key: &'static str, pub body_key: &'static str, pub count: usize, pub confirm_key: &'static str, pub cancel_key: &'static str }   #[non_exhaustive]
-pub struct ReviewWorkbench { .. }
-pub struct CategoryTabView { pub category: CandidateCategory, pub label_key: &'static str, pub count: usize, pub active: bool }   #[non_exhaustive]
-pub struct CandidateCardView { pub entity_id: String, pub title: String, pub state: ReviewState, pub state_key: &'static str, pub selected: bool, pub highlighted: bool }   #[non_exhaustive]
-pub struct MapObjectView { pub entity_id: String, pub category: CandidateCategory, pub state: ReviewState, pub highlighted: bool }   #[non_exhaustive]
-pub struct InfoPanelView { pub title: String, pub category_label_key: &'static str, pub category_key: &'static str, pub tags_label_key: &'static str, pub tags: Vec<(String, String)>, pub state_label_key: &'static str, pub state_key: &'static str }   #[non_exhaustive]
-pub struct WorkbenchView { pub title_key: &'static str, pub category_tabs: Vec<CategoryTabView>, pub cards: Vec<CandidateCardView>, pub map_objects: Vec<MapObjectView>, pub info_panel: Option<InfoPanelView>, pub selected_count: usize, pub bulk_buttons_visible: bool, pub pending_confirmation: Option<ConfirmationRequest>, pub sealed: bool }   #[non_exhaustive]
-pub struct ExportSummary { pub keep_by_category: Vec<(CandidateCategory, usize)>, pub keep_total: usize, pub pending_count: usize, pub remove_count: usize }   #[non_exhaustive]
-
-## Type Aliases
-
-pub type Result<T> = std::result::Result<T, Error>
-
-## Enums #[non_exhaustive]
-
-pub enum CommandOutcome {
-    Applied { changed: usize },
-    NeedsConfirmation(ConfirmationRequest),
-}
-
-pub enum Error {
-    Persistence(data_persistence::Error),
-    AlreadySealed,
-    CandidateNotFound(String),
-    NoPendingConfirmation,
-    SessionIo(String),
-    SessionCorrupt(String),
-    SessionPlanMismatch { expected: String, found: String },
-}
-
-## Traits & Implementations
-
-impl CandidateKey {
-    pub fn new(category: CandidateCategory, candidate_id: impl Into<String>) -> Self
-}
-
-impl Candidate {
-    pub fn from_projection(projection: &CandidateProjection) -> Self
-}
-
-impl StateChange {
-    pub fn single(target: CandidateKey, to: ReviewState) -> Self
-    pub fn batch(targets: Vec<CandidateKey>, to: ReviewState) -> Self
-    pub fn needs_confirmation(&self) -> bool
-}
-
-impl ReviewWorkbench {
-    // 缝 4：一次性读入
-    pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self>
-    pub fn plan_id(&self) -> &str
-    pub fn candidate_count(&self) -> usize
-    pub fn state_of(&self, key: &CandidateKey) -> Option<ReviewState>
-    // 状态变更操作（B8 接口预留）
-    pub fn submit(&mut self, change: StateChange) -> Result<CommandOutcome>
-    pub fn confirm_pending(&mut self) -> Result<CommandOutcome>
-    pub fn cancel_pending(&mut self) -> Result<()>
-    pub fn submit_for_selected(&mut self, to: ReviewState) -> Result<CommandOutcome>
-    // 勾选与全选浮现
-    pub fn toggle_selected(&mut self, key: &CandidateKey) -> Result<bool>
-    pub fn select_all_in_active_category(&mut self)
-    pub fn deselect_all_in_active_category(&mut self)
-    pub fn selected_count(&self) -> usize
-    pub fn bulk_buttons_visible(&self) -> bool
-    // 类别抽屉与高亮联动
-    pub fn set_active_category(&mut self, category: CandidateCategory)
-    pub fn active_category(&self) -> CandidateCategory
-    pub fn highlight(&mut self, key: &CandidateKey) -> Result<()>
-    pub fn clear_highlight(&mut self)
-    pub fn highlighted(&self) -> Option<&CandidateKey>
-    // 暂停/恢复
-    pub fn save_session(&self, path: &Path) -> Result<()>
-    pub fn restore_session(&mut self, path: &Path) -> Result<()>
-    // 封账（缝 4 批量写回 + 缝 5 汇总）
-    pub fn export_summary(&self) -> ExportSummary
-    pub fn seal(&mut self, db: &mut Database) -> Result<ExportSummary>
-    pub fn is_sealed(&self) -> bool
-    // 三栏布局视图
-    pub fn view(&self) -> WorkbenchView
-}
-
-impl std::fmt::Display for CandidateKey
-impl std::error::Error for Error            (thiserror)
-impl std::fmt::Display for Error            (thiserror)
-impl From<data_persistence::Error> for Error
-
-## Derives
-
-CandidateKey: Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord
-Candidate: Debug, Clone, PartialEq, Eq
-StateChange: Debug, Clone, PartialEq, Eq
-CommandOutcome: Debug, Clone, PartialEq, Eq
-ConfirmationRequest: Debug, Clone, PartialEq, Eq
-ReviewWorkbench: Debug, Clone
-CategoryTabView / CandidateCardView / MapObjectView / InfoPanelView / WorkbenchView / ExportSummary: Debug, Clone, PartialEq, Eq
-Error: Debug, thiserror::Error
-
----
-END OF PUBLIC API SNAPSHOT
----
+pub mod review_workbench
+pub mod review_workbench::text_keys
+pub const review_workbench::text_keys::BATCH_REJECT_CONFIRM_BODY: &str
+pub const review_workbench::text_keys::BATCH_REJECT_CONFIRM_TITLE: &str
+pub const review_workbench::text_keys::CANCEL_BUTTON: &str
+pub const review_workbench::text_keys::CONFIRM_BUTTON: &str
+pub const review_workbench::text_keys::DESELECT_ALL: &str
+pub const review_workbench::text_keys::INFO_CATEGORY: &str
+pub const review_workbench::text_keys::INFO_TAGS: &str
+pub const review_workbench::text_keys::ITEM_COUNT: &str
+pub const review_workbench::text_keys::PAUSE: &str
+pub const review_workbench::text_keys::PENDING_COUNT: &str
+pub const review_workbench::text_keys::RESUME: &str
+pub const review_workbench::text_keys::SELECTED_COUNT: &str
+pub const review_workbench::text_keys::SELECT_ALL: &str
+pub const review_workbench::text_keys::SET_KEEP: &str
+pub const review_workbench::text_keys::SET_PENDING: &str
+pub const review_workbench::text_keys::SET_REJECT: &str
+pub const review_workbench::text_keys::STATE_KEEP: &str
+pub const review_workbench::text_keys::STATE_LABEL: &str
+pub const review_workbench::text_keys::STATE_PENDING: &str
+pub const review_workbench::text_keys::STATE_REJECT: &str
+pub const review_workbench::text_keys::WORKBENCH_TITLE: &str
+#[non_exhaustive] pub enum review_workbench::CommandOutcome
+pub review_workbench::CommandOutcome::Applied
+pub review_workbench::CommandOutcome::Applied::changed: usize
+pub review_workbench::CommandOutcome::NeedsConfirmation(review_workbench::ConfirmationRequest)
+impl core::clone::Clone for review_workbench::CommandOutcome
+pub fn review_workbench::CommandOutcome::clone(&self) -> review_workbench::CommandOutcome
+impl core::cmp::Eq for review_workbench::CommandOutcome
+impl core::cmp::PartialEq for review_workbench::CommandOutcome
+pub fn review_workbench::CommandOutcome::eq(&self, other: &review_workbench::CommandOutcome) -> bool
+impl core::fmt::Debug for review_workbench::CommandOutcome
+pub fn review_workbench::CommandOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::CommandOutcome
+impl core::marker::Freeze for review_workbench::CommandOutcome
+impl core::marker::Send for review_workbench::CommandOutcome
+impl core::marker::Sync for review_workbench::CommandOutcome
+impl core::marker::Unpin for review_workbench::CommandOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::CommandOutcome
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::CommandOutcome
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::CommandOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::CommandOutcome::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::CommandOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::CommandOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::CommandOutcome where U: core::convert::From<T>
+pub fn review_workbench::CommandOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::CommandOutcome where U: core::convert::Into<T>
+pub type review_workbench::CommandOutcome::Error = core::convert::Infallible
+pub fn review_workbench::CommandOutcome::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::CommandOutcome where U: core::convert::TryFrom<T>
+pub type review_workbench::CommandOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::CommandOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::CommandOutcome where T: core::clone::Clone
+pub type review_workbench::CommandOutcome::Owned = T
+pub fn review_workbench::CommandOutcome::clone_into(&self, target: &mut T)
+pub fn review_workbench::CommandOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::CommandOutcome where T: 'static + ?core::marker::Sized
+pub fn review_workbench::CommandOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::CommandOutcome where T: ?core::marker::Sized
+pub fn review_workbench::CommandOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::CommandOutcome where T: ?core::marker::Sized
+pub fn review_workbench::CommandOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::CommandOutcome where T: core::clone::Clone
+pub unsafe fn review_workbench::CommandOutcome::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::CommandOutcome
+pub fn review_workbench::CommandOutcome::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::CommandOutcome
+pub type review_workbench::CommandOutcome::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::CommandOutcome where T: ?core::marker::Sized
+#[non_exhaustive] pub enum review_workbench::Error
+pub review_workbench::Error::AlreadySealed
+pub review_workbench::Error::CandidateNotFound(alloc::string::String)
+pub review_workbench::Error::NoPendingConfirmation
+pub review_workbench::Error::Persistence(data_persistence::error::Error)
+pub review_workbench::Error::SessionCorrupt(alloc::string::String)
+pub review_workbench::Error::SessionIo(alloc::string::String)
+pub review_workbench::Error::SessionPlanMismatch
+pub review_workbench::Error::SessionPlanMismatch::expected: alloc::string::String
+pub review_workbench::Error::SessionPlanMismatch::found: alloc::string::String
+impl core::convert::From<data_persistence::error::Error> for review_workbench::Error
+pub fn review_workbench::Error::from(source: data_persistence::error::Error) -> Self
+impl core::error::Error for review_workbench::Error
+pub fn review_workbench::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for review_workbench::Error
+pub fn review_workbench::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for review_workbench::Error
+pub fn review_workbench::Error::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for review_workbench::Error
+impl core::marker::Send for review_workbench::Error
+impl core::marker::Sync for review_workbench::Error
+impl core::marker::Unpin for review_workbench::Error
+impl !core::panic::unwind_safe::RefUnwindSafe for review_workbench::Error
+impl !core::panic::unwind_safe::UnwindSafe for review_workbench::Error
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::Error where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::Error where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::Error where U: core::convert::From<T>
+pub fn review_workbench::Error::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::Error where U: core::convert::Into<T>
+pub type review_workbench::Error::Error = core::convert::Infallible
+pub fn review_workbench::Error::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::Error where U: core::convert::TryFrom<T>
+pub type review_workbench::Error::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::Error::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for review_workbench::Error where T: core::fmt::Display + ?core::marker::Sized
+pub fn review_workbench::Error::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for review_workbench::Error where T: 'static + ?core::marker::Sized
+pub fn review_workbench::Error::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::Error where T: ?core::marker::Sized
+pub fn review_workbench::Error::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::Error where T: ?core::marker::Sized
+pub fn review_workbench::Error::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for review_workbench::Error
+pub fn review_workbench::Error::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::Error
+pub type review_workbench::Error::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::Error where T: ?core::marker::Sized
+pub struct review_workbench::Candidate
+pub review_workbench::Candidate::key: review_workbench::CandidateKey
+pub review_workbench::Candidate::selected: bool
+pub review_workbench::Candidate::state: shared_domain_types::review::ReviewState
+pub review_workbench::Candidate::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub review_workbench::Candidate::title: alloc::string::String
+impl review_workbench::Candidate
+pub fn review_workbench::Candidate::from_projection(projection: &data_persistence::candidate_projections::CandidateProjection) -> Self
+impl core::clone::Clone for review_workbench::Candidate
+pub fn review_workbench::Candidate::clone(&self) -> review_workbench::Candidate
+impl core::cmp::Eq for review_workbench::Candidate
+impl core::cmp::PartialEq for review_workbench::Candidate
+pub fn review_workbench::Candidate::eq(&self, other: &review_workbench::Candidate) -> bool
+impl core::fmt::Debug for review_workbench::Candidate
+pub fn review_workbench::Candidate::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::Candidate
+impl core::marker::Freeze for review_workbench::Candidate
+impl core::marker::Send for review_workbench::Candidate
+impl core::marker::Sync for review_workbench::Candidate
+impl core::marker::Unpin for review_workbench::Candidate
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::Candidate
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::Candidate
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::Candidate where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::Candidate::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::Candidate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::Candidate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::Candidate where U: core::convert::From<T>
+pub fn review_workbench::Candidate::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::Candidate where U: core::convert::Into<T>
+pub type review_workbench::Candidate::Error = core::convert::Infallible
+pub fn review_workbench::Candidate::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::Candidate where U: core::convert::TryFrom<T>
+pub type review_workbench::Candidate::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::Candidate::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::Candidate where T: core::clone::Clone
+pub type review_workbench::Candidate::Owned = T
+pub fn review_workbench::Candidate::clone_into(&self, target: &mut T)
+pub fn review_workbench::Candidate::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::Candidate where T: 'static + ?core::marker::Sized
+pub fn review_workbench::Candidate::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::Candidate where T: ?core::marker::Sized
+pub fn review_workbench::Candidate::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::Candidate where T: ?core::marker::Sized
+pub fn review_workbench::Candidate::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::Candidate where T: core::clone::Clone
+pub unsafe fn review_workbench::Candidate::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::Candidate
+pub fn review_workbench::Candidate::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::Candidate
+pub type review_workbench::Candidate::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::Candidate where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::CandidateCardView
+pub review_workbench::CandidateCardView::candidate_id: alloc::string::String
+pub review_workbench::CandidateCardView::highlighted: bool
+pub review_workbench::CandidateCardView::selected: bool
+pub review_workbench::CandidateCardView::state: shared_domain_types::review::ReviewState
+pub review_workbench::CandidateCardView::state_key: &'static str
+pub review_workbench::CandidateCardView::title: alloc::string::String
+impl core::clone::Clone for review_workbench::CandidateCardView
+pub fn review_workbench::CandidateCardView::clone(&self) -> review_workbench::CandidateCardView
+impl core::cmp::Eq for review_workbench::CandidateCardView
+impl core::cmp::PartialEq for review_workbench::CandidateCardView
+pub fn review_workbench::CandidateCardView::eq(&self, other: &review_workbench::CandidateCardView) -> bool
+impl core::fmt::Debug for review_workbench::CandidateCardView
+pub fn review_workbench::CandidateCardView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::CandidateCardView
+impl core::marker::Freeze for review_workbench::CandidateCardView
+impl core::marker::Send for review_workbench::CandidateCardView
+impl core::marker::Sync for review_workbench::CandidateCardView
+impl core::marker::Unpin for review_workbench::CandidateCardView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::CandidateCardView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::CandidateCardView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::CandidateCardView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::CandidateCardView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::CandidateCardView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::CandidateCardView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::CandidateCardView where U: core::convert::From<T>
+pub fn review_workbench::CandidateCardView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::CandidateCardView where U: core::convert::Into<T>
+pub type review_workbench::CandidateCardView::Error = core::convert::Infallible
+pub fn review_workbench::CandidateCardView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::CandidateCardView where U: core::convert::TryFrom<T>
+pub type review_workbench::CandidateCardView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::CandidateCardView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::CandidateCardView where T: core::clone::Clone
+pub type review_workbench::CandidateCardView::Owned = T
+pub fn review_workbench::CandidateCardView::clone_into(&self, target: &mut T)
+pub fn review_workbench::CandidateCardView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::CandidateCardView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::CandidateCardView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::CandidateCardView where T: ?core::marker::Sized
+pub fn review_workbench::CandidateCardView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::CandidateCardView where T: ?core::marker::Sized
+pub fn review_workbench::CandidateCardView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::CandidateCardView where T: core::clone::Clone
+pub unsafe fn review_workbench::CandidateCardView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::CandidateCardView
+pub fn review_workbench::CandidateCardView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::CandidateCardView
+pub type review_workbench::CandidateCardView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::CandidateCardView where T: ?core::marker::Sized
+pub struct review_workbench::CandidateKey
+pub review_workbench::CandidateKey::candidate_id: alloc::string::String
+pub review_workbench::CandidateKey::category: shared_domain_types::category::CandidateCategory
+impl review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::new(category: shared_domain_types::category::CandidateCategory, candidate_id: impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::clone(&self) -> review_workbench::CandidateKey
+impl core::cmp::Eq for review_workbench::CandidateKey
+impl core::cmp::Ord for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::cmp(&self, other: &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::eq(&self, other: &Self) -> bool
+impl core::cmp::PartialOrd for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::partial_cmp(&self, other: &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::hash<H: core::hash::Hasher>(&self, state: &mut H)
+impl core::marker::Freeze for review_workbench::CandidateKey
+impl core::marker::Send for review_workbench::CandidateKey
+impl core::marker::Sync for review_workbench::CandidateKey
+impl core::marker::Unpin for review_workbench::CandidateKey
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::CandidateKey
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::CandidateKey
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::CandidateKey where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::CandidateKey::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::CandidateKey where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::CandidateKey where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::CandidateKey where U: core::convert::From<T>
+pub fn review_workbench::CandidateKey::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::CandidateKey where U: core::convert::Into<T>
+pub type review_workbench::CandidateKey::Error = core::convert::Infallible
+pub fn review_workbench::CandidateKey::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::CandidateKey where U: core::convert::TryFrom<T>
+pub type review_workbench::CandidateKey::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::CandidateKey::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::CandidateKey where T: core::clone::Clone
+pub type review_workbench::CandidateKey::Owned = T
+pub fn review_workbench::CandidateKey::clone_into(&self, target: &mut T)
+pub fn review_workbench::CandidateKey::to_owned(&self) -> T
+impl<T> alloc::string::ToString for review_workbench::CandidateKey where T: core::fmt::Display + ?core::marker::Sized
+pub fn review_workbench::CandidateKey::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for review_workbench::CandidateKey where T: 'static + ?core::marker::Sized
+pub fn review_workbench::CandidateKey::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::CandidateKey where T: ?core::marker::Sized
+pub fn review_workbench::CandidateKey::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::CandidateKey where T: ?core::marker::Sized
+pub fn review_workbench::CandidateKey::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::CandidateKey where T: core::clone::Clone
+pub unsafe fn review_workbench::CandidateKey::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::CandidateKey
+pub fn review_workbench::CandidateKey::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::CandidateKey
+pub type review_workbench::CandidateKey::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::CandidateKey where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::CategoryTabView
+pub review_workbench::CategoryTabView::active: bool
+pub review_workbench::CategoryTabView::category: shared_domain_types::category::CandidateCategory
+pub review_workbench::CategoryTabView::count: usize
+pub review_workbench::CategoryTabView::label_key: &'static str
+impl core::clone::Clone for review_workbench::CategoryTabView
+pub fn review_workbench::CategoryTabView::clone(&self) -> review_workbench::CategoryTabView
+impl core::cmp::Eq for review_workbench::CategoryTabView
+impl core::cmp::PartialEq for review_workbench::CategoryTabView
+pub fn review_workbench::CategoryTabView::eq(&self, other: &review_workbench::CategoryTabView) -> bool
+impl core::fmt::Debug for review_workbench::CategoryTabView
+pub fn review_workbench::CategoryTabView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::CategoryTabView
+impl core::marker::Freeze for review_workbench::CategoryTabView
+impl core::marker::Send for review_workbench::CategoryTabView
+impl core::marker::Sync for review_workbench::CategoryTabView
+impl core::marker::Unpin for review_workbench::CategoryTabView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::CategoryTabView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::CategoryTabView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::CategoryTabView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::CategoryTabView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::CategoryTabView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::CategoryTabView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::CategoryTabView where U: core::convert::From<T>
+pub fn review_workbench::CategoryTabView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::CategoryTabView where U: core::convert::Into<T>
+pub type review_workbench::CategoryTabView::Error = core::convert::Infallible
+pub fn review_workbench::CategoryTabView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::CategoryTabView where U: core::convert::TryFrom<T>
+pub type review_workbench::CategoryTabView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::CategoryTabView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::CategoryTabView where T: core::clone::Clone
+pub type review_workbench::CategoryTabView::Owned = T
+pub fn review_workbench::CategoryTabView::clone_into(&self, target: &mut T)
+pub fn review_workbench::CategoryTabView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::CategoryTabView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::CategoryTabView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::CategoryTabView where T: ?core::marker::Sized
+pub fn review_workbench::CategoryTabView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::CategoryTabView where T: ?core::marker::Sized
+pub fn review_workbench::CategoryTabView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::CategoryTabView where T: core::clone::Clone
+pub unsafe fn review_workbench::CategoryTabView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::CategoryTabView
+pub fn review_workbench::CategoryTabView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::CategoryTabView
+pub type review_workbench::CategoryTabView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::CategoryTabView where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::ConfirmationRequest
+pub review_workbench::ConfirmationRequest::body_key: &'static str
+pub review_workbench::ConfirmationRequest::cancel_key: &'static str
+pub review_workbench::ConfirmationRequest::confirm_key: &'static str
+pub review_workbench::ConfirmationRequest::count: usize
+pub review_workbench::ConfirmationRequest::title_key: &'static str
+impl core::clone::Clone for review_workbench::ConfirmationRequest
+pub fn review_workbench::ConfirmationRequest::clone(&self) -> review_workbench::ConfirmationRequest
+impl core::cmp::Eq for review_workbench::ConfirmationRequest
+impl core::cmp::PartialEq for review_workbench::ConfirmationRequest
+pub fn review_workbench::ConfirmationRequest::eq(&self, other: &review_workbench::ConfirmationRequest) -> bool
+impl core::fmt::Debug for review_workbench::ConfirmationRequest
+pub fn review_workbench::ConfirmationRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::ConfirmationRequest
+impl core::marker::Freeze for review_workbench::ConfirmationRequest
+impl core::marker::Send for review_workbench::ConfirmationRequest
+impl core::marker::Sync for review_workbench::ConfirmationRequest
+impl core::marker::Unpin for review_workbench::ConfirmationRequest
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::ConfirmationRequest
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::ConfirmationRequest
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::ConfirmationRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::ConfirmationRequest::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::ConfirmationRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::ConfirmationRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::ConfirmationRequest where U: core::convert::From<T>
+pub fn review_workbench::ConfirmationRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::ConfirmationRequest where U: core::convert::Into<T>
+pub type review_workbench::ConfirmationRequest::Error = core::convert::Infallible
+pub fn review_workbench::ConfirmationRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::ConfirmationRequest where U: core::convert::TryFrom<T>
+pub type review_workbench::ConfirmationRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::ConfirmationRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::ConfirmationRequest where T: core::clone::Clone
+pub type review_workbench::ConfirmationRequest::Owned = T
+pub fn review_workbench::ConfirmationRequest::clone_into(&self, target: &mut T)
+pub fn review_workbench::ConfirmationRequest::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::ConfirmationRequest where T: 'static + ?core::marker::Sized
+pub fn review_workbench::ConfirmationRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::ConfirmationRequest where T: ?core::marker::Sized
+pub fn review_workbench::ConfirmationRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::ConfirmationRequest where T: ?core::marker::Sized
+pub fn review_workbench::ConfirmationRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::ConfirmationRequest where T: core::clone::Clone
+pub unsafe fn review_workbench::ConfirmationRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::ConfirmationRequest
+pub fn review_workbench::ConfirmationRequest::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::ConfirmationRequest
+pub type review_workbench::ConfirmationRequest::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::ConfirmationRequest where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::ExportSummary
+pub review_workbench::ExportSummary::keep_by_category: alloc::vec::Vec<(shared_domain_types::category::CandidateCategory, usize)>
+pub review_workbench::ExportSummary::keep_total: usize
+pub review_workbench::ExportSummary::pending_count: usize
+pub review_workbench::ExportSummary::remove_count: usize
+impl core::clone::Clone for review_workbench::ExportSummary
+pub fn review_workbench::ExportSummary::clone(&self) -> review_workbench::ExportSummary
+impl core::cmp::Eq for review_workbench::ExportSummary
+impl core::cmp::PartialEq for review_workbench::ExportSummary
+pub fn review_workbench::ExportSummary::eq(&self, other: &review_workbench::ExportSummary) -> bool
+impl core::fmt::Debug for review_workbench::ExportSummary
+pub fn review_workbench::ExportSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::ExportSummary
+impl core::marker::Freeze for review_workbench::ExportSummary
+impl core::marker::Send for review_workbench::ExportSummary
+impl core::marker::Sync for review_workbench::ExportSummary
+impl core::marker::Unpin for review_workbench::ExportSummary
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::ExportSummary
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::ExportSummary
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::ExportSummary where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::ExportSummary::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::ExportSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::ExportSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::ExportSummary where U: core::convert::From<T>
+pub fn review_workbench::ExportSummary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::ExportSummary where U: core::convert::Into<T>
+pub type review_workbench::ExportSummary::Error = core::convert::Infallible
+pub fn review_workbench::ExportSummary::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::ExportSummary where U: core::convert::TryFrom<T>
+pub type review_workbench::ExportSummary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::ExportSummary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::ExportSummary where T: core::clone::Clone
+pub type review_workbench::ExportSummary::Owned = T
+pub fn review_workbench::ExportSummary::clone_into(&self, target: &mut T)
+pub fn review_workbench::ExportSummary::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::ExportSummary where T: 'static + ?core::marker::Sized
+pub fn review_workbench::ExportSummary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::ExportSummary where T: ?core::marker::Sized
+pub fn review_workbench::ExportSummary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::ExportSummary where T: ?core::marker::Sized
+pub fn review_workbench::ExportSummary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::ExportSummary where T: core::clone::Clone
+pub unsafe fn review_workbench::ExportSummary::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::ExportSummary
+pub fn review_workbench::ExportSummary::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::ExportSummary
+pub type review_workbench::ExportSummary::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::ExportSummary where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::InfoPanelView
+pub review_workbench::InfoPanelView::category_key: &'static str
+pub review_workbench::InfoPanelView::category_label_key: &'static str
+pub review_workbench::InfoPanelView::state_key: &'static str
+pub review_workbench::InfoPanelView::state_label_key: &'static str
+pub review_workbench::InfoPanelView::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub review_workbench::InfoPanelView::tags_label_key: &'static str
+pub review_workbench::InfoPanelView::title: alloc::string::String
+impl core::clone::Clone for review_workbench::InfoPanelView
+pub fn review_workbench::InfoPanelView::clone(&self) -> review_workbench::InfoPanelView
+impl core::cmp::Eq for review_workbench::InfoPanelView
+impl core::cmp::PartialEq for review_workbench::InfoPanelView
+pub fn review_workbench::InfoPanelView::eq(&self, other: &review_workbench::InfoPanelView) -> bool
+impl core::fmt::Debug for review_workbench::InfoPanelView
+pub fn review_workbench::InfoPanelView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::InfoPanelView
+impl core::marker::Freeze for review_workbench::InfoPanelView
+impl core::marker::Send for review_workbench::InfoPanelView
+impl core::marker::Sync for review_workbench::InfoPanelView
+impl core::marker::Unpin for review_workbench::InfoPanelView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::InfoPanelView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::InfoPanelView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::InfoPanelView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::InfoPanelView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::InfoPanelView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::InfoPanelView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::InfoPanelView where U: core::convert::From<T>
+pub fn review_workbench::InfoPanelView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::InfoPanelView where U: core::convert::Into<T>
+pub type review_workbench::InfoPanelView::Error = core::convert::Infallible
+pub fn review_workbench::InfoPanelView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::InfoPanelView where U: core::convert::TryFrom<T>
+pub type review_workbench::InfoPanelView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::InfoPanelView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::InfoPanelView where T: core::clone::Clone
+pub type review_workbench::InfoPanelView::Owned = T
+pub fn review_workbench::InfoPanelView::clone_into(&self, target: &mut T)
+pub fn review_workbench::InfoPanelView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::InfoPanelView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::InfoPanelView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::InfoPanelView where T: ?core::marker::Sized
+pub fn review_workbench::InfoPanelView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::InfoPanelView where T: ?core::marker::Sized
+pub fn review_workbench::InfoPanelView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::InfoPanelView where T: core::clone::Clone
+pub unsafe fn review_workbench::InfoPanelView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::InfoPanelView
+pub fn review_workbench::InfoPanelView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::InfoPanelView
+pub type review_workbench::InfoPanelView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::InfoPanelView where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::MapObjectView
+pub review_workbench::MapObjectView::candidate_id: alloc::string::String
+pub review_workbench::MapObjectView::category: shared_domain_types::category::CandidateCategory
+pub review_workbench::MapObjectView::highlighted: bool
+pub review_workbench::MapObjectView::state: shared_domain_types::review::ReviewState
+impl core::clone::Clone for review_workbench::MapObjectView
+pub fn review_workbench::MapObjectView::clone(&self) -> review_workbench::MapObjectView
+impl core::cmp::Eq for review_workbench::MapObjectView
+impl core::cmp::PartialEq for review_workbench::MapObjectView
+pub fn review_workbench::MapObjectView::eq(&self, other: &review_workbench::MapObjectView) -> bool
+impl core::fmt::Debug for review_workbench::MapObjectView
+pub fn review_workbench::MapObjectView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::MapObjectView
+impl core::marker::Freeze for review_workbench::MapObjectView
+impl core::marker::Send for review_workbench::MapObjectView
+impl core::marker::Sync for review_workbench::MapObjectView
+impl core::marker::Unpin for review_workbench::MapObjectView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::MapObjectView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::MapObjectView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::MapObjectView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::MapObjectView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::MapObjectView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::MapObjectView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::MapObjectView where U: core::convert::From<T>
+pub fn review_workbench::MapObjectView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::MapObjectView where U: core::convert::Into<T>
+pub type review_workbench::MapObjectView::Error = core::convert::Infallible
+pub fn review_workbench::MapObjectView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::MapObjectView where U: core::convert::TryFrom<T>
+pub type review_workbench::MapObjectView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::MapObjectView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::MapObjectView where T: core::clone::Clone
+pub type review_workbench::MapObjectView::Owned = T
+pub fn review_workbench::MapObjectView::clone_into(&self, target: &mut T)
+pub fn review_workbench::MapObjectView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::MapObjectView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::MapObjectView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::MapObjectView where T: ?core::marker::Sized
+pub fn review_workbench::MapObjectView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::MapObjectView where T: ?core::marker::Sized
+pub fn review_workbench::MapObjectView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::MapObjectView where T: core::clone::Clone
+pub unsafe fn review_workbench::MapObjectView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::MapObjectView
+pub fn review_workbench::MapObjectView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::MapObjectView
+pub type review_workbench::MapObjectView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::MapObjectView where T: ?core::marker::Sized
+pub struct review_workbench::ReviewWorkbench
+impl review_workbench::ReviewWorkbench
+pub fn review_workbench::ReviewWorkbench::active_category(&self) -> shared_domain_types::category::CandidateCategory
+pub fn review_workbench::ReviewWorkbench::bulk_buttons_visible(&self) -> bool
+pub fn review_workbench::ReviewWorkbench::cancel_pending(&mut self) -> review_workbench::Result<()>
+pub fn review_workbench::ReviewWorkbench::candidate_count(&self) -> usize
+pub fn review_workbench::ReviewWorkbench::clear_highlight(&mut self)
+pub fn review_workbench::ReviewWorkbench::confirm_pending(&mut self) -> review_workbench::Result<review_workbench::CommandOutcome>
+pub fn review_workbench::ReviewWorkbench::deselect_all_in_active_category(&mut self)
+pub fn review_workbench::ReviewWorkbench::export_summary(&self) -> review_workbench::ExportSummary
+pub fn review_workbench::ReviewWorkbench::highlight(&mut self, key: &review_workbench::CandidateKey) -> review_workbench::Result<()>
+pub fn review_workbench::ReviewWorkbench::highlighted(&self) -> core::option::Option<&review_workbench::CandidateKey>
+pub fn review_workbench::ReviewWorkbench::is_sealed(&self) -> bool
+pub fn review_workbench::ReviewWorkbench::load(db: &data_persistence::database::Database, plan_id: &shared_domain_types::id::PlanId) -> review_workbench::Result<Self>
+pub fn review_workbench::ReviewWorkbench::plan_id(&self) -> &str
+pub fn review_workbench::ReviewWorkbench::restore_session(&mut self, path: &std::path::Path) -> review_workbench::Result<()>
+pub fn review_workbench::ReviewWorkbench::save_session(&self, path: &std::path::Path) -> review_workbench::Result<()>
+pub fn review_workbench::ReviewWorkbench::seal(&mut self, db: &mut data_persistence::database::Database) -> review_workbench::Result<review_workbench::ExportSummary>
+pub fn review_workbench::ReviewWorkbench::select_all_in_active_category(&mut self)
+pub fn review_workbench::ReviewWorkbench::selected_count(&self) -> usize
+pub fn review_workbench::ReviewWorkbench::set_active_category(&mut self, category: shared_domain_types::category::CandidateCategory)
+pub fn review_workbench::ReviewWorkbench::state_of(&self, key: &review_workbench::CandidateKey) -> core::option::Option<shared_domain_types::review::ReviewState>
+pub fn review_workbench::ReviewWorkbench::submit(&mut self, change: review_workbench::StateChange) -> review_workbench::Result<review_workbench::CommandOutcome>
+pub fn review_workbench::ReviewWorkbench::submit_for_selected(&mut self, to: shared_domain_types::review::ReviewState) -> review_workbench::Result<review_workbench::CommandOutcome>
+pub fn review_workbench::ReviewWorkbench::toggle_selected(&mut self, key: &review_workbench::CandidateKey) -> review_workbench::Result<bool>
+pub fn review_workbench::ReviewWorkbench::view(&self) -> review_workbench::WorkbenchView
+impl core::clone::Clone for review_workbench::ReviewWorkbench
+pub fn review_workbench::ReviewWorkbench::clone(&self) -> review_workbench::ReviewWorkbench
+impl core::fmt::Debug for review_workbench::ReviewWorkbench
+pub fn review_workbench::ReviewWorkbench::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for review_workbench::ReviewWorkbench
+impl core::marker::Send for review_workbench::ReviewWorkbench
+impl core::marker::Sync for review_workbench::ReviewWorkbench
+impl core::marker::Unpin for review_workbench::ReviewWorkbench
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::ReviewWorkbench
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::ReviewWorkbench
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::ReviewWorkbench where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::ReviewWorkbench where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::ReviewWorkbench where U: core::convert::From<T>
+pub fn review_workbench::ReviewWorkbench::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::ReviewWorkbench where U: core::convert::Into<T>
+pub type review_workbench::ReviewWorkbench::Error = core::convert::Infallible
+pub fn review_workbench::ReviewWorkbench::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::ReviewWorkbench where U: core::convert::TryFrom<T>
+pub type review_workbench::ReviewWorkbench::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::ReviewWorkbench::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::ReviewWorkbench where T: core::clone::Clone
+pub type review_workbench::ReviewWorkbench::Owned = T
+pub fn review_workbench::ReviewWorkbench::clone_into(&self, target: &mut T)
+pub fn review_workbench::ReviewWorkbench::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::ReviewWorkbench where T: 'static + ?core::marker::Sized
+pub fn review_workbench::ReviewWorkbench::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::ReviewWorkbench where T: ?core::marker::Sized
+pub fn review_workbench::ReviewWorkbench::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::ReviewWorkbench where T: ?core::marker::Sized
+pub fn review_workbench::ReviewWorkbench::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::ReviewWorkbench where T: core::clone::Clone
+pub unsafe fn review_workbench::ReviewWorkbench::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::ReviewWorkbench
+pub fn review_workbench::ReviewWorkbench::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::ReviewWorkbench
+pub type review_workbench::ReviewWorkbench::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::ReviewWorkbench where T: ?core::marker::Sized
+pub struct review_workbench::StateChange
+pub review_workbench::StateChange::targets: alloc::vec::Vec<review_workbench::CandidateKey>
+pub review_workbench::StateChange::to: shared_domain_types::review::ReviewState
+impl review_workbench::StateChange
+pub fn review_workbench::StateChange::batch(targets: alloc::vec::Vec<review_workbench::CandidateKey>, to: shared_domain_types::review::ReviewState) -> Self
+pub fn review_workbench::StateChange::needs_confirmation(&self) -> bool
+pub fn review_workbench::StateChange::single(target: review_workbench::CandidateKey, to: shared_domain_types::review::ReviewState) -> Self
+impl core::clone::Clone for review_workbench::StateChange
+pub fn review_workbench::StateChange::clone(&self) -> review_workbench::StateChange
+impl core::cmp::Eq for review_workbench::StateChange
+impl core::cmp::PartialEq for review_workbench::StateChange
+pub fn review_workbench::StateChange::eq(&self, other: &review_workbench::StateChange) -> bool
+impl core::fmt::Debug for review_workbench::StateChange
+pub fn review_workbench::StateChange::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::StateChange
+impl core::marker::Freeze for review_workbench::StateChange
+impl core::marker::Send for review_workbench::StateChange
+impl core::marker::Sync for review_workbench::StateChange
+impl core::marker::Unpin for review_workbench::StateChange
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::StateChange
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::StateChange
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::StateChange where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::StateChange::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::StateChange where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::StateChange where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::StateChange where U: core::convert::From<T>
+pub fn review_workbench::StateChange::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::StateChange where U: core::convert::Into<T>
+pub type review_workbench::StateChange::Error = core::convert::Infallible
+pub fn review_workbench::StateChange::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::StateChange where U: core::convert::TryFrom<T>
+pub type review_workbench::StateChange::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::StateChange::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::StateChange where T: core::clone::Clone
+pub type review_workbench::StateChange::Owned = T
+pub fn review_workbench::StateChange::clone_into(&self, target: &mut T)
+pub fn review_workbench::StateChange::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::StateChange where T: 'static + ?core::marker::Sized
+pub fn review_workbench::StateChange::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::StateChange where T: ?core::marker::Sized
+pub fn review_workbench::StateChange::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::StateChange where T: ?core::marker::Sized
+pub fn review_workbench::StateChange::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::StateChange where T: core::clone::Clone
+pub unsafe fn review_workbench::StateChange::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::StateChange
+pub fn review_workbench::StateChange::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::StateChange
+pub type review_workbench::StateChange::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::StateChange where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::WorkbenchView
+pub review_workbench::WorkbenchView::bulk_buttons_visible: bool
+pub review_workbench::WorkbenchView::cards: alloc::vec::Vec<review_workbench::CandidateCardView>
+pub review_workbench::WorkbenchView::category_tabs: alloc::vec::Vec<review_workbench::CategoryTabView>
+pub review_workbench::WorkbenchView::info_panel: core::option::Option<review_workbench::InfoPanelView>
+pub review_workbench::WorkbenchView::map_objects: alloc::vec::Vec<review_workbench::MapObjectView>
+pub review_workbench::WorkbenchView::pending_confirmation: core::option::Option<review_workbench::ConfirmationRequest>
+pub review_workbench::WorkbenchView::sealed: bool
+pub review_workbench::WorkbenchView::selected_count: usize
+pub review_workbench::WorkbenchView::title_key: &'static str
+impl core::clone::Clone for review_workbench::WorkbenchView
+pub fn review_workbench::WorkbenchView::clone(&self) -> review_workbench::WorkbenchView
+impl core::cmp::Eq for review_workbench::WorkbenchView
+impl core::cmp::PartialEq for review_workbench::WorkbenchView
+pub fn review_workbench::WorkbenchView::eq(&self, other: &review_workbench::WorkbenchView) -> bool
+impl core::fmt::Debug for review_workbench::WorkbenchView
+pub fn review_workbench::WorkbenchView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::WorkbenchView
+impl core::marker::Freeze for review_workbench::WorkbenchView
+impl core::marker::Send for review_workbench::WorkbenchView
+impl core::marker::Sync for review_workbench::WorkbenchView
+impl core::marker::Unpin for review_workbench::WorkbenchView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::WorkbenchView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::WorkbenchView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::WorkbenchView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::WorkbenchView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::WorkbenchView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::WorkbenchView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::WorkbenchView where U: core::convert::From<T>
+pub fn review_workbench::WorkbenchView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::WorkbenchView where U: core::convert::Into<T>
+pub type review_workbench::WorkbenchView::Error = core::convert::Infallible
+pub fn review_workbench::WorkbenchView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::WorkbenchView where U: core::convert::TryFrom<T>
+pub type review_workbench::WorkbenchView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::WorkbenchView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::WorkbenchView where T: core::clone::Clone
+pub type review_workbench::WorkbenchView::Owned = T
+pub fn review_workbench::WorkbenchView::clone_into(&self, target: &mut T)
+pub fn review_workbench::WorkbenchView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::WorkbenchView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::WorkbenchView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::WorkbenchView where T: ?core::marker::Sized
+pub fn review_workbench::WorkbenchView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::WorkbenchView where T: ?core::marker::Sized
+pub fn review_workbench::WorkbenchView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::WorkbenchView where T: core::clone::Clone
+pub unsafe fn review_workbench::WorkbenchView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::WorkbenchView
+pub fn review_workbench::WorkbenchView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::WorkbenchView
+pub type review_workbench::WorkbenchView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::WorkbenchView where T: ?core::marker::Sized
+pub const review_workbench::BATCH_REMOVE_CONFIRM_THRESHOLD: usize
+pub type review_workbench::Result<T> = core::result::Result<T, review_workbench::Error>
