@@ -192,7 +192,7 @@ fn version_contract(
         _ => {
             return Err(Error::Version(VersionError::Unsupported {
                 requested: requested.to_owned(),
-            }))
+            }));
         }
     };
     if material_table.minecraft_version != contract.material_version {
@@ -252,6 +252,14 @@ impl BoundaryExportUseCase {
             return Err(Error::Boundary(BoundaryError::NotConfirmed));
         }
         let contract = version_contract(request, &self.material_table)?;
+        self.material_table
+            .validate_configured_blocks()
+            .map_err(|error| {
+                Error::Version(VersionError::InvalidMaterialTable {
+                    version: self.material_table.minecraft_version.to_string(),
+                    detail: error.to_string(),
+                })
+            })?;
         validate_targets(request, self.file_system.as_ref())?;
 
         // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
@@ -413,20 +421,20 @@ impl BoundaryExportPort {
         if self.active.swap(true, Ordering::SeqCst) {
             return Err(Error::InvalidState("导出进行中，不接受新的导出请求"));
         }
-        let request = match self.input.load_request() {
-            Ok(request) => request,
-            Err(error) => {
-                self.active.store(false, Ordering::SeqCst);
-                return Err(error);
-            }
-        };
         let progress = ProgressTracker::new();
         let worker_progress = progress.clone();
         let use_case = Arc::clone(&self.use_case);
+        let input = Arc::clone(&self.input);
         let active = Arc::clone(&self.active);
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = use_case.export(&request, &worker_progress);
+            let result = match input.load_request() {
+                Ok(request) => use_case.export(&request, &worker_progress),
+                Err(error) => {
+                    worker_progress.fail();
+                    Err(error)
+                }
+            };
             active.store(false, Ordering::SeqCst);
             let _send_result = sender.send(result);
         });
@@ -472,7 +480,7 @@ fn validate_targets(
             return Err(invalid_target(format!(
                 "无法检查导出目录 {}：{error}",
                 schematic_parent.display()
-            )))
+            )));
         }
     }
     file_system

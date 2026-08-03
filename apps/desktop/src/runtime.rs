@@ -39,6 +39,7 @@ struct ExportInputSnapshot {
     plan_name: String,
     boundary: Option<Vec<[f64; 2]>>,
     boundary_confirmed: bool,
+    settings_error: Option<String>,
     orientation: Option<f32>,
     minecraft_version: String,
     export_location: String,
@@ -53,8 +54,16 @@ pub(crate) struct ExportInputStore {
 impl ExportInputStore {
     pub(crate) fn sync_settings(&self, minecraft_version: String, export_location: String) {
         let mut snapshot = self.snapshot.lock().expect("导出输入快照锁不可中毒");
+        snapshot.settings_error = None;
         snapshot.minecraft_version = minecraft_version;
         snapshot.export_location = export_location;
+    }
+
+    pub(crate) fn set_settings_error(&self, error: impl Into<String>) {
+        self.snapshot
+            .lock()
+            .expect("export input snapshot lock")
+            .settings_error = Some(error.into());
     }
 
     pub(crate) fn set_plan(&self, context: &project_management::PlanContextView) {
@@ -86,6 +95,9 @@ impl BoundaryExportInput for ExportInputStore {
             .lock()
             .expect("导出输入快照锁不可中毒")
             .clone();
+        if let Some(error) = snapshot.settings_error.clone() {
+            return Err(ExportError::SettingsRead(error));
+        }
         let Some(plan_id_text) = snapshot.plan_id else {
             return Err(ExportError::Boundary(BoundaryError::Missing));
         };
@@ -298,10 +310,6 @@ impl ViewModelInjector {
         // F2 引导进度与 F3 同库装载（生产环境两连接指向同一文件）
         let tutorial = OnboardingTutorial::load(&db.projects)?;
         let export_input = ExportInputStore::default();
-        export_input.sync_settings(
-            global_settings::DEFAULT_MINECRAFT_VERSION.to_owned(),
-            String::new(),
-        );
         Ok(Self {
             l10n,
             settings: SettingsManager::new(db.settings),
@@ -479,13 +487,17 @@ impl ViewModelInjector {
 
     /// 同步 F1 当前设置到注入 F9 的稳定输入端口。
     pub(crate) fn sync_export_settings(&self) {
-        let version = self
-            .settings
-            .settings()
-            .map(|settings| settings.minecraft_version)
-            .unwrap_or_else(|_| global_settings::DEFAULT_MINECRAFT_VERSION.to_owned());
-        let location = self.settings.default_export_location().unwrap_or_default();
-        self.export_input.sync_settings(version, location);
+        match (
+            self.settings.settings(),
+            self.settings.default_export_location(),
+        ) {
+            (Ok(settings), Ok(location)) => self
+                .export_input
+                .sync_settings(settings.minecraft_version, location),
+            (Err(error), _) | (_, Err(error)) => {
+                self.export_input.set_settings_error(error.to_string());
+            }
+        }
     }
 
     /// 取得 F9 稳定完整导出能力端口；输入读取不落在 S1 适配器中。
@@ -938,5 +950,17 @@ mod tests {
         let reloaded = OnboardingTutorial::load(injector.projects_mut().database_mut())
             .expect("重新装载引导进度");
         assert_eq!(reloaded.status(), TutorialStatus::NotStarted);
+    }
+    #[test]
+    fn export_input_surfaces_settings_read_error_without_fallback() {
+        let store = ExportInputStore::default();
+        store.set_settings_error("database read failed");
+
+        let error = store
+            .load_request()
+            .expect_err("a settings read failure must reach F9");
+        assert!(
+            matches!(error, ExportError::SettingsRead(detail) if detail == "database read failed")
+        );
     }
 }

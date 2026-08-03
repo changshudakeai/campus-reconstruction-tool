@@ -4,7 +4,9 @@
 
 use std::path::Path;
 
-use export_console::{BoundaryError, BoundaryExportRequest, Error, ExportConsole, MockSealGate};
+use export_console::{
+    BoundaryError, BoundaryExportRequest, Error, ExportConsole, MockSealGate, VersionError,
+};
 use manifest_generator::{FoundationManifest, ManifestOrientationSource};
 use shared_domain_types::{Boundary, Orientation, PlanId};
 
@@ -43,6 +45,19 @@ fn request(
 fn read_manifest(path: &Path) -> FoundationManifest {
     let json = std::fs::read_to_string(path).expect("manifest 必须实际写入");
     FoundationManifest::from_json(&json).expect("manifest 必须是有效 JSON")
+}
+
+fn oversized_boundary() -> Boundary {
+    Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [0.0, 39.0],
+            [100_000.0, 39.0],
+            [100_000.0, 39.001],
+            [0.0, 39.001],
+            [0.0, 39.0]
+        ]]),
+    }
 }
 
 #[test]
@@ -123,12 +138,10 @@ fn missing_or_unconfirmed_boundary_returns_structured_failure_without_artifacts(
 #[test]
 fn generation_failure_is_explicit_and_does_not_leave_success_artifacts() {
     let dir = tempfile::tempdir().unwrap();
-    let mut table = manifest_generator::MaterialTable::v26_1_2_school();
-    table.building_presets.school.foundation = "not-a-minecraft-block".to_owned();
-    let mut console = ExportConsole::new_with_material_table(MockSealGate::new(), table);
+    let mut console = ExportConsole::new(MockSealGate::new());
 
     let error = console
-        .export_confirmed_boundary(request(dir.path(), None, Some(boundary()), true))
+        .export_confirmed_boundary(request(dir.path(), None, Some(oversized_boundary()), true))
         .expect_err("B18 材料失败必须向上返回");
 
     assert!(matches!(error, Error::Generation(_)));
@@ -179,6 +192,24 @@ fn material_table_version_mismatch_is_rejected_even_for_supported_target() {
     assert!(!dir.path().join("foundation_manifest.json").exists());
 }
 
+#[test]
+fn invalid_material_block_id_is_rejected_before_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut table = manifest_generator::MaterialTable::v26_1_2_school();
+    table.building_presets.school.foundation = "minecraft:not_a_real_block".to_owned();
+    let mut console = ExportConsole::new_with_material_table(MockSealGate::new(), table);
+
+    let error = console
+        .export_confirmed_boundary(request(dir.path(), None, Some(boundary()), true))
+        .expect_err("unknown configured block must be rejected by F9");
+
+    assert!(matches!(
+        error,
+        Error::Version(VersionError::InvalidMaterialTable { .. })
+    ));
+    assert!(!dir.path().join("campus.schem").exists());
+    assert!(!dir.path().join("foundation_manifest.json").exists());
+}
 #[test]
 fn non_square_custom_orientation_changes_generated_footprint_not_only_manifest() {
     let north_dir = tempfile::tempdir().unwrap();

@@ -643,19 +643,6 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
         }
-        let coordinates = {
-            let session = self.context.session.borrow();
-            session
-                .active_plan_id
-                .as_ref()
-                .and_then(|plan_id| session.plans.get(plan_id))
-                .and_then(|state| state.boundary_gcj02.clone())
-        };
-        if let Some(coordinates) = coordinates {
-            self.context
-                .export_input
-                .set_boundary(Some(coordinates), true);
-        }
         Presentation::ready(self.context.page())
     }
 
@@ -691,7 +678,7 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &detail));
         }
-        let rejected = {
+        let (rejected, confirmed_boundary) = {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
                 EventResult::Accepted => {
@@ -704,21 +691,24 @@ impl WorkspaceProductionAdapter {
                     });
                     if let Some(plan_id) = session.active_plan_id.clone() {
                         let state = session.plans.entry(plan_id).or_default();
-                        state.has_boundary = true;
-                        if state.boundary_gcj02.is_none() {
-                            state.boundary_gcj02 = fallback_boundary;
-                        }
+                        state.has_boundary = fallback_boundary.is_some();
+                        state.boundary_gcj02 = fallback_boundary.clone();
                     }
-                    None
+                    (None, fallback_boundary)
                 }
-                EventResult::Rejected(message) => Some(message),
-                EventResult::Ignored => None,
+                EventResult::Rejected(message) => (Some(message), None),
+                EventResult::Ignored => (None, None),
             }
         };
         if let Some(message) = rejected {
             let l10n = self.l10n();
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
+        }
+        if let Some(coordinates) = confirmed_boundary {
+            self.context
+                .export_input
+                .set_boundary(Some(coordinates), true);
         }
         Presentation::ready(self.context.page())
     }

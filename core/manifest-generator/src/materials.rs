@@ -173,18 +173,73 @@ impl MaterialTable {
         self.validate_blocks(&blocks)
     }
 
-    /// 检查单个方块是否在目标版本存在
-    ///
-    /// # 注意
-    /// 这是简化实现。实际项目应从 MC 官方数据库或权威来源加载版本方块列表。
-    /// 这里仅校验格式是否规范。
+    /// Check one block ID against the authoritative allowlist for its Minecraft version.
     fn is_valid_block(&self, block: &str) -> bool {
-        // 简化：只校验 format，实际应动态检测版本兼容性
-        // 例如：minecraft:crafter 只在 1.21+ 可用
-        block.starts_with("minecraft:") && !block.is_empty()
+        block_id_is_allowed(self.minecraft_version, block)
     }
 }
 
+const MINECRAFT_26_1_2_ALLOWED_BLOCKS: &[&str] = &[
+    "minecraft:air",
+    "minecraft:bricks",
+    "minecraft:dark_oak_door",
+    "minecraft:dark_oak_slab",
+    "minecraft:dirt",
+    "minecraft:glass_pane",
+    "minecraft:grass_block",
+    "minecraft:light_gray_concrete",
+    "minecraft:oak_leaves",
+    "minecraft:oak_log",
+    "minecraft:oak_planks",
+    "minecraft:rail",
+    "minecraft:red_concrete",
+    "minecraft:smooth_sandstone",
+    "minecraft:smooth_stone",
+    "minecraft:spruce_door",
+    "minecraft:spruce_planks",
+    "minecraft:stone",
+    "minecraft:stone_bricks",
+    "minecraft:stone_slab",
+    "minecraft:water",
+    "minecraft:white_concrete",
+];
+
+const MINECRAFT_1_20_4_ALLOWED_BLOCKS: &[&str] = MINECRAFT_26_1_2_ALLOWED_BLOCKS;
+
+const MINECRAFT_1_21_ALLOWED_BLOCKS: &[&str] = &[
+    "minecraft:air",
+    "minecraft:bricks",
+    "minecraft:crafter",
+    "minecraft:dark_oak_door",
+    "minecraft:dark_oak_slab",
+    "minecraft:dirt",
+    "minecraft:glass_pane",
+    "minecraft:grass_block",
+    "minecraft:light_gray_concrete",
+    "minecraft:oak_leaves",
+    "minecraft:oak_log",
+    "minecraft:oak_planks",
+    "minecraft:rail",
+    "minecraft:red_concrete",
+    "minecraft:smooth_sandstone",
+    "minecraft:smooth_stone",
+    "minecraft:spruce_door",
+    "minecraft:spruce_planks",
+    "minecraft:stone",
+    "minecraft:stone_bricks",
+    "minecraft:stone_slab",
+    "minecraft:water",
+    "minecraft:white_concrete",
+];
+
+pub(crate) fn block_id_is_allowed(version: MinecraftVersion, block: &str) -> bool {
+    let allowed = match version {
+        MinecraftVersion::V26_1_2 => MINECRAFT_26_1_2_ALLOWED_BLOCKS,
+        MinecraftVersion::V1_20_4 | MinecraftVersion::V1_20_2 => MINECRAFT_1_20_4_ALLOWED_BLOCKS,
+        MinecraftVersion::V1_21 => MINECRAFT_1_21_ALLOWED_BLOCKS,
+    };
+    allowed.contains(&block)
+}
 /// 多套建筑预设
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -282,5 +337,17 @@ mod tests {
         assert!(MaterialTable::v26_1_2_school()
             .validate_configured_blocks()
             .is_ok());
+    }
+    #[test]
+    fn product_version_rejects_unknown_namespaced_block_id() {
+        let table = MaterialTable::v26_1_2_school();
+        let blocks = vec!["minecraft:not_a_real_block".to_owned()];
+
+        let error = table
+            .validate_blocks(&blocks)
+            .expect_err("an unknown namespaced block must not pass a prefix-only check");
+
+        assert_eq!(error.invalid_blocks, blocks);
+        assert_eq!(error.version, "26.1.2");
     }
 }

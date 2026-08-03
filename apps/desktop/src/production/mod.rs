@@ -19,7 +19,7 @@ use slint::ComponentHandle;
 use crate::presentation::{
     CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
     CoveragePageState, CoveragePresentationEntry, ExportPageState, ExportPresentationEntry,
-    ExportPresentationRequest, NavigationDecision, NotificationPageState,
+    ExportPresentationRequest, NavigationDecision, NotificationFact, NotificationPageState,
     NotificationPresentationEntry, OperationState, Presentation, PresentationAdapter, Progress,
     ReviewPageState, ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
     StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPresentationEntry,
@@ -374,6 +374,27 @@ impl ExportProductionAdapter {
         workspace.placeholder_subtitle = subtitle.into();
         ExportPageState { workspace }
     }
+    fn failure_presentation(&self, error: &export_console::Error) -> Presentation<ExportPageState> {
+        let detail = {
+            let injector = self.context.injector();
+            let l10n = injector.borrow();
+            let category = l10n.l10n().t(export_error_category_key(error));
+            let diagnostic = error.to_string();
+            l10n.l10n()
+                .t_with_array("export.failure_detail", &[&category, &diagnostic])
+        };
+        let notification = {
+            let injector = self.context.injector();
+            let l10n = injector.borrow();
+            NotificationFact::new(Notification::error(
+                l10n.l10n().t("app.source_tag"),
+                l10n.l10n().t("dialog.error_title"),
+                detail.clone(),
+            ))
+        };
+        Presentation::failed(self.page_with_status("error.export_failed", detail))
+            .with_notification(notification)
+    }
 }
 
 impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportProductionAdapter {
@@ -408,16 +429,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                         Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
                     )
                 }
-                Err(_) => Presentation::failed(
-                    self.page_with_status(
-                        "error.export_failed",
-                        self.context
-                            .injector()
-                            .borrow()
-                            .l10n()
-                            .t("export.failure_retry"),
-                    ),
-                ),
+                Err(error) => self.failure_presentation(&error),
             }
             .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             ExportPresentationRequest::Poll => {
@@ -441,16 +453,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                             "export.done",
                             result.schematic_path.display().to_string(),
                         )),
-                        Err(_) => Presentation::failed(
-                            self.page_with_status(
-                                "error.export_failed",
-                                self.context
-                                    .injector()
-                                    .borrow()
-                                    .l10n()
-                                    .t("export.failure_retry"),
-                            ),
-                        ),
+                        Err(error) => self.failure_presentation(&error),
                     }
                 } else {
                     let progress = operation.progress_view();
@@ -469,6 +472,21 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
         }
+    }
+}
+
+fn export_error_category_key(error: &export_console::Error) -> &'static str {
+    match error {
+        export_console::Error::Boundary(_) => "error.export_boundary_failed",
+        export_console::Error::SettingsRead(_) => "error.export_settings_failed",
+        export_console::Error::Version(_) => "error.export_version_failed",
+        export_console::Error::Generation(_) => "error.export_generation_failed",
+        export_console::Error::ManifestWrite(_) => "error.export_manifest_write_failed",
+        export_console::Error::SchematicWrite(_) => "error.export_schematic_write_failed",
+        export_console::Error::ArtifactWrite(_) => "error.export_artifact_write_failed",
+        export_console::Error::ArtifactRecovery(_) => "error.export_recovery_failed",
+        export_console::Error::BackgroundTask => "error.export_background_failed",
+        _ => "error.export_failed",
     }
 }
 

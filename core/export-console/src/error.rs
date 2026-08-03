@@ -96,7 +96,6 @@ pub enum ArtifactRecoveryError {
         paths: Vec<PathBuf>,
     },
 }
-
 /// F9 导出控制台错误
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -120,6 +119,9 @@ pub enum Error {
     /// 封账失败（F5 批量写回失败等；封账不生效，评审保持可改）
     #[error("封账失败：{0}")]
     SealFailed(String),
+    /// F1 设置读取失败；与缺失设置键触发的合法默认值区分。
+    #[error("导出设置读取失败：{0}")]
+    SettingsRead(String),
 
     /// 生成引擎错误（B18；用料表版本不匹配也从这里向上传递）
     #[error("生成引擎错误：{0}")]
