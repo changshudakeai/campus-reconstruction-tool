@@ -73,6 +73,27 @@ pub fn export_schematic(
     schematic_name: &str,
     progress: &ProgressTracker,
 ) -> Result<()> {
+    export_schematic_inner(model, output_path, schematic_name, progress, true)
+}
+
+/// F9 完整导出用例的 staging 写入：文件已由 B4 写好，但在双文件发布前
+/// 不把进度标记为成功。
+pub(crate) fn export_schematic_staged(
+    model: &BlockModel,
+    output_path: &Path,
+    schematic_name: &str,
+    progress: &ProgressTracker,
+) -> Result<()> {
+    export_schematic_inner(model, output_path, schematic_name, progress, false)
+}
+
+fn export_schematic_inner(
+    model: &BlockModel,
+    output_path: &Path,
+    schematic_name: &str,
+    progress: &ProgressTracker,
+    finish: bool,
+) -> Result<()> {
     progress.set_stage(ExportStage::Generating);
     progress.report_percent(0);
 
@@ -82,7 +103,9 @@ pub fn export_schematic(
     progress.set_stage(ExportStage::Writing);
     sponge_export::write_schematic(output_path, schematic_name, &voxel)
         .map_err(|err| Error::SchematicWrite(err.to_string()))?;
-    progress.finish();
+    if finish {
+        progress.finish();
+    }
     Ok(())
 }
 

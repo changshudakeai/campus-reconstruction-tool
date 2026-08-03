@@ -25,6 +25,7 @@
 //! B3 自有 `OsmElement` 类型而归 B3 gaode-client（ADR-0029 允许 B3/B5 任一）。
 //! 错误文案暂为中文硬编码，待壳层经 B6 解析文本键。
 
+pub mod boundary_export;
 pub mod boundary_ui;
 pub mod coordinate;
 pub mod orientation;
@@ -32,6 +33,7 @@ pub mod validation;
 pub mod warning;
 
 // 重新导出公共类型，方便 crate 外使用
+pub use boundary_export::{boundary_footprint, BoundaryFootprint, BoundaryFootprintError};
 pub use boundary_ui::{BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex};
 pub use coordinate::{CoordinateConverter, McBlockCoord, MercatorCoord, PlaneMileUnit};
 pub use orientation::{OrientationCalculator, OrientationLine, Point2D};

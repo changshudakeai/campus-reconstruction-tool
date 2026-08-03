@@ -1659,9 +1659,12 @@ dependencies = [
 name = "export-console"
 version = "2.0.0-dev"
 dependencies = [
+ "chrono",
  "data-persistence",
+ "foundation-mode",
  "generation-engine",
  "localization",
+ "manifest-generator",
  "notification-center",
  "public-api",
  "review-workbench",
@@ -1670,6 +1673,7 @@ dependencies = [
  "sponge-export",
  "tempfile",
  "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]
@@ -1920,6 +1924,7 @@ dependencies = [
  "geo",
  "public-api",
  "serde",
+ "serde_json",
  "shared-domain-types",
  "thiserror 2.0.19",
 ]

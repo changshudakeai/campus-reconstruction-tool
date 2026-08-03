@@ -487,6 +487,11 @@ impl ViewModelInjector {
     pub fn export(&self) -> &ExportConsole<MockSealGate> {
         &self.export
     }
+
+    /// F9 完整边界导出入口（S1 只能经此一次提交完整请求）。
+    pub(crate) fn export_mut(&mut self) -> &mut ExportConsole<MockSealGate> {
+        &mut self.export
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

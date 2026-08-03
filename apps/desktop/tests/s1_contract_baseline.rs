@@ -198,3 +198,33 @@ fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
         assert!(!window.get_confirm_dialog_visible());
     }
 }
+
+#[test]
+fn export_s1_seam_submits_one_complete_f9_intent() {
+    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let seam = source
+        .split("impl ExportProductionAdapter")
+        .nth(1)
+        .and_then(|tail| tail.split("struct NotificationLabels").next())
+        .expect("导出适配器必须存在");
+
+    assert!(seam.contains("ExportPresentationRequest::Start"));
+    assert_eq!(
+        seam.matches("export_confirmed_boundary").count(),
+        1,
+        "S1 导出接缝只能调用一次 F9 完整入口"
+    );
+    for forbidden in [
+        "collect_and_audit(",
+        "database_mut(",
+        "generate_flat_ground(",
+        "write_schematic(",
+        "ManifestGenerator",
+        "GenerationEngine",
+    ] {
+        assert!(
+            !seam.contains(forbidden),
+            "S1 导出适配器不得协调底层步骤：{forbidden}"
+        );
+    }
+}

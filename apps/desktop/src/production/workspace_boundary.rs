@@ -147,6 +147,21 @@ impl WorkspaceProductionContext {
         let l10n = injector.l10n();
         let session = self.session.borrow();
         let completed = session.completed_steps();
+        let boundary_confirmed = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .is_some_and(|state| state.has_boundary);
+        let has_orientation = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .is_some_and(|state| state.has_orientation);
+        let has_collection = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .is_some_and(|state| state.has_collection);
         let (campus_name, plan_name) = session
             .active_context
             .as_ref()
@@ -164,8 +179,18 @@ impl WorkspaceProductionContext {
             context_label,
             active_step: session.active_step,
             completed_steps: i32::from(completed),
-            step_locked: (0..5).map(|index| index > completed).collect(),
-            step_completed: (0..5).map(|index| index < completed).collect(),
+            // ADR-0041：边界确认后朝向、采集、评审与导出都可进入；
+            // 未确认边界时只有边界步骤可用。
+            step_locked: (0..5)
+                .map(|index| index != 0 && !boundary_confirmed)
+                .collect(),
+            step_completed: vec![
+                boundary_confirmed,
+                has_orientation,
+                has_collection,
+                false,
+                false,
+            ],
             placeholder_title: l10n.t("workspace.placeholder_title"),
             placeholder_subtitle: l10n.t("workspace.placeholder_subtitle"),
             pending_notice: l10n.t("workspace.step_pending_notice"),
@@ -174,7 +199,7 @@ impl WorkspaceProductionContext {
             orientation_step_label: l10n.t("collection.orientation_step"),
             collection_step_label: l10n.t("collection.collect_button"),
             review_step_label: l10n.t("review.workbench_title"),
-            export_step_label: l10n.t("export.confirm_title"),
+            export_step_label: l10n.t("export.start_button"),
             boundary: self.boundary_view(l10n, &session),
             orientation: self.orientation_view(l10n, &session),
             tutorial_visible: session.tutorial_visible,
@@ -488,9 +513,21 @@ impl WorkspaceProductionAdapter {
                 session.adopt(completed);
             }
         }
-        let completed = self.context.session.borrow().completed_steps();
-        // 前跳上锁（ADR-0027）：第①格永远解锁
-        if step > i32::from(completed) && step != 0 {
+        let boundary_confirmed = {
+            let session = self.context.session.borrow();
+            match session.active_plan_id.as_ref() {
+                Some(plan_id) => session
+                    .plans
+                    .get(plan_id)
+                    .is_some_and(|state| state.has_boundary),
+                // 迁移期无方案测试/占位路径沿用窗口注入的已完成状态。
+                None => session
+                    .adopted_completed_steps
+                    .is_some_and(|completed| completed > 0),
+            }
+        };
+        // ADR-0041：边界确认是唯一门槛；其余步骤不再形成线性强制链。
+        if step != 0 && !boundary_confirmed {
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Blocked);
         }
@@ -638,9 +675,19 @@ impl WorkspaceProductionAdapter {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
                 EventResult::Accepted => {
+                    let fallback_boundary = session.active_context.as_ref().map(|context| {
+                        plane_vertices_to_gcj02(
+                            session.drawer.vertices(),
+                            context.anchor_lng,
+                            context.anchor_lat,
+                        )
+                    });
                     if let Some(plan_id) = session.active_plan_id.clone() {
                         let state = session.plans.entry(plan_id).or_default();
                         state.has_boundary = true;
+                        if state.boundary_gcj02.is_none() {
+                            state.boundary_gcj02 = fallback_boundary;
+                        }
                     }
                     None
                 }
@@ -1116,6 +1163,24 @@ fn centroid(coords: &[[f64; 2]]) -> Option<(f64, f64)> {
         });
     let count = coords.len() as f64;
     Some((sum_lon / count, sum_lat / count))
+}
+
+/// 手动画布没有地图经纬度时，沿用 B5 的平面米语义以校区锚点反投影，
+/// 让“已确认边界”仍能交给 F9 完整导出用例，不在壳层计算导出尺寸。
+fn plane_vertices_to_gcj02(vertices: &[Vertex], anchor_lng: f64, anchor_lat: f64) -> Vec<[f64; 2]> {
+    let center = MercatorCoord::from_lat_lon(anchor_lat, anchor_lng);
+    let scale = anchor_lat.to_radians().cos();
+    vertices
+        .iter()
+        .map(|vertex| {
+            let mercator = MercatorCoord {
+                x: center.x + vertex.x / scale,
+                y: center.y + vertex.y / scale,
+            };
+            let (lat, lon) = mercator.to_lat_lon();
+            [lon, lat]
+        })
+        .collect()
 }
 
 /// 重算确认窗正文：沿用既有重算提示（collection.orientation_recalc_notice），

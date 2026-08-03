@@ -15,8 +15,10 @@
 use std::path::Path;
 
 use generation_engine::BlockModel;
+use manifest_generator::MaterialTable;
 use shared_domain_types::PlanId;
 
+use crate::boundary_export::{BoundaryExportRequest, BoundaryExportResult, BoundaryExportUseCase};
 use crate::data::{ExportRequest, ExportStage, ExportSummary};
 use crate::error::{Error, Result};
 use crate::pipeline;
@@ -60,16 +62,59 @@ pub struct ExportConsole<G: SealGate> {
     gate: G,
     progress: ProgressTracker,
     state: State,
+    boundary_export: BoundaryExportUseCase,
 }
 
 impl<G: SealGate> ExportConsole<G> {
     /// 用封账门控创建（门控由壳接线到 F5，测试用 Mock）
     pub fn new(gate: G) -> Self {
+        Self::new_with_material_table(gate, MaterialTable::v1_20_4_school())
+    }
+
+    /// 用指定 B17 用料表创建；完整边界直出用例仍由 F9 统一协调。
+    pub fn new_with_material_table(gate: G, material_table: MaterialTable) -> Self {
         Self {
             request: None,
             gate,
             progress: ProgressTracker::new(),
             state: State::Idle,
+            boundary_export: BoundaryExportUseCase::new(material_table),
+        }
+    }
+
+    /// 完整边界直出入口（ADR-0041）。
+    ///
+    /// 调用方只提交一次已确认边界与可选朝向；边界资格、默认正北、空候选
+    /// 最小场地、manifest 与 `.schem` 的生成/发布都在 F9 内完成。
+    pub fn export_confirmed_boundary(
+        &mut self,
+        request: BoundaryExportRequest,
+    ) -> Result<BoundaryExportResult> {
+        if self.state == State::Exporting {
+            return Err(Error::InvalidState("导出进行中，不接受新的导出请求"));
+        }
+        self.progress = ProgressTracker::new();
+        self.state = State::Exporting;
+        let plan_id = request.plan.plan_id.to_string();
+        match self.boundary_export.export(&request, &self.progress) {
+            Ok(result) => {
+                self.state = State::Completed;
+                notification_center::warn(
+                    source_tag(&plan_id),
+                    resolve_text(text_keys::DONE),
+                    result.schematic_path.display().to_string(),
+                );
+                Ok(result)
+            }
+            Err(error) => {
+                self.state = State::Failed;
+                notification_center::error(
+                    source_tag(&plan_id),
+                    resolve_text(text_keys::EXPORT_FAILED),
+                    error.to_string(),
+                );
+                Err(error)
+            }
         }
     }
 

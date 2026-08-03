@@ -107,6 +107,7 @@ notification-center = { path = "core/notification-center" }
 sponge-export = { path = "core/sponge-export" }
 review-workbench = { path = "core/review-workbench" }
 generation-engine = { path = "core/generation-engine" }
+manifest-generator = { path = "core/manifest-generator" }
 data-transformers = { path = "core/data-transformers" }
 gaode-client = { path = "core/gaode-client" }
 # 构建自动化（xtask is not a regular crate）

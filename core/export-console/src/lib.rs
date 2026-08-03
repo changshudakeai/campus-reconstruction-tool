@@ -35,6 +35,7 @@
 
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
+mod boundary_export;
 mod console;
 mod data;
 mod error;
@@ -43,9 +44,10 @@ mod progress;
 mod seal_gate;
 mod views;
 
+pub use boundary_export::{BoundaryExportRequest, BoundaryExportResult};
 pub use console::ExportConsole;
 pub use data::{ExportRequest, ExportStage, ExportSummary};
-pub use error::{Error, Result};
+pub use error::{BoundaryError, Error, Result};
 pub use pipeline::{adapt_to_voxel_model, export_schematic};
 pub use progress::ProgressTracker;
 pub use seal_gate::{MockSealGate, SealGate};

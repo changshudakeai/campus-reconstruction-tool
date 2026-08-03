@@ -135,6 +135,7 @@ export component AppWindow inherits Window {
     in property <string> workspace-stepper-collection-label;
     in property <string> workspace-stepper-review-label;
     in property <string> workspace-stepper-export-label;
+    in property <string> workspace-export-start-label;
     // ADR-0027：五个步骤顶部始终同时显示校区名与方案名（合成文案由 Rust 侧注入）
     in property <string> workspace-campus-name;
     in property <string> workspace-plan-name;
@@ -211,6 +212,7 @@ export component AppWindow inherits Window {
     in property <string> collection-report-body;
     callback collection-start-clicked();
     callback collection-report-clicked();
+    callback workspace-export-start-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -910,7 +912,7 @@ export component AppWindow inherits Window {
                     Text {
                         text: root.workspace-active-step == 2 ? root.workspace-stepper-collection-label :
                               root.workspace-active-step == 3 ? root.workspace-stepper-review-label :
-                              root.workspace-stepper-export-label;
+                              root.workspace-placeholder-title;
                         font-size: 18px;
                         color: Theme.text-primary;
                         horizontal-alignment: center;
@@ -918,10 +920,18 @@ export component AppWindow inherits Window {
                     }
 
                     Text {
-                        text: root.workspace-step-pending-notice;
+                        text: root.workspace-active-step == 4 ? root.workspace-placeholder-subtitle :
+                              root.workspace-step-pending-notice;
                         font-size: 12px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
+                    }
+
+                    if root.workspace-active-step == 4: Button {
+                        text: root.workspace-export-start-label;
+                        primary: true;
+                        enabled: root.workspace-boundary-is-determined;
+                        clicked => { root.workspace-export-start-clicked(); }
                     }
                 }
             }

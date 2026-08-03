@@ -5,24 +5,26 @@
 //! 不在 S1 读取或推演后续业务状态。
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use coverage_audit::AuditResult;
 use data_acquisition::GaodeDataSource;
+use export_console::BoundaryExportRequest;
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
-use shared_domain_types::{Boundary, CandidateCategory, PlanId};
+use shared_domain_types::{Boundary, CandidateCategory, Orientation, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
     CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
     CoveragePageState, CoveragePresentationEntry, ExportPageState, ExportPresentationEntry,
-    NavigationDecision, NotificationPageState, NotificationPresentationEntry, OperationState,
-    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
-    SettingsPresentationEntry, SettingsRequest, StartupPresentationEntry, StartupRequest,
-    ToolbarPageState, TrashPresentationEntry, TrashRequest, WindowPageState,
-    WorkspacePresentationEntry, WorkspaceRequest,
+    ExportPresentationRequest, NavigationDecision, NotificationPageState,
+    NotificationPresentationEntry, OperationState, Presentation, PresentationAdapter, Progress,
+    ReviewPageState, ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
+    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPresentationEntry,
+    TrashRequest, WindowPageState, WorkspacePresentationEntry, WorkspaceRequest,
 };
 mod campus_plan_trash;
 mod startup_settings;
@@ -360,14 +362,115 @@ impl PresentationAdapter<(), CoveragePageState> for CoverageProductionAdapter {
 
 struct ExportProductionAdapter(WorkspaceProductionContext);
 
-impl PresentationAdapter<(), ExportPageState> for ExportProductionAdapter {
-    fn present(&mut self, (): ()) -> Presentation<ExportPageState> {
+impl ExportProductionAdapter {
+    fn request(&self) -> Option<BoundaryExportRequest> {
+        let (plan_id, campus_name, plan_name, boundary, boundary_confirmed, orientation) = {
+            let session = self.0.session.borrow();
+            let plan_id_text = session.active_plan_id.clone()?;
+            let plan_id = PlanId::parse(&plan_id_text).ok()?;
+            let context = session.active_context.clone()?;
+            let state = session.plans.get(&plan_id_text);
+            let boundary =
+                state
+                    .and_then(|state| state.boundary_gcj02.clone())
+                    .map(|coordinates| Boundary {
+                        r#type: "Polygon".to_owned(),
+                        coordinates: serde_json::json!([coordinates]),
+                    });
+            let boundary_confirmed = state.is_some_and(|state| state.has_boundary);
+            let orientation = state
+                .and_then(|state| state.orientation_angle)
+                .and_then(Orientation::new);
+            (
+                plan_id,
+                context.campus_name,
+                context.plan_name,
+                boundary,
+                boundary_confirmed,
+                orientation,
+            )
+        };
+
+        let injector = self.0.injector();
+        let (minecraft_version, export_location) = {
+            let injector = injector.borrow();
+            let settings = injector.settings();
+            (
+                settings.settings().ok()?.minecraft_version,
+                settings.default_export_location().ok()?,
+            )
+        };
+        let output_dir = PathBuf::from(export_location);
+        let plan_stem = plan_id.to_string();
+        Some(BoundaryExportRequest::new(
+            campus_name,
+            plan_id,
+            plan_name,
+            minecraft_version,
+            boundary,
+            boundary_confirmed,
+            orientation,
+            output_dir.join(format!("{plan_stem}.schem")),
+            output_dir.join(format!("{plan_stem}.foundation_manifest.json")),
+        ))
+    }
+
+    fn page_with_status(&self, title_key: &str, subtitle: impl Into<String>) -> ExportPageState {
+        let injector = self.0.injector();
+        let l10n = injector.borrow();
+        let mut workspace = self.0.page();
+        workspace.placeholder_title = l10n.l10n().t(title_key);
+        workspace.placeholder_subtitle = subtitle.into();
+        ExportPageState { workspace }
+    }
+}
+
+impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportProductionAdapter {
+    fn present(&mut self, request: ExportPresentationRequest) -> Presentation<ExportPageState> {
         #[cfg(test)]
         record_entry_call(6);
-        Presentation::ready(ExportPageState {
-            workspace: self.0.page(),
-        })
-        .with_navigation(NavigationDecision::Show(Screen::Workspace))
+        match request {
+            ExportPresentationRequest::Open => Presentation::ready(
+                self.page_with_status(
+                    "export.confirm_title",
+                    self.0
+                        .injector()
+                        .borrow()
+                        .l10n()
+                        .t("export.boundary_only_summary"),
+                ),
+            )
+            .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            ExportPresentationRequest::Start => {
+                let Some(request) = self.request() else {
+                    return Presentation::failed(self.page_with_status(
+                        "error.export_failed",
+                        self.0.injector().borrow().l10n().t("export.failure_retry"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                };
+                let result = {
+                    let injector = self.0.injector();
+                    let result = injector
+                        .borrow_mut()
+                        .export_mut()
+                        .export_confirmed_boundary(request);
+                    result
+                };
+                match result {
+                    Ok(result) => Presentation::succeeded(self.page_with_status(
+                        "export.done",
+                        result.schematic_path.display().to_string(),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+                    Err(_) => Presentation::failed(self.page_with_status(
+                        "error.export_failed",
+                        self.0.injector().borrow().l10n().t("export.failure_retry"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+                }
+            }
+        }
     }
 }
 
@@ -522,7 +625,7 @@ pub(crate) struct ProductionEntries {
     workspace: WorkspacePresentationEntry<'static, WorkspaceRequest>,
     review: ReviewPresentationEntry<'static, ()>,
     _coverage: CoveragePresentationEntry<'static, ()>,
-    export: ExportPresentationEntry<'static, ()>,
+    export: ExportPresentationEntry<'static, ExportPresentationRequest>,
     notification: NotificationPresentationEntry<'static, NotificationRequest>,
     trash: TrashPresentationEntry<'static, TrashRequest>,
     center: Arc<NotificationCenter>,
@@ -772,7 +875,14 @@ impl ProductionEntries {
 
     pub(crate) fn show_export(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        self.export.show(window, &self.center, ());
+        self.export
+            .show(window, &self.center, ExportPresentationRequest::Open);
+    }
+
+    pub(crate) fn start_export(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.export
+            .show(window, &self.center, ExportPresentationRequest::Start);
     }
 
     #[cfg(test)]
@@ -1308,6 +1418,14 @@ impl ProductionEntries {
         window.on_collection_report_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().show_collection_report(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_export_start_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().start_export(&window);
             }
         });
 

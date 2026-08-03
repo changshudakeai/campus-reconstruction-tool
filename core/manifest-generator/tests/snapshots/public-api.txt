@@ -8,8 +8,10 @@
 
 ## Structures
 
-pub struct FoundationManifest { pub version: String, pub id: String, pub campus_name: String, pub plan_id: String, pub plan_name: String, pub minecraft_version: String, pub exported_at: String, pub categories: Vec<CategoryStatus> }
+pub struct FoundationManifest { pub version: String, pub id: String, pub campus_name: String, pub plan_id: String, pub plan_name: String, pub minecraft_version: String, pub exported_at: String, pub categories: Vec<CategoryStatus>, pub orientation: Option<ManifestOrientation>, pub candidate_facts: CandidateFacts }
 pub struct CategoryStatus { pub name: String, pub display_name: String, pub included: bool }
+pub struct ManifestOrientation { pub degree: f32, pub source: ManifestOrientationSource }
+pub struct CandidateFacts { pub candidate_projection_count: usize, pub review_decision_count: usize, pub retained_candidate_count: usize }
 pub struct PlanInfo { pub campus_name: String, pub plan_id: shared_domain_types::PlanId, pub plan_name: String, pub minecraft_version: String }
 pub struct BuildingBlocks { pub foundation: String, pub wall: String, pub window: String, pub floor: String, pub roof: String, pub entrance: String, pub accent: String }
 pub struct MaterialTable { pub minecraft_version: MinecraftVersion, pub building_presets: BuildingPresets }
@@ -19,6 +21,7 @@ pub struct ValidationError { pub invalid_blocks: Vec<String>, pub version: Strin
 ## Enums #[non_exhaustive]
 
 pub enum MinecraftVersion { V1_20_4, V1_20_2, V1_21 }
+pub enum ManifestOrientationSource { MapNorth, Custom }
 pub enum GeneratorError { Serialization(serde_json::Error), Io(std::io::Error, std::path::PathBuf) }
 
 ## Traits & Implementations
@@ -101,6 +104,7 @@ impl Eq for ValidationError
 impl ManifestGenerator {
     pub fn new() -> Self
     pub fn generate_manifest(&self, plan_info: &PlanInfo, review_decisions: &[(shared_domain_types::CandidateCategory, bool)], manifest_id: impl Into<String>, exported_at: impl Into<String>) -> Result<FoundationManifest, GeneratorError>
+    pub fn generate_manifest_with_facts(&self, plan_info: &PlanInfo, review_decisions: &[(shared_domain_types::CandidateCategory, bool)], manifest_id: impl Into<String>, exported_at: impl Into<String>, orientation: Option<ManifestOrientation>, candidate_facts: CandidateFacts) -> Result<FoundationManifest, GeneratorError>
     pub fn write_to_file(&self, manifest: &FoundationManifest, dir_path: impl AsRef<std::path::Path>, filename: &str) -> Result<(), GeneratorError>
 }
 

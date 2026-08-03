@@ -137,6 +137,8 @@
     "confirm_summary": "类别汇总",
     "seal_notice": "确认后评审即封账，决定不可再改；想调整只能重新采集、重新评审。",
     "pending_notice": "尚有 {count} 项待定，它们不会被导出。",
+    "boundary_only_summary": "边界已确认。未设置自定义朝向时使用地图正北；未采集候选时生成边界覆盖范围内的最小平整场地。",
+    "failure_retry": "导出未完成，请检查输出位置后重试。",
     "in_progress": "正在导出…",
     "done": "导出完成",
     "manifest_title": "导出清单",

@@ -715,6 +715,15 @@ pub enum WorkspaceRequest {
     OrientationModeChanged { mode: String },
 }
 
+/// S1 导出页面只提交“显示确认”或“一次开始导出”意图；完整业务链由 F9 接管。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportPresentationRequest {
+    /// 进入导出步骤，显示可导出的确认状态。
+    Open,
+    /// 用户点击一次开始导出按钮。
+    Start,
+}
+
 /// 当前五步工作区页的全部可观察状态。
 #[derive(Clone)]
 pub struct WorkspacePageState {
@@ -770,6 +779,7 @@ impl WorkspacePageState {
         window.set_workspace_stepper_collection_label(self.collection_step_label.clone().into());
         window.set_workspace_stepper_review_label(self.review_step_label.clone().into());
         window.set_workspace_stepper_export_label(self.export_step_label.clone().into());
+        window.set_workspace_export_start_label(self.export_step_label.clone().into());
         window.set_workspace_tutorial_visible(self.tutorial_visible);
         window.set_workspace_tutorial_text(self.tutorial_text.clone().into());
         window.set_workspace_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());

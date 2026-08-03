@@ -16,6 +16,7 @@ pub struct MercatorCoord { pub x: f64, pub y: f64 }
 pub struct PlaneMileUnit { pub x: f64, pub y: f64 }
 pub struct McBlockCoord { pub block_x: i32, pub block_z: i32 }
 pub struct CoordinateConverter { /* private: center_mercator, blocks_per_meter */ }
+pub struct BoundaryFootprint { pub width_blocks: usize, pub length_blocks: usize }
 pub struct BoundaryDrawer { /* private: vertices, state, max_vertices */ }
 pub struct ValidationResult { pub is_valid: bool, pub errors: Vec<BoundaryValidationError>, pub area: Option<f64> }
 pub struct ImpactItem { pub category: CandidateCategory, pub count: usize, pub requires_confirmation: bool }
@@ -24,6 +25,7 @@ pub struct OrientationImpactReport { pub items: Vec<ImpactItem>, pub all_safe_to
 ## Enums
 
 pub enum BoundaryState { Idle, Drawing, Determined, Editing { selected_vertex: usize } }  // #[derive(Default)] Idle
+pub enum BoundaryFootprintError { Empty, UnsupportedType(String), MalformedCoordinates, InvalidGeometry(String), SizeOverflow }
 pub enum BoundaryUiEvent { ClickAt { x: f64, y: f64 }, DragTo { x: f64, y: f64 }, Confirm, Cancel, ClickVertex { index: usize } }
 pub enum EventResult { Accepted, Rejected(String), Ignored }
 pub enum BoundaryValidationError #[non_exhaustive] { InsufficientVertices(usize), AreaTooSmall { area: f64, min: f64 }, SelfIntersecting { edge_a: usize, edge_b: usize } }  // SelfIntersecting: T24 新增（ADR-0029）
@@ -35,6 +37,7 @@ pub fn detect_self_intersection(vertices: &[Vertex]) -> Option<(usize, usize)>  
 pub fn check_orientation_change_impact(existing_data: &HashMap<CandidateCategory, usize>, old_orientation: Option<Orientation>, new_orientation: Orientation) -> OrientationImpactReport
 pub fn should_show_confirmation_dialog(report: &OrientationImpactReport) -> bool
 pub fn format_impact_details(report: &OrientationImpactReport) -> String
+pub fn boundary_footprint(boundary: &shared_domain_types::Boundary) -> Result<BoundaryFootprint, BoundaryFootprintError>
 
 ## Re-exports（B1 共享类型透传）
 
