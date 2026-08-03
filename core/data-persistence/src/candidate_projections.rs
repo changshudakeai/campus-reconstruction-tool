@@ -62,53 +62,6 @@ impl CandidateDisplay {
             tags,
         }
     }
-
-    /// 从生产 `source_data` 提取评审工作台所需的确定性展示属性。
-    pub fn from_source_data(source_data: &serde_json::Value, source_entity_id: &str) -> Self {
-        let top_level = source_data.as_object();
-        let nested_tags = top_level
-            .and_then(|values| values.get("tags"))
-            .and_then(serde_json::Value::as_object);
-        let title = top_level
-            .and_then(|values| values.get("name"))
-            .and_then(display_scalar_text)
-            .or_else(|| {
-                nested_tags
-                    .and_then(|values| values.get("name"))
-                    .and_then(display_scalar_text)
-            })
-            .unwrap_or_else(|| source_entity_id.to_owned());
-
-        let mut tags = Vec::new();
-        if let Some(values) = top_level {
-            for (key, value) in values {
-                if key != "tags" {
-                    if let Some(text) = display_scalar_text(value) {
-                        tags.push((key.clone(), text));
-                    }
-                }
-            }
-        }
-        if let Some(values) = nested_tags {
-            for (key, value) in values {
-                if let Some(text) = display_scalar_text(value) {
-                    tags.push((key.clone(), text));
-                }
-            }
-        }
-        tags.sort();
-
-        Self { title, tags }
-    }
-}
-
-fn display_scalar_text(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(text) => Some(text.clone()),
-        serde_json::Value::Number(number) => Some(number.to_string()),
-        serde_json::Value::Bool(flag) => Some(flag.to_string()),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

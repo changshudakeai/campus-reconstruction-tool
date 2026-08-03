@@ -401,7 +401,6 @@ pub struct data_persistence::CandidateDisplay
 pub data_persistence::CandidateDisplay::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub data_persistence::CandidateDisplay::title: alloc::string::String
 impl data_persistence::CandidateDisplay
-pub fn data_persistence::CandidateDisplay::from_source_data(source_data: &serde_json::value::Value, source_entity_id: &str) -> Self
 pub fn data_persistence::CandidateDisplay::new(title: impl core::convert::Into<alloc::string::String>, tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> Self
 impl core::clone::Clone for data_persistence::CandidateDisplay
 pub fn data_persistence::CandidateDisplay::clone(&self) -> data_persistence::CandidateDisplay

@@ -8,21 +8,12 @@ use data_persistence::{
 use shared_domain_types::CandidateCategory;
 
 #[test]
-fn fresh_database_preserves_production_display_across_publish_and_reopen() {
+fn fresh_database_preserves_caller_provided_display_across_publish_and_reopen() {
     let directory = tempfile::tempdir().expect("临时目录");
     let path = directory.path().join("candidate-display.sqlite3");
     let source_data = serde_json::json!({
-        "name": "第一教学楼",
-        "height": 24.5,
-        "accessible": true,
-        "ignored": ["not", "a", "scalar"],
-        "tags": {
-            "name": "不会覆盖顶层名称",
-            "building": "school",
-            "levels": 6,
-            "heated": false,
-            "ignored": {"nested": "object"}
-        }
+        "unprocessed_source_payload": true,
+        "tags": {"source": "overpass"}
     });
 
     {
@@ -45,7 +36,18 @@ fn fresh_database_preserves_production_display_across_publish_and_reopen() {
         let batch = database
             .prepare_candidate_batch("plan-1")
             .expect("准备批次");
-        let display = CandidateDisplay::from_source_data(&source_data, "way/1");
+        let display = CandidateDisplay::new(
+            "第一教学楼",
+            vec![
+                ("accessible".to_owned(), "true".to_owned()),
+                ("building".to_owned(), "school".to_owned()),
+                ("heated".to_owned(), "false".to_owned()),
+                ("height".to_owned(), "24.5".to_owned()),
+                ("levels".to_owned(), "6".to_owned()),
+                ("name".to_owned(), "不会覆盖顶层名称".to_owned()),
+                ("name".to_owned(), "第一教学楼".to_owned()),
+            ],
+        );
         let projections = [
             projection(
                 "overpass:way/1:outer",
@@ -98,26 +100,6 @@ fn fresh_database_preserves_production_display_across_publish_and_reopen() {
             ]
         );
     }
-}
-
-#[test]
-fn display_title_falls_back_to_nested_name_then_source_entity_id() {
-    assert_eq!(
-        CandidateDisplay::from_source_data(
-            &serde_json::json!({"tags": {"name": "游泳池"}}),
-            "way/2",
-        )
-        .title,
-        "游泳池"
-    );
-    assert_eq!(
-        CandidateDisplay::from_source_data(
-            &serde_json::json!({"tags": {"sport": "soccer"}}),
-            "way/3",
-        )
-        .title,
-        "way/3"
-    );
 }
 
 fn projection(
