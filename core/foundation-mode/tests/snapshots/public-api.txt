@@ -38,6 +38,7 @@ pub fn check_orientation_change_impact(existing_data: &HashMap<CandidateCategory
 pub fn should_show_confirmation_dialog(report: &OrientationImpactReport) -> bool
 pub fn format_impact_details(report: &OrientationImpactReport) -> String
 pub fn boundary_footprint(boundary: &shared_domain_types::Boundary) -> Result<BoundaryFootprint, BoundaryFootprintError>
+pub fn boundary_footprint_with_orientation(boundary: &shared_domain_types::Boundary, orientation: shared_domain_types::Orientation) -> Result<BoundaryFootprint, BoundaryFootprintError>
 
 ## Re-exports（B1 共享类型透传）
 

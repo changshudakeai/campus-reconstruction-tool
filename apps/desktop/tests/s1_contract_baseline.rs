@@ -131,20 +131,30 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
     );
     assert!(
         baseline.contains("不切换到内存数据或假首开页")
-            && baseline.contains("不存在失败后返回评审的行为"),
-        "基线必须如实固定启动读取失败与导出占位的现有可观察行为"
+            && baseline.contains("生成、版本核对或落盘失败时显示失败状态"),
+        "基线必须如实固定启动读取失败与 M1 导出失败的可观察行为"
     );
 }
 
 #[test]
-fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
+fn public_ui_seam_matches_startup_settings_and_m1_export() {
     let baseline =
         read_workspace_file("docs/behavior-baselines/s1-current-user-observable-behavior.md");
-    for flow in ["评审", "导出"] {
-        let row = find_flow_row(&baseline, flow);
+    let review_row = find_flow_row(&baseline, "评审");
+    assert!(
+        review_row.contains("当前仅显示占位页") && review_row.contains("没有可观察的"),
+        "评审仍应记录提交树中的占位现状"
+    );
+    let export_row = find_flow_row(&baseline, "导出");
+    for observable in [
+        "边界确认后",
+        "后台完成后",
+        "立即显示处理中",
+        "失败不显示成功产物",
+    ] {
         assert!(
-            row.contains("当前仅显示占位页") && row.contains("没有可观察的"),
-            "{flow} 必须记录提交树中的占位现状，不能提前冻结后续工单行为"
+            export_row.contains(observable),
+            "M1 导出基线缺少可观察事实：{observable}"
         );
     }
 
@@ -210,13 +220,20 @@ fn export_s1_seam_submits_one_complete_f9_intent() {
 
     assert!(seam.contains("ExportPresentationRequest::Start"));
     assert_eq!(
-        seam.matches("export_confirmed_boundary").count(),
+        seam.matches("self.port.start()").count(),
         1,
-        "S1 导出接缝只能调用一次 F9 完整入口"
+        "S1 导出接缝只能提交一次 F9 完整开始意图"
     );
     for forbidden in [
         "collect_and_audit(",
         "database_mut(",
+        "BoundaryExportRequest",
+        "default_export_location",
+        "minecraft_version",
+        "boundary_gcj02",
+        "orientation_angle",
+        "session.plans",
+        "PathBuf",
         "generate_flat_ground(",
         "write_schematic(",
         "ManifestGenerator",
@@ -227,4 +244,9 @@ fn export_s1_seam_submits_one_complete_f9_intent() {
             "S1 导出适配器不得协调底层步骤：{forbidden}"
         );
     }
+    assert!(
+        seam.contains("Presentation::processing")
+            || seam.contains("ExportPresentationRequest::Poll"),
+        "S1 必须呈现 F9 的后台处理中状态，而不是同步等待结果"
+    );
 }

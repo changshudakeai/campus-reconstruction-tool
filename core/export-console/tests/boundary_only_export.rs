@@ -31,7 +31,7 @@ fn request(
         "测试校区",
         PlanId::generate(),
         "边界直出方案",
-        "1.20.4",
+        "26.1.2",
         boundary,
         confirmed,
         orientation,
@@ -62,11 +62,13 @@ fn confirmed_boundary_without_orientation_or_candidates_exports_real_artifacts()
 
     let inspection = sponge_export::verify_worldedit_import_contract(&result.schematic_path)
         .expect("必须生成可导入的 Sponge .schem");
+    assert_eq!(inspection.data_version, 3955);
     assert_eq!(inspection.dimensions[1], 1, "最小路径只生成一层平整场地");
     assert!(inspection.non_air_voxels > 0);
     assert!(inspection.palette.contains_key("minecraft:stone_bricks"));
 
     let manifest = read_manifest(&result.manifest_path);
+    assert_eq!(manifest.minecraft_version, "26.1.2");
     let orientation = manifest.orientation.expect("完整导出必须记录实际朝向");
     assert_eq!(orientation.degree, 0.0);
     assert_eq!(orientation.source, ManifestOrientationSource::MapNorth);
@@ -121,7 +123,7 @@ fn missing_or_unconfirmed_boundary_returns_structured_failure_without_artifacts(
 #[test]
 fn generation_failure_is_explicit_and_does_not_leave_success_artifacts() {
     let dir = tempfile::tempdir().unwrap();
-    let mut table = manifest_generator::MaterialTable::v1_20_4_school();
+    let mut table = manifest_generator::MaterialTable::v26_1_2_school();
     table.building_presets.school.foundation = "not-a-minecraft-block".to_owned();
     let mut console = ExportConsole::new_with_material_table(MockSealGate::new(), table);
 
@@ -136,28 +138,94 @@ fn generation_failure_is_explicit_and_does_not_leave_success_artifacts() {
 }
 
 #[test]
-fn write_failure_is_explicit_and_does_not_publish_manifest_or_schematic() {
+fn unsupported_target_version_is_rejected_without_fallback() {
     let dir = tempfile::tempdir().unwrap();
-    let bad_schematic_path = dir.path().join("campus.schem");
-    std::fs::create_dir(&bad_schematic_path).unwrap();
     let mut console = ExportConsole::new(MockSealGate::new());
 
     let error = console
         .export_confirmed_boundary(BoundaryExportRequest::new(
             "测试校区",
             PlanId::generate(),
-            "落盘失败方案",
+            "不支持版本方案",
             "1.20.4",
             Some(boundary()),
             true,
             None,
-            bad_schematic_path.clone(),
+            dir.path().join("campus.schem"),
             dir.path().join("foundation_manifest.json"),
         ))
-        .expect_err("目标不可写时不得报告成功");
+        .expect_err("不支持版本不得静默回退到其他用料表");
 
-    assert!(matches!(error, Error::ArtifactWrite(_)));
+    assert!(matches!(error, Error::Version(_)));
+    assert!(!dir.path().join("campus.schem").exists());
     assert!(!dir.path().join("foundation_manifest.json").exists());
-    assert!(bad_schematic_path.is_dir(), "既有无效目标不得被移除");
     assert!(!console.progress_view().is_done);
+}
+
+#[test]
+fn material_table_version_mismatch_is_rejected_even_for_supported_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut console = ExportConsole::new_with_material_table(
+        MockSealGate::new(),
+        manifest_generator::MaterialTable::v1_20_4_school(),
+    );
+
+    let error = console
+        .export_confirmed_boundary(request(dir.path(), None, Some(boundary()), true))
+        .expect_err("目标版本与用料表版本不一致时必须失败");
+
+    assert!(matches!(error, Error::Version(_)));
+    assert!(!dir.path().join("campus.schem").exists());
+    assert!(!dir.path().join("foundation_manifest.json").exists());
+}
+
+#[test]
+fn non_square_custom_orientation_changes_generated_footprint_not_only_manifest() {
+    let north_dir = tempfile::tempdir().unwrap();
+    let custom_dir = tempfile::tempdir().unwrap();
+    let non_square = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0100, 39.0000],
+            [116.0100, 39.0010],
+            [116.0000, 39.0010],
+            [116.0000, 39.0000]
+        ]]),
+    };
+
+    let mut north = ExportConsole::new(MockSealGate::new());
+    let north_result = north
+        .export_confirmed_boundary(request(
+            north_dir.path(),
+            None,
+            Some(non_square.clone()),
+            true,
+        ))
+        .unwrap();
+    let north_dimensions = sponge_export::inspect_schematic(&north_result.schematic_path)
+        .unwrap()
+        .dimensions;
+
+    let mut custom = ExportConsole::new(MockSealGate::new());
+    let custom_result = custom
+        .export_confirmed_boundary(request(
+            custom_dir.path(),
+            Some(Orientation::new(127.5).unwrap()),
+            Some(non_square),
+            true,
+        ))
+        .unwrap();
+    let custom_dimensions = sponge_export::inspect_schematic(&custom_result.schematic_path)
+        .unwrap()
+        .dimensions;
+
+    assert_ne!(north_dimensions, custom_dimensions);
+    assert_eq!(
+        read_manifest(&custom_result.manifest_path)
+            .orientation
+            .unwrap()
+            .degree,
+        127.5
+    );
 }

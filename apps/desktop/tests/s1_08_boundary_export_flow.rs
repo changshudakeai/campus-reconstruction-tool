@@ -1,6 +1,7 @@
 //! M1 S1 接缝验收：边界确认后一次开始意图直达 F9 完整导出入口。
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use desktop_shell::{
     assemble_application, AppWindow, OperationPresentationState, ShellDatabases, ShellPresenter,
@@ -10,7 +11,28 @@ use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
-use slint::Model;
+use slint::{ComponentHandle, Model};
+
+fn pump_until_succeeded(window: &AppWindow, deadline: Duration) {
+    let deadline_at = Instant::now() + deadline;
+    let weak = window.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(10),
+        move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if window.get_operation_state() == OperationPresentationState::Succeeded
+                || Instant::now() >= deadline_at
+            {
+                slint::quit_event_loop().expect("停止导出验收事件循环");
+            }
+        },
+    );
+    slint::run_event_loop_until_quit().expect("运行导出验收事件循环");
+}
 
 #[test]
 fn confirmed_boundary_unlocks_direct_export_without_orientation_or_collection() {
@@ -72,6 +94,12 @@ fn confirmed_boundary_unlocks_direct_export_without_orientation_or_collection() 
     );
     window.invoke_workspace_export_start_clicked();
 
+    assert_eq!(
+        window.get_operation_state(),
+        OperationPresentationState::Processing,
+        "Start 必须先返回处理中，不能在 Slint 回调线程同步完成导出"
+    );
+    pump_until_succeeded(&window, Duration::from_secs(5));
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded

@@ -32,6 +32,7 @@ use crate::presentation::{
     OrientationViewState, Presentation, PresentationAdapter, Progress, Screen, WorkspacePageState,
     WorkspaceRequest,
 };
+use crate::runtime::ExportInputStore;
 use crate::ViewModelInjector;
 
 #[cfg(test)]
@@ -121,11 +122,13 @@ pub(crate) struct WorkspaceProductionContext {
     injector: Rc<RefCell<ViewModelInjector>>,
     window: slint::Weak<crate::AppWindow>,
     pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
+    pub(super) export_input: ExportInputStore,
 }
 
 impl WorkspaceProductionContext {
     pub(crate) fn new(injector: Rc<RefCell<ViewModelInjector>>, window: &crate::AppWindow) -> Self {
         let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
+        let export_input = injector.borrow().export_input_store();
         Self {
             injector,
             window: window.as_weak(),
@@ -134,6 +137,7 @@ impl WorkspaceProductionContext {
                 tutorial_dismiss_label,
                 ..Default::default()
             })),
+            export_input,
         }
     }
 
@@ -478,6 +482,9 @@ impl WorkspaceProductionAdapter {
                 }
             }
         }
+        if let Some(context) = self.context.session.borrow().active_context.clone() {
+            self.context.export_input.set_plan(&context);
+        }
         let (keys, anchor) = self.context.map_credentials();
         let page = self.context.page();
         let presentation = if keys.0.is_empty() || crate::map_webview::is_visible() {
@@ -636,6 +643,19 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
         }
+        let coordinates = {
+            let session = self.context.session.borrow();
+            session
+                .active_plan_id
+                .as_ref()
+                .and_then(|plan_id| session.plans.get(plan_id))
+                .and_then(|state| state.boundary_gcj02.clone())
+        };
+        if let Some(coordinates) = coordinates {
+            self.context
+                .export_input
+                .set_boundary(Some(coordinates), true);
+        }
         Presentation::ready(self.context.page())
     }
 
@@ -713,6 +733,7 @@ impl WorkspaceProductionAdapter {
                 state.boundary_gcj02 = None;
             }
         }
+        self.context.export_input.set_boundary(None, false);
         Presentation::ready(self.context.page())
     }
 
@@ -802,7 +823,10 @@ impl WorkspaceProductionAdapter {
     fn commit_orientation(&mut self, angle: f32) -> Presentation<WorkspacePageState> {
         let result = self.context.session.borrow_mut().commit_orientation(angle);
         match result {
-            Ok(()) => Presentation::ready(self.context.page()),
+            Ok(()) => {
+                self.context.export_input.set_orientation(Some(angle));
+                Presentation::ready(self.context.page())
+            }
             Err(()) => self.orientation_save_failed(),
         }
     }
@@ -922,6 +946,7 @@ impl WorkspaceProductionAdapter {
                 state.generated_category_counts.clear();
             }
         }
+        self.context.export_input.set_orientation(None);
         Presentation::ready(self.context.page())
     }
 
@@ -1134,6 +1159,9 @@ impl WorkspaceProductionAdapter {
             }
             session.drawer.load_determined(vertices);
         }
+        self.context
+            .export_input
+            .set_boundary(Some(coords.to_vec()), true);
         Presentation::ready(self.context.page())
     }
 

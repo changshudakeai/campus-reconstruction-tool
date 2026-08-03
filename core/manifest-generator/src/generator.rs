@@ -117,11 +117,27 @@ impl ManifestGenerator {
         dir_path: impl AsRef<std::path::Path>,
         filename: &str,
     ) -> Result<(), GeneratorError> {
+        self.write_to_file_with(manifest, dir_path, filename, |path, json| {
+            std::fs::write(path, json)
+        })
+    }
+
+    /// 序列化后经调用方提供的窄写入端口写入 manifest。
+    ///
+    /// F9 用此端口把 B17 生成的事实写入受控 staging 文件；B17 仍拥有
+    /// manifest 序列化逻辑，调用方不复制 JSON 结构。
+    pub fn write_to_file_with(
+        &self,
+        manifest: &FoundationManifest,
+        dir_path: impl AsRef<std::path::Path>,
+        filename: &str,
+        write: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), GeneratorError> {
         let json = manifest
             .to_json_pretty()
             .map_err(GeneratorError::Serialization)?;
         let path = dir_path.as_ref().join(filename);
-        std::fs::write(&path, json).map_err(|e| GeneratorError::Io(e, path))
+        write(&path, json.as_bytes()).map_err(|e| GeneratorError::Io(e, path))
     }
 }
 

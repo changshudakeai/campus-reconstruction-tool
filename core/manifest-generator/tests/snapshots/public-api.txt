@@ -20,7 +20,7 @@ pub struct ValidationError { pub invalid_blocks: Vec<String>, pub version: Strin
 
 ## Enums #[non_exhaustive]
 
-pub enum MinecraftVersion { V1_20_4, V1_20_2, V1_21 }
+pub enum MinecraftVersion { V26_1_2, V1_20_4, V1_20_2, V1_21 }
 pub enum ManifestOrientationSource { MapNorth, Custom }
 pub enum GeneratorError { Serialization(serde_json::Error), Io(std::io::Error, std::path::PathBuf) }
 
@@ -68,8 +68,10 @@ impl<'de> serde::Deserialize<'de> for BuildingBlocks
 impl PartialEq for BuildingBlocks
 
 impl MaterialTable {
+    pub fn v26_1_2_school() -> Self
     pub fn v1_20_4_school() -> Self
     pub fn validate_blocks(&self, blocks: &[String]) -> Result<Vec<String>, ValidationError>
+    pub fn validate_configured_blocks(&self) -> Result<Vec<String>, ValidationError>
 }
 
 impl std::fmt::Debug for MaterialTable
@@ -106,6 +108,7 @@ impl ManifestGenerator {
     pub fn generate_manifest(&self, plan_info: &PlanInfo, review_decisions: &[(shared_domain_types::CandidateCategory, bool)], manifest_id: impl Into<String>, exported_at: impl Into<String>) -> Result<FoundationManifest, GeneratorError>
     pub fn generate_manifest_with_facts(&self, plan_info: &PlanInfo, review_decisions: &[(shared_domain_types::CandidateCategory, bool)], manifest_id: impl Into<String>, exported_at: impl Into<String>, orientation: Option<ManifestOrientation>, candidate_facts: CandidateFacts) -> Result<FoundationManifest, GeneratorError>
     pub fn write_to_file(&self, manifest: &FoundationManifest, dir_path: impl AsRef<std::path::Path>, filename: &str) -> Result<(), GeneratorError>
+    pub fn write_to_file_with(&self, manifest: &FoundationManifest, dir_path: impl AsRef<std::path::Path>, filename: &str, write: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>) -> Result<(), GeneratorError>
 }
 
 impl Default for ManifestGenerator

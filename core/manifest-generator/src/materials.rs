@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftVersion {
+    /// Minecraft Java 26.1.2（当前产品唯一生产导出配置）
+    V26_1_2,
     /// 1.20.4 (推荐)
     V1_20_4,
     /// 1.20.2
@@ -20,6 +22,7 @@ pub enum MinecraftVersion {
 impl std::fmt::Display for MinecraftVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::V26_1_2 => write!(f, "26.1.2"),
             Self::V1_20_4 => write!(f, "1.20.4"),
             Self::V1_20_2 => write!(f, "1.20.2"),
             Self::V1_21 => write!(f, "1.21"),
@@ -94,6 +97,20 @@ pub struct MaterialTable {
 }
 
 impl MaterialTable {
+    /// 创建产品生产导出使用的 Minecraft 26.1.2 School 用料表。
+    ///
+    /// 这是与 Sponge 26.1.2 DataVersion 3955 配套的明确配置；生产 F9
+    /// 必须同时核对三者，不能从旧版本表静默回退。
+    pub fn v26_1_2_school() -> Self {
+        Self {
+            minecraft_version: MinecraftVersion::V26_1_2,
+            building_presets: BuildingPresets {
+                school: BuildingBlocks::school_preset(),
+                residential: BuildingBlocks::residential_preset(),
+            },
+        }
+    }
+
     /// 创建 1.20.4 版本的 School 预设用料表
     pub fn v1_20_4_school() -> Self {
         Self {
@@ -128,6 +145,32 @@ impl MaterialTable {
                 version: self.minecraft_version.to_string(),
             })
         }
+    }
+
+    /// 验证当前配置中的所有建筑用料方块。
+    pub fn validate_configured_blocks(&self) -> Result<Vec<String>, ValidationError> {
+        let school = &self.building_presets.school;
+        let residential = &self.building_presets.residential;
+        let blocks = [
+            &school.foundation,
+            &school.wall,
+            &school.window,
+            &school.floor,
+            &school.roof,
+            &school.entrance,
+            &school.accent,
+            &residential.foundation,
+            &residential.wall,
+            &residential.window,
+            &residential.floor,
+            &residential.roof,
+            &residential.entrance,
+            &residential.accent,
+        ]
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+        self.validate_blocks(&blocks)
     }
 
     /// 检查单个方块是否在目标版本存在
@@ -189,9 +232,9 @@ mod tests {
 
     #[test]
     fn test_material_table_creation() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
 
-        assert_eq!(table.minecraft_version, MinecraftVersion::V1_20_4);
+        assert_eq!(table.minecraft_version, MinecraftVersion::V26_1_2);
         assert_eq!(
             table.building_presets.school.foundation,
             "minecraft:stone_bricks"
@@ -204,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_validate_blocks() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
         let blocks = vec![
             "minecraft:stone_bricks".to_string(),
             "minecraft:bricks".to_string(),
@@ -218,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_format() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
         let blocks = vec!["air".to_string(), "tnt".to_string()];
 
         // air 不是有效方块 ID 格式（无 namespace）
@@ -228,8 +271,16 @@ mod tests {
 
     #[test]
     fn test_display_minecraft_version() {
+        assert_eq!(format!("{}", MinecraftVersion::V26_1_2), "26.1.2");
         assert_eq!(format!("{}", MinecraftVersion::V1_20_4), "1.20.4");
         assert_eq!(format!("{}", MinecraftVersion::V1_20_2), "1.20.2");
         assert_eq!(format!("{}", MinecraftVersion::V1_21), "1.21");
+    }
+
+    #[test]
+    fn product_26_1_2_configuration_validates_all_known_blocks() {
+        assert!(MaterialTable::v26_1_2_school()
+            .validate_configured_blocks()
+            .is_ok());
     }
 }

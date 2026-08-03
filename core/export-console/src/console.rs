@@ -13,12 +13,16 @@
 //! B7 收成品文字：文本键在本层经 B6 解析后递入。
 
 use std::path::Path;
+use std::sync::Arc;
 
 use generation_engine::BlockModel;
 use manifest_generator::MaterialTable;
 use shared_domain_types::PlanId;
 
-use crate::boundary_export::{BoundaryExportRequest, BoundaryExportResult, BoundaryExportUseCase};
+use crate::boundary_export::{
+    BoundaryExportInput, BoundaryExportOperation, BoundaryExportPort, BoundaryExportRequest,
+    BoundaryExportResult, BoundaryExportUseCase, ExportFileSystem, StdExportFileSystem,
+};
 use crate::data::{ExportRequest, ExportStage, ExportSummary};
 use crate::error::{Error, Result};
 use crate::pipeline;
@@ -62,24 +66,50 @@ pub struct ExportConsole<G: SealGate> {
     gate: G,
     progress: ProgressTracker,
     state: State,
-    boundary_export: BoundaryExportUseCase,
+    boundary_export: Arc<BoundaryExportUseCase>,
 }
 
 impl<G: SealGate> ExportConsole<G> {
     /// 用封账门控创建（门控由壳接线到 F5，测试用 Mock）
     pub fn new(gate: G) -> Self {
-        Self::new_with_material_table(gate, MaterialTable::v1_20_4_school())
+        Self::new_with_material_table(gate, MaterialTable::v26_1_2_school())
     }
 
     /// 用指定 B17 用料表创建；完整边界直出用例仍由 F9 统一协调。
     pub fn new_with_material_table(gate: G, material_table: MaterialTable) -> Self {
+        Self::new_with_material_table_and_file_system(
+            gate,
+            material_table,
+            Arc::new(StdExportFileSystem),
+        )
+    }
+
+    /// 用指定用料表与文件端口创建 F9 控制台。
+    pub fn new_with_material_table_and_file_system(
+        gate: G,
+        material_table: MaterialTable,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Self {
         Self {
             request: None,
             gate,
             progress: ProgressTracker::new(),
             state: State::Idle,
-            boundary_export: BoundaryExportUseCase::new(material_table),
+            boundary_export: Arc::new(BoundaryExportUseCase::new(material_table, file_system)),
         }
+    }
+
+    /// 构造一个由 F9 拥有完整输入/执行链的异步能力端口。
+    pub fn boundary_export_port(&self, input: Arc<dyn BoundaryExportInput>) -> BoundaryExportPort {
+        BoundaryExportPort::new(Arc::clone(&self.boundary_export), input)
+    }
+
+    /// 直接启动异步边界导出；生产 S1 使用 [`Self::boundary_export_port`]。
+    pub fn start_boundary_export(
+        &self,
+        input: Arc<dyn BoundaryExportInput>,
+    ) -> Result<BoundaryExportOperation> {
+        self.boundary_export_port(input).start()
     }
 
     /// 完整边界直出入口（ADR-0041）。

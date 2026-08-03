@@ -5,16 +5,15 @@
 //! 不在 S1 读取或推演后续业务状态。
 
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use coverage_audit::AuditResult;
 use data_acquisition::GaodeDataSource;
-use export_console::BoundaryExportRequest;
+use export_console::BoundaryExportPort;
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
-use shared_domain_types::{Boundary, CandidateCategory, Orientation, PlanId};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
@@ -360,65 +359,17 @@ impl PresentationAdapter<(), CoveragePageState> for CoverageProductionAdapter {
     }
 }
 
-struct ExportProductionAdapter(WorkspaceProductionContext);
+struct ExportProductionAdapter {
+    context: WorkspaceProductionContext,
+    port: BoundaryExportPort,
+    operation: Option<export_console::BoundaryExportOperation>,
+}
 
 impl ExportProductionAdapter {
-    fn request(&self) -> Option<BoundaryExportRequest> {
-        let (plan_id, campus_name, plan_name, boundary, boundary_confirmed, orientation) = {
-            let session = self.0.session.borrow();
-            let plan_id_text = session.active_plan_id.clone()?;
-            let plan_id = PlanId::parse(&plan_id_text).ok()?;
-            let context = session.active_context.clone()?;
-            let state = session.plans.get(&plan_id_text);
-            let boundary =
-                state
-                    .and_then(|state| state.boundary_gcj02.clone())
-                    .map(|coordinates| Boundary {
-                        r#type: "Polygon".to_owned(),
-                        coordinates: serde_json::json!([coordinates]),
-                    });
-            let boundary_confirmed = state.is_some_and(|state| state.has_boundary);
-            let orientation = state
-                .and_then(|state| state.orientation_angle)
-                .and_then(Orientation::new);
-            (
-                plan_id,
-                context.campus_name,
-                context.plan_name,
-                boundary,
-                boundary_confirmed,
-                orientation,
-            )
-        };
-
-        let injector = self.0.injector();
-        let (minecraft_version, export_location) = {
-            let injector = injector.borrow();
-            let settings = injector.settings();
-            (
-                settings.settings().ok()?.minecraft_version,
-                settings.default_export_location().ok()?,
-            )
-        };
-        let output_dir = PathBuf::from(export_location);
-        let plan_stem = plan_id.to_string();
-        Some(BoundaryExportRequest::new(
-            campus_name,
-            plan_id,
-            plan_name,
-            minecraft_version,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            output_dir.join(format!("{plan_stem}.schem")),
-            output_dir.join(format!("{plan_stem}.foundation_manifest.json")),
-        ))
-    }
-
     fn page_with_status(&self, title_key: &str, subtitle: impl Into<String>) -> ExportPageState {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let l10n = injector.borrow();
-        let mut workspace = self.0.page();
+        let mut workspace = self.context.page();
         workspace.placeholder_title = l10n.l10n().t(title_key);
         workspace.placeholder_subtitle = subtitle.into();
         ExportPageState { workspace }
@@ -433,7 +384,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
             ExportPresentationRequest::Open => Presentation::ready(
                 self.page_with_status(
                     "export.confirm_title",
-                    self.0
+                    self.context
                         .injector()
                         .borrow()
                         .l10n()
@@ -441,34 +392,81 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 ),
             )
             .with_navigation(NavigationDecision::Show(Screen::Workspace)),
-            ExportPresentationRequest::Start => {
-                let Some(request) = self.request() else {
-                    return Presentation::failed(self.page_with_status(
+            ExportPresentationRequest::Start => match self.port.start() {
+                Ok(operation) => {
+                    let progress = operation.progress_view();
+                    self.operation = Some(operation);
+                    Presentation::processing(
+                        self.page_with_status(
+                            progress.stage_key,
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                        Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                    )
+                }
+                Err(_) => Presentation::failed(
+                    self.page_with_status(
                         "error.export_failed",
-                        self.0.injector().borrow().l10n().t("export.failure_retry"),
-                    ))
+                        self.context
+                            .injector()
+                            .borrow()
+                            .l10n()
+                            .t("export.failure_retry"),
+                    ),
+                ),
+            }
+            .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            ExportPresentationRequest::Poll => {
+                let Some(operation) = self.operation.as_mut() else {
+                    return Presentation::ready(
+                        self.page_with_status(
+                            "export.confirm_title",
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                    )
                     .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
-                let result = {
-                    let injector = self.0.injector();
-                    let result = injector
-                        .borrow_mut()
-                        .export_mut()
-                        .export_confirmed_boundary(request);
-                    result
-                };
-                match result {
-                    Ok(result) => Presentation::succeeded(self.page_with_status(
-                        "export.done",
-                        result.schematic_path.display().to_string(),
-                    ))
-                    .with_navigation(NavigationDecision::Show(Screen::Workspace)),
-                    Err(_) => Presentation::failed(self.page_with_status(
-                        "error.export_failed",
-                        self.0.injector().borrow().l10n().t("export.failure_retry"),
-                    ))
-                    .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+                if let Some(result) = operation.try_complete() {
+                    self.operation = None;
+                    match result {
+                        Ok(result) => Presentation::succeeded(self.page_with_status(
+                            "export.done",
+                            result.schematic_path.display().to_string(),
+                        )),
+                        Err(_) => Presentation::failed(
+                            self.page_with_status(
+                                "error.export_failed",
+                                self.context
+                                    .injector()
+                                    .borrow()
+                                    .l10n()
+                                    .t("export.failure_retry"),
+                            ),
+                        ),
+                    }
+                } else {
+                    let progress = operation.progress_view();
+                    Presentation::processing(
+                        self.page_with_status(
+                            progress.stage_key,
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                        Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                    )
                 }
+                .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
         }
     }
@@ -633,6 +631,7 @@ pub(crate) struct ProductionEntries {
     diagnostic_failure: DiagnosticFailureLabels,
     pending_confirmation: Option<PendingConfirmation>,
     pending_input: Option<PendingInput>,
+    export_poll_timer: slint::Timer,
 }
 
 impl ProductionEntries {
@@ -650,7 +649,9 @@ impl ProductionEntries {
                 panicked_body: injector.l10n().t("notice.diagnostic_action_panicked"),
             }
         };
+        injector.borrow().sync_export_settings();
         let workspace = WorkspaceProductionContext::new(Rc::clone(&injector), window);
+        let export_port = injector.borrow().boundary_export_port();
         let collection_coordinator = CollectionCoordinator::new(workspace.clone());
         Self {
             startup: StartupPresentationEntry::new(StartupProductionAdapter {
@@ -673,7 +674,11 @@ impl ProductionEntries {
             }),
             review: ReviewPresentationEntry::new(ReviewProductionAdapter(workspace.clone())),
             _coverage: CoveragePresentationEntry::new(CoverageProductionAdapter(workspace.clone())),
-            export: ExportPresentationEntry::new(ExportProductionAdapter(workspace.clone())),
+            export: ExportPresentationEntry::new(ExportProductionAdapter {
+                context: workspace.clone(),
+                port: export_port,
+                operation: None,
+            }),
             notification: NotificationPresentationEntry::new(NotificationProductionAdapter {
                 center: Arc::clone(&center),
                 labels,
@@ -686,6 +691,7 @@ impl ProductionEntries {
             diagnostic_failure,
             pending_confirmation: None,
             pending_input: None,
+            export_poll_timer: slint::Timer::default(),
         }
     }
 
@@ -879,10 +885,40 @@ impl ProductionEntries {
             .show(window, &self.center, ExportPresentationRequest::Open);
     }
 
-    pub(crate) fn start_export(&mut self, window: &AppWindow) {
+    pub(crate) fn start_export(&mut self, window: &AppWindow) -> bool {
         self.supersede_diagnostic(window);
-        self.export
+        let presentation = self
+            .export
             .show(window, &self.center, ExportPresentationRequest::Start);
+        matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
+    fn poll_export(&mut self, window: &AppWindow) -> bool {
+        let presentation = self
+            .export
+            .show(window, &self.center, ExportPresentationRequest::Poll);
+        !matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
+    fn start_export_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().export_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let completed = entries.borrow_mut().poll_export(&window);
+                if completed {
+                    entries.borrow_mut().export_poll_timer.stop();
+                }
+            },
+        );
     }
 
     #[cfg(test)]
@@ -1425,7 +1461,10 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_workspace_export_start_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().start_export(&window);
+                let processing = shared.borrow_mut().start_export(&window);
+                if processing {
+                    ProductionEntries::start_export_polling(&shared, &window);
+                }
             }
         });
 

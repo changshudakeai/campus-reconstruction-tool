@@ -1,28 +1,100 @@
 //! F9 边界直出完整用例（ADR-0041）。
 //!
-//! 该用例拥有一次导出所需的完整业务决定：校验边界确认状态、决定默认正北
-//! 或用户朝向、调用 B18 生成最小场地、调用 B17 写 manifest，再调用 B4
-//! 写 Sponge 文件。S1 只提交一次 [`BoundaryExportRequest`]，不拆解这条链。
+//! 该用例拥有一次导出所需的完整业务决定：校验边界确认状态、核对
+//! Minecraft 26.1.2 兼容配置、决定默认正北或用户朝向、调用 B18 生成
+//! 最小场地、调用 B17 写 manifest，再调用 B4 编码 Sponge 文件。S1 只
+//! 通过 [`BoundaryExportPort`] 提交一次开始意图，不拆解这条链。
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 
 use chrono::Utc;
-use foundation_mode::boundary_footprint;
+use foundation_mode::boundary_footprint_with_orientation;
 use generation_engine::GenerationEngine;
 use manifest_generator::{
     CandidateFacts, FoundationManifest, ManifestGenerator, ManifestOrientation,
-    ManifestOrientationSource, MaterialTable, PlanInfo,
+    ManifestOrientationSource, MaterialTable, MinecraftVersion, PlanInfo,
 };
 use shared_domain_types::{Boundary, Orientation, PlanId};
+use sponge_export::{SchematicProfile, MINECRAFT_26_1_2_PROFILE};
 
 use crate::data::ExportStage;
-use crate::error::{BoundaryError, Error, Result};
+use crate::error::{
+    ArtifactKind, ArtifactRecoveryError, ArtifactWriteError, BoundaryError, Error, Result,
+    VersionError,
+};
 use crate::pipeline;
 use crate::progress::ProgressTracker;
+use crate::views::ExportProgressView;
 
 static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// 文件系统窄端口；F9 通过它写 staging、发布和恢复，测试可注入故障。
+pub trait ExportFileSystem: Send + Sync {
+    /// 创建受控输出目录。
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+    /// 写入一个完整 staging 文件。
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()>;
+    /// 在同一输出目录内移动文件。
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// 删除一个文件或 staging/backup 文件。
+    fn remove_file(&self, path: &Path) -> io::Result<()>;
+    /// 查询路径类别；不存在时返回 None。
+    fn kind(&self, path: &Path) -> io::Result<Option<ExportFileKind>>;
+}
+
+/// 文件系统路径类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFileKind {
+    /// 普通文件。
+    File,
+    /// 目录。
+    Directory,
+}
+
+/// 生产使用的标准文件系统实现。
+#[derive(Debug, Default)]
+pub struct StdExportFileSystem;
+
+impl ExportFileSystem for StdExportFileSystem {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        fs::create_dir_all(path)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        fs::write(path, contents)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        fs::remove_file(path)
+    }
+
+    fn kind(&self, path: &Path) -> io::Result<Option<ExportFileKind>> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(ExportFileKind::File)),
+            Ok(metadata) if metadata.is_dir() => Ok(Some(ExportFileKind::Directory)),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// F9 从组合根取得完整输入的稳定能力端口。
+///
+/// 实现可以读取方案正式状态、全局版本和默认输出位置，但这些读取发生在
+/// F9 端口内部；S1 不读取中间状态，也不拼装 [`BoundaryExportRequest`]。
+pub trait BoundaryExportInput: Send + Sync {
+    /// 一次读取完整边界直出输入。
+    fn load_request(&self) -> Result<BoundaryExportRequest>;
+}
 
 /// F9 完整导出入口的一次请求。
 #[derive(Debug, Clone)]
@@ -45,7 +117,7 @@ impl BoundaryExportRequest {
     /// 创建一次边界直出请求。
     #[allow(
         clippy::too_many_arguments,
-        reason = "the F9 request keeps all export inputs explicit at the presentation seam"
+        reason = "the F9 request keeps all export inputs explicit at the stable capability port"
     )]
     pub fn new(
         campus_name: impl Into<String>,
@@ -99,14 +171,60 @@ pub struct BoundaryExportResult {
     pub manifest: FoundationManifest,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ExportVersionContract {
+    version: &'static str,
+    material_version: MinecraftVersion,
+    schematic_profile: SchematicProfile,
+}
+
+fn version_contract(
+    request: &BoundaryExportRequest,
+    material_table: &MaterialTable,
+) -> Result<ExportVersionContract> {
+    let requested = request.plan.minecraft_version.as_str();
+    let contract = match requested {
+        "26.1.2" => ExportVersionContract {
+            version: "26.1.2",
+            material_version: MinecraftVersion::V26_1_2,
+            schematic_profile: MINECRAFT_26_1_2_PROFILE,
+        },
+        _ => {
+            return Err(Error::Version(VersionError::Unsupported {
+                requested: requested.to_owned(),
+            }))
+        }
+    };
+    if material_table.minecraft_version != contract.material_version {
+        return Err(Error::Version(VersionError::MaterialTableMismatch {
+            requested: requested.to_owned(),
+            material_table: material_table.minecraft_version.to_string(),
+        }));
+    }
+    if contract.schematic_profile.minecraft_version != contract.version {
+        return Err(Error::Version(VersionError::SchematicProfileMismatch {
+            requested: requested.to_owned(),
+            data_version: contract.schematic_profile.data_version,
+        }));
+    }
+    Ok(contract)
+}
+
 /// F9 内部完整导出用例；不向 S1 暴露 B18/B17/B4 的分段接口。
 pub(crate) struct BoundaryExportUseCase {
     material_table: MaterialTable,
+    file_system: Arc<dyn ExportFileSystem>,
 }
 
 impl BoundaryExportUseCase {
-    pub(crate) fn new(material_table: MaterialTable) -> Self {
-        Self { material_table }
+    pub(crate) fn new(
+        material_table: MaterialTable,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Self {
+        Self {
+            material_table,
+            file_system,
+        }
     }
 
     pub(crate) fn export(
@@ -133,23 +251,26 @@ impl BoundaryExportUseCase {
         if !request.boundary_confirmed {
             return Err(Error::Boundary(BoundaryError::NotConfirmed));
         }
-        if request.schematic_path == request.manifest_path {
-            return Err(Error::ArtifactWrite(
-                "Sponge 文件与 manifest 不能使用同一目标路径".to_owned(),
-            ));
-        }
-        validate_target(&request.schematic_path)?;
-        validate_target(&request.manifest_path)?;
-
-        let footprint = boundary_footprint(boundary)
-            .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
+        let contract = version_contract(request, &self.material_table)?;
+        validate_targets(request, self.file_system.as_ref())?;
 
         // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
-        let (degree, source) = request
-            .orientation
-            .map_or((0.0, ManifestOrientationSource::MapNorth), |orientation| {
-                (orientation.degree(), ManifestOrientationSource::Custom)
-            });
+        let (orientation, degree, source) = match request.orientation {
+            Some(orientation) => (
+                orientation,
+                orientation.degree(),
+                ManifestOrientationSource::Custom,
+            ),
+            None => (
+                Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
+                0.0,
+                ManifestOrientationSource::MapNorth,
+            ),
+        };
+
+        // B5：验证每个 Polygon/MultiPolygon 外环，并按实际朝向计算完整覆盖范围。
+        let footprint = boundary_footprint_with_orientation(boundary, orientation)
+            .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
 
         // B18：空候选时生成边界覆盖范围内的一层最小平整场地。
         progress.set_stage(ExportStage::Generating);
@@ -159,9 +280,15 @@ impl BoundaryExportUseCase {
         progress.report_percent(35);
 
         // B17：不伪造候选投影、评审决定或保留候选，manifest 如实记录全为零。
+        let actual_plan = PlanInfo::new(
+            request.plan.campus_name.clone(),
+            request.plan.plan_id,
+            request.plan.plan_name.clone(),
+            contract.version,
+        );
         let manifest = ManifestGenerator::new()
             .generate_manifest_with_facts(
-                &request.plan,
+                &actual_plan,
                 &[],
                 uuid::Uuid::new_v4().to_string(),
                 Utc::now().to_rfc3339(),
@@ -178,26 +305,34 @@ impl BoundaryExportUseCase {
             let manifest_parent = request
                 .manifest_path
                 .parent()
-                .ok_or_else(|| Error::ArtifactWrite("manifest 没有父目录".to_owned()))?;
+                .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
             let manifest_filename = staged_manifest
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| Error::ArtifactWrite("manifest 临时文件名无效".to_owned()))?;
+                .ok_or_else(|| invalid_target("manifest 临时文件名无效"))?;
             ManifestGenerator::new()
-                .write_to_file(&manifest, manifest_parent, manifest_filename)
+                .write_to_file_with(
+                    &manifest,
+                    manifest_parent,
+                    manifest_filename,
+                    |path, bytes| self.file_system.write(path, bytes),
+                )
                 .map_err(|error| Error::ManifestWrite(error.to_string()))?;
             progress.report_percent(65);
 
-            // B4：沿用现有 F9 → B18 → B4 适配器，不复制 Sponge 编码逻辑。
-            pipeline::export_schematic_staged(
+            // B4：复用 Sponge 编码器，经 F9 的受控文件端口写 staging。
+            pipeline::export_schematic_staged_with_file_system(
                 &model,
                 &staged_schematic,
-                &request.plan.plan_name,
+                &actual_plan.plan_name,
+                contract.schematic_profile,
+                self.file_system.as_ref(),
                 progress,
             )?;
             progress.report_percent(90);
 
             publish_pair(
+                self.file_system.as_ref(),
                 &staged_schematic,
                 &request.schematic_path,
                 &staged_manifest,
@@ -212,48 +347,159 @@ impl BoundaryExportUseCase {
         })();
 
         if result.is_err() {
-            let _ = fs::remove_file(&staged_schematic);
-            let _ = fs::remove_file(&staged_manifest);
+            if let Err(recovery) = cleanup_staging(
+                self.file_system.as_ref(),
+                [&staged_schematic, &staged_manifest],
+            ) {
+                return Err(Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
+                    primary: result
+                        .as_ref()
+                        .err()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "导出失败".to_owned()),
+                    recovery,
+                    paths: vec![staged_schematic, staged_manifest],
+                }));
+            }
         }
         result
     }
 }
 
-fn validate_target(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty() {
-        return Err(Error::ArtifactWrite("导出目标路径为空".to_owned()));
+/// 后台边界导出操作；UI 只读取真实 F9 进度并轮询终态。
+pub struct BoundaryExportOperation {
+    progress: ProgressTracker,
+    result: mpsc::Receiver<Result<BoundaryExportResult>>,
+}
+
+impl BoundaryExportOperation {
+    /// 当前真实阶段/百分比对应的呈现数据。
+    pub fn progress_view(&self) -> ExportProgressView {
+        ExportProgressView::from_tracker(&self.progress)
     }
-    let parent = path
+
+    /// 非阻塞取得后台终态；没有终态时返回 None。
+    pub fn try_complete(&mut self) -> Option<Result<BoundaryExportResult>> {
+        match self.result.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(Error::BackgroundTask)),
+        }
+    }
+}
+
+/// F9 稳定的完整导出能力端口；S1 只调用 [`Self::start`] 一次。
+#[derive(Clone)]
+pub struct BoundaryExportPort {
+    use_case: Arc<BoundaryExportUseCase>,
+    input: Arc<dyn BoundaryExportInput>,
+    active: Arc<AtomicBool>,
+}
+
+impl BoundaryExportPort {
+    pub(crate) fn new(
+        use_case: Arc<BoundaryExportUseCase>,
+        input: Arc<dyn BoundaryExportInput>,
+    ) -> Self {
+        Self {
+            use_case,
+            input,
+            active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// 提交一次最小开始意图；输入取得和完整导出均由 F9 端口拥有。
+    pub fn start(&self) -> Result<BoundaryExportOperation> {
+        if self.active.swap(true, Ordering::SeqCst) {
+            return Err(Error::InvalidState("导出进行中，不接受新的导出请求"));
+        }
+        let request = match self.input.load_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.active.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
+        let progress = ProgressTracker::new();
+        let worker_progress = progress.clone();
+        let use_case = Arc::clone(&self.use_case);
+        let active = Arc::clone(&self.active);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = use_case.export(&request, &worker_progress);
+            active.store(false, Ordering::SeqCst);
+            let _send_result = sender.send(result);
+        });
+        Ok(BoundaryExportOperation {
+            progress,
+            result: receiver,
+        })
+    }
+}
+
+fn validate_targets(
+    request: &BoundaryExportRequest,
+    file_system: &dyn ExportFileSystem,
+) -> Result<()> {
+    if request.schematic_path.as_os_str().is_empty() || request.manifest_path.as_os_str().is_empty()
+    {
+        return Err(invalid_target("导出目标路径为空"));
+    }
+    if request.schematic_path == request.manifest_path {
+        return Err(invalid_target(
+            "Sponge 文件与 manifest 不能使用同一目标路径",
+        ));
+    }
+    let schematic_parent = request
+        .schematic_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| Error::ArtifactWrite(format!("导出目标没有父目录：{}", path.display())))?;
-    if parent.exists() && !parent.is_dir() {
-        return Err(Error::ArtifactWrite(format!(
-            "导出目标父路径不是目录：{}",
-            parent.display()
-        )));
+        .ok_or_else(|| invalid_target(".schem 没有父目录"))?;
+    let manifest_parent = request
+        .manifest_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
+    if schematic_parent != manifest_parent {
+        return Err(invalid_target(
+            ".schem 与 manifest 必须属于同一受控输出目录",
+        ));
     }
-    if path.exists() && !path.is_file() {
-        return Err(Error::ArtifactWrite(format!(
-            "导出目标不是文件：{}",
-            path.display()
-        )));
+    match file_system.kind(schematic_parent) {
+        Ok(Some(ExportFileKind::Directory)) | Ok(None) => {}
+        Ok(Some(ExportFileKind::File)) => return Err(invalid_target("导出目标父路径不是目录")),
+        Err(error) => {
+            return Err(invalid_target(format!(
+                "无法检查导出目录 {}：{error}",
+                schematic_parent.display()
+            )))
+        }
     }
-    fs::create_dir_all(parent).map_err(|error| {
-        Error::ArtifactWrite(format!("无法创建导出目录 {}：{error}", parent.display()))
-    })?;
-    Ok(())
+    file_system
+        .create_dir_all(schematic_parent)
+        .map_err(|error| {
+            invalid_target(format!(
+                "无法创建导出目录 {}：{error}",
+                schematic_parent.display()
+            ))
+        })
+}
+
+fn invalid_target(detail: impl Into<String>) -> Error {
+    Error::ArtifactWrite(ArtifactWriteError::InvalidTarget {
+        detail: detail.into(),
+    })
 }
 
 fn staged_path(final_path: &Path, kind: &str) -> Result<PathBuf> {
     let parent = final_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| Error::ArtifactWrite("导出目标没有父目录".to_owned()))?;
+        .ok_or_else(|| invalid_target("导出目标没有父目录"))?;
     let filename = final_path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| Error::ArtifactWrite("导出目标文件名无效".to_owned()))?;
+        .ok_or_else(|| invalid_target("导出目标文件名无效"))?;
     let sequence = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     Ok(parent.join(format!(
         ".{filename}.m1-{kind}-{}-{sequence}",
@@ -261,59 +507,224 @@ fn staged_path(final_path: &Path, kind: &str) -> Result<PathBuf> {
     )))
 }
 
-/// 发布两个已由各自基础模块写好的文件；失败时恢复既有目标。
 fn publish_pair(
+    file_system: &dyn ExportFileSystem,
     staged_schematic: &Path,
     schematic: &Path,
     staged_manifest: &Path,
     manifest: &Path,
 ) -> Result<()> {
-    let schematic_backup = publish_one(staged_schematic, schematic, "schem")?;
-    match publish_one(staged_manifest, manifest, "manifest") {
-        Ok(manifest_backup) => {
-            remove_backup(schematic_backup);
-            remove_backup(manifest_backup);
-            Ok(())
+    let schematic_backup = backup_existing(file_system, schematic, ArtifactKind::Schematic)?;
+    let manifest_backup = match backup_existing(file_system, manifest, ArtifactKind::Manifest) {
+        Ok(backup) => backup,
+        Err(primary) => {
+            if let Err(recovery) = restore_backups(
+                file_system,
+                schematic,
+                schematic_backup.as_ref(),
+                manifest,
+                None,
+            ) {
+                return Err(recovery_error(primary, recovery, [schematic, manifest]));
+            }
+            return Err(primary);
         }
-        Err(error) => {
-            let _ = fs::remove_file(schematic);
-            restore_backup(schematic, schematic_backup);
-            Err(error)
-        }
-    }
-}
-
-fn publish_one(stage: &Path, final_path: &Path, kind: &str) -> Result<Option<PathBuf>> {
-    let backup = if final_path.exists() {
-        let backup = staged_path(final_path, &format!("backup-{kind}"))?;
-        fs::rename(final_path, &backup).map_err(|error| {
-            Error::ArtifactWrite(format!(
-                "无法备份既有导出 {}：{error}",
-                final_path.display()
-            ))
-        })?;
-        Some(backup)
-    } else {
-        None
     };
-    if let Err(error) = fs::rename(stage, final_path) {
-        restore_backup(final_path, backup.clone());
-        return Err(Error::ArtifactWrite(format!(
-            "无法发布导出文件 {}：{error}",
+
+    let mut published_schematic = false;
+    let mut published_manifest = false;
+    let publish_result = (|| {
+        file_system
+            .rename(staged_schematic, schematic)
+            .map_err(|error| publish_error(ArtifactKind::Schematic, schematic, error))?;
+        published_schematic = true;
+        file_system
+            .rename(staged_manifest, manifest)
+            .map_err(|error| publish_error(ArtifactKind::Manifest, manifest, error))?;
+        published_manifest = true;
+        Ok::<(), Error>(())
+    })();
+
+    if let Err(primary) = publish_result {
+        let rollback = rollback_pair(
+            file_system,
+            schematic,
+            published_schematic,
+            schematic_backup.as_ref(),
+            manifest,
+            published_manifest,
+            manifest_backup.as_ref(),
+        );
+        if let Err(recovery) = rollback {
+            return Err(recovery_error(primary, recovery, [schematic, manifest]));
+        }
+        return Err(primary);
+    }
+
+    cleanup_backup(file_system, schematic_backup)?;
+    cleanup_backup(file_system, manifest_backup)?;
+    Ok(())
+}
+
+fn backup_existing(
+    file_system: &dyn ExportFileSystem,
+    final_path: &Path,
+    artifact: ArtifactKind,
+) -> Result<Option<PathBuf>> {
+    match file_system.kind(final_path).map_err(|error| {
+        invalid_target(format!(
+            "无法检查既有 {artifact} 文件 {}：{error}",
             final_path.display()
-        )));
+        ))
+    })? {
+        None => Ok(None),
+        Some(ExportFileKind::Directory) => Err(invalid_target(format!(
+            "既有 {artifact} 目标不是文件：{}",
+            final_path.display()
+        ))),
+        Some(ExportFileKind::File) => {
+            let backup = staged_path(final_path, &format!("backup-{artifact}"))?;
+            file_system
+                .rename(final_path, &backup)
+                .map_err(|error| publish_error(artifact, final_path, error))?;
+            Ok(Some(backup))
+        }
     }
-    Ok(backup)
 }
 
-fn restore_backup(final_path: &Path, backup: Option<PathBuf>) {
-    if let Some(backup) = backup {
-        let _ = fs::rename(backup, final_path);
+fn publish_error(artifact: ArtifactKind, path: &Path, error: io::Error) -> Error {
+    Error::ArtifactWrite(ArtifactWriteError::Publish {
+        artifact,
+        path: path.to_owned(),
+        detail: error.to_string(),
+    })
+}
+
+fn rollback_pair(
+    file_system: &dyn ExportFileSystem,
+    schematic: &Path,
+    published_schematic: bool,
+    schematic_backup: Option<&PathBuf>,
+    manifest: &Path,
+    published_manifest: bool,
+    manifest_backup: Option<&PathBuf>,
+) -> std::result::Result<(), String> {
+    let mut diagnostics = Vec::new();
+    if published_manifest {
+        if let Err(error) = file_system.remove_file(manifest) {
+            diagnostics.push(format!(
+                "删除新 manifest {} 失败：{error}",
+                manifest.display()
+            ));
+        }
+    }
+    if published_schematic {
+        if let Err(error) = file_system.remove_file(schematic) {
+            diagnostics.push(format!(
+                "删除新 .schem {} 失败：{error}",
+                schematic.display()
+            ));
+        }
+    }
+    if let Some(backup) = schematic_backup {
+        if let Err(error) = file_system.rename(backup, schematic) {
+            diagnostics.push(format!("恢复 .schem {} 失败：{error}", schematic.display()));
+        }
+    }
+    if let Some(backup) = manifest_backup {
+        if let Err(error) = file_system.rename(backup, manifest) {
+            diagnostics.push(format!(
+                "恢复 manifest {} 失败：{error}",
+                manifest.display()
+            ));
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics.join("; "))
     }
 }
 
-fn remove_backup(backup: Option<PathBuf>) {
-    if let Some(backup) = backup {
-        let _ = fs::remove_file(backup);
+fn restore_backups(
+    file_system: &dyn ExportFileSystem,
+    schematic: &Path,
+    schematic_backup: Option<&PathBuf>,
+    manifest: &Path,
+    manifest_backup: Option<&PathBuf>,
+) -> std::result::Result<(), String> {
+    let mut diagnostics = Vec::new();
+    if let Some(backup) = schematic_backup {
+        if let Err(error) = file_system.rename(backup, schematic) {
+            diagnostics.push(format!("恢复 .schem 失败：{error}"));
+        }
     }
+    if let Some(backup) = manifest_backup {
+        if let Err(error) = file_system.rename(backup, manifest) {
+            diagnostics.push(format!("恢复 manifest 失败：{error}"));
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics.join("; "))
+    }
+}
+
+fn cleanup_backup(file_system: &dyn ExportFileSystem, backup: Option<PathBuf>) -> Result<()> {
+    let Some(backup) = backup else { return Ok(()) };
+    match file_system.kind(&backup).map_err(|error| {
+        Error::ArtifactWrite(ArtifactWriteError::Cleanup {
+            path: backup.clone(),
+            detail: error.to_string(),
+        })
+    })? {
+        None => Ok(()),
+        Some(ExportFileKind::File) => file_system.remove_file(&backup).map_err(|error| {
+            Error::ArtifactWrite(ArtifactWriteError::Cleanup {
+                path: backup,
+                detail: error.to_string(),
+            })
+        }),
+        Some(ExportFileKind::Directory) => Err(Error::ArtifactWrite(ArtifactWriteError::Cleanup {
+            path: backup,
+            detail: "备份路径意外是目录".to_owned(),
+        })),
+    }
+}
+
+fn cleanup_staging<const N: usize>(
+    file_system: &dyn ExportFileSystem,
+    paths: [&Path; N],
+) -> std::result::Result<(), String> {
+    let mut diagnostics = Vec::new();
+    for path in paths {
+        match file_system.kind(path) {
+            Ok(Some(ExportFileKind::File)) => {
+                if let Err(error) = file_system.remove_file(path) {
+                    diagnostics.push(format!("清理 staging {} 失败：{error}", path.display()));
+                }
+            }
+            Ok(Some(ExportFileKind::Directory)) => {
+                diagnostics.push(format!("清理 staging {} 失败：路径是目录", path.display()))
+            }
+            Ok(None) => {}
+            Err(error) => {
+                diagnostics.push(format!("检查 staging {} 失败：{error}", path.display()))
+            }
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(diagnostics.join("; "))
+    }
+}
+
+fn recovery_error<const N: usize>(primary: Error, recovery: String, paths: [&Path; N]) -> Error {
+    Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
+        primary: primary.to_string(),
+        recovery,
+        paths: paths.into_iter().map(Path::to_owned).collect(),
+    })
 }

@@ -70,6 +70,10 @@ impl MaterialValidator {
 
         // 版本特异性检查（可扩展）
         match version {
+            MinecraftVersion::V26_1_2 => {
+                // 产品生产档案中的常用基础方块均在 26.1.2 可用。
+                true
+            }
             MinecraftVersion::V1_20_4 | MinecraftVersion::V1_20_2 => {
                 // 1.20.x 支持的方块子集
                 // 例：minecraft:crafter 只在 1.21+ 引入

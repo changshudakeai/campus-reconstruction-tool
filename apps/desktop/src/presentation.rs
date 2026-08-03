@@ -722,6 +722,8 @@ pub enum ExportPresentationRequest {
     Open,
     /// 用户点击一次开始导出按钮。
     Start,
+    /// S1 内部观察 F9 已提交操作的真实进度或终态。
+    Poll,
 }
 
 /// 当前五步工作区页的全部可观察状态。
