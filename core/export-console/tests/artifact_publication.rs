@@ -2,6 +2,7 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,7 @@ enum Failure {
     SchematicStageWrite,
     ManifestPublish,
     ManifestPublishAndRestore,
+    BackupCleanup,
 }
 
 struct FaultFileSystem {
@@ -152,6 +154,54 @@ impl ExportFileSystem for FaultFileSystem {
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
+        if matches!(self.failure, Failure::BackupCleanup)
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains("backup-"))
+        {
+            return Err(Self::io_error("backup cleanup", path));
+        }
+        std::fs::remove_file(path)
+    }
+
+    fn kind(&self, path: &Path) -> io::Result<Option<ExportFileKind>> {
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(ExportFileKind::File)),
+            Ok(metadata) if metadata.is_dir() => Ok(Some(ExportFileKind::Directory)),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+struct PanicOnceFileSystem {
+    panicked: Arc<AtomicBool>,
+}
+
+impl ExportFileSystem for PanicOnceFileSystem {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("m1-manifest"))
+            && !self.panicked.swap(true, Ordering::SeqCst)
+        {
+            panic!("injected one-shot F9 worker panic");
+        }
+        std::fs::write(path, contents)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
     }
 
@@ -279,6 +329,57 @@ fn restoration_failure_is_not_reported_as_an_ordinary_artifact_write() {
 
     assert!(matches!(error, Error::ArtifactRecovery(_)));
     assert!(!error.to_string().is_empty());
+}
+
+#[test]
+fn backup_cleanup_failure_keeps_new_pair_successful_with_structured_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    let schematic = dir.path().join("schematic.schem");
+    let manifest = dir.path().join("manifest.json");
+    std::fs::write(&schematic, b"old schem").unwrap();
+    std::fs::write(&manifest, b"old manifest").unwrap();
+    let mut console = console(dir.path(), Failure::BackupCleanup);
+
+    let result = console
+        .export_confirmed_boundary(request(dir.path()))
+        .expect("清理备份失败不应否定已经发布的有效双文件");
+
+    assert!(result.cleanup_warning.is_some());
+    assert_ne!(std::fs::read(&schematic).unwrap(), b"old schem");
+    assert_ne!(std::fs::read(&manifest).unwrap(), b"old manifest");
+}
+
+#[test]
+fn worker_panic_clears_active_state_and_allows_a_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_system = Arc::new(PanicOnceFileSystem {
+        panicked: Arc::new(AtomicBool::new(false)),
+    });
+    let console = ExportConsole::new_with_material_table_and_file_system(
+        MockSealGate::new(),
+        MaterialTable::v26_1_2_school(),
+        file_system,
+    );
+    let port = console.boundary_export_port(Arc::new(FixedInput(request(dir.path()))));
+    let mut first = port.start().expect("首次 Start 应返回后台操作");
+    let first_result = loop {
+        if let Some(result) = first.try_complete() {
+            break result;
+        }
+        std::thread::yield_now();
+    };
+    assert!(matches!(first_result, Err(Error::BackgroundTask)));
+
+    let mut retry = port
+        .start()
+        .expect("worker panic 后 active 状态必须清理，允许重试");
+    let retry_result = loop {
+        if let Some(result) = retry.try_complete() {
+            break result;
+        }
+        std::thread::yield_now();
+    };
+    assert!(retry_result.is_ok());
 }
 
 #[test]

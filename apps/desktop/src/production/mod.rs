@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use coverage_audit::AuditResult;
 use data_acquisition::GaodeDataSource;
+use export_flow::{BoundaryExportFlow, Error as ExportError};
 use localization::Localization;
 use notification_center::{
     Notification, NotificationActionOutcome, NotificationCenter, OpaqueNotificationAction,
@@ -36,218 +37,6 @@ use workspace_boundary::{WorkspaceProductionAdapter, WorkspaceProductionContext}
 
 use crate::presenter::DiagnosticActionRunner;
 use crate::{AppWindow, NoticeData, ViewModelInjector};
-
-pub(crate) mod export_flow {
-    //! F9 应用流程能力：组装完整输入并提交不可变的边界导出请求。
-
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    use export_console::{
-        BoundaryError, BoundaryExportInput, BoundaryExportOperation, BoundaryExportPort,
-        BoundaryExportRequest, Error as ExportError, ExportConsole, ExportFileSystem,
-    };
-    use global_settings::SettingsManager;
-    use project_management::PlanContextView;
-    use shared_domain_types::{Boundary, Orientation, PlanId};
-
-    /// F9 输入适配器的冻结前快照；S1 不读取或解释这份业务状态。
-    #[derive(Debug, Clone, Default)]
-    struct ExportInputSnapshot {
-        plan_id: Option<String>,
-        campus_name: String,
-        plan_name: String,
-        boundary: Option<Vec<[f64; 2]>>,
-        boundary_confirmed: bool,
-        settings_error: Option<String>,
-        orientation: Option<f32>,
-        minecraft_version: String,
-        export_location: String,
-    }
-
-    #[derive(Clone, Default)]
-    struct ExportInputStore {
-        snapshot: Arc<Mutex<ExportInputSnapshot>>,
-    }
-
-    impl ExportInputStore {
-        fn sync_settings(&self, settings: &SettingsManager) {
-            let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
-            match (settings.settings(), settings.default_export_location()) {
-                (Ok(settings), Ok(location)) => {
-                    snapshot.settings_error = None;
-                    snapshot.minecraft_version = settings.minecraft_version;
-                    snapshot.export_location = location;
-                }
-                (Err(error), _) | (_, Err(error)) => {
-                    snapshot.settings_error = Some(error.to_string());
-                }
-            }
-        }
-
-        fn set_plan(&self, context: &PlanContextView) {
-            let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
-            snapshot.plan_id = Some(context.plan_id.clone());
-            snapshot.campus_name = context.campus_name.clone();
-            snapshot.plan_name = context.plan_name.clone();
-            snapshot.boundary = None;
-            snapshot.boundary_confirmed = false;
-            snapshot.orientation = None;
-        }
-
-        fn set_boundary(&self, coordinates: Option<Vec<[f64; 2]>>, confirmed: bool) {
-            let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
-            snapshot.boundary = coordinates;
-            snapshot.boundary_confirmed = confirmed;
-        }
-
-        fn set_orientation(&self, orientation: Option<f32>) {
-            let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
-            snapshot.orientation = orientation;
-        }
-
-        #[cfg(test)]
-        fn set_settings_error(&self, detail: impl Into<String>) {
-            self.snapshot
-                .lock()
-                .expect("export input snapshot lock")
-                .settings_error = Some(detail.into());
-        }
-    }
-
-    impl BoundaryExportInput for ExportInputStore {
-        fn load_request(&self) -> std::result::Result<BoundaryExportRequest, ExportError> {
-            let snapshot = self
-                .snapshot
-                .lock()
-                .expect("export input snapshot lock")
-                .clone();
-            if let Some(error) = snapshot.settings_error {
-                return Err(ExportError::SettingsRead(error));
-            }
-            let Some(plan_id_text) = snapshot.plan_id else {
-                return Err(ExportError::Boundary(BoundaryError::Missing));
-            };
-            let plan_id = PlanId::parse(&plan_id_text)
-                .map_err(|error| ExportError::BadPlanId(error.to_string()))?;
-            let boundary = snapshot.boundary.map(|coordinates| Boundary {
-                r#type: "Polygon".to_owned(),
-                coordinates: serde_json::json!([coordinates]),
-            });
-            let orientation = match snapshot.orientation {
-                Some(degree) => Some(Orientation::new(degree).ok_or_else(|| {
-                    ExportError::Boundary(BoundaryError::Invalid(
-                        "orientation is outside the supported range".to_owned(),
-                    ))
-                })?),
-                None => None,
-            };
-            let output_dir = PathBuf::from(snapshot.export_location);
-            let plan_stem = plan_id.to_string();
-            Ok(BoundaryExportRequest::new(
-                snapshot.campus_name,
-                plan_id,
-                snapshot.plan_name,
-                snapshot.minecraft_version,
-                boundary,
-                snapshot.boundary_confirmed,
-                orientation,
-                output_dir.join(format!("{plan_stem}.schem")),
-                output_dir.join(format!("{plan_stem}.foundation_manifest.json")),
-            ))
-        }
-    }
-
-    /// M1 的 F9 能力端口；S1 只提交 Start/Poll 意图并呈现结果。
-    #[derive(Clone)]
-    pub(crate) struct BoundaryExportFlow {
-        input: ExportInputStore,
-        port: BoundaryExportPort,
-    }
-
-    impl BoundaryExportFlow {
-        pub(crate) fn new(file_system: Arc<dyn ExportFileSystem>) -> Self {
-            let input = ExportInputStore::default();
-            let console = ExportConsole::new_with_v26_1_2_file_system(
-                export_console::MockSealGate::new(),
-                file_system,
-            );
-            let port = console.boundary_export_port(Arc::new(input.clone()));
-            Self { input, port }
-        }
-
-        pub(crate) fn start(&self) -> export_console::Result<BoundaryExportOperation> {
-            self.port.start()
-        }
-
-        pub(crate) fn sync_settings(&self, settings: &SettingsManager) {
-            self.input.sync_settings(settings);
-        }
-
-        pub(crate) fn set_plan(&self, context: &PlanContextView) {
-            self.input.set_plan(context);
-        }
-
-        pub(crate) fn set_boundary(&self, coordinates: Option<Vec<[f64; 2]>>, confirmed: bool) {
-            self.input.set_boundary(coordinates, confirmed);
-        }
-
-        pub(crate) fn set_orientation(&self, orientation: Option<f32>) {
-            self.input.set_orientation(orientation);
-        }
-    }
-
-    /// S1 可注入的稳定 F9 能力端口；正式快照和请求类型不穿过该边界。
-    pub(crate) trait BoundaryExportCapability {
-        fn start(&self) -> export_console::Result<BoundaryExportOperation>;
-        fn sync_settings(&self, settings: &SettingsManager);
-        fn set_plan(&self, context: &PlanContextView);
-        fn set_boundary(&self, coordinates: Option<Vec<[f64; 2]>>, confirmed: bool);
-        fn set_orientation(&self, orientation: Option<f32>);
-    }
-
-    impl BoundaryExportCapability for BoundaryExportFlow {
-        fn start(&self) -> export_console::Result<BoundaryExportOperation> {
-            BoundaryExportFlow::start(self)
-        }
-
-        fn sync_settings(&self, settings: &SettingsManager) {
-            BoundaryExportFlow::sync_settings(self, settings);
-        }
-
-        fn set_plan(&self, context: &PlanContextView) {
-            BoundaryExportFlow::set_plan(self, context);
-        }
-
-        fn set_boundary(&self, coordinates: Option<Vec<[f64; 2]>>, confirmed: bool) {
-            BoundaryExportFlow::set_boundary(self, coordinates, confirmed);
-        }
-
-        fn set_orientation(&self, orientation: Option<f32>) {
-            BoundaryExportFlow::set_orientation(self, orientation);
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn export_input_surfaces_settings_read_error_without_fallback() {
-            let store = ExportInputStore::default();
-            store.set_settings_error("database read failed");
-
-            let error = store
-                .load_request()
-                .expect_err("a settings read failure must reach F9");
-            assert!(
-                matches!(error, ExportError::SettingsRead(detail) if detail == "database read failed")
-            );
-        }
-    }
-}
-
-pub(crate) use export_flow::{BoundaryExportCapability, BoundaryExportFlow};
 
 #[cfg(test)]
 static ENTRY_CALLS: [std::sync::atomic::AtomicUsize; 10] =
@@ -494,29 +283,26 @@ impl CollectionCoordinator {
     fn collection_target(&self) -> Option<(PlanId, Boundary)> {
         let session = self.context.session.borrow();
         let plan_id = PlanId::parse(session.active_plan_id.as_ref()?).ok()?;
-        let coordinates = session
+        let boundary = session
             .plans
             .get(&plan_id.to_string())?
-            .boundary_gcj02
+            .boundary
             .clone()
             .or_else(|| {
                 let context = session.active_context.as_ref()?;
                 let delta = 0.0001;
-                Some(vec![
-                    [context.anchor_lng - delta, context.anchor_lat - delta],
-                    [context.anchor_lng + delta, context.anchor_lat - delta],
-                    [context.anchor_lng + delta, context.anchor_lat + delta],
-                    [context.anchor_lng - delta, context.anchor_lat + delta],
-                    [context.anchor_lng - delta, context.anchor_lat - delta],
-                ])
+                Some(Boundary {
+                    r#type: "Polygon".to_owned(),
+                    coordinates: serde_json::json!([[
+                        [context.anchor_lng - delta, context.anchor_lat - delta],
+                        [context.anchor_lng + delta, context.anchor_lat - delta],
+                        [context.anchor_lng + delta, context.anchor_lat + delta],
+                        [context.anchor_lng - delta, context.anchor_lat + delta],
+                        [context.anchor_lng - delta, context.anchor_lat - delta],
+                    ]]),
+                })
             })?;
-        Some((
-            plan_id,
-            Boundary {
-                r#type: "Polygon".to_owned(),
-                coordinates: serde_json::json!([coordinates]),
-            },
-        ))
+        Some((plan_id, boundary))
     }
 
     fn record_collection(&self, counts: &[(CandidateCategory, usize)]) {
@@ -574,8 +360,8 @@ impl PresentationAdapter<(), CoveragePageState> for CoverageProductionAdapter {
 
 struct ExportProductionAdapter {
     context: WorkspaceProductionContext,
-    flow: Arc<dyn BoundaryExportCapability>,
-    operation: Option<export_console::BoundaryExportOperation>,
+    flow: Arc<BoundaryExportFlow>,
+    operation: Option<export_flow::BoundaryExportOperation>,
 }
 
 impl ExportProductionAdapter {
@@ -587,7 +373,7 @@ impl ExportProductionAdapter {
         workspace.placeholder_subtitle = subtitle.into();
         ExportPageState { workspace }
     }
-    fn failure_presentation(&self, error: &export_console::Error) -> Presentation<ExportPageState> {
+    fn failure_presentation(&self, error: &ExportError) -> Presentation<ExportPageState> {
         let (body, action) = {
             let injector = self.context.injector();
             let l10n = injector.borrow();
@@ -672,10 +458,46 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 if let Some(result) = operation.try_complete() {
                     self.operation = None;
                     match result {
-                        Ok(result) => Presentation::succeeded(self.page_with_status(
-                            "export.done",
-                            result.schematic_path.display().to_string(),
-                        )),
+                        Ok(result) => {
+                            let injector = self.context.injector();
+                            let l10n = injector.borrow();
+                            let dimensions = result.schematic_dimensions;
+                            let subtitle = l10n.l10n().t_with_array(
+                                "export.done_with_dimensions",
+                                &[
+                                    &result.schematic_path.display().to_string(),
+                                    &dimensions[0].to_string(),
+                                    &dimensions[1].to_string(),
+                                    &dimensions[2].to_string(),
+                                ],
+                            );
+                            let mut presentation = Presentation::succeeded(
+                                self.page_with_status("export.done", subtitle),
+                            );
+                            if let Some(detail) = result.cleanup_warning {
+                                let source = l10n.l10n().t("app.source_tag");
+                                let title = l10n.l10n().t("export.done");
+                                let warning_body = l10n.l10n().t("export.cleanup_warning");
+                                let diagnostic_title = l10n.l10n().t("notice.diagnostic_action");
+                                let diagnostic_source = source.clone();
+                                let action = OpaqueNotificationAction::new(move || {
+                                    NotificationActionOutcome::succeeded(Notification::info(
+                                        diagnostic_source.clone(),
+                                        diagnostic_title.clone(),
+                                        detail.clone(),
+                                    ))
+                                });
+                                presentation = presentation.with_notification(
+                                    NotificationFact::new(Notification::warn(
+                                        source,
+                                        title,
+                                        warning_body,
+                                    ))
+                                    .with_diagnostic_action(action),
+                                );
+                            }
+                            presentation
+                        }
                         Err(error) => self.failure_presentation(&error),
                     }
                 } else {
@@ -698,21 +520,21 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
     }
 }
 
-fn export_diagnostic_detail(error: &export_console::Error) -> String {
+fn export_diagnostic_detail(error: &ExportError) -> String {
     error.to_string()
 }
 
-fn export_error_category_key(error: &export_console::Error) -> &'static str {
+fn export_error_category_key(error: &ExportError) -> &'static str {
     match error {
-        export_console::Error::Boundary(_) => "error.export_boundary_failed",
-        export_console::Error::SettingsRead(_) => "error.export_settings_failed",
-        export_console::Error::Version(_) => "error.export_version_failed",
-        export_console::Error::Generation(_) => "error.export_generation_failed",
-        export_console::Error::ManifestWrite(_) => "error.export_manifest_write_failed",
-        export_console::Error::SchematicWrite(_) => "error.export_schematic_write_failed",
-        export_console::Error::ArtifactWrite(_) => "error.export_artifact_write_failed",
-        export_console::Error::ArtifactRecovery(_) => "error.export_recovery_failed",
-        export_console::Error::BackgroundTask => "error.export_background_failed",
+        ExportError::Boundary(_) => "error.export_boundary_failed",
+        ExportError::SettingsRead(_) => "error.export_settings_failed",
+        ExportError::Version(_) => "error.export_version_failed",
+        ExportError::Generation(_) => "error.export_generation_failed",
+        ExportError::ManifestWrite(_) => "error.export_manifest_write_failed",
+        ExportError::SchematicWrite(_) => "error.export_schematic_write_failed",
+        ExportError::ArtifactWrite(_) => "error.export_artifact_write_failed",
+        ExportError::ArtifactRecovery(_) => "error.export_recovery_failed",
+        ExportError::BackgroundTask => "error.export_background_failed",
         _ => "error.export_failed",
     }
 }

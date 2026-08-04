@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use export_flow::BoundaryExportFlow;
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryDrawer, BoundaryState,
     BoundaryUiEvent, CoordinateConverter, EventResult, MercatorCoord, Orientation,
@@ -25,7 +26,7 @@ use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, BoundarySorter, Ip
 use localization::Localization;
 use notification_center::Notification;
 use onboarding_tutorial::TutorialStep;
-use shared_domain_types::{CandidateCategory, PlanId};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
@@ -33,7 +34,6 @@ use crate::presentation::{
     OrientationViewState, Presentation, PresentationAdapter, Progress, Screen, WorkspacePageState,
     WorkspaceRequest,
 };
-use crate::production::BoundaryExportCapability;
 use crate::ViewModelInjector;
 
 #[cfg(test)]
@@ -46,7 +46,7 @@ pub(crate) struct PlanProgressState {
     pub(crate) has_orientation: bool,
     pub(crate) has_collection: bool,
     pub(crate) orientation_angle: Option<f32>,
-    pub(crate) boundary_gcj02: Option<Vec<[f64; 2]>>,
+    pub(crate) boundary: Option<Boundary>,
     /// 已生成数据分布（F5 重算影响报告的输入；采集/评审迁出后填充，当前为空）。
     pub(crate) generated_category_counts: HashMap<CandidateCategory, usize>,
 }
@@ -123,14 +123,14 @@ pub(crate) struct WorkspaceProductionContext {
     injector: Rc<RefCell<ViewModelInjector>>,
     window: slint::Weak<crate::AppWindow>,
     pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
-    pub(super) export_flow: Arc<dyn BoundaryExportCapability>,
+    pub(super) export_flow: Arc<BoundaryExportFlow>,
 }
 
 impl WorkspaceProductionContext {
     pub(crate) fn new(
         injector: Rc<RefCell<ViewModelInjector>>,
         window: &crate::AppWindow,
-        export_flow: Arc<dyn BoundaryExportCapability>,
+        export_flow: Arc<BoundaryExportFlow>,
     ) -> Self {
         let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
         Self {
@@ -579,7 +579,7 @@ impl WorkspaceProductionAdapter {
                 Presentation::ready(self.context.page())
             } else {
                 crate::map_webview::hide();
-                let existing_boundary_gcj02 = self
+                let existing_boundary = self
                     .context
                     .session
                     .borrow()
@@ -591,12 +591,13 @@ impl WorkspaceProductionAdapter {
                             .borrow()
                             .plans
                             .get(plan_id)
-                            .and_then(|state| state.boundary_gcj02.clone())
+                            .and_then(|state| state.boundary.as_ref())
+                            .and_then(polygon_coordinates)
                     });
                 let config = BoundaryEditPageConfig::new(&keys.0, &keys.1)
                     .with_anchor(anchor.0, anchor.1)
                     .with_orientation_mode(true)
-                    .with_existing_boundary(existing_boundary_gcj02);
+                    .with_existing_boundary(existing_boundary);
                 crate::map_webview::show_with_config(self.context.window.clone(), config);
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
@@ -686,19 +687,21 @@ impl WorkspaceProductionAdapter {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
                 EventResult::Accepted => {
-                    let fallback_boundary = session.active_context.as_ref().map(|context| {
-                        plane_vertices_to_gcj02(
-                            session.drawer.vertices(),
-                            context.anchor_lng,
-                            context.anchor_lat,
-                        )
-                    });
+                    let confirmed_boundary =
+                        session.active_context.as_ref().map(|context| Boundary {
+                            r#type: "Polygon".to_owned(),
+                            coordinates: serde_json::json!([plane_vertices_to_gcj02(
+                                session.drawer.vertices(),
+                                context.anchor_lng,
+                                context.anchor_lat,
+                            )]),
+                        });
                     if let Some(plan_id) = session.active_plan_id.clone() {
                         let state = session.plans.entry(plan_id).or_default();
-                        state.has_boundary = fallback_boundary.is_some();
-                        state.boundary_gcj02 = fallback_boundary.clone();
+                        state.has_boundary = confirmed_boundary.is_some();
+                        state.boundary = confirmed_boundary.clone();
                     }
-                    (None, fallback_boundary)
+                    (None, confirmed_boundary)
                 }
                 EventResult::Rejected(message) => (Some(message), None),
                 EventResult::Ignored => (None, None),
@@ -709,10 +712,8 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
         }
-        if let Some(coordinates) = confirmed_boundary {
-            self.context
-                .export_flow
-                .set_boundary(Some(coordinates), true);
+        if let Some(boundary) = confirmed_boundary {
+            self.context.export_flow.set_boundary(Some(boundary), true);
         }
         Presentation::ready(self.context.page())
     }
@@ -724,7 +725,7 @@ impl WorkspaceProductionAdapter {
             if let Some(plan_id) = session.active_plan_id.clone() {
                 let state = session.plans.entry(plan_id).or_default();
                 state.has_boundary = false;
-                state.boundary_gcj02 = None;
+                state.boundary = None;
             }
         }
         self.context.export_flow.set_boundary(None, false);
@@ -902,8 +903,9 @@ impl WorkspaceProductionAdapter {
                 .active_plan_id
                 .as_ref()
                 .and_then(|plan_id| session.plans.get(plan_id))
-                .and_then(|state| state.boundary_gcj02.as_ref())
-                .and_then(|coords| centroid(coords));
+                .and_then(|state| state.boundary.as_ref())
+                .and_then(polygon_coordinates)
+                .and_then(|coords| centroid(&coords));
             boundary_center.or_else(|| {
                 session
                     .active_context
@@ -1148,14 +1150,21 @@ impl WorkspaceProductionAdapter {
             let mut session = self.context.session.borrow_mut();
             if let Some(plan_id) = session.active_plan_id.clone() {
                 let state = session.plans.entry(plan_id).or_default();
-                state.boundary_gcj02 = Some(coords.to_vec());
+                state.boundary = Some(Boundary {
+                    r#type: "Polygon".to_owned(),
+                    coordinates: serde_json::json!([coords]),
+                });
                 state.has_boundary = true;
             }
             session.drawer.load_determined(vertices);
         }
-        self.context
-            .export_flow
-            .set_boundary(Some(coords.to_vec()), true);
+        self.context.export_flow.set_boundary(
+            Some(Boundary {
+                r#type: "Polygon".to_owned(),
+                coordinates: serde_json::json!([coords]),
+            }),
+            true,
+        );
         Presentation::ready(self.context.page())
     }
 
@@ -1171,6 +1180,15 @@ fn calculate_orientation_angle(points: [[f64; 2]; 2]) -> Option<f32> {
     OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
         .and_then(|line| OrientationCalculator::calculate(&line))
         .map(|orientation| orientation.degree())
+}
+
+fn polygon_coordinates(boundary: &Boundary) -> Option<Vec<[f64; 2]>> {
+    if boundary.r#type != "Polygon" {
+        return None;
+    }
+    serde_json::from_value::<Vec<Vec<[f64; 2]>>>(boundary.coordinates.clone())
+        .ok()
+        .and_then(|rings| rings.into_iter().next())
 }
 
 /// 坐标数组的简单重心（经纬度平均值）。

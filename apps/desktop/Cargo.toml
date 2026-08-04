@@ -46,7 +46,7 @@ review-workbench = { workspace = true }
 # F7 覆盖率审计安静哨兵
 coverage-audit = { workspace = true }
 # F9 导出控制台（门控占位，真门控随 T19B-8 落地）
-export-console = { workspace = true }
+export-flow = { workspace = true }
 # B1 共享领域类型（ADR-0025 例外授权：仅类型层面只读使用）
 shared-domain-types = { workspace = true }
 # B2 数据持久化（仅用于打开数据库并交给 F 模块，不直接碰 SQL）

@@ -100,6 +100,8 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         window.get_operation_state(),
         OperationPresentationState::Succeeded
     );
+    let first_dimensions = window.get_workspace_placeholder_subtitle().to_string();
+    assert!(first_dimensions.contains("尺寸"));
 
     let schematic_path = export_dir.join(format!("{plan_id}.schem"));
     let manifest_path = export_dir.join(format!("{plan_id}.foundation_manifest.json"));
@@ -122,6 +124,12 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded
+    );
+    let corrected_dimensions = window.get_workspace_placeholder_subtitle().to_string();
+    assert!(corrected_dimensions.contains("尺寸"));
+    assert_ne!(
+        first_dimensions, corrected_dimensions,
+        "修正边界后的 F9 结果必须反映最新几何尺寸，而不是旧快照"
     );
 
     assert!(schematic_path.is_file());

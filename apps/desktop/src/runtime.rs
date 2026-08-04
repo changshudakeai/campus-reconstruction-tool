@@ -12,6 +12,7 @@ use anyhow::Result;
 use coverage_audit::{AuditOutcome, QuietSentinel};
 use data_acquisition::{AcquisitionPipeline, CollectionReport, DataSource};
 use data_persistence::Database;
+use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use notification_center::{Notification, NotificationCenter, PresenterRegistry};
@@ -27,7 +28,6 @@ use crate::presenter::ShellPresenter;
 use crate::production::ProductionEntries;
 use crate::AppWindow;
 
-use crate::production::{BoundaryExportCapability, BoundaryExportFlow};
 /// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
 const DEV_DB_FILE: &str = "campus-rebuild.db";
 
@@ -195,23 +195,22 @@ pub struct ViewModelInjector {
     /// F7 覆盖率审计安静哨兵
     sentinel: QuietSentinel,
     /// F9 完整导出入口的稳定输入能力端口状态。
-    export_flow: Arc<dyn BoundaryExportCapability>,
+    export_flow: Arc<BoundaryExportFlow>,
 }
 
 impl ViewModelInjector {
     /// 构造并持有全部 F 模块实例（F1-F9，B8/F6/F8 未立户不在册）。
     pub fn new(db: ShellDatabases) -> Result<Self> {
-        Self::new_with_export_file_system(db, Arc::new(export_console::StdExportFileSystem))
+        Self::new_with_export_file_system(db, Arc::new(StdExportFileSystem))
     }
 
     pub fn new_with_export_file_system(
         db: ShellDatabases,
-        file_system: Arc<dyn export_console::ExportFileSystem>,
+        file_system: Arc<dyn ExportFileSystem>,
     ) -> Result<Self> {
         let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
         let tutorial = OnboardingTutorial::load(&db.projects)?;
-        let export_flow: Arc<dyn BoundaryExportCapability> =
-            Arc::new(BoundaryExportFlow::new(file_system));
+        let export_flow = Arc::new(BoundaryExportFlow::new(file_system));
         Ok(Self {
             l10n,
             settings: SettingsManager::new(db.settings),
@@ -386,7 +385,7 @@ impl ViewModelInjector {
         &mut self.settings
     }
 
-    pub(crate) fn export_flow(&self) -> Arc<dyn BoundaryExportCapability> {
+    pub(crate) fn export_flow(&self) -> Arc<BoundaryExportFlow> {
         self.export_flow.clone()
     }
 

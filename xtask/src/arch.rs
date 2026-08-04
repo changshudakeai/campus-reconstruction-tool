@@ -29,6 +29,9 @@ const FEATURE_CRATES: &[&str] = &[
     "export-console",      // F9
 ];
 
+/// Non-S1 application-flow crates own complete cross-feature user operations.
+const APPLICATION_FLOW_CRATES: &[&str] = &["export-flow"];
+
 /// B1-B18 基础模块 crate 名（ADR-0017 第二节 B 表，B16 已并入 B14）。
 const BASE_CRATES: &[&str] = &[
     "shared-domain-types",  // B1
@@ -67,6 +70,7 @@ const SHELL_ALLOWED_MEMBER_DEPS: &[&str] = &[
     "review-workbench",
     "coverage-audit",
     "export-console",
+    "export-flow",
     // 允许的基础层（B1 人人可依；B2-B7、B9-B11、B17 按 DAG）
     "shared-domain-types",
     "data-persistence",
@@ -97,8 +101,16 @@ fn is_base(name: &str) -> bool {
     BASE_CRATES.contains(&name)
 }
 
+fn is_application_flow(name: &str) -> bool {
+    APPLICATION_FLOW_CRATES.contains(&name)
+}
+
 fn is_known(name: &str) -> bool {
-    is_feature(name) || is_base(name) || name == SHELL_CRATE || name == TOOLING_CRATE
+    is_feature(name)
+        || is_base(name)
+        || is_application_flow(name)
+        || name == SHELL_CRATE
+        || name == TOOLING_CRATE
 }
 
 /// 对成员依赖边集合执行全部架构断言，返回违规描述（空 = 通过）。
@@ -133,6 +145,15 @@ pub(crate) fn check_edges(members: &[String], edges: &[(String, String)]) -> Vec
             violations.push(format!(
                 "禁止边 {from} → {to}：B1 共享领域类型必须零内部依赖（全工程词汇的最底座）"
             ));
+            continue;
+        }
+
+        if is_application_flow(from) {
+            if to == SHELL_CRATE {
+                violations.push(format!(
+                    "application flow `{from}` must not depend on S1 shell `{to}`"
+                ));
+            }
             continue;
         }
 

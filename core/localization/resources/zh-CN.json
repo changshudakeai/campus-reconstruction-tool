@@ -143,6 +143,8 @@
     "failure_user_message": "{0}。导出未完成；已确认的边界保持不变，请修正后重试。",
     "in_progress": "正在导出…",
     "done": "导出完成",
+    "done_with_dimensions": "导出完成：{0}（尺寸 {1}×{2}×{3}）",
+    "cleanup_warning": "导出完成，但旧备份清理失败；当前双文件仍有效。",
     "manifest_title": "导出清单",
     "included_categories": "包含的类别",
     "missing_categories": "缺失的类别"

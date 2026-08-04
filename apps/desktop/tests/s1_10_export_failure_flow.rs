@@ -2,14 +2,15 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use desktop_shell::{
     assemble_application, AppWindow, ApplicationRuntime, OperationPresentationState,
     ShellDatabases, ShellPresenter, ViewModelInjector,
 };
-use export_console::{ExportFileKind, ExportFileSystem, StdExportFileSystem};
+use export_flow::{ExportFileKind, ExportFileSystem, StdExportFileSystem};
 use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
@@ -21,13 +22,20 @@ enum FailureMode {
     None,
     ManifestStaging,
     SchematicStaging,
-    BackgroundPanic,
+    BackgroundPanicOnce,
+    BlockManifest,
+    ManifestPublish,
+    ManifestPublishAndRestore,
+    BackupCleanup,
 }
 
 #[derive(Clone)]
 struct FailingFileSystem {
     mode: Arc<Mutex<FailureMode>>,
     standard: Arc<StdExportFileSystem>,
+    panic_once: Arc<AtomicBool>,
+    publish_failed: Arc<AtomicBool>,
+    manifest_gate: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl FailingFileSystem {
@@ -37,6 +45,9 @@ impl FailingFileSystem {
             Self {
                 mode: Arc::clone(&mode),
                 standard: Arc::new(StdExportFileSystem),
+                panic_once: Arc::new(AtomicBool::new(false)),
+                publish_failed: Arc::new(AtomicBool::new(false)),
+                manifest_gate: Arc::new((Mutex::new(false), Condvar::new())),
             },
             mode,
         )
@@ -50,6 +61,20 @@ impl FailingFileSystem {
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.contains(suffix))
+    }
+
+    fn wait_for_manifest_block(&self) {
+        let (lock, signal) = &*self.manifest_gate;
+        let mut started = lock.lock().expect("manifest block lock");
+        while !*started {
+            started = signal.wait(started).expect("manifest block wait");
+        }
+    }
+
+    fn release_manifest_block(&self) {
+        let (lock, signal) = &*self.manifest_gate;
+        *lock.lock().expect("manifest block release lock") = true;
+        signal.notify_one();
     }
 }
 
@@ -72,18 +97,59 @@ impl ExportFileSystem for FailingFileSystem {
                     "injected schematic staging failure",
                 ))
             }
-            FailureMode::BackgroundPanic if Self::is_staging(path, ".m1-manifest-") => {
-                panic!("injected F9 background panic")
+            FailureMode::BackgroundPanicOnce
+                if Self::is_staging(path, ".m1-manifest-")
+                    && !self.panic_once.swap(true, Ordering::SeqCst) =>
+            {
+                panic!("injected one-shot F9 background panic")
+            }
+            FailureMode::BlockManifest if Self::is_staging(path, ".m1-manifest-") => {
+                let (lock, signal) = &*self.manifest_gate;
+                *lock.lock().expect("manifest block lock") = true;
+                signal.notify_one();
+                let mut released = lock.lock().expect("manifest block release lock");
+                while !*released {
+                    released = signal.wait(released).expect("manifest block wait");
+                }
+                Ok(())
             }
             _ => self.standard.write(path, contents),
         }
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let mode = self.mode_for();
+        let is_final_manifest = to
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".json") && !name.contains(".m1-"));
+        let should_fail_publish = is_final_manifest
+            && match mode {
+                FailureMode::ManifestPublish => !self.publish_failed.swap(true, Ordering::SeqCst),
+                FailureMode::ManifestPublishAndRestore => true,
+                _ => false,
+            };
+        if is_final_manifest && should_fail_publish {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected manifest publication failure",
+            ));
+        }
         self.standard.rename(from, to)
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
+        if matches!(self.mode_for(), FailureMode::BackupCleanup)
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains("backup-"))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected backup cleanup failure",
+            ));
+        }
         self.standard.remove_file(path)
     }
 
@@ -199,7 +265,7 @@ impl TestApp {
         self.window.invoke_workspace_step_clicked(4);
     }
 
-    fn start_and_wait_for_failure(&self, deadline: Duration) {
+    fn start_and_wait_for_failure(&self, deadline: Duration, label: &str) {
         self.window.invoke_workspace_export_start_clicked();
         let deadline_at = Instant::now() + deadline;
         let weak = self.window.as_weak();
@@ -222,9 +288,38 @@ impl TestApp {
         assert_eq!(
             self.window.get_operation_state(),
             OperationPresentationState::Failed,
-            "a failed F9 operation must never be presented as success"
+            "{label}: a failed F9 operation must never be presented as success: title={} subtitle={}",
+            self.window.get_workspace_placeholder_title(),
+            self.window.get_workspace_placeholder_subtitle()
         );
         assert!(self.window.get_error_dialog_visible());
+    }
+
+    fn start_and_wait_for_success(&self, deadline: Duration) {
+        self.window.invoke_workspace_export_start_clicked();
+        let deadline_at = Instant::now() + deadline;
+        let weak = self.window.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(10),
+            move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                if window.get_operation_state() != OperationPresentationState::Processing
+                    || Instant::now() >= deadline_at
+                {
+                    slint::quit_event_loop().expect("stop success export loop");
+                }
+            },
+        );
+        slint::run_event_loop_until_quit().expect("run success export loop");
+        assert_eq!(
+            self.window.get_operation_state(),
+            OperationPresentationState::Succeeded,
+            "successful F9 operation must be presented as success"
+        );
     }
 
     fn assert_localized_failure(&self, category_key: &str) {
@@ -249,12 +344,16 @@ impl TestApp {
 #[test]
 fn desktop_export_failures_are_localized_async_and_pair_safe() {
     let (file_system, mode) = FailingFileSystem::new();
-    let app = TestApp::new(Arc::new(file_system), Arc::clone(&mode));
+    let file_system = Arc::new(file_system);
+    let app = TestApp::new(
+        Arc::clone(&file_system) as Arc<dyn ExportFileSystem>,
+        Arc::clone(&mode),
+    );
 
     // No boundary: Start fails synchronously at the F9 input boundary.
     app.set_mode(FailureMode::None);
     app.window.invoke_workspace_step_clicked(4);
-    app.start_and_wait_for_failure(Duration::from_secs(5));
+    app.start_and_wait_for_failure(Duration::from_secs(5), "missing boundary");
     app.assert_localized_failure("error.export_boundary_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
@@ -264,7 +363,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[0.0,39.9],[1000000000.0,39.9],[1000000000.0,39.91],[0.0,39.91]]}"#,
     );
     app.set_mode(FailureMode::None);
-    app.start_and_wait_for_failure(Duration::from_secs(5));
+    app.start_and_wait_for_failure(Duration::from_secs(5), "generation");
     app.assert_localized_failure("error.export_generation_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
@@ -274,21 +373,89 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
     app.set_mode(FailureMode::ManifestStaging);
-    app.start_and_wait_for_failure(Duration::from_secs(5));
+    app.start_and_wait_for_failure(Duration::from_secs(5), "manifest staging");
     app.assert_localized_failure("error.export_manifest_write_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
 
     // B4 schematic staging failure: a staged manifest is cleaned up as well.
     app.set_mode(FailureMode::SchematicStaging);
-    app.start_and_wait_for_failure(Duration::from_secs(5));
+    app.start_and_wait_for_failure(Duration::from_secs(5), "schematic staging");
     app.assert_localized_failure("error.export_schematic_write_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
 
     // Worker panic: a disconnected operation is a localized background failure.
-    app.set_mode(FailureMode::BackgroundPanic);
-    app.start_and_wait_for_failure(Duration::from_secs(5));
+    app.set_mode(FailureMode::BackgroundPanicOnce);
+    app.start_and_wait_for_failure(Duration::from_secs(5), "worker panic");
     app.assert_localized_failure("error.export_background_failed");
     app.assert_no_artifact_pair();
+    app.dismiss_error();
+
+    // The worker guard clears active state, so the same confirmed boundary can retry.
+    app.set_mode(FailureMode::None);
+    app.start_and_wait_for_success(Duration::from_secs(5));
+    assert!(app.schematic_path().is_file());
+    assert!(app.manifest_path().is_file());
+
+    // A publish failure restores the old pair and remains an ordinary artifact failure.
+    let old_schematic = b"old schematic";
+    let old_manifest = b"old manifest";
+    std::fs::write(app.schematic_path(), old_schematic).unwrap();
+    std::fs::write(app.manifest_path(), old_manifest).unwrap();
+    app.confirm_boundary(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
+    );
+    app.set_mode(FailureMode::ManifestPublish);
+    app.start_and_wait_for_failure(Duration::from_secs(5), "publish");
+    app.assert_localized_failure("error.export_artifact_write_failed");
+    assert_eq!(std::fs::read(app.schematic_path()).unwrap(), old_schematic);
+    assert_eq!(std::fs::read(app.manifest_path()).unwrap(), old_manifest);
+    app.dismiss_error();
+
+    // A restore failure is promoted to ArtifactRecovery and is never shown as a safe rollback.
+    app.confirm_boundary(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
+    );
+    app.set_mode(FailureMode::ManifestPublishAndRestore);
+    app.start_and_wait_for_failure(Duration::from_secs(5), "recovery");
+    app.assert_localized_failure("error.export_recovery_failed");
+    app.dismiss_error();
+
+    // A cleanup failure keeps the newly published pair successful and exposes a warning fact.
+    std::fs::write(app.schematic_path(), old_schematic).unwrap();
+    std::fs::write(app.manifest_path(), old_manifest).unwrap();
+    app.confirm_boundary(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
+    );
+    app.set_mode(FailureMode::BackupCleanup);
+    app.start_and_wait_for_success(Duration::from_secs(5));
+    assert_ne!(std::fs::read(app.schematic_path()).unwrap(), old_schematic);
+    assert_ne!(std::fs::read(app.manifest_path()).unwrap(), old_manifest);
+    assert!(app
+        .center
+        .board_records()
+        .into_iter()
+        .any(|record| record.notification().body == app.l10n.t("export.cleanup_warning")));
+
+    // Duplicate Start is rejected while the first immutable request is still running.
+    app.confirm_boundary(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
+    );
+    app.set_mode(FailureMode::BlockManifest);
+    app.window.invoke_workspace_export_start_clicked();
+    file_system.wait_for_manifest_block();
+    app.window.invoke_workspace_export_start_clicked();
+    assert!(app.window.get_error_dialog_visible());
+    app.assert_localized_failure("error.export_failed");
+    app.dismiss_error();
+    file_system.release_manifest_block();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !app.manifest_path().is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "第一個导出 worker 未在重复 Start 后完成"
+        );
+        std::thread::yield_now();
+    }
 }

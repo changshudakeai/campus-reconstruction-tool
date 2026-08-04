@@ -21,6 +21,28 @@ fn read_workspace_file(relative: &str) -> String {
         panic!("无法读取书面契约 {}: {error}", path.display());
     })
 }
+
+fn read_desktop_sources() -> String {
+    fn append_sources(path: &Path, output: &mut String) {
+        let entries = fs::read_dir(path)
+            .unwrap_or_else(|error| panic!("无法读取 S1 源目录 {}: {error}", path.display()));
+        for entry in entries {
+            let entry = entry.expect("读取 S1 源目录项");
+            let path = entry.path();
+            if path.is_dir() {
+                append_sources(&path, output);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                output.push_str(&fs::read_to_string(&path).unwrap_or_else(|error| {
+                    panic!("无法读取 S1 源文件 {}: {error}", path.display())
+                }));
+            }
+        }
+    }
+
+    let mut source = String::new();
+    append_sources(&workspace_root().join("apps/desktop/src"), &mut source);
+    source
+}
 fn find_flow_row<'a>(baseline: &'a str, flow: &str) -> &'a str {
     let row_prefix = format!("| **{flow}** |");
     baseline
@@ -272,6 +294,26 @@ fn export_input_assembly_is_not_kept_in_runtime_or_workspace_shell_files() {
                 "{path} ??????? F9 ???????{forbidden}"
             );
         }
+    }
+}
+
+#[test]
+fn the_entire_s1_source_tree_has_no_formal_f9_input_assembly() {
+    let source = read_desktop_sources();
+    for forbidden in [
+        "BoundaryExportRequest",
+        "BoundaryExportInput",
+        "ExportInputSnapshot",
+        "ExportInputStore",
+        "BoundaryExportPort",
+        "load_request(",
+        "BoundaryExportFlow {",
+        "MockSealGate",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "S1 全部源文件不得持有或组装 F9 正式输入：{forbidden}"
+        );
     }
 }
 

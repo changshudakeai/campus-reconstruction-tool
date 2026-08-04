@@ -22,7 +22,7 @@ CANCEL_BUTTON = "app.cancel_button"
 ## Structures
 
 pub struct BoundaryExportRequest { pub boundary: Option<shared_domain_types::Boundary>, pub boundary_confirmed: bool, pub orientation: Option<shared_domain_types::Orientation>, pub schematic_path: PathBuf, pub manifest_path: PathBuf }
-pub struct BoundaryExportResult { pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub manifest: manifest_generator::FoundationManifest }
+pub struct BoundaryExportResult { pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub manifest: manifest_generator::FoundationManifest, pub cleanup_warning: Option<String>, pub schematic_dimensions: [usize; 3] }
 pub struct BoundaryExportOperation { .. }
 pub struct BoundaryExportPort { .. }
 pub struct ExportFileKind

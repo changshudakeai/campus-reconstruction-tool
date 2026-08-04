@@ -77,6 +77,7 @@ fn confirmed_boundary_without_orientation_or_candidates_exports_real_artifacts()
 
     let inspection = sponge_export::verify_worldedit_import_contract(&result.schematic_path)
         .expect("必须生成可导入的 Sponge .schem");
+    assert_eq!(result.schematic_dimensions, inspection.dimensions);
     assert_eq!(inspection.data_version, 3955);
     assert_eq!(inspection.dimensions[1], 1, "最小路径只生成一层平整场地");
     assert!(inspection.non_air_voxels > 0);
@@ -299,4 +300,33 @@ fn corrected_boundary_changes_schematic_dimensions() {
 
     assert!(second_dimensions[0] > first_dimensions[0]);
     assert!(second_dimensions[2] > first_dimensions[2]);
+}
+
+#[test]
+fn multipolygon_exports_all_separated_outer_rings() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = boundary();
+    let multi = Boundary {
+        r#type: "MultiPolygon".to_owned(),
+        coordinates: serde_json::json!([
+            [first.coordinates[0].clone()],
+            [[
+                [116.0200, 39.0200],
+                [116.0210, 39.0200],
+                [116.0210, 39.0210],
+                [116.0200, 39.0210],
+                [116.0200, 39.0200]
+            ]]
+        ]),
+    };
+    let mut console = ExportConsole::new(MockSealGate::new());
+
+    let result = console
+        .export_confirmed_boundary(request(dir.path(), None, Some(multi), true))
+        .expect("MultiPolygon 的所有分片都应参与边界直出");
+    let inspection = sponge_export::inspect_schematic(&result.schematic_path).unwrap();
+
+    assert_eq!(result.schematic_dimensions, inspection.dimensions);
+    assert!(inspection.dimensions[0] > 1_000);
+    assert!(inspection.dimensions[2] > 1_000);
 }

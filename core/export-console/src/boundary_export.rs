@@ -169,6 +169,8 @@ pub struct BoundaryExportResult {
     pub manifest_path: PathBuf,
     /// 与 manifest 同一份事实对象，便于呈现层显示成功结果。
     pub manifest: FoundationManifest,
+    pub cleanup_warning: Option<String>,
+    pub schematic_dimensions: [usize; 3],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -339,7 +341,7 @@ impl BoundaryExportUseCase {
             )?;
             progress.report_percent(90);
 
-            publish_pair(
+            let cleanup_warning = publish_pair(
                 self.file_system.as_ref(),
                 &staged_schematic,
                 &request.schematic_path,
@@ -351,6 +353,8 @@ impl BoundaryExportUseCase {
                 schematic_path: request.schematic_path.clone(),
                 manifest_path: request.manifest_path.clone(),
                 manifest: manifest.clone(),
+                cleanup_warning,
+                schematic_dimensions: [footprint.width_blocks, 1, footprint.length_blocks],
             })
         })();
 
@@ -416,6 +420,20 @@ impl BoundaryExportPort {
         }
     }
 
+    /// Construct the production boundary-only F9 port with the authoritative 26.1.2 contract.
+    pub fn new_boundary_only_v26_1_2(
+        input: Arc<dyn BoundaryExportInput>,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Self {
+        Self::new(
+            Arc::new(BoundaryExportUseCase::new(
+                MaterialTable::v26_1_2_school(),
+                file_system,
+            )),
+            input,
+        )
+    }
+
     /// 提交一次最小开始意图；输入取得和完整导出均由 F9 端口拥有。
     pub fn start(&self) -> Result<BoundaryExportOperation> {
         if self.active.swap(true, Ordering::SeqCst) {
@@ -436,9 +454,9 @@ impl BoundaryExportPort {
         let active = Arc::clone(&self.active);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = std::thread::Builder::new().spawn(move || {
+            let _active_guard = ActiveTaskGuard(active);
             let result = use_case.export(&request, &worker_progress);
-            active.store(false, Ordering::SeqCst);
-            let _send_result = sender.send(result);
+            let _ = sender.send(result);
         });
         if spawn_result.is_err() {
             self.active.store(false, Ordering::SeqCst);
@@ -448,6 +466,14 @@ impl BoundaryExportPort {
             progress,
             result: receiver,
         })
+    }
+}
+
+struct ActiveTaskGuard(Arc<AtomicBool>);
+
+impl Drop for ActiveTaskGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -527,7 +553,7 @@ fn publish_pair(
     schematic: &Path,
     staged_manifest: &Path,
     manifest: &Path,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let schematic_backup = backup_existing(file_system, schematic, ArtifactKind::Schematic)?;
     let manifest_backup = match backup_existing(file_system, manifest, ArtifactKind::Manifest) {
         Ok(backup) => backup,
@@ -575,9 +601,13 @@ fn publish_pair(
         return Err(primary);
     }
 
-    cleanup_backup(file_system, schematic_backup)?;
-    cleanup_backup(file_system, manifest_backup)?;
-    Ok(())
+    let mut cleanup_diagnostics = Vec::new();
+    for backup in [schematic_backup, manifest_backup] {
+        if let Err(error) = cleanup_backup(file_system, backup) {
+            cleanup_diagnostics.push(error.to_string());
+        }
+    }
+    Ok((!cleanup_diagnostics.is_empty()).then(|| cleanup_diagnostics.join("; ")))
 }
 
 fn backup_existing(
