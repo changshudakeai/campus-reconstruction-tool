@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryDrawer, BoundaryState,
@@ -32,7 +33,7 @@ use crate::presentation::{
     OrientationViewState, Presentation, PresentationAdapter, Progress, Screen, WorkspacePageState,
     WorkspaceRequest,
 };
-use crate::runtime::ExportInputStore;
+use crate::production::BoundaryExportCapability;
 use crate::ViewModelInjector;
 
 #[cfg(test)]
@@ -122,13 +123,16 @@ pub(crate) struct WorkspaceProductionContext {
     injector: Rc<RefCell<ViewModelInjector>>,
     window: slint::Weak<crate::AppWindow>,
     pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
-    pub(super) export_input: ExportInputStore,
+    pub(super) export_flow: Arc<dyn BoundaryExportCapability>,
 }
 
 impl WorkspaceProductionContext {
-    pub(crate) fn new(injector: Rc<RefCell<ViewModelInjector>>, window: &crate::AppWindow) -> Self {
+    pub(crate) fn new(
+        injector: Rc<RefCell<ViewModelInjector>>,
+        window: &crate::AppWindow,
+        export_flow: Arc<dyn BoundaryExportCapability>,
+    ) -> Self {
         let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
-        let export_input = injector.borrow().export_input_store();
         Self {
             injector,
             window: window.as_weak(),
@@ -137,7 +141,7 @@ impl WorkspaceProductionContext {
                 tutorial_dismiss_label,
                 ..Default::default()
             })),
-            export_input,
+            export_flow,
         }
     }
 
@@ -483,7 +487,7 @@ impl WorkspaceProductionAdapter {
             }
         }
         if let Some(context) = self.context.session.borrow().active_context.clone() {
-            self.context.export_input.set_plan(&context);
+            self.context.export_flow.set_plan(&context);
         }
         let (keys, anchor) = self.context.map_credentials();
         let page = self.context.page();
@@ -707,7 +711,7 @@ impl WorkspaceProductionAdapter {
         }
         if let Some(coordinates) = confirmed_boundary {
             self.context
-                .export_input
+                .export_flow
                 .set_boundary(Some(coordinates), true);
         }
         Presentation::ready(self.context.page())
@@ -723,7 +727,7 @@ impl WorkspaceProductionAdapter {
                 state.boundary_gcj02 = None;
             }
         }
-        self.context.export_input.set_boundary(None, false);
+        self.context.export_flow.set_boundary(None, false);
         Presentation::ready(self.context.page())
     }
 
@@ -814,7 +818,7 @@ impl WorkspaceProductionAdapter {
         let result = self.context.session.borrow_mut().commit_orientation(angle);
         match result {
             Ok(()) => {
-                self.context.export_input.set_orientation(Some(angle));
+                self.context.export_flow.set_orientation(Some(angle));
                 Presentation::ready(self.context.page())
             }
             Err(()) => self.orientation_save_failed(),
@@ -936,7 +940,7 @@ impl WorkspaceProductionAdapter {
                 state.generated_category_counts.clear();
             }
         }
-        self.context.export_input.set_orientation(None);
+        self.context.export_flow.set_orientation(None);
         Presentation::ready(self.context.page())
     }
 
@@ -1150,7 +1154,7 @@ impl WorkspaceProductionAdapter {
             session.drawer.load_determined(vertices);
         }
         self.context
-            .export_input
+            .export_flow
             .set_boundary(Some(coords.to_vec()), true);
         Presentation::ready(self.context.page())
     }

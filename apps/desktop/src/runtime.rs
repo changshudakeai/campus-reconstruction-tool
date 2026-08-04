@@ -6,23 +6,19 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use coverage_audit::{AuditOutcome, QuietSentinel};
 use data_acquisition::{AcquisitionPipeline, CollectionReport, DataSource};
 use data_persistence::Database;
-use export_console::{
-    BoundaryError, BoundaryExportInput, BoundaryExportPort, BoundaryExportRequest,
-    Error as ExportError, ExportConsole, MockSealGate,
-};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::{Boundary, CandidateCategory, Orientation, PlanId};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::presenter::report_callback_error;
@@ -31,106 +27,7 @@ use crate::presenter::ShellPresenter;
 use crate::production::ProductionEntries;
 use crate::AppWindow;
 
-/// F9 稳定输入端口背后的应用快照；S1 不读取或拼装这些字段。
-#[derive(Debug, Clone, Default)]
-struct ExportInputSnapshot {
-    plan_id: Option<String>,
-    campus_name: String,
-    plan_name: String,
-    boundary: Option<Vec<[f64; 2]>>,
-    boundary_confirmed: bool,
-    settings_error: Option<String>,
-    orientation: Option<f32>,
-    minecraft_version: String,
-    export_location: String,
-}
-
-/// 由组合根注入 F9 的稳定能力端口实现。
-#[derive(Clone, Default)]
-pub(crate) struct ExportInputStore {
-    snapshot: Arc<Mutex<ExportInputSnapshot>>,
-}
-
-impl ExportInputStore {
-    pub(crate) fn sync_settings(&self, minecraft_version: String, export_location: String) {
-        let mut snapshot = self.snapshot.lock().expect("导出输入快照锁不可中毒");
-        snapshot.settings_error = None;
-        snapshot.minecraft_version = minecraft_version;
-        snapshot.export_location = export_location;
-    }
-
-    pub(crate) fn set_settings_error(&self, error: impl Into<String>) {
-        self.snapshot
-            .lock()
-            .expect("export input snapshot lock")
-            .settings_error = Some(error.into());
-    }
-
-    pub(crate) fn set_plan(&self, context: &project_management::PlanContextView) {
-        let mut snapshot = self.snapshot.lock().expect("导出输入快照锁不可中毒");
-        snapshot.plan_id = Some(context.plan_id.clone());
-        snapshot.campus_name = context.campus_name.clone();
-        snapshot.plan_name = context.plan_name.clone();
-        snapshot.boundary = None;
-        snapshot.boundary_confirmed = false;
-        snapshot.orientation = None;
-    }
-
-    pub(crate) fn set_boundary(&self, coordinates: Option<Vec<[f64; 2]>>, confirmed: bool) {
-        let mut snapshot = self.snapshot.lock().expect("导出输入快照锁不可中毒");
-        snapshot.boundary = coordinates;
-        snapshot.boundary_confirmed = confirmed;
-    }
-
-    pub(crate) fn set_orientation(&self, orientation: Option<f32>) {
-        let mut snapshot = self.snapshot.lock().expect("导出输入快照锁不可中毒");
-        snapshot.orientation = orientation;
-    }
-}
-
-impl BoundaryExportInput for ExportInputStore {
-    fn load_request(&self) -> std::result::Result<BoundaryExportRequest, ExportError> {
-        let snapshot = self
-            .snapshot
-            .lock()
-            .expect("导出输入快照锁不可中毒")
-            .clone();
-        if let Some(error) = snapshot.settings_error.clone() {
-            return Err(ExportError::SettingsRead(error));
-        }
-        let Some(plan_id_text) = snapshot.plan_id else {
-            return Err(ExportError::Boundary(BoundaryError::Missing));
-        };
-        let plan_id = PlanId::parse(&plan_id_text)
-            .map_err(|error| ExportError::BadPlanId(error.to_string()))?;
-        let boundary = snapshot.boundary.map(|coordinates| Boundary {
-            r#type: "Polygon".to_owned(),
-            coordinates: serde_json::json!([coordinates]),
-        });
-        let orientation = match snapshot.orientation {
-            Some(degree) => Some(Orientation::new(degree).ok_or_else(|| {
-                ExportError::Boundary(BoundaryError::Invalid(
-                    "方案朝向超出 0..=360 范围".to_owned(),
-                ))
-            })?),
-            None => None,
-        };
-        let output_dir = std::path::PathBuf::from(snapshot.export_location);
-        let plan_stem = plan_id.to_string();
-        Ok(BoundaryExportRequest::new(
-            snapshot.campus_name,
-            plan_id,
-            snapshot.plan_name,
-            snapshot.minecraft_version,
-            boundary,
-            snapshot.boundary_confirmed,
-            orientation,
-            output_dir.join(format!("{plan_stem}.schem")),
-            output_dir.join(format!("{plan_stem}.foundation_manifest.json")),
-        ))
-    }
-}
-
+use crate::production::{BoundaryExportCapability, BoundaryExportFlow};
 /// 开发版数据库文件名（工作目录下，与 F1/F3 约定一致）。
 const DEV_DB_FILE: &str = "campus-rebuild.db";
 
@@ -298,18 +195,23 @@ pub struct ViewModelInjector {
     /// F7 覆盖率审计安静哨兵
     sentinel: QuietSentinel,
     /// F9 完整导出入口的稳定输入能力端口状态。
-    export_input: ExportInputStore,
-    /// F9 导出控制台。门控暂用 `MockSealGate` 占位——真门控随后续导出接线落地。
-    export: ExportConsole<MockSealGate>,
+    export_flow: Arc<dyn BoundaryExportCapability>,
 }
 
 impl ViewModelInjector {
     /// 构造并持有全部 F 模块实例（F1-F9，B8/F6/F8 未立户不在册）。
     pub fn new(db: ShellDatabases) -> Result<Self> {
+        Self::new_with_export_file_system(db, Arc::new(export_console::StdExportFileSystem))
+    }
+
+    pub fn new_with_export_file_system(
+        db: ShellDatabases,
+        file_system: Arc<dyn export_console::ExportFileSystem>,
+    ) -> Result<Self> {
         let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
-        // F2 引导进度与 F3 同库装载（生产环境两连接指向同一文件）
         let tutorial = OnboardingTutorial::load(&db.projects)?;
-        let export_input = ExportInputStore::default();
+        let export_flow: Arc<dyn BoundaryExportCapability> =
+            Arc::new(BoundaryExportFlow::new(file_system));
         Ok(Self {
             l10n,
             settings: SettingsManager::new(db.settings),
@@ -318,8 +220,7 @@ impl ViewModelInjector {
             acquisition: AcquisitionPipeline::new()?,
             review: None,
             sentinel: QuietSentinel::new(),
-            export_input,
-            export: ExportConsole::new(MockSealGate::new()),
+            export_flow,
         })
     }
 
@@ -485,30 +386,8 @@ impl ViewModelInjector {
         &mut self.settings
     }
 
-    /// 同步 F1 当前设置到注入 F9 的稳定输入端口。
-    pub(crate) fn sync_export_settings(&self) {
-        match (
-            self.settings.settings(),
-            self.settings.default_export_location(),
-        ) {
-            (Ok(settings), Ok(location)) => self
-                .export_input
-                .sync_settings(settings.minecraft_version, location),
-            (Err(error), _) | (_, Err(error)) => {
-                self.export_input.set_settings_error(error.to_string());
-            }
-        }
-    }
-
-    /// 取得 F9 稳定完整导出能力端口；输入读取不落在 S1 适配器中。
-    pub(crate) fn boundary_export_port(&self) -> BoundaryExportPort {
-        self.export
-            .boundary_export_port(Arc::new(self.export_input.clone()))
-    }
-
-    /// 工作区功能入口更新 F9 所需的已确认边界/朝向事实。
-    pub(crate) fn export_input_store(&self) -> ExportInputStore {
-        self.export_input.clone()
+    pub(crate) fn export_flow(&self) -> Arc<dyn BoundaryExportCapability> {
+        self.export_flow.clone()
     }
 
     /// F2 新手教程
@@ -938,7 +817,7 @@ mod tests {
         assert_eq!(workbench.candidate_count(), 0);
         // F7 / F9：实例可达
         let _sentinel = injector.sentinel();
-        let _export = injector.boundary_export_port();
+        let _export = injector.export_flow();
     }
 
     #[test]
@@ -950,17 +829,5 @@ mod tests {
         let reloaded = OnboardingTutorial::load(injector.projects_mut().database_mut())
             .expect("重新装载引导进度");
         assert_eq!(reloaded.status(), TutorialStatus::NotStarted);
-    }
-    #[test]
-    fn export_input_surfaces_settings_read_error_without_fallback() {
-        let store = ExportInputStore::default();
-        store.set_settings_error("database read failed");
-
-        let error = store
-            .load_request()
-            .expect_err("a settings read failure must reach F9");
-        assert!(
-            matches!(error, ExportError::SettingsRead(detail) if detail == "database read failed")
-        );
     }
 }

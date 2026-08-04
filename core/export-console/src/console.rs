@@ -30,6 +30,10 @@ use crate::progress::ProgressTracker;
 use crate::seal_gate::SealGate;
 use crate::views::{text_keys, ExportConfirmDialogView, ExportProgressView, NavigationTarget};
 
+use notification_center::{
+    Notification, NotificationActionOutcome, NotificationCenter, OpaqueNotificationAction,
+};
+
 /// B7 留底消息的来源标签前缀取自方案 ID（跨方案不混淆，ADR-0021）
 fn source_tag(plan_id: &str) -> String {
     plan_id.to_owned()
@@ -43,6 +47,55 @@ fn resolve_text(key: &str) -> String {
         .ok()
         .and_then(|global| global.as_ref().map(|l10n| l10n.t(key)))
         .unwrap_or_else(|| key.to_owned())
+}
+
+fn resolve_text_with_array(key: &str, args: &[&str]) -> String {
+    localization::GLOBAL_LOCALIZATION
+        .lock()
+        .ok()
+        .and_then(|global| global.as_ref().map(|l10n| l10n.t_with_array(key, args)))
+        .unwrap_or_else(|| key.to_owned())
+}
+
+fn export_error_category_key(error: &Error) -> &'static str {
+    match error {
+        Error::Boundary(_) => "error.export_boundary_failed",
+        Error::SettingsRead(_) => "error.export_settings_failed",
+        Error::Version(_) => "error.export_version_failed",
+        Error::Generation(_) => "error.export_generation_failed",
+        Error::ManifestWrite(_) => "error.export_manifest_write_failed",
+        Error::SchematicWrite(_) => "error.export_schematic_write_failed",
+        Error::ArtifactWrite(_) => "error.export_artifact_write_failed",
+        Error::ArtifactRecovery(_) => "error.export_recovery_failed",
+        Error::BackgroundTask => "error.export_background_failed",
+        _ => "error.export_failed",
+    }
+}
+
+fn publish_export_failure(plan_id: &str, error: &Error) {
+    publish_export_failure_detail(plan_id, export_error_category_key(error), error.to_string());
+}
+
+fn publish_export_failure_detail(plan_id: &str, category_key: &str, diagnostic: String) {
+    let source = source_tag(plan_id);
+    let category = resolve_text(category_key);
+    let body = resolve_text_with_array("export.failure_user_message", &[&category]);
+    let title = resolve_text(text_keys::EXPORT_FAILED);
+    let diagnostic_title = resolve_text("notice.diagnostic_action");
+    let diagnostic_source = source.clone();
+    let action = OpaqueNotificationAction::new(move || {
+        NotificationActionOutcome::succeeded(Notification::info(
+            diagnostic_source.clone(),
+            diagnostic_title.clone(),
+            diagnostic.clone(),
+        ))
+    });
+    let notification = Notification::error(source.clone(), title, body.clone());
+    if let Some(center) = NotificationCenter::global() {
+        center.publish_with_action(notification, action);
+    } else {
+        notification_center::error(source, resolve_text(text_keys::EXPORT_FAILED), body);
+    }
 }
 
 /// 内部状态（显式状态机）
@@ -85,6 +138,15 @@ impl<G: SealGate> ExportConsole<G> {
     }
 
     /// 用指定用料表与文件端口创建 F9 控制台。
+    /// Construct the production F9 console for the only supported Minecraft version.
+    pub fn new_with_v26_1_2_file_system(gate: G, file_system: Arc<dyn ExportFileSystem>) -> Self {
+        Self::new_with_material_table_and_file_system(
+            gate,
+            MaterialTable::v26_1_2_school(),
+            file_system,
+        )
+    }
+
     pub fn new_with_material_table_and_file_system(
         gate: G,
         material_table: MaterialTable,
@@ -138,11 +200,7 @@ impl<G: SealGate> ExportConsole<G> {
             }
             Err(error) => {
                 self.state = State::Failed;
-                notification_center::error(
-                    source_tag(&plan_id),
-                    resolve_text(text_keys::EXPORT_FAILED),
-                    error.to_string(),
-                );
+                publish_export_failure(&plan_id, &error);
                 Err(error)
             }
         }
@@ -268,21 +326,13 @@ impl<G: SealGate> ExportConsole<G> {
         if let Ok(plan_id) = PlanId::parse(&plan_key) {
             if let Err(reason) = self.gate.release(&plan_id) {
                 // 解封失败也必须留痕（仍走弹窗——卡住流程级）
-                notification_center::error(
-                    source_tag(&plan_key),
-                    resolve_text(text_keys::EXPORT_FAILED),
-                    reason,
-                );
+                publish_export_failure_detail(&plan_key, "error.export_failed", reason);
             }
         }
         self.state = State::Failed;
 
         // 要紧错误级：模态弹窗 + 留底，禁止横幅（ADR-0021）
-        notification_center::error(
-            source_tag(&plan_key),
-            resolve_text(text_keys::EXPORT_FAILED),
-            err.to_string(),
-        );
+        publish_export_failure(&plan_key, err);
     }
 
     /// 失败后的跳转目标：回评审台继续评审（封账已回滚）

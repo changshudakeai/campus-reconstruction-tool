@@ -140,6 +140,7 @@
     "boundary_only_summary": "边界已确认。未设置自定义朝向时使用地图正北；未采集候选时生成边界覆盖范围内的最小平整场地。",
     "failure_retry": "导出未完成，请检查输出位置后重试。",
     "failure_detail": "{0}：{1}",
+    "failure_user_message": "{0}。导出未完成；已确认的边界保持不变，请修正后重试。",
     "in_progress": "正在导出…",
     "done": "导出完成",
     "manifest_title": "导出清单",
@@ -268,6 +269,7 @@
     "export_schematic_write_failed": ".schem 写入失败",
     "export_artifact_write_failed": "导出文件发布失败",
     "export_recovery_failed": "导出失败且恢复未完成",
+    "export_background_failed": "导出后台任务异常中止",
     "export_failed": "导出失败",
     "file_write_failed": "文件写入失败，可重试",
     "block_not_in_version": "用料表中查不到目标版本的方块，已终止导出"

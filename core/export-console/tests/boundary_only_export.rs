@@ -260,3 +260,43 @@ fn non_square_custom_orientation_changes_generated_footprint_not_only_manifest()
         127.5
     );
 }
+#[test]
+fn corrected_boundary_changes_schematic_dimensions() {
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first_boundary = boundary();
+    let second_boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0050, 39.0000],
+            [116.0050, 39.0040],
+            [116.0000, 39.0040],
+            [116.0000, 39.0000]
+        ]]),
+    };
+
+    let mut first_console = ExportConsole::new(MockSealGate::new());
+    let first_result = first_console
+        .export_confirmed_boundary(request(first_dir.path(), None, Some(first_boundary), true))
+        .unwrap();
+    let first_dimensions = sponge_export::inspect_schematic(&first_result.schematic_path)
+        .unwrap()
+        .dimensions;
+
+    let mut second_console = ExportConsole::new(MockSealGate::new());
+    let second_result = second_console
+        .export_confirmed_boundary(request(
+            second_dir.path(),
+            None,
+            Some(second_boundary),
+            true,
+        ))
+        .unwrap();
+    let second_dimensions = sponge_export::inspect_schematic(&second_result.schematic_path)
+        .unwrap()
+        .dimensions;
+
+    assert!(second_dimensions[0] > first_dimensions[0]);
+    assert!(second_dimensions[2] > first_dimensions[2]);
+}

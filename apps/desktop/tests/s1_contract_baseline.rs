@@ -220,7 +220,7 @@ fn export_s1_seam_submits_one_complete_f9_intent() {
 
     assert!(seam.contains("ExportPresentationRequest::Start"));
     assert_eq!(
-        seam.matches("self.port.start()").count(),
+        seam.matches("self.flow.start()").count(),
         1,
         "S1 导出接缝只能提交一次 F9 完整开始意图"
     );
@@ -248,5 +248,55 @@ fn export_s1_seam_submits_one_complete_f9_intent() {
         seam.contains("Presentation::processing")
             || seam.contains("ExportPresentationRequest::Poll"),
         "S1 必须呈现 F9 的后台处理中状态，而不是同步等待结果"
+    );
+}
+
+#[test]
+fn export_input_assembly_is_not_kept_in_runtime_or_workspace_shell_files() {
+    for path in [
+        "apps/desktop/src/runtime.rs",
+        "apps/desktop/src/production/workspace_boundary.rs",
+    ] {
+        let source = read_workspace_file(path);
+        for forbidden in [
+            "BoundaryExportRequest",
+            "BoundaryExportInput",
+            "ExportInputSnapshot",
+            "ExportInputStore",
+            "BoundaryExportPort",
+            "load_request(",
+            "default_export_location",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} ??????? F9 ???????{forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn export_failure_facts_have_a_localized_background_branch_and_diagnostic_seam() {
+    let resources = read_workspace_file("core/localization/resources/zh-CN.json");
+    assert!(
+        resources.contains("\"export_background_failed\"")
+            && resources.contains("\"failure_user_message\""),
+        "????????????????????"
+    );
+
+    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let failure = source
+        .split("fn failure_presentation")
+        .nth(1)
+        .and_then(|tail| tail.split("impl PresentationAdapter").next())
+        .expect("????????????");
+    assert!(
+        failure.contains("with_diagnostic_action"),
+        "????????? B7 ????????"
+    );
+    assert!(
+        !failure.contains("export.failure_detail")
+            && !failure.contains("let diagnostic = error.to_string()"),
+        "error.to_string() ?????????????"
     );
 }

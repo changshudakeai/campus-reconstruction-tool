@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use export_console::{
@@ -321,4 +321,115 @@ fn async_start_returns_before_export_finishes_and_then_observes_terminal_state()
     };
     assert!(result.is_ok());
     assert!(operation.progress_view().is_done);
+}
+
+struct StartFreezeInput {
+    initial: BoundaryExportRequest,
+    changed: BoundaryExportRequest,
+    start_returned: Arc<std::sync::atomic::AtomicBool>,
+    load_started: Arc<(Mutex<bool>, Condvar)>,
+    release_load: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl BoundaryExportInput for StartFreezeInput {
+    fn load_request(&self) -> export_console::Result<BoundaryExportRequest> {
+        let (lock, signal) = &*self.load_started;
+        *lock.lock().expect("request load barrier lock") = true;
+        signal.notify_one();
+
+        let (lock, signal) = &*self.release_load;
+        let mut released = lock.lock().expect("request release barrier lock");
+        while !*released {
+            released = signal.wait(released).expect("request release barrier wait");
+        }
+
+        if self
+            .start_returned
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            Ok(self.changed.clone())
+        } else {
+            Ok(self.initial.clone())
+        }
+    }
+}
+
+#[test]
+fn start_freezes_request_before_return_when_boundary_changes_after_start() {
+    let first_dir = tempfile::tempdir().unwrap();
+    let changed_dir = tempfile::tempdir().unwrap();
+    let load_started = Arc::new((Mutex::new(false), Condvar::new()));
+    let release_load = Arc::new((Mutex::new(false), Condvar::new()));
+    let start_returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let input = Arc::new(StartFreezeInput {
+        initial: request(first_dir.path()),
+        changed: BoundaryExportRequest::new(
+            "????",
+            PlanId::generate(),
+            "???????",
+            "26.1.2",
+            Some(Boundary {
+                r#type: "Polygon".to_owned(),
+                coordinates: serde_json::json!([[
+                    [116.0000, 39.0000],
+                    [116.0100, 39.0000],
+                    [116.0100, 39.0010],
+                    [116.0000, 39.0010],
+                    [116.0000, 39.0000]
+                ]]),
+            }),
+            true,
+            None,
+            changed_dir.path().join("schematic.schem"),
+            changed_dir.path().join("manifest.json"),
+        ),
+        start_returned: Arc::clone(&start_returned),
+        load_started: Arc::clone(&load_started),
+        release_load: Arc::clone(&release_load),
+    });
+    let console = ExportConsole::new(MockSealGate::new());
+    let port = console.boundary_export_port(input);
+    let (sender, receiver) = mpsc::channel();
+    let worker_port = port.clone();
+    let returned_flag = Arc::clone(&start_returned);
+    std::thread::spawn(move || {
+        let result = worker_port.start();
+        returned_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        sender.send(result).expect("?? Start ??");
+    });
+
+    let (lock, signal) = &*load_started;
+    let mut loaded = lock.lock().expect("request load barrier lock");
+    while !*loaded {
+        loaded = signal.wait(loaded).expect("request load barrier wait");
+    }
+    drop(loaded);
+
+    let returned_before_load_release = start_returned.load(std::sync::atomic::Ordering::SeqCst);
+    let (lock, signal) = &*release_load;
+    *lock.lock().expect("request release barrier lock") = true;
+    signal.notify_one();
+
+    let mut operation = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("Start ????")
+        .expect("??????????");
+    assert!(
+        !returned_before_load_release,
+        "Start ????? BoundaryExportRequest ?????"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let result = loop {
+        if let Some(result) = operation.try_complete() {
+            break result;
+        }
+        assert!(std::time::Instant::now() < deadline, "?????????");
+        std::thread::yield_now();
+    };
+    assert!(result.is_ok());
+    assert!(first_dir.path().join("schematic.schem").exists());
+    assert!(first_dir.path().join("manifest.json").exists());
+    assert!(!changed_dir.path().join("schematic.schem").exists());
+    assert!(!changed_dir.path().join("manifest.json").exists());
 }
