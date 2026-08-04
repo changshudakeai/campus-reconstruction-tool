@@ -200,7 +200,11 @@ impl CollectionCoordinator {
             state.request_id
         };
         self.page().render(window);
-        let center = collection_centroid(&boundary.coordinates).unwrap_or((116.397, 39.916));
+        let Some(center) = collection_centroid(&boundary.coordinates) else {
+            self.fail();
+            self.page().render(window);
+            return;
+        };
         crate::map_webview::evaluate_script(&collection_request_script(request_id, center));
     }
 
@@ -283,24 +287,13 @@ impl CollectionCoordinator {
     fn collection_target(&self) -> Option<(PlanId, Boundary)> {
         let session = self.context.session.borrow();
         let plan_id = PlanId::parse(session.active_plan_id.as_ref()?).ok()?;
-        let boundary = session
-            .plans
-            .get(&plan_id.to_string())?
-            .boundary
-            .clone()
-            .or_else(|| {
-                let context = session.active_context.as_ref()?;
-                let delta = 0.0001;
-                Some(Boundary {
-                    r#type: "Polygon".to_owned(),
-                    coordinates: serde_json::json!([[
-                        [context.anchor_lng - delta, context.anchor_lat - delta],
-                        [context.anchor_lng + delta, context.anchor_lat - delta],
-                        [context.anchor_lng + delta, context.anchor_lat + delta],
-                        [context.anchor_lng - delta, context.anchor_lat + delta],
-                        [context.anchor_lng - delta, context.anchor_lat - delta],
-                    ]]),
-                })
+        let boundary = self
+            .context
+            .export_flow
+            .boundary_view()
+            .map(|view| Boundary {
+                r#type: view.r#type,
+                coordinates: view.coordinates,
             })?;
         Some((plan_id, boundary))
     }
@@ -515,6 +508,20 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                     )
                 }
                 .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            ExportPresentationRequest::Abandon => {
+                self.flow.leave();
+                self.operation = None;
+                Presentation::ready(
+                    self.page_with_status(
+                        "export.confirm_title",
+                        self.context
+                            .injector()
+                            .borrow()
+                            .l10n()
+                            .t("export.boundary_only_summary"),
+                    ),
+                )
             }
         }
     }
@@ -1151,7 +1158,12 @@ impl ProductionEntries {
             self.workspace
                 .show(window, &self.center, WorkspaceRequest::Leave { target });
         match presentation.navigation() {
-            NavigationDecision::Show(screen) => self.navigate_to(window, screen),
+            NavigationDecision::Show(screen) => {
+                self.export_poll_timer.stop();
+                self.export
+                    .show(window, &self.center, ExportPresentationRequest::Abandon);
+                self.navigate_to(window, screen);
+            }
             // 必须停留：功能入口已呈现当前页，不导航
             NavigationDecision::Blocked => {}
             NavigationDecision::Stay => {

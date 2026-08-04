@@ -100,6 +100,8 @@ pub enum IpcMessage {                                        (Debug + Clone + Pa
     ManualCancel,                                            (T24: 撤销落点)
     ManualClear,                                             (T24: 清空重画)
     ConfirmBoundary { coords: Vec<[f64; 2]> },               (T24: 确认最终边界 GCJ-02)
+    BoundaryGeometryUpdate { r#type: String, coordinates: serde_json::Value }, (GeoJSON Polygon/MultiPolygon 编辑中)
+    ConfirmBoundaryGeometry { r#type: String, coordinates: serde_json::Value }, (GeoJSON Polygon/MultiPolygon 最终确认)
 }
 
 pub struct OsmElement {                                      (Serialize + Deserialize + PartialEq)

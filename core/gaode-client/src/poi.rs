@@ -220,6 +220,16 @@ pub enum IpcMessage {
     ManualClear,
     /// 确认最终边界 (confirm_boundary: GCJ-02 or WGS-84 TBD)
     ConfirmBoundary { coords: Vec<[f64; 2]> },
+    /// GeoJSON Polygon/MultiPolygon boundary submitted by the map seam.
+    BoundaryGeometryUpdate {
+        r#type: String,
+        coordinates: serde_json::Value,
+    },
+    /// Confirmed GeoJSON Polygon/MultiPolygon boundary submitted by the map seam.
+    ConfirmBoundaryGeometry {
+        r#type: String,
+        coordinates: serde_json::Value,
+    },
     // T25: 朝向模式
     /// 朝向点击两点 [(lng,lat), (lng,lat)]
     OrientationPoints { points: [[f64; 2]; 2] },
@@ -316,8 +326,28 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                     struct BoundaryPayload {
                         #[serde(default)]
                         coords: Vec<[f64; 2]>,
+                        #[serde(default)]
+                        geometry: Option<BoundaryGeometryPayload>,
+                    }
+                    #[derive(Deserialize)]
+                    struct BoundaryGeometryPayload {
+                        #[serde(rename = "type")]
+                        r#type: String,
+                        coordinates: serde_json::Value,
                     }
                     if let Ok(payload) = serde_json::from_str::<BoundaryPayload>(msg) {
+                        if let Some(geometry) = payload.geometry {
+                            if type_payload.r#type == "boundary_update" {
+                                return Ok(IpcMessage::BoundaryGeometryUpdate {
+                                    r#type: geometry.r#type,
+                                    coordinates: geometry.coordinates,
+                                });
+                            }
+                            return Ok(IpcMessage::ConfirmBoundaryGeometry {
+                                r#type: geometry.r#type,
+                                coordinates: geometry.coordinates,
+                            });
+                        }
                         if type_payload.r#type == "boundary_update" {
                             return Ok(IpcMessage::BoundaryUpdate {
                                 coords: payload.coords,
@@ -467,6 +497,28 @@ mod ipc_tests {
             assert_eq!(coords.len(), 3);
         } else {
             panic!("Expected ConfirmBoundary variant");
+        }
+    }
+
+    #[test]
+    fn confirmed_multipolygon_geometry_is_preserved_for_f9() {
+        let json = r#"{
+            "type": "confirm_boundary",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [[[[116.4, 39.9], [116.5, 39.9], [116.5, 40.0], [116.4, 39.9]]]]
+            }
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        match result {
+            IpcMessage::ConfirmBoundaryGeometry {
+                r#type,
+                coordinates,
+            } => {
+                assert_eq!(r#type, "MultiPolygon");
+                assert_eq!(coordinates[0][0][0][0], 116.4);
+            }
+            other => panic!("expected geometry-preserving confirmation, got {other:?}"),
         }
     }
 

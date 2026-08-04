@@ -76,6 +76,11 @@ impl FailingFileSystem {
         *lock.lock().expect("manifest block release lock") = true;
         signal.notify_one();
     }
+
+    fn reset_manifest_block(&self) {
+        let (lock, _) = &*self.manifest_gate;
+        *lock.lock().expect("manifest block reset lock") = false;
+    }
 }
 
 impl ExportFileSystem for FailingFileSystem {
@@ -111,7 +116,7 @@ impl ExportFileSystem for FailingFileSystem {
                 while !*released {
                     released = signal.wait(released).expect("manifest block wait");
                 }
-                Ok(())
+                self.standard.write(path, contents)
             }
             _ => self.standard.write(path, contents),
         }
@@ -322,6 +327,37 @@ impl TestApp {
         );
     }
 
+    fn wait_for_terminal(&self, deadline: Duration) {
+        let deadline_at = Instant::now() + deadline;
+        let weak = self.window.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(10),
+            move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                if window.get_operation_state() != OperationPresentationState::Processing
+                    || Instant::now() >= deadline_at
+                {
+                    slint::quit_event_loop().expect("stop terminal export loop");
+                }
+            },
+        );
+        slint::run_event_loop_until_quit().expect("run terminal export loop");
+        assert_ne!(
+            self.window.get_operation_state(),
+            OperationPresentationState::Processing,
+            "F9 operation must reach a terminal presentation state"
+        );
+        assert_eq!(
+            self.window.get_operation_state(),
+            OperationPresentationState::Succeeded,
+            "duplicate Start must leave the original operation observable to success"
+        );
+    }
+
     fn assert_localized_failure(&self, category_key: &str) {
         let category = self.l10n.t(category_key);
         let expected_body = self
@@ -438,24 +474,60 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         .into_iter()
         .any(|record| record.notification().body == app.l10n.t("export.cleanup_warning")));
 
-    // Duplicate Start is rejected while the first immutable request is still running.
+    // Leaving the workspace expires the presentation result while the F9 worker
+    // finishes in its plan-specific output directory; it must not repaint the
+    // campus page or a later reopening of the plan.
     app.confirm_boundary(
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
+    file_system.reset_manifest_block();
     app.set_mode(FailureMode::BlockManifest);
     app.window.invoke_workspace_export_start_clicked();
     file_system.wait_for_manifest_block();
-    app.window.invoke_workspace_export_start_clicked();
-    assert!(app.window.get_error_dialog_visible());
-    app.assert_localized_failure("error.export_failed");
-    app.dismiss_error();
+    app.window.invoke_switch_campus_toolbar_button_clicked();
+    assert_ne!(
+        app.window.get_active_screen(),
+        4,
+        "leaving the workspace must stop presenting the old export page"
+    );
+    assert!(!app.window.get_error_dialog_visible());
     file_system.release_manifest_block();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !app.manifest_path().is_file() {
-        assert!(
-            Instant::now() < deadline,
-            "第一個导出 worker 未在重复 Start 后完成"
-        );
+        assert!(Instant::now() < deadline, "abandoned worker did not finish");
         std::thread::yield_now();
     }
+    assert_ne!(app.window.get_active_screen(), 4);
+
+    app.window
+        .invoke_plan_list_card_clicked(app.plan_id.to_string().into());
+    assert_eq!(app.window.get_active_screen(), 4);
+    assert_eq!(
+        app.window.get_operation_state(),
+        OperationPresentationState::Ready,
+        "the old result must not appear as success after reopening the plan"
+    );
+
+    // Drop the first app before exercising duplicate Start in a fresh output
+    // directory; the terminal state is observed through the operation poll.
+    drop(app);
+    let duplicate_app = TestApp::new(
+        Arc::clone(&file_system) as Arc<dyn ExportFileSystem>,
+        Arc::clone(&mode),
+    );
+    duplicate_app.confirm_boundary(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
+    );
+    file_system.reset_manifest_block();
+    duplicate_app.set_mode(FailureMode::BlockManifest);
+    duplicate_app.window.invoke_workspace_export_start_clicked();
+    file_system.wait_for_manifest_block();
+    duplicate_app.window.invoke_workspace_export_start_clicked();
+    assert!(duplicate_app.window.get_error_dialog_visible());
+    duplicate_app.assert_localized_failure("error.export_failed");
+    duplicate_app.dismiss_error();
+    file_system.release_manifest_block();
+    duplicate_app.wait_for_terminal(Duration::from_secs(5));
+    assert!(duplicate_app.schematic_path().is_file());
+    assert!(duplicate_app.manifest_path().is_file());
 }

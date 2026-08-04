@@ -342,3 +342,26 @@ fn export_failure_facts_have_a_localized_background_branch_and_diagnostic_seam()
         "error.to_string() ?????????????"
     );
 }
+
+#[test]
+fn workspace_shell_does_not_hold_formal_boundary_or_synthesize_collection_fallback() {
+    let workspace = read_workspace_file("apps/desktop/src/production/workspace_boundary.rs");
+    for forbidden in [
+        "use shared_domain_types::{Boundary",
+        "state.boundary",
+        "export_flow.set_boundary(",
+    ] {
+        assert!(
+            !workspace.contains(forbidden),
+            "S1 工作区不得持有或镜像正式边界：{forbidden}"
+        );
+    }
+
+    let production = read_workspace_file("apps/desktop/src/production/mod.rs");
+    assert!(
+        !production.contains("let delta = 0.0001")
+            && !production.contains("anchor_lng - delta")
+            && !production.contains("unwrap_or((116.397, 39.916))"),
+        "候选采集不得用校区锚点合成静默矩形后备"
+    );
+}

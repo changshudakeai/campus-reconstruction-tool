@@ -9,10 +9,11 @@ description = "F9 boundary-only application flow: freeze input and submit the co
 export-console = { workspace = true }
 global-settings = { workspace = true }
 project-management = { workspace = true }
+serde_json = { workspace = true }
 shared-domain-types = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+data-persistence = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -216,6 +216,80 @@ impl ExportFileSystem for PanicOnceFileSystem {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PanicPoint {
+    ManifestStaging,
+    SchematicStaging,
+    AfterFirstFinalPublish,
+}
+
+struct PanicAtPublicationFileSystem {
+    point: PanicPoint,
+    panicked: Arc<AtomicBool>,
+}
+
+impl PanicAtPublicationFileSystem {
+    fn is_named(path: &Path, fragment: &str) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(fragment))
+    }
+
+    fn final_name(path: &Path, name: &str) -> bool {
+        path.file_name().and_then(|value| value.to_str()) == Some(name)
+    }
+
+    fn panic_once(&self, should_panic: bool, message: &str) {
+        if should_panic && !self.panicked.swap(true, Ordering::SeqCst) {
+            panic!("{message}");
+        }
+    }
+}
+
+impl ExportFileSystem for PanicAtPublicationFileSystem {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        std::fs::write(path, contents)?;
+        self.panic_once(
+            matches!(self.point, PanicPoint::ManifestStaging)
+                && Self::is_named(path, "m1-manifest-"),
+            "panic after manifest staging boundary",
+        );
+        self.panic_once(
+            matches!(self.point, PanicPoint::SchematicStaging) && Self::is_named(path, "m1-schem-"),
+            "panic after schematic staging boundary",
+        );
+        Ok(())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)?;
+        self.panic_once(
+            matches!(self.point, PanicPoint::AfterFirstFinalPublish)
+                && Self::final_name(to, "schematic.schem"),
+            "panic after first final artifact publication",
+        );
+        Ok(())
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    fn kind(&self, path: &Path) -> io::Result<Option<ExportFileKind>> {
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(ExportFileKind::File)),
+            Ok(metadata) if metadata.is_dir() => Ok(Some(ExportFileKind::Directory)),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 fn boundary() -> Boundary {
     Boundary {
         r#type: "Polygon".to_owned(),
@@ -380,6 +454,81 @@ fn worker_panic_clears_active_state_and_allows_a_retry() {
         std::thread::yield_now();
     };
     assert!(retry_result.is_ok());
+}
+
+#[test]
+fn panic_at_each_publication_phase_rolls_back_every_transaction_file() {
+    for point in [
+        PanicPoint::ManifestStaging,
+        PanicPoint::SchematicStaging,
+        PanicPoint::AfterFirstFinalPublish,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let schematic = dir.path().join("schematic.schem");
+        let manifest = dir.path().join("manifest.json");
+        if matches!(point, PanicPoint::AfterFirstFinalPublish) {
+            std::fs::write(&schematic, b"old schematic").unwrap();
+            std::fs::write(&manifest, b"old manifest").unwrap();
+        }
+        let file_system = Arc::new(PanicAtPublicationFileSystem {
+            point,
+            panicked: Arc::new(AtomicBool::new(false)),
+        });
+        let console = ExportConsole::new_with_material_table_and_file_system(
+            MockSealGate::new(),
+            MaterialTable::v26_1_2_school(),
+            file_system,
+        );
+        let port = console.boundary_export_port(Arc::new(FixedInput(request(dir.path()))));
+        let mut first = port.start().expect("Start must return before worker panic");
+        let first_result = wait_for_operation(&mut first);
+        assert!(
+            matches!(first_result, Err(Error::BackgroundTask)),
+            "worker panic must be converted to a structured background failure"
+        );
+        assert_transaction_files_are_absent(dir.path());
+        if matches!(point, PanicPoint::AfterFirstFinalPublish) {
+            assert_eq!(std::fs::read(&schematic).unwrap(), b"old schematic");
+            assert_eq!(std::fs::read(&manifest).unwrap(), b"old manifest");
+        } else {
+            assert!(!schematic.exists());
+            assert!(!manifest.exists());
+        }
+
+        let mut retry = port.start().expect("panic must clear active state");
+        assert!(wait_for_operation(&mut retry).is_ok());
+        assert!(schematic.is_file());
+        assert!(manifest.is_file());
+        assert_transaction_files_are_absent(dir.path());
+    }
+}
+
+fn wait_for_operation(
+    operation: &mut export_console::BoundaryExportOperation,
+) -> export_console::Result<export_console::BoundaryExportResult> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(result) = operation.try_complete() {
+            return result;
+        }
+        assert!(Instant::now() < deadline, "异步导出未达到终态");
+        std::thread::yield_now();
+    }
+}
+
+fn assert_transaction_files_are_absent(directory: &Path) {
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        assert!(
+            !name.contains(".m1-") && !name.contains("backup-"),
+            "发布失败后不得留下 staging/backup：{}",
+            path.display()
+        );
+    }
 }
 
 #[test]

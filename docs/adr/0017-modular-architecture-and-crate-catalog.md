@@ -67,11 +67,12 @@ v1.x 失败的核心原因是代码耦合严重：一个 Cargo workspace 内所�
 | B17 | Manifest 生成器 | `manifest-generator` | `foundation_manifest.json` schema 生成器 + SHA256 校验和 | ✅ ETL 特有 |
 | B18 | 初始校园生成引擎 | `generation-engine` | 评审保留数据 → 方块模型；Arnis 建筑规则 + 六类生成规则；只读调用 B17 获取按 MC 版本绑定的用料 | ADR-0024；用料归属由 ADR-0026 修订；复用 v1.x arnis-core |
 
-#### （C）应用流程模块（1 个）—— 一个用户操作一个完整入口
+#### （C）应用流程模块（2 个）—— 一个用户操作一个完整入口
 
 | 编号 | 中文名称 | Crate 名建议 | 核心职责 | 对应 ADR / 备注 |
 |------|----------|-------------|---------|----------------|
 | A1 | 采集应用流程 | `collection-flow` | 在非 S1 seam 后协调 F4、B2、B14、F7；向 S1 返回完整采集状态与报告 | ADR-0039；规划路径 `apps/collection-flow`，尚未立户 |
+| A2 | 边界直出应用流程 | `export-flow` | 拥有 F9 边界确认输入、版本/输出配置读取、Start 前不可变请求冻结，以及 B5 → B18 → B17 → B4 的完整后台导出与 Poll/过期交付 | ADR-0037/0039/0041/0042；路径 `apps/export-flow` |
 
 #### （D）应用壳（2 个）—— 薄壳 UI 层 + 工程工具
 

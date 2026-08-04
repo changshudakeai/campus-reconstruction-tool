@@ -234,7 +234,31 @@ impl BoundaryExportUseCase {
         request: &BoundaryExportRequest,
         progress: &ProgressTracker,
     ) -> Result<BoundaryExportResult> {
-        let result = self.export_inner(request, progress);
+        let staged_schematic = staged_path(&request.schematic_path, "schem")?;
+        let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.export_inner(request, progress, &staged_schematic, &staged_manifest)
+        }))
+        .unwrap_or(Err(Error::BackgroundTask));
+        let result = if result.is_err() {
+            match cleanup_staging(
+                self.file_system.as_ref(),
+                [&staged_schematic, &staged_manifest],
+            ) {
+                Ok(()) => result,
+                Err(recovery) => Err(Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
+                    primary: result
+                        .as_ref()
+                        .err()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "导出失败".to_owned()),
+                    recovery,
+                    paths: vec![staged_schematic.clone(), staged_manifest.clone()],
+                })),
+            }
+        } else {
+            result
+        };
         if result.is_err() {
             progress.fail();
         }
@@ -245,6 +269,8 @@ impl BoundaryExportUseCase {
         &self,
         request: &BoundaryExportRequest,
         progress: &ProgressTracker,
+        staged_schematic: &Path,
+        staged_manifest: &Path,
     ) -> Result<BoundaryExportResult> {
         let boundary = request
             .boundary
@@ -308,8 +334,6 @@ impl BoundaryExportUseCase {
             .map_err(|error| Error::ManifestWrite(error.to_string()))?;
         progress.report_percent(55);
 
-        let staged_schematic = staged_path(&request.schematic_path, "schem")?;
-        let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
         let result = (|| {
             // B17 先写入 staging；只有 B4 与最终双文件发布都成功才返回成功。
             let manifest_parent = request
@@ -333,7 +357,7 @@ impl BoundaryExportUseCase {
             // B4：复用 Sponge 编码器，经 F9 的受控文件端口写 staging。
             pipeline::export_schematic_staged_with_file_system(
                 &model,
-                &staged_schematic,
+                staged_schematic,
                 &actual_plan.plan_name,
                 contract.schematic_profile,
                 self.file_system.as_ref(),
@@ -343,9 +367,9 @@ impl BoundaryExportUseCase {
 
             let cleanup_warning = publish_pair(
                 self.file_system.as_ref(),
-                &staged_schematic,
+                staged_schematic,
                 &request.schematic_path,
-                &staged_manifest,
+                staged_manifest,
                 &request.manifest_path,
             )?;
             progress.finish();
@@ -358,22 +382,6 @@ impl BoundaryExportUseCase {
             })
         })();
 
-        if result.is_err() {
-            if let Err(recovery) = cleanup_staging(
-                self.file_system.as_ref(),
-                [&staged_schematic, &staged_manifest],
-            ) {
-                return Err(Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
-                    primary: result
-                        .as_ref()
-                        .err()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "导出失败".to_owned()),
-                    recovery,
-                    paths: vec![staged_schematic, staged_manifest],
-                }));
-            }
-        }
         result
     }
 }
@@ -382,6 +390,8 @@ impl BoundaryExportUseCase {
 pub struct BoundaryExportOperation {
     progress: ProgressTracker,
     result: mpsc::Receiver<Result<BoundaryExportResult>>,
+    lifecycle: Arc<AtomicU64>,
+    generation: u64,
 }
 
 impl BoundaryExportOperation {
@@ -392,7 +402,12 @@ impl BoundaryExportOperation {
 
     /// 非阻塞取得后台终态；没有终态时返回 None。
     pub fn try_complete(&mut self) -> Option<Result<BoundaryExportResult>> {
+        let expired = self.lifecycle.load(Ordering::SeqCst) != self.generation;
         match self.result.try_recv() {
+            Ok(_result) if expired => {
+                self.progress.fail();
+                Some(Err(Error::InvalidState("export result expired")))
+            }
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(Err(Error::BackgroundTask)),
@@ -406,6 +421,7 @@ pub struct BoundaryExportPort {
     use_case: Arc<BoundaryExportUseCase>,
     input: Arc<dyn BoundaryExportInput>,
     active: Arc<AtomicBool>,
+    lifecycle: Arc<AtomicU64>,
 }
 
 impl BoundaryExportPort {
@@ -417,6 +433,7 @@ impl BoundaryExportPort {
             use_case,
             input,
             active: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -441,21 +458,37 @@ impl BoundaryExportPort {
         }
 
         // Freeze the complete request before Start returns; the worker receives only this immutable value.
-        let request = match self.input.load_request() {
-            Ok(request) => request,
-            Err(error) => {
+        let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.input.load_request()
+        })) {
+            Ok(Ok(request)) => request,
+            Ok(Err(error)) => {
                 self.active.store(false, Ordering::SeqCst);
                 return Err(error);
+            }
+            Err(_) => {
+                self.active.store(false, Ordering::SeqCst);
+                return Err(Error::BackgroundTask);
             }
         };
         let progress = ProgressTracker::new();
         let worker_progress = progress.clone();
         let use_case = Arc::clone(&self.use_case);
         let active = Arc::clone(&self.active);
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let generation = lifecycle.load(Ordering::SeqCst);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = std::thread::Builder::new().spawn(move || {
-            let _active_guard = ActiveTaskGuard(active);
-            let result = use_case.export(&request, &worker_progress);
+            let result = {
+                let _active_guard = ActiveTaskGuard(active);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    use_case.export(&request, &worker_progress)
+                }))
+                .unwrap_or_else(|_| {
+                    worker_progress.fail();
+                    Err(Error::BackgroundTask)
+                })
+            };
             let _ = sender.send(result);
         });
         if spawn_result.is_err() {
@@ -465,7 +498,14 @@ impl BoundaryExportPort {
         Ok(BoundaryExportOperation {
             progress,
             result: receiver,
+            lifecycle,
+            generation,
         })
+    }
+
+    /// Expire an operation result when its presentation context is left.
+    pub fn expire_active(&self) {
+        self.lifecycle.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -573,7 +613,7 @@ fn publish_pair(
 
     let mut published_schematic = false;
     let mut published_manifest = false;
-    let publish_result = (|| {
+    let publish_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         file_system
             .rename(staged_schematic, schematic)
             .map_err(|error| publish_error(ArtifactKind::Schematic, schematic, error))?;
@@ -583,9 +623,24 @@ fn publish_pair(
             .map_err(|error| publish_error(ArtifactKind::Manifest, manifest, error))?;
         published_manifest = true;
         Ok::<(), Error>(())
-    })();
+    }))
+    .unwrap_or(Err(Error::BackgroundTask));
 
     if let Err(primary) = publish_result {
+        let published_schematic =
+            match publication_completed(file_system, schematic, published_schematic) {
+                Ok(published) => published,
+                Err(recovery) => {
+                    return Err(recovery_error(primary, recovery, [schematic, manifest]))
+                }
+            };
+        let published_manifest =
+            match publication_completed(file_system, manifest, published_manifest) {
+                Ok(published) => published,
+                Err(recovery) => {
+                    return Err(recovery_error(primary, recovery, [schematic, manifest]))
+                }
+            };
         let rollback = rollback_pair(
             file_system,
             schematic,
@@ -608,6 +663,28 @@ fn publish_pair(
         }
     }
     Ok((!cleanup_diagnostics.is_empty()).then(|| cleanup_diagnostics.join("; ")))
+}
+
+fn publication_completed(
+    file_system: &dyn ExportFileSystem,
+    final_path: &Path,
+    tracked: bool,
+) -> std::result::Result<bool, String> {
+    if tracked {
+        return Ok(true);
+    }
+    match file_system.kind(final_path) {
+        Ok(Some(ExportFileKind::File)) => Ok(true),
+        Ok(None) => Ok(false),
+        Ok(Some(ExportFileKind::Directory)) => Err(format!(
+            "发布状态检查失败：最终路径是目录 {}",
+            final_path.display()
+        )),
+        Err(error) => Err(format!(
+            "发布状态检查失败：无法检查 {}：{error}",
+            final_path.display()
+        )),
+    }
 }
 
 fn backup_existing(

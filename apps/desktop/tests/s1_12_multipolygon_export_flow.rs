@@ -1,4 +1,4 @@
-//! M1 regression: manual boundary confirmation must feed F9 with the latest boundary.
+//! M1 regression: a confirmed MultiPolygon must reach F9 without reconstruction.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,13 +8,12 @@ use desktop_shell::{
     ViewModelInjector,
 };
 use global_settings::FirstRunSetup;
-use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
 use slint::ComponentHandle;
 
-fn pump_until_terminal(window: &AppWindow, deadline: Duration) {
-    let deadline_at = Instant::now() + deadline;
+fn pump_until_terminal(window: &AppWindow) {
+    let deadline = Instant::now() + Duration::from_secs(5);
     let weak = window.as_weak();
     let timer = slint::Timer::default();
     timer.start(
@@ -25,13 +24,13 @@ fn pump_until_terminal(window: &AppWindow, deadline: Duration) {
                 return;
             };
             if window.get_operation_state() != OperationPresentationState::Processing
-                || Instant::now() >= deadline_at
+                || Instant::now() >= deadline
             {
-                slint::quit_event_loop().expect("stop manual export loop");
+                slint::quit_event_loop().expect("stop multipolygon export loop");
             }
         },
     );
-    slint::run_event_loop_until_quit().expect("run manual export loop");
+    slint::run_event_loop_until_quit().expect("run multipolygon export loop");
 }
 
 fn displayed_dimensions(subtitle: &str) -> [usize; 3] {
@@ -50,8 +49,7 @@ fn displayed_dimensions(subtitle: &str) -> [usize; 3] {
 }
 
 #[test]
-fn manual_canvas_boundary_exports_latest_confirmed_revision() {
-    let l10n = Localization::new(Language::ZhCn).expect("load zh-CN resources");
+fn desktop_multipolygon_confirmation_reaches_f9_and_publishes_pair() {
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center
@@ -59,7 +57,7 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         .set_presenter(ShellPresenter::install(&window));
 
     let directory = tempfile::tempdir().expect("temporary directory");
-    let database_path = directory.path().join("m1-manual.db");
+    let database_path = directory.path().join("m1-multipolygon.db");
     let export_dir = directory.path().join("exports");
     let mut injector =
         ViewModelInjector::new(ShellDatabases::open(&database_path).expect("open databases"))
@@ -78,12 +76,12 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         .expect("set export directory");
     let campus = injector
         .projects_mut()
-        .create_campus("manual regression campus")
+        .create_campus("multipolygon campus")
         .expect("create campus");
     let campus_id = CampusId::parse(&campus.id).expect("parse campus id");
     let plan_id = injector
         .projects_mut()
-        .create_plan(&campus_id, "manual regression plan")
+        .create_plan(&campus_id, "multipolygon plan")
         .expect("create plan");
     injector
         .settings_mut()
@@ -92,75 +90,36 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
     let _runtime = assemble_application(&window, injector, Arc::clone(&center));
 
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
-    assert_eq!(window.get_active_screen(), 4);
-
-    for (x, y) in [(0.0, 0.0), (120.0, 0.0), (120.0, 40.0), (0.0, 40.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
-    assert!(window.get_workspace_boundary_is_determined());
-    window.invoke_workspace_step_clicked(4);
-    assert_eq!(
-        window.get_workspace_placeholder_title().as_str(),
-        l10n.t("export.confirm_title")
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","geometry":{"type":"MultiPolygon","coordinates":[[[[116.4000,39.9000],[116.4010,39.9000],[116.4010,39.9010],[116.4000,39.9010],[116.4000,39.9000]]],[[[116.4050,39.9050],[116.4060,39.9050],[116.4060,39.9060],[116.4050,39.9060],[116.4050,39.9050]]]]}}"#
+            .into(),
     );
-    window.invoke_workspace_export_start_clicked();
-    assert_eq!(
-        window.get_operation_state(),
-        OperationPresentationState::Processing,
-        "Start returns Processing before export completion"
+    assert!(
+        window.get_workspace_boundary_is_determined(),
+        "desktop must preserve the confirmed MultiPolygon contract"
     );
-    pump_until_terminal(&window, Duration::from_secs(5));
-    assert_eq!(
-        window.get_operation_state(),
-        OperationPresentationState::Succeeded
-    );
-    let first_dimensions = displayed_dimensions(&window.get_workspace_placeholder_subtitle());
-
-    let schematic_path = export_dir.join(format!("{plan_id}.schem"));
-    let manifest_path = export_dir.join(format!("{plan_id}.foundation_manifest.json"));
-    assert!(schematic_path.is_file());
-    assert!(manifest_path.is_file());
-
-    window.invoke_workspace_boundary_reset_clicked();
-    for (x, y) in [(0.0, 0.0), (320.0, 0.0), (320.0, 160.0), (0.0, 160.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
-    assert!(window.get_workspace_boundary_is_determined());
     window.invoke_workspace_step_clicked(4);
     window.invoke_workspace_export_start_clicked();
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until_terminal(&window, Duration::from_secs(5));
+    pump_until_terminal(&window);
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded
     );
-    let corrected_dimensions = displayed_dimensions(&window.get_workspace_placeholder_subtitle());
-    assert!(
-        corrected_dimensions[0] > first_dimensions[0]
-            && corrected_dimensions[2] > first_dimensions[2],
-        "修正边界后的 F9 结果必须反映最新几何尺寸，而不是旧快照"
-    );
-
+    let schematic_path = export_dir.join(format!("{plan_id}.schem"));
     assert!(schematic_path.is_file());
     assert!(
         std::fs::metadata(&schematic_path)
             .expect("schematic metadata")
             .len()
-            > 0,
-        "成功尺寸必须来自实际写入的 .schem 产物"
+            > 0
     );
-    assert!(manifest_path.is_file());
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&manifest_path).expect("manifest must be readable"),
-    )
-    .expect("manifest must be valid JSON");
-    assert_eq!(manifest["minecraftVersion"], "26.1.2");
-    assert_eq!(manifest["orientation"]["degree"], 0.0);
-    assert_eq!(manifest["orientation"]["source"], "map_north");
-    assert_eq!(manifest["candidateFacts"]["candidateProjectionCount"], 0);
+    assert!(export_dir
+        .join(format!("{plan_id}.foundation_manifest.json"))
+        .is_file());
+    let dimensions = displayed_dimensions(&window.get_workspace_placeholder_subtitle());
+    assert!(dimensions[0] > 300 && dimensions[2] > 300);
 }

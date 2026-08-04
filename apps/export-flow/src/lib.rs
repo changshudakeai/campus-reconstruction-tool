@@ -3,6 +3,7 @@
 //! This crate is outside the S1 presentation shell. It owns formal export-input
 //! acquisition, immutable request assembly, and submission to the F9 port.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +18,13 @@ use global_settings::SettingsManager;
 use project_management::PlanContextView;
 use shared_domain_types::{Boundary, Orientation, PlanId};
 
+/// Boundary data needed by the map presentation; the formal F9 request stays private to this flow.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundaryView {
+    pub r#type: String,
+    pub coordinates: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ExportInputSnapshot {
     plan_id: Option<String>,
@@ -28,6 +36,16 @@ struct ExportInputSnapshot {
     orientation: Option<f32>,
     minecraft_version: Option<String>,
     export_location: Option<PathBuf>,
+    plans: HashMap<String, PlanExportSnapshot>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PlanExportSnapshot {
+    campus_name: String,
+    plan_name: String,
+    boundary: Option<Boundary>,
+    boundary_confirmed: bool,
+    orientation: Option<f32>,
 }
 
 #[derive(Clone, Default)]
@@ -54,23 +72,65 @@ impl ExportInputStore {
 
     fn set_plan(&self, context: &PlanContextView) {
         let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
+        if snapshot.plan_id.as_deref() != Some(context.plan_id.as_str()) {
+            snapshot.save_current_plan();
+        }
         snapshot.plan_id = Some(context.plan_id.clone());
-        snapshot.campus_name = context.campus_name.clone();
-        snapshot.plan_name = context.plan_name.clone();
-        snapshot.boundary = None;
-        snapshot.boundary_confirmed = false;
-        snapshot.orientation = None;
+        if let Some(previous) = snapshot.plans.get(&context.plan_id).cloned() {
+            snapshot.campus_name = previous.campus_name;
+            snapshot.plan_name = previous.plan_name;
+            snapshot.boundary = previous.boundary;
+            snapshot.boundary_confirmed = previous.boundary_confirmed;
+            snapshot.orientation = previous.orientation;
+        } else {
+            snapshot.campus_name = context.campus_name.clone();
+            snapshot.plan_name = context.plan_name.clone();
+            snapshot.boundary = None;
+            snapshot.boundary_confirmed = false;
+            snapshot.orientation = None;
+        }
     }
 
     fn set_boundary(&self, boundary: Option<Boundary>, confirmed: bool) {
         let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
         snapshot.boundary = boundary;
         snapshot.boundary_confirmed = confirmed;
+        snapshot.save_current_plan();
     }
 
     fn set_orientation(&self, orientation: Option<f32>) {
         let mut snapshot = self.snapshot.lock().expect("export input snapshot lock");
         snapshot.orientation = orientation;
+        snapshot.save_current_plan();
+    }
+
+    fn plan_boundary_confirmed(&self, plan_id: &str) -> bool {
+        let snapshot = self.snapshot.lock().expect("export input snapshot lock");
+        if snapshot.plan_id.as_deref() == Some(plan_id) {
+            return snapshot.boundary_confirmed;
+        }
+        snapshot
+            .plans
+            .get(plan_id)
+            .is_some_and(|plan| plan.boundary_confirmed)
+    }
+}
+
+impl ExportInputSnapshot {
+    fn save_current_plan(&mut self) {
+        let Some(plan_id) = self.plan_id.clone() else {
+            return;
+        };
+        self.plans.insert(
+            plan_id,
+            PlanExportSnapshot {
+                campus_name: self.campus_name.clone(),
+                plan_name: self.plan_name.clone(),
+                boundary: self.boundary.clone(),
+                boundary_confirmed: self.boundary_confirmed,
+                orientation: self.orientation,
+            },
+        );
     }
 }
 
@@ -146,7 +206,27 @@ impl BoundaryExportFlow {
     }
 
     pub fn set_plan(&self, context: &PlanContextView) {
+        self.port.expire_active();
         self.input.set_plan(context);
+    }
+
+    /// Submit the user's confirmed map geometry; F9 owns conversion to its formal Boundary.
+    pub fn confirm_boundary(
+        &self,
+        boundary_type: impl Into<String>,
+        coordinates: serde_json::Value,
+    ) {
+        self.input.set_boundary(
+            Some(Boundary {
+                r#type: boundary_type.into(),
+                coordinates,
+            }),
+            true,
+        );
+    }
+
+    pub fn reset_boundary(&self) {
+        self.input.set_boundary(None, false);
     }
 
     pub fn set_boundary(&self, boundary: Option<Boundary>, confirmed: bool) {
@@ -156,6 +236,36 @@ impl BoundaryExportFlow {
     pub fn set_orientation(&self, orientation: Option<f32>) {
         self.input.set_orientation(orientation);
     }
+
+    pub fn boundary_confirmed(&self) -> bool {
+        self.input
+            .snapshot
+            .lock()
+            .expect("export input snapshot lock")
+            .boundary_confirmed
+    }
+
+    pub fn plan_boundary_confirmed(&self, plan_id: &str) -> bool {
+        self.input.plan_boundary_confirmed(plan_id)
+    }
+
+    pub fn boundary_view(&self) -> Option<BoundaryView> {
+        self.input
+            .snapshot
+            .lock()
+            .expect("export input snapshot lock")
+            .boundary
+            .as_ref()
+            .map(|boundary| BoundaryView {
+                r#type: boundary.r#type.clone(),
+                coordinates: boundary.coordinates.clone(),
+            })
+    }
+
+    /// Expire the current operation when its presentation context is left.
+    pub fn leave(&self) {
+        self.port.expire_active();
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +273,9 @@ mod tests {
     use std::io;
     use std::path::Path;
     use std::sync::{Arc, Condvar, Mutex};
+
+    use data_persistence::Database;
+    use global_settings::SettingsManager;
 
     use super::*;
 
@@ -234,41 +347,42 @@ mod tests {
     #[test]
     fn start_freezes_boundary_before_reset_after_start() {
         let initial_dir = tempfile::tempdir().expect("initial export directory");
-        let input = ExportInputStore::default();
         let plan_id = PlanId::generate();
-        let initial_boundary = Boundary {
-            r#type: "Polygon".to_owned(),
-            coordinates: serde_json::json!([[
+        let plan = PlanContextView {
+            plan_id: plan_id.to_string(),
+            plan_name: "冻结请求测试方案".to_owned(),
+            campus_id: "freeze-campus".to_owned(),
+            campus_name: "冻结请求测试校区".to_owned(),
+            anchor_lng: 116.4,
+            anchor_lat: 39.9,
+        };
+
+        let file_system = Arc::new(BlockingManifestFileSystem {
+            manifest_started: Arc::new((Mutex::new(false), Condvar::new())),
+            release_manifest: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+        let flow = BoundaryExportFlow::new(file_system.clone());
+        let mut settings =
+            SettingsManager::new(Database::open_in_memory().expect("打开测试设置库"));
+        settings
+            .set_default_export_location(initial_dir.path().to_str().expect("temporary path"))
+            .expect("设置导出目录");
+        flow.sync_settings(&settings);
+        flow.set_plan(&plan);
+        flow.confirm_boundary(
+            "Polygon",
+            serde_json::json!([[
                 [116.4000, 39.9000],
                 [116.4010, 39.9000],
                 [116.4010, 39.9010],
                 [116.4000, 39.9010],
                 [116.4000, 39.9000]
             ]]),
-        };
-        {
-            let mut snapshot = input.snapshot.lock().expect("export input snapshot lock");
-            snapshot.plan_id = Some(plan_id.to_string());
-            snapshot.campus_name = "冻结测试校区".to_owned();
-            snapshot.plan_name = "冻结测试方案".to_owned();
-            snapshot.boundary = Some(initial_boundary);
-            snapshot.boundary_confirmed = true;
-            snapshot.minecraft_version = Some("26.1.2".to_owned());
-            snapshot.export_location = Some(initial_dir.path().to_owned());
-        }
-
-        let file_system = Arc::new(BlockingManifestFileSystem {
-            manifest_started: Arc::new((Mutex::new(false), Condvar::new())),
-            release_manifest: Arc::new((Mutex::new(false), Condvar::new())),
-        });
-        let port = BoundaryExportPort::new_boundary_only_v26_1_2(
-            Arc::new(input.clone()),
-            file_system.clone(),
         );
-        let mut operation = port.start().expect("Start 应立即提交后台操作");
+        let mut operation = flow.start().expect("Start 应立即提交后台操作");
 
         file_system.wait_for_manifest();
-        input.set_boundary(None, false);
+        flow.reset_boundary();
         file_system.release_manifest();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -285,17 +399,97 @@ mod tests {
     }
 
     #[test]
-    fn settings_read_error_is_not_replaced_by_export_defaults() {
-        let input = ExportInputStore::default();
-        input
-            .snapshot
-            .lock()
-            .expect("export input snapshot lock")
-            .settings_error = Some("database read failed".to_owned());
+    fn missing_settings_are_reported_through_the_public_flow() {
+        let flow = BoundaryExportFlow::new(Arc::new(StdExportFileSystem));
+        flow.set_plan(&PlanContextView {
+            plan_id: PlanId::generate().to_string(),
+            plan_name: "璁剧疆璇锋眰娴嬭瘯鏂规".to_owned(),
+            campus_id: "settings-campus".to_owned(),
+            campus_name: "璁剧疆璇锋眰娴嬭瘯鏍″尯".to_owned(),
+            anchor_lng: 116.4,
+            anchor_lat: 39.9,
+        });
 
-        let error = input
-            .load_request()
-            .expect_err("F9 must preserve a settings read failure");
-        assert!(matches!(error, Error::SettingsRead(detail) if detail == "database read failed"));
+        let error = match flow.start() {
+            Ok(_) => panic!("F9 must preserve an unavailable settings error"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::SettingsRead(detail) if detail.contains("unavailable")));
+    }
+
+    #[test]
+    fn switching_plans_restores_latest_boundary_and_expires_old_result() {
+        let directory = tempfile::tempdir().expect("export directory");
+        let file_system = Arc::new(BlockingManifestFileSystem {
+            manifest_started: Arc::new((Mutex::new(false), Condvar::new())),
+            release_manifest: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+        let flow = BoundaryExportFlow::new(file_system.clone());
+        let mut settings =
+            SettingsManager::new(Database::open_in_memory().expect("打开测试设置库"));
+        settings
+            .set_default_export_location(directory.path().to_str().expect("temporary path"))
+            .expect("设置导出目录");
+        flow.sync_settings(&settings);
+
+        let plan_a = PlanContextView {
+            plan_id: PlanId::generate().to_string(),
+            plan_name: "方案 A".to_owned(),
+            campus_id: "campus-a".to_owned(),
+            campus_name: "校区".to_owned(),
+            anchor_lng: 116.4,
+            anchor_lat: 39.9,
+        };
+        let plan_b = PlanContextView {
+            plan_id: PlanId::generate().to_string(),
+            plan_name: "方案 B".to_owned(),
+            ..plan_a.clone()
+        };
+        let boundary_a = Boundary {
+            r#type: "Polygon".to_owned(),
+            coordinates: serde_json::json!([[
+                [116.4000, 39.9000],
+                [116.4010, 39.9000],
+                [116.4010, 39.9010],
+                [116.4000, 39.9010],
+                [116.4000, 39.9000]
+            ]]),
+        };
+
+        flow.set_plan(&plan_a);
+        flow.set_boundary(Some(boundary_a), true);
+        let mut old_operation = flow.start().expect("start plan A export");
+        file_system.wait_for_manifest();
+
+        flow.set_plan(&plan_b);
+        file_system.release_manifest();
+        let old_result = wait_for_result(&mut old_operation);
+        assert!(
+            matches!(old_result, Err(Error::InvalidState(_))),
+            "离开方案后旧结果必须过期，不能交付到方案 B"
+        );
+
+        flow.set_plan(&plan_a);
+        let mut restored_operation = flow.start().expect("reopen plan A export");
+        let restored_result = wait_for_result(&mut restored_operation);
+        assert!(
+            restored_result.is_ok(),
+            "方案 A 的最新确认边界必须可直接导出"
+        );
+        assert!(directory
+            .path()
+            .join(format!("{}.schem", plan_a.plan_id))
+            .is_file());
+    }
+
+    fn wait_for_result(operation: &mut BoundaryExportOperation) -> Result<BoundaryExportResult> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(result) = operation.try_complete() {
+                return result;
+            }
+            assert!(std::time::Instant::now() < deadline, "导出操作未达到终态");
+            std::thread::yield_now();
+        }
     }
 }

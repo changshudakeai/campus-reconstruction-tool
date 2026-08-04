@@ -1680,6 +1680,7 @@ dependencies = [
 name = "export-flow"
 version = "2.0.0-dev"
 dependencies = [
+ "data-persistence",
  "export-console",
  "global-settings",
  "project-management",
