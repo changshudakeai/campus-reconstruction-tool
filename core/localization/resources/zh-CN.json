@@ -206,6 +206,9 @@
     "impact_item_line": "{0}：{1} 项",
     "error_save_failed": "朝向保存失败，正式状态未改变，请重试"
   },
+  "common": {
+    "pending": "等待中"
+  },
   "collection": {
     "title": "数据采集",
     "boundary_step": "圈画边界",

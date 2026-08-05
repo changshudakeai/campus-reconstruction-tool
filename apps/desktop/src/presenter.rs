@@ -13,8 +13,8 @@
 //   在 UI 线程字面阻塞会死锁——遮罩已保证用户无法绕过弹窗操作界面，
 //   模态语义由遮罩层承担。
 //
-// Warn 级 toast 与铃铛角标的 Slint 呈现随公告栏工单（T19B 后续）接线，
-// 消息与未读数已由 B7 留底/维护，不丢。
+// Warn 级 toast 与铃铛未读角标由本壳直接呈现（ADR-0021）：toast 短暂弹出
+// 自动消失（main.slint Timer），未读数随 B7 分派增减；消息仍由 B7 留底。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -188,12 +188,44 @@ impl Presenter for ShellPresenter {
         let _ = rx.recv();
     }
 
-    fn show_toast(&self, _notification: &Notification) {
-        // Warn 级 toast 的 Slint 呈现归公告栏工单（T19B 后续）；消息已留底
+    fn show_toast(&self, notification: &Notification) {
+        if std::thread::current().id() == self.ui_thread {
+            if let Some(window) = self.window.upgrade() {
+                Self::present_toast(&window, notification);
+            }
+            return;
+        }
+        let weak = self.window.clone();
+        let notification = notification.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                Self::present_toast(&window, &notification);
+            }
+        });
     }
 
-    fn update_unread_count(&self, _count: usize) {
-        // 铃铛角标随公告栏界面（T19B 后续）接线；未读数已由 B7 维护
+    fn update_unread_count(&self, count: usize) {
+        if std::thread::current().id() == self.ui_thread {
+            if let Some(window) = self.window.upgrade() {
+                window.set_notice_unread_count(count as i32);
+            }
+            return;
+        }
+        let weak = self.window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_notice_unread_count(count as i32);
+            }
+        });
+    }
+}
+
+impl ShellPresenter {
+    /// 把普通提示填进 toast 浮层并点亮（仅 UI 线程调用；Timer 自动消失）。
+    fn present_toast(window: &AppWindow, notification: &Notification) {
+        window.set_toast_title(notification.title.clone().into());
+        window.set_toast_body(notification.body.clone().into());
+        window.set_toast_visible(true);
     }
 }
 

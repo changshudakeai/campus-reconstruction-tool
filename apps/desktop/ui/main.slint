@@ -34,7 +34,7 @@ export enum OperationPresentationState {
 }
 
 export component AppWindow inherits Window {
-    // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表占位，3 = 设置页
+    // 路由屏号：0 = 首跑向导，1 = 校区选择，2 = 方案列表，3 = 设置页
     in-out property <int> active-screen: 1;
 
     // 窗口标题与着陆状态文案，均由壳的 Rust 侧填充
@@ -98,6 +98,8 @@ export component AppWindow inherits Window {
     // 四个图标按钮：公告栏 / 切换校区 / 回收站 / 设置
     in property <bool> notice-toolbar-button-visible;
     in property <string> notice-toolbar-label;
+    // B7 铃铛未读角标（ADR-0021：点开即清零）
+    in property <int> notice-unread-count;
     in property <bool> switch-campus-toolbar-button-visible;
     in property <string> switch-campus-toolbar-label;
     in property <bool> trash-toolbar-button-visible;
@@ -116,6 +118,10 @@ export component AppWindow inherits Window {
     in property <string> notice-board-diagnostic-action-label;
     in property <[NoticeData]> notice-board-model;
     callback notice-diagnostic-action-clicked(notification-id: string);
+    // B7 普通提示 toast（ADR-0021：短暂弹出自动消失）
+    in property <string> toast-title;
+    in property <string> toast-body;
+    in-out property <bool> toast-visible;
 
     in property <string> trash-page-title;
     in property <string> trash-page-empty-list-text;
@@ -378,15 +384,39 @@ export component AppWindow inherits Window {
                 // 弹性间隔
             }
             
-            // 公告栏图标 + 文字标签 (ADR-0027)
+            // 公告栏图标 + 文字标签 + 未读角标 (ADR-0021/0027)
             if root.notice-toolbar-button-visible: HorizontalLayout {
                 spacing: 4px;
-                preferred-width: 60px;
+                preferred-width: 64px;
                 alignment: center;
                 
-                Button {
-                    text: "📢";
-                    clicked => { root.notice-toolbar-button-clicked(); }
+                Rectangle {
+                    preferred-width: 36px;
+                    preferred-height: 32px;
+                    
+                    Button {
+                        text: "📢";
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.notice-toolbar-button-clicked(); }
+                    }
+                    
+                    if root.notice-unread-count > 0: Rectangle {
+                        x: parent.width - 16px;
+                        y: -6px;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: Theme.error;
+                        
+                        Text {
+                            text: root.notice-unread-count;
+                            color: Theme.text-inverse;
+                            font-size: 10px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
                 
                 Text {
@@ -1095,8 +1125,8 @@ export component AppWindow inherits Window {
         diagnostic-action-label <=> root.notice-board-diagnostic-action-label;
         notice-model <=> root.notice-board-model;
         
-        archive-all-clicked => { /* 归档逻辑待 F3 实现 */ }
-        notice-clicked(notice-id) => { /* 详情查看待 T20 */ }
+        archive-all-clicked => { /* 只读公告栏（ADR-0021）：归档为未来提案，暂无动作 */ }
+        notice-clicked(notice-id) => { /* 只读 + 可复制（ADR-0021）：不提供点击跳转 */ }
         diagnostic-action-clicked(notice-id) => { root.notice-diagnostic-action-clicked(notice-id); }
     }
     
@@ -1113,6 +1143,51 @@ export component AppWindow inherits Window {
         purge-clicked(plan-id) => { root.trash-purge-clicked(plan-id) }
         purge-all-clicked() => { root.trash-purge-all-clicked() }
         
+    }
+
+    // B7 普通提示 toast（ADR-0021：短暂弹出自动消失；warn 级分派触发）
+    if root.toast-visible: Rectangle {
+        x: (parent.width - 320px) / 2;
+        y: parent.height - 96px;
+        width: 320px;
+        height: 64px;
+        border-radius: 12px;
+        background: Theme.surface;
+        border-color: Theme.separator;
+        border-width: 1px;
+        
+        VerticalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 2px;
+            
+            Text {
+                text: root.toast-title;
+                font-size: 13px;
+                font-weight: 700;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            
+            Text {
+                text: root.toast-body;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+    
+    Timer {
+        interval: 4s;
+        running: root.toast-visible;
+        triggered => { root.toast-visible = false; }
     }
 }
 
