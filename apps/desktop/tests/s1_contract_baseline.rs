@@ -164,8 +164,11 @@ fn public_ui_seam_matches_startup_settings_and_m1_export() {
         read_workspace_file("docs/behavior-baselines/s1-current-user-observable-behavior.md");
     let review_row = find_flow_row(&baseline, "评审");
     assert!(
-        review_row.contains("当前仅显示占位页") && review_row.contains("没有可观察的"),
-        "评审仍应记录提交树中的占位现状"
+        review_row.contains("六类标签页")
+            && review_row.contains("封账")
+            && review_row.contains("空态")
+            && review_row.contains("不阻塞导出"),
+        "评审基线应记录 M3 的真实可观察行为（六类分组、封账摘要、空态、不阻塞导出）"
     );
     let export_row = find_flow_row(&baseline, "导出");
     for observable in [
