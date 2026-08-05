@@ -20,8 +20,8 @@ pub mod validator;
 // 重新导出常用类型
 pub use generator::{GeneratorError, ManifestGenerator, PlanInfo};
 pub use manifest::{
-    CandidateFacts, CategoryStatus, FoundationManifest, ManifestOrientation,
-    ManifestOrientationSource,
+    CandidateFacts, CategoryCount, CategoryStatus, ExportKind, FoundationManifest,
+    ManifestOrientation, ManifestOrientationSource,
 };
 pub use materials::{
     BuildingBlocks, BuildingPresets, MaterialTable, MinecraftVersion, ValidationError,
