@@ -6,11 +6,12 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 
 use anyhow::Result;
-use coverage_audit::{AuditOutcome, QuietSentinel};
-use data_acquisition::{AcquisitionPipeline, CollectionReport, DataSource};
+use collection_flow::CollectionFlow;
+use data_acquisition::GaodeDataSource;
 use data_persistence::Database;
 use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
@@ -19,7 +20,7 @@ use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::{Boundary, CandidateCategory, PlanId};
+use shared_domain_types::{Boundary, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::presenter::report_callback_error;
@@ -151,12 +152,12 @@ pub fn run_dev() -> Result<()> {
 /// 壳持有的 B2 连接组。
 ///
 /// B2 `Database` 有意不可 `Clone`（一个持有者一条连接）；F1 与 F3 都
-/// 按值持有句柄，因此壳对同一数据库文件开两条连接。F2/F5/F7 的落库
-/// 操作统一借道 F3 [`ProjectManager::database_mut`]，不再额外开连接。
+/// 按值持有句柄，因此壳对同一数据库文件开两条连接。F2/F5/F7 与 A1
+/// 采集的落库操作统一借道 F3 [`ProjectManager::database`]，不再额外开连接。
 pub struct ShellDatabases {
     /// F1 全局设置的专属连接
     settings: Database,
-    /// F3 方案管理的专属连接（`database_mut` 供 F2/F5/F7 借用）
+    /// F3 方案管理的专属连接（`database` 供 F2/F5/F7/A1 借用）
     projects: Database,
 }
 
@@ -181,21 +182,21 @@ impl ShellDatabases {
 /// VM 注入器：构造并持有全部 F 模块实例，把静态视图文案注入 Slint 窗口。
 pub struct ViewModelInjector {
     /// B6 文案解析（文本外置铁律 ADR-0005）
-    l10n: Localization,
+    l10n: Arc<Localization>,
     /// F1 全局设置（自持一条 B2 连接）
     settings: SettingsManager,
     /// F2 新手教程（引导进度经 B2 app_settings 持久化）
     tutorial: OnboardingTutorial,
     /// F3 方案管理（自持一条 B2 连接）
     projects: ProjectManager,
-    /// F4 数据采集流水线（内含 B13 归类引擎）
-    acquisition: AcquisitionPipeline,
     /// F5 评审工作台：按方案进台的会话（[`Self::enter_review`] 装载）
     review: Option<ReviewWorkbench>,
-    /// F7 覆盖率审计安静哨兵
-    sentinel: QuietSentinel,
     /// F9 完整导出入口的稳定输入能力端口状态。
     export_flow: Arc<BoundaryExportFlow>,
+    /// A1 候选采集完整用例（F4 → B2 → B14 → F7 在入口后协调，ADR-0039）。
+    collection_flow: Arc<CollectionFlow>,
+    /// 生产候选数据源 WebView 桥的响应通道（S1 只做传输转发，不解析内容）。
+    collection_ipc: mpsc::Sender<String>,
 }
 
 impl ViewModelInjector {
@@ -208,18 +209,25 @@ impl ViewModelInjector {
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
     ) -> Result<Self> {
-        let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
+        let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
         let export_flow = Arc::new(BoundaryExportFlow::new(file_system));
+        let projects = ProjectManager::new(db.projects);
+        let (collection_ipc, collection_source) = collection_production_source();
+        let collection_flow = Arc::new(CollectionFlow::new(
+            projects.shared_database(),
+            collection_source,
+            Arc::clone(&l10n),
+        ));
         Ok(Self {
             l10n,
             settings: SettingsManager::new(db.settings),
             tutorial,
-            projects: ProjectManager::new(db.projects),
-            acquisition: AcquisitionPipeline::new()?,
+            projects,
             review: None,
-            sentinel: QuietSentinel::new(),
             export_flow,
+            collection_flow,
+            collection_ipc,
         })
     }
 
@@ -361,10 +369,8 @@ impl ViewModelInjector {
     /// 再次调用即重新装载——导出失败回滚后"丢弃已封账实例、重新
     /// 进台"的落点（见 F9 `SealGate` 文档）。
     pub fn enter_review(&mut self, plan_id: &PlanId) -> Result<()> {
-        self.review = Some(ReviewWorkbench::load(
-            self.projects.database_mut(),
-            plan_id,
-        )?);
+        let database = self.projects.database();
+        self.review = Some(ReviewWorkbench::load(&database, plan_id)?);
         Ok(())
     }
 
@@ -372,7 +378,7 @@ impl ViewModelInjector {
 
     /// B6 文案解析器
     pub fn l10n(&self) -> &Localization {
-        &self.l10n
+        self.l10n.as_ref()
     }
 
     /// F1 全局设置
@@ -387,6 +393,16 @@ impl ViewModelInjector {
 
     pub(crate) fn export_flow(&self) -> Arc<BoundaryExportFlow> {
         self.export_flow.clone()
+    }
+
+    /// A1 候选采集完整用例（S1 只转发意图并呈现返回状态）。
+    pub(crate) fn collection_flow(&self) -> Arc<CollectionFlow> {
+        self.collection_flow.clone()
+    }
+
+    /// 生产候选数据源 WebView 桥的响应通道（壳把原始 IPC 原样转交）。
+    pub(crate) fn collection_ipc_sender(&self) -> mpsc::Sender<String> {
+        self.collection_ipc.clone()
     }
 
     /// F2 新手教程
@@ -406,7 +422,9 @@ impl ViewModelInjector {
         let Self {
             tutorial, projects, ..
         } = self;
-        tutorial.restart(projects.database_mut())?;
+        let mut database = projects.database();
+        let database: &mut Database = &mut database;
+        tutorial.restart(database)?;
         Ok(())
     }
 
@@ -415,7 +433,9 @@ impl ViewModelInjector {
         let Self {
             tutorial, projects, ..
         } = self;
-        tutorial.dismiss(projects.database_mut(), step)?;
+        let mut database = projects.database();
+        let database: &mut Database = &mut database;
+        tutorial.dismiss(database, step)?;
         Ok(())
     }
 
@@ -427,7 +447,9 @@ impl ViewModelInjector {
             l10n,
             ..
         } = self;
-        tutorial.skip_all(projects.database_mut(), l10n)?;
+        let mut database = projects.database();
+        let database: &mut Database = &mut database;
+        tutorial.skip_all(database, l10n)?;
         Ok(())
     }
 
@@ -441,58 +463,95 @@ impl ViewModelInjector {
         &mut self.projects
     }
 
-    /// S1-07: 由采集功能入口协调 F4 采集与 F7 体检；F4/F7 彼此保持零依赖。
-    pub(crate) fn collect_and_audit(
-        &mut self,
-        plan_id: &PlanId,
-        boundary: &Boundary,
-        source: &dyn DataSource,
-    ) -> Result<(CollectionReport, AuditOutcome)> {
-        let Self {
-            acquisition,
-            sentinel,
-            projects,
-            l10n,
-            ..
-        } = self;
-        let report = acquisition.collect(projects.database_mut(), plan_id, boundary, source)?;
-        let mut counts = [0_u32; 6];
-        for (category, count) in &report.category_counts {
-            let index = match category {
-                CandidateCategory::Building => 0,
-                CandidateCategory::Road => 1,
-                CandidateCategory::Water => 2,
-                CandidateCategory::Vegetation => 3,
-                CandidateCategory::Sports => 4,
-                CandidateCategory::Other => 5,
-                _ => 5,
-            };
-            counts[index] = u32::try_from(*count).unwrap_or(u32::MAX);
-        }
-        let outcome = sentinel.after_collection(
-            projects.database_mut(),
-            plan_id,
-            &counts,
-            Vec::new(),
-            l10n,
-        )?;
-        Ok((report, outcome))
-    }
-
-    /// F4 采集流水线
-    pub fn acquisition(&self) -> &AcquisitionPipeline {
-        &self.acquisition
-    }
-
     /// F5 当前评审会话（未进台时为 `None`）
     pub fn review(&self) -> Option<&ReviewWorkbench> {
         self.review.as_ref()
     }
+}
 
-    /// F7 安静哨兵
-    pub fn sentinel(&self) -> &QuietSentinel {
-        &self.sentinel
+/// 采集查询请求序号（WebView 桥响应与请求配对，防旧响应串台）。
+static COLLECTION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
+
+/// 生产候选数据源：F4 `DataSource` 适配器（高德），经地图 WebView JS 桥拉取。
+///
+/// 构造期接线（ADR-0037 壳接线澄清）：组合根创建数据源适配器并注入 A1；
+/// 脚本生成、请求配对与信封解析都在适配器内，S1 只把原始 IPC 消息转交
+/// 响应通道。真实高德在线链路仍留发布前验证；测试注入罐头响应。
+fn collection_production_source() -> (
+    mpsc::Sender<String>,
+    Arc<dyn data_acquisition::DataSource + Send + Sync>,
+) {
+    let (response_tx, response_rx) = mpsc::channel::<String>();
+    // Receiver 非 Sync：桥闭包要求 Send + Sync，用互斥包一层。
+    let response_rx = Arc::new(std::sync::Mutex::new(response_rx));
+    let source = GaodeDataSource::new(Box::new(move |boundary: &Boundary| {
+        let request_id = COLLECTION_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
+        let Some(center) = collection_centroid(&boundary.coordinates) else {
+            return Err("边界坐标无法计算查询中心".to_owned());
+        };
+        let script = collection_request_script(request_id, center);
+        // 脚本求值必须回到 UI 线程（map_webview 状态为线程局部）。
+        let _ = slint::invoke_from_event_loop(move || {
+            crate::map_webview::evaluate_script(&script);
+        });
+        // 等待匹配的采集响应（30 秒超时；测试直接注入罐头响应）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err("采集响应超时".to_owned());
+            }
+            let message = response_rx
+                .lock()
+                .expect("collection response lock")
+                .recv_timeout(remaining)
+                .map_err(|_| "采集响应超时".to_owned())?;
+            let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else {
+                continue;
+            };
+            if envelope.get("type").and_then(serde_json::Value::as_str)
+                != Some("collection_response")
+            {
+                continue;
+            }
+            if envelope
+                .get("request_id")
+                .and_then(serde_json::Value::as_u64)
+                != Some(request_id)
+            {
+                continue;
+            }
+            return envelope
+                .get("payload")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| "采集响应缺少 payload".to_owned());
+        }
+    }));
+    (response_tx, Arc::new(source))
+}
+
+/// 边界坐标 → 查询中心（真实边界数据的质心，非固定坐标兜底）。
+fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
+    let points = coordinates.as_array()?.first()?.as_array()?;
+    let mut total = (0.0, 0.0);
+    let mut count = 0.0;
+    for point in points {
+        let pair = point.as_array()?;
+        total.0 += pair.first()?.as_f64()?;
+        total.1 += pair.get(1)?.as_f64()?;
+        count += 1.0;
     }
+    (count > 0.0).then_some((total.0 / count, total.1 / count))
+}
+
+/// 高德 WebView 采集查询脚本（发布前人工验证的在线链路；M2 用测试桩）。
+fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
+    format!(
+        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
+        lon = center.0,
+        lat = center.1
+    )
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -808,14 +867,13 @@ mod tests {
             .projects_mut()
             .create_plan(&campus_id, "第一个方案")
             .expect("建方案");
-        // F4：归类引擎就绪
-        let _engine = injector.acquisition().engine();
+        // A1：候选采集完整用例就绪（F4/F7 在入口后协调，壳不直接持有）
+        let _flow = injector.collection_flow();
         // F5：进台会话装载成功（零候选照样成台）
         injector.enter_review(&plan_id).expect("评审进台");
         let workbench = injector.review().expect("评审会话已持有");
         assert_eq!(workbench.candidate_count(), 0);
-        // F7 / F9：实例可达
-        let _sentinel = injector.sentinel();
+        // F9：实例可达
         let _export = injector.export_flow();
     }
 
@@ -825,8 +883,9 @@ mod tests {
         let mut injector = injector();
         injector.restart_tutorial().expect("重看教程");
         assert_eq!(injector.tutorial().status(), TutorialStatus::NotStarted);
-        let reloaded = OnboardingTutorial::load(injector.projects_mut().database_mut())
-            .expect("重新装载引导进度");
+        let database = injector.projects().database();
+        let database: &Database = &database;
+        let reloaded = OnboardingTutorial::load(database).expect("重新装载引导进度");
         assert_eq!(reloaded.status(), TutorialStatus::NotStarted);
     }
 }

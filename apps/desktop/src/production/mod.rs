@@ -8,24 +8,22 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use coverage_audit::AuditResult;
-use data_acquisition::GaodeDataSource;
 use export_flow::{BoundaryExportFlow, Error as ExportError};
 use localization::Localization;
 use notification_center::{
     Notification, NotificationActionOutcome, NotificationCenter, OpaqueNotificationAction,
 };
-use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
     CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
-    CoveragePageState, CoveragePresentationEntry, ExportPageState, ExportPresentationEntry,
-    ExportPresentationRequest, NavigationDecision, NotificationFact, NotificationPageState,
-    NotificationPresentationEntry, OperationState, Presentation, PresentationAdapter, Progress,
-    ReviewPageState, ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
-    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPresentationEntry,
-    TrashRequest, WindowPageState, WorkspacePresentationEntry, WorkspaceRequest,
+    CollectionRequest, CoveragePageState, CoveragePresentationEntry, ExportPageState,
+    ExportPresentationEntry, ExportPresentationRequest, NavigationDecision, NotificationFact,
+    NotificationPageState, NotificationPresentationEntry, OperationState, Presentation,
+    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
+    SettingsPresentationEntry, SettingsRequest, StartupPresentationEntry, StartupRequest,
+    ToolbarPageState, TrashPresentationEntry, TrashRequest, WorkspacePresentationEntry,
+    WorkspaceRequest,
 };
 mod campus_plan_trash;
 mod startup_settings;
@@ -59,26 +57,6 @@ pub(crate) fn entry_calls() -> [usize; 10] {
     std::array::from_fn(|index| ENTRY_CALLS[index].load(std::sync::atomic::Ordering::SeqCst))
 }
 
-struct CollectionProductionAdapter(CollectionCoordinator);
-
-impl PresentationAdapter<(), CollectionPageState> for CollectionProductionAdapter {
-    fn present(&mut self, (): ()) -> Presentation<CollectionPageState> {
-        #[cfg(test)]
-        record_entry_call(3);
-        Presentation::ready(self.0.page())
-            .with_navigation(NavigationDecision::Show(Screen::Workspace))
-    }
-}
-
-const COLLECTION_CATEGORIES: [CandidateCategory; 6] = [
-    CandidateCategory::Building,
-    CandidateCategory::Road,
-    CandidateCategory::Water,
-    CandidateCategory::Vegetation,
-    CandidateCategory::Sports,
-    CandidateCategory::Other,
-];
-
 const COLLECTION_CATEGORY_KEYS: [&str; 6] = [
     "collection.category_building",
     "collection.category_road",
@@ -88,85 +66,55 @@ const COLLECTION_CATEGORY_KEYS: [&str; 6] = [
     "collection.category_other",
 ];
 
-#[derive(Clone, Default)]
-enum CollectionPhase {
-    #[default]
-    Pending,
-    Fetching,
-    Failed,
-    Completed,
-}
-
-#[derive(Clone, Default)]
-struct CollectionState {
-    phase: CollectionPhase,
-    request_id: u64,
-    category_counts: [u32; 6],
-    diff_summary: String,
-    audit: Option<AuditResult>,
-    report_visible: bool,
-}
-
-/// S1-07 采集功能入口：F4 流水线与 F7 安静哨兵只在壳层协调。
-#[derive(Clone)]
-struct CollectionCoordinator {
+/// 采集呈现适配器：S1 只转发一次完整意图，并呈现 A1 返回的页面状态与通知。
+struct CollectionProductionAdapter {
     context: WorkspaceProductionContext,
-    state: Rc<RefCell<CollectionState>>,
+    flow: Arc<collection_flow::CollectionFlow>,
+    operation: Option<collection_flow::CollectionOperation>,
 }
 
-impl CollectionCoordinator {
-    fn new(context: WorkspaceProductionContext) -> Self {
-        Self {
-            context,
-            state: Rc::new(RefCell::new(CollectionState::default())),
-        }
-    }
-
-    fn page(&self) -> CollectionPageState {
-        let state = self.state.borrow();
+impl CollectionProductionAdapter {
+    fn page_state(&self, view: &collection_flow::CollectionPageView) -> CollectionPageState {
         let injector = self.context.injector();
         let injector = injector.borrow();
         let l10n = injector.l10n();
-        let statuses = match state.phase {
-            CollectionPhase::Pending => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
-            CollectionPhase::Fetching => {
-                vec![l10n.t("collection.progress_fetching"); COLLECTION_CATEGORIES.len()]
+        let statuses = match view.status {
+            collection_flow::CollectionStatus::Pending
+            | collection_flow::CollectionStatus::Failed => vec![l10n.t("common.pending"); 6],
+            collection_flow::CollectionStatus::Fetching => {
+                vec![l10n.t("collection.progress_fetching"); 6]
             }
-            CollectionPhase::Failed => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
-            CollectionPhase::Completed => state
-                .category_counts
+            collection_flow::CollectionStatus::Completed => view
+                .progress
+                .categories
                 .iter()
-                .map(ToString::to_string)
+                .map(|category| category.collected.to_string())
                 .collect(),
         };
-        let report_body = state.audit.as_ref().map_or_else(String::new, |result| {
-            if !state.report_visible {
-                return String::new();
-            }
-            let view = injector.sentinel().report_view(result, l10n);
-            let mut lines = view.category_lines;
-            lines.extend(view.issue_lines);
-            if let Some(no_issues) = view.no_issues_line {
-                lines.push(no_issues);
+        let progress_label = match view.status {
+            collection_flow::CollectionStatus::Pending
+            | collection_flow::CollectionStatus::Failed => l10n.t("collection.progress_title"),
+            collection_flow::CollectionStatus::Fetching => l10n.t("collection.progress_fetching"),
+            collection_flow::CollectionStatus::Completed => l10n.t_with_args(
+                "collection.progress_done",
+                serde_json::json!({ "count": view.progress.collected_total }),
+            ),
+        };
+        let report_body = view.report.as_ref().map_or_else(String::new, |report| {
+            let mut lines = report.category_lines.clone();
+            lines.extend(report.candidate_lines.clone());
+            lines.extend(report.issue_lines.clone());
+            if let Some(no_issues) = &report.no_issues_line {
+                lines.push(no_issues.clone());
             }
             lines.join("\n")
         });
-        let progress_label = match state.phase {
-            CollectionPhase::Pending | CollectionPhase::Failed => {
-                l10n.t("collection.progress_title")
-            }
-            CollectionPhase::Fetching => l10n.t("collection.progress_fetching"),
-            CollectionPhase::Completed => l10n.t_with_args(
-                "collection.progress_done",
-                serde_json::json!({ "count": state.category_counts.iter().sum::<u32>() }),
-            ),
-        };
-        let source_label = l10n.t("collection.source_gaode");
-        let collect_label = l10n.t("collection.collect_button");
         let category_labels = COLLECTION_CATEGORY_KEYS
             .iter()
             .map(|key| l10n.t(key))
             .collect();
+        let source_label = l10n.t("collection.source_gaode");
+        let collect_label = l10n.t("collection.collect_button");
         let category_skip_label = l10n.t("collection.skippable");
         let report_entry_label = l10n.t("audit.report_entry");
         drop(injector);
@@ -178,152 +126,103 @@ impl CollectionCoordinator {
             category_labels,
             category_statuses: statuses,
             category_skip_label,
-            diff_summary: state.diff_summary.clone(),
+            diff_summary: view.diff_summary.clone().unwrap_or_default(),
             report_entry_label,
             report_body,
         }
     }
 
-    fn start(&self, window: &AppWindow) {
-        let Some((_, boundary)) = self.collection_target() else {
-            self.fail();
-            self.page().render(window);
-            return;
-        };
-        let request_id = {
-            let mut state = self.state.borrow_mut();
-            state.request_id = state.request_id.wrapping_add(1);
-            state.phase = CollectionPhase::Fetching;
-            state.audit = None;
-            state.report_visible = false;
-            state.diff_summary.clear();
-            state.request_id
-        };
-        self.page().render(window);
-        let Some(center) = collection_centroid(&boundary.coordinates) else {
-            self.fail();
-            self.page().render(window);
-            return;
-        };
-        crate::map_webview::evaluate_script(&collection_request_script(request_id, center));
+    /// Start 同步错误（无后台操作）与后台失败共用的失败呈现：A1 已汇总
+    /// 页面状态与通知事实，S1 只转发给 B7 并绘制。
+    fn start_failure(
+        &self,
+        error: &collection_flow::CollectionError,
+    ) -> Presentation<CollectionPageState> {
+        let failure = self.flow.failure_view(error);
+        let mut presentation = Presentation::failed(self.page_state(&failure.page));
+        if let Some(notification) = failure.notification {
+            presentation = presentation.with_notification(NotificationFact::new(notification));
+        }
+        presentation
     }
+}
 
-    fn handle_map_response(&self, window: &AppWindow, message: &str) -> bool {
-        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(message) else {
-            return false;
-        };
-        if envelope.get("type").and_then(serde_json::Value::as_str) != Some("collection_response") {
-            return false;
-        }
-        let Some(request_id) = envelope
-            .get("request_id")
-            .and_then(serde_json::Value::as_u64)
-        else {
-            return true;
-        };
-        let Some(payload) = envelope.get("payload").and_then(serde_json::Value::as_str) else {
-            self.fail();
-            self.page().render(window);
-            return true;
-        };
-        if self.state.borrow().request_id != request_id {
-            return true;
-        }
-        let Some((plan_id, boundary)) = self.collection_target() else {
-            self.fail();
-            self.page().render(window);
-            return true;
-        };
-        let response = payload.to_owned();
-        let source = GaodeDataSource::new(Box::new(move |_| Ok(response.clone())));
-        let result = {
-            let injector = self.context.injector();
-            let result = injector
-                .borrow_mut()
-                .collect_and_audit(&plan_id, &boundary, &source);
-            result
-        };
-        match result {
-            Ok((report, outcome)) => {
-                let counts = COLLECTION_CATEGORIES.map(|category| {
-                    u32::try_from(*report.category_counts.get(&category).unwrap_or(&0))
-                        .unwrap_or(u32::MAX)
-                });
-                let categories = COLLECTION_CATEGORIES
-                    .iter()
-                    .zip(counts)
-                    .map(|(category, count)| (*category, count as usize))
-                    .collect::<Vec<_>>();
-                self.record_collection(&categories);
-                let injector = self.context.injector();
-                let l10n = injector.borrow();
-                let mut state = self.state.borrow_mut();
-                state.phase = CollectionPhase::Completed;
-                state.category_counts = counts;
-                state.diff_summary = l10n.l10n().t_with_args(report.diff.summary_key(), serde_json::json!({ "added": report.diff.added_count(), "updated": report.diff.updated_count(), "unchanged": report.diff.unchanged_count() }));
-                state.audit = Some(outcome.result);
+impl PresentationAdapter<CollectionRequest, CollectionPageState> for CollectionProductionAdapter {
+    fn present(&mut self, request: CollectionRequest) -> Presentation<CollectionPageState> {
+        #[cfg(test)]
+        record_entry_call(3);
+        match request {
+            CollectionRequest::Open => Presentation::ready(self.page_state(&self.flow.page_view()))
+                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            CollectionRequest::Start => match self.flow.start() {
+                Ok(operation) => {
+                    self.operation = Some(operation);
+                    Presentation::processing(
+                        self.page_state(&self.flow.page_view()),
+                        Progress::ZERO,
+                    )
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+                }
+                Err(error) => self
+                    .start_failure(&error)
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            },
+            CollectionRequest::Poll => self.poll(),
+            CollectionRequest::ShowReport => {
+                let mut view = self.flow.page_view();
+                if let Some(report) = self.flow.report_view() {
+                    view.report = Some(report);
+                }
+                Presentation::ready(self.page_state(&view))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
-            Err(_) => self.fail(),
+            CollectionRequest::Abandon => {
+                self.flow.leave();
+                self.operation = None;
+                Presentation::ready(self.page_state(&self.flow.page_view()))
+            }
         }
-        self.page().render(window);
-        true
     }
+}
 
-    fn show_report(&self, window: &AppWindow) {
-        self.state.borrow_mut().report_visible = true;
-        self.page().render(window);
-    }
-    fn fail(&self) {
-        self.state.borrow_mut().phase = CollectionPhase::Failed;
-        let injector = self.context.injector();
-        let l10n = injector.borrow();
-        notification_center::error(
-            l10n.l10n().t("collection.source_gaode"),
-            l10n.l10n().t("dialog.error_title"),
-            l10n.l10n().t("collection.error_failed"),
-        );
-    }
-
-    fn collection_target(&self) -> Option<(PlanId, Boundary)> {
-        let session = self.context.session.borrow();
-        let plan_id = PlanId::parse(session.active_plan_id.as_ref()?).ok()?;
-        let boundary = self
-            .context
-            .export_flow
-            .boundary_view()
-            .map(|view| Boundary {
-                r#type: view.r#type,
-                coordinates: view.coordinates,
-            })?;
-        Some((plan_id, boundary))
-    }
-
-    fn record_collection(&self, counts: &[(CandidateCategory, usize)]) {
-        let mut session = self.context.session.borrow_mut();
-        let Some(plan_id) = session.active_plan_id.clone() else {
-            return;
+impl CollectionProductionAdapter {
+    fn poll(&mut self) -> Presentation<CollectionPageState> {
+        let Some(mut operation) = self.operation.take() else {
+            return Presentation::ready(self.page_state(&self.flow.page_view()))
+                .with_navigation(NavigationDecision::Show(Screen::Workspace));
         };
-        let state = session.plans.entry(plan_id).or_default();
-        state.has_collection = true;
-        state.generated_category_counts = counts.iter().copied().collect();
+        match operation.try_complete() {
+            Some(Ok(collection_flow::CollectionOutcome::Succeeded(summary))) => {
+                let mut presentation = Presentation::succeeded(self.page_state(&summary.page));
+                if let Some(notification) = summary.notification {
+                    presentation =
+                        presentation.with_notification(NotificationFact::new(notification));
+                }
+                presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            Some(Ok(collection_flow::CollectionOutcome::Failed(failure))) => {
+                let mut presentation = Presentation::failed(self.page_state(&failure.page));
+                if let Some(notification) = failure.notification {
+                    presentation =
+                        presentation.with_notification(NotificationFact::new(notification));
+                }
+                presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            Some(Err(collection_flow::CollectionError::Expired)) => {
+                // 取消/切换方案后旧结果不得拉回：回到当前页面状态。
+                Presentation::ready(self.page_state(&self.flow.page_view()))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            Some(Err(error)) => self
+                .start_failure(&error)
+                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            None => {
+                self.operation = Some(operation);
+                Presentation::processing(self.page_state(&self.flow.page_view()), Progress::ZERO)
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+        }
     }
-}
-
-fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
-    let points = coordinates.as_array()?.first()?.as_array()?;
-    let mut total = (0.0, 0.0);
-    let mut count = 0.0;
-    for point in points {
-        let pair = point.as_array()?;
-        total.0 += pair.first()?.as_f64()?;
-        total.1 += pair.get(1)?.as_f64()?;
-        count += 1.0;
-    }
-    (count > 0.0).then_some((total.0 / count, total.1 / count))
-}
-
-fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
-    format!("(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();", lon = center.0, lat = center.1)
 }
 
 struct ReviewProductionAdapter(WorkspaceProductionContext);
@@ -692,8 +591,7 @@ pub(crate) struct ProductionEntries {
     startup: StartupPresentationEntry<'static, StartupRequest>,
     settings: SettingsPresentationEntry<'static, SettingsRequest>,
     campus_plan: CampusPlanPresentationEntry<'static, CampusPlanRequest>,
-    collection: CollectionPresentationEntry<'static, ()>,
-    collection_coordinator: CollectionCoordinator,
+    collection: CollectionPresentationEntry<'static, CollectionRequest>,
     workspace: WorkspacePresentationEntry<'static, WorkspaceRequest>,
     review: ReviewPresentationEntry<'static, ()>,
     _coverage: CoveragePresentationEntry<'static, ()>,
@@ -706,6 +604,8 @@ pub(crate) struct ProductionEntries {
     pending_confirmation: Option<PendingConfirmation>,
     pending_input: Option<PendingInput>,
     export_poll_timer: slint::Timer,
+    collection_poll_timer: slint::Timer,
+    collection_ipc: std::sync::mpsc::Sender<String>,
 }
 
 impl ProductionEntries {
@@ -729,9 +629,20 @@ impl ProductionEntries {
             flow.sync_settings(injector_ref.settings());
             flow
         };
-        let workspace =
-            WorkspaceProductionContext::new(Rc::clone(&injector), window, export_flow.clone());
-        let collection_coordinator = CollectionCoordinator::new(workspace.clone());
+        let collection_flow = {
+            let injector_ref = injector.borrow();
+            injector_ref.collection_flow()
+        };
+        let collection_ipc = {
+            let injector_ref = injector.borrow();
+            injector_ref.collection_ipc_sender()
+        };
+        let workspace = WorkspaceProductionContext::new(
+            Rc::clone(&injector),
+            window,
+            export_flow.clone(),
+            collection_flow.clone(),
+        );
         Self {
             startup: StartupPresentationEntry::new(StartupProductionAdapter {
                 injector: Rc::clone(&injector),
@@ -744,10 +655,11 @@ impl ProductionEntries {
                 injector: Rc::clone(&injector),
                 workspace: workspace.clone(),
             }),
-            collection: CollectionPresentationEntry::new(CollectionProductionAdapter(
-                collection_coordinator.clone(),
-            )),
-            collection_coordinator,
+            collection: CollectionPresentationEntry::new(CollectionProductionAdapter {
+                context: workspace.clone(),
+                flow: collection_flow,
+                operation: None,
+            }),
             workspace: WorkspacePresentationEntry::new(WorkspaceProductionAdapter {
                 context: workspace.clone(),
             }),
@@ -771,6 +683,8 @@ impl ProductionEntries {
             pending_confirmation: None,
             pending_input: None,
             export_poll_timer: slint::Timer::default(),
+            collection_poll_timer: slint::Timer::default(),
+            collection_ipc,
         }
     }
 
@@ -885,8 +799,11 @@ impl ProductionEntries {
                 // 与直接离开（NavigationDecision::Show）等价：离开工作区会使当前
                 // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                 self.export_poll_timer.stop();
+                self.collection_poll_timer.stop();
                 self.export
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
+                self.collection
+                    .show(window, &self.center, CollectionRequest::Abandon);
                 self.navigate_to(window, target);
             }
             PendingConfirmation::OrientationRecalc => {
@@ -947,15 +864,22 @@ impl ProductionEntries {
 
     pub(crate) fn show_collection(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        self.collection.show(window, &self.center, ());
+        self.collection
+            .show(window, &self.center, CollectionRequest::Open);
     }
 
-    pub(crate) fn start_collection(&mut self, window: &AppWindow) {
-        self.collection_coordinator.start(window);
+    pub(crate) fn start_collection(&mut self, window: &AppWindow) -> bool {
+        self.supersede_diagnostic(window);
+        let presentation = self
+            .collection
+            .show(window, &self.center, CollectionRequest::Start);
+        matches!(presentation.operation(), OperationState::Processing { .. })
     }
 
     pub(crate) fn show_collection_report(&mut self, window: &AppWindow) {
-        self.collection_coordinator.show_report(window);
+        self.supersede_diagnostic(window);
+        self.collection
+            .show(window, &self.center, CollectionRequest::ShowReport);
     }
 
     pub(crate) fn show_review(&mut self, window: &AppWindow) {
@@ -984,6 +908,13 @@ impl ProductionEntries {
         !matches!(presentation.operation(), OperationState::Processing { .. })
     }
 
+    fn poll_collection(&mut self, window: &AppWindow) -> bool {
+        let presentation = self
+            .collection
+            .show(window, &self.center, CollectionRequest::Poll);
+        !matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
     fn start_export_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
         let weak_entries = Rc::downgrade(entries);
         let weak_window = window.as_weak();
@@ -1000,6 +931,27 @@ impl ProductionEntries {
                 let completed = entries.borrow_mut().poll_export(&window);
                 if completed {
                     entries.borrow_mut().export_poll_timer.stop();
+                }
+            },
+        );
+    }
+
+    fn start_collection_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().collection_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let completed = entries.borrow_mut().poll_collection(&window);
+                if completed {
+                    entries.borrow_mut().collection_poll_timer.stop();
                 }
             },
         );
@@ -1132,14 +1084,11 @@ impl ProductionEntries {
         );
     }
 
-    /// 地图 WebView 转交的原始 IPC 消息：由工作区功能入口解析并应用规则。
+    /// 地图 WebView 转交的原始 IPC 消息：原样转交候选数据源桥的响应通道
+    /// （信封匹配在数据源适配器内，S1 不读取采集内容），同时交给工作区
+    /// 功能入口解析边界/朝向消息。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
-        if self
-            .collection_coordinator
-            .handle_map_response(window, message)
-        {
-            return;
-        }
+        let _ = self.collection_ipc.send(message.to_owned());
         let presentation = self.workspace.show(
             window,
             &self.center,
@@ -1165,8 +1114,11 @@ impl ProductionEntries {
         match presentation.navigation() {
             NavigationDecision::Show(screen) => {
                 self.export_poll_timer.stop();
+                self.collection_poll_timer.stop();
                 self.export
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
+                self.collection
+                    .show(window, &self.center, CollectionRequest::Abandon);
                 self.navigate_to(window, screen);
             }
             // 必须停留：功能入口已呈现当前页，不导航
@@ -1534,7 +1486,10 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_collection_start_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().start_collection(&window);
+                let started = shared.borrow_mut().start_collection(&window);
+                if started {
+                    ProductionEntries::start_collection_polling(&shared, &window);
+                }
             }
         });
 

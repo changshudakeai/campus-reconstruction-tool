@@ -30,7 +30,7 @@ const FEATURE_CRATES: &[&str] = &[
 ];
 
 /// Non-S1 application-flow crates own complete cross-feature user operations.
-const APPLICATION_FLOW_CRATES: &[&str] = &["export-flow"];
+const APPLICATION_FLOW_CRATES: &[&str] = &["export-flow", "collection-flow"];
 
 /// B1-B18 基础模块 crate 名（ADR-0017 第二节 B 表，B16 已并入 B14）。
 const BASE_CRATES: &[&str] = &[
@@ -74,6 +74,7 @@ const SHELL_ALLOWED_MEMBER_DEPS: &[&str] = &[
     "coverage-audit",
     "export-console",
     "export-flow",
+    "collection-flow",
     // 允许的基础层（B1 人人可依；B2-B7、B9-B11、B17 按 DAG）
     "shared-domain-types",
     "data-persistence",

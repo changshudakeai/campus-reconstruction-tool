@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use collection_flow::CollectionFlow;
 use export_flow::{BoundaryExportFlow, BoundaryView};
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryDrawer, BoundaryState,
@@ -43,15 +44,12 @@ use super::record_entry_call;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlanProgressState {
     pub(crate) has_orientation: bool,
-    pub(crate) has_collection: bool,
     pub(crate) orientation_angle: Option<f32>,
-    /// 已生成数据分布（F5 重算影响报告的输入；采集/评审迁出后填充，当前为空）。
-    pub(crate) generated_category_counts: HashMap<CandidateCategory, usize>,
 }
 
 impl PlanProgressState {
     fn completed_steps(&self, boundary_confirmed: bool) -> u8 {
-        boundary_confirmed as u8 + self.has_orientation as u8 + self.has_collection as u8
+        boundary_confirmed as u8 + self.has_orientation as u8
     }
 }
 
@@ -78,13 +76,13 @@ pub(crate) struct WorkspaceSessionState {
 }
 
 impl WorkspaceSessionState {
-    fn completed_steps(&self, boundary_confirmed: bool) -> u8 {
+    fn completed_steps(&self, boundary_confirmed: bool, has_collection: bool) -> u8 {
         match &self.active_plan_id {
             Some(plan_id) => self
                 .plans
                 .get(plan_id)
-                .map(|state| state.completed_steps(boundary_confirmed))
-                .unwrap_or(boundary_confirmed as u8),
+                .map(|state| state.completed_steps(boundary_confirmed) + has_collection as u8)
+                .unwrap_or(boundary_confirmed as u8 + has_collection as u8),
             None => self.adopted_completed_steps.unwrap_or(0),
         }
     }
@@ -122,6 +120,7 @@ pub(crate) struct WorkspaceProductionContext {
     window: slint::Weak<crate::AppWindow>,
     pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
     pub(super) export_flow: Arc<BoundaryExportFlow>,
+    pub(super) collection_flow: Arc<CollectionFlow>,
 }
 
 impl WorkspaceProductionContext {
@@ -129,6 +128,7 @@ impl WorkspaceProductionContext {
         injector: Rc<RefCell<ViewModelInjector>>,
         window: &crate::AppWindow,
         export_flow: Arc<BoundaryExportFlow>,
+        collection_flow: Arc<CollectionFlow>,
     ) -> Self {
         let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
         Self {
@@ -140,6 +140,7 @@ impl WorkspaceProductionContext {
                 ..Default::default()
             })),
             export_flow,
+            collection_flow,
         }
     }
 
@@ -154,17 +155,16 @@ impl WorkspaceProductionContext {
         let session = self.session.borrow();
         let boundary_confirmed =
             session.active_plan_id.is_some() && self.export_flow.boundary_confirmed();
-        let completed = session.completed_steps(boundary_confirmed);
+        let has_collection = session
+            .active_plan_id
+            .as_ref()
+            .is_some_and(|plan_id| self.collection_flow.is_review_unlocked(plan_id));
+        let completed = session.completed_steps(boundary_confirmed, has_collection);
         let has_orientation = session
             .active_plan_id
             .as_ref()
             .and_then(|plan_id| session.plans.get(plan_id))
             .is_some_and(|state| state.has_orientation);
-        let has_collection = session
-            .active_plan_id
-            .as_ref()
-            .and_then(|plan_id| session.plans.get(plan_id))
-            .is_some_and(|state| state.has_collection);
         let (campus_name, plan_name) = session
             .active_context
             .as_ref()
@@ -216,11 +216,7 @@ impl WorkspaceProductionContext {
     /// 功能入口侧，数据结果不变）。
     pub(crate) fn plan_card_progress_text(&self, plan_id: &str, fallback: &str) -> String {
         let session = self.session.borrow();
-        if session
-            .plans
-            .get(plan_id)
-            .is_some_and(|state| state.has_collection)
-        {
+        if self.collection_flow.is_review_unlocked(plan_id) {
             return self.injector.borrow().l10n().t("plan.progress_next_review");
         }
         if self.export_flow.plan_boundary_confirmed(plan_id) {
@@ -495,6 +491,9 @@ impl WorkspaceProductionAdapter {
         }
         if let Some(context) = self.context.session.borrow().active_context.clone() {
             self.context.export_flow.set_plan(&context);
+            if let Ok(plan_id) = shared_domain_types::PlanId::parse(&context.plan_id) {
+                self.context.collection_flow.set_plan(&plan_id);
+            }
         }
         let Some((keys, anchor)) = self.context.map_credentials() else {
             let l10n = self.l10n();
@@ -730,6 +729,12 @@ impl WorkspaceProductionAdapter {
             )])
         };
         self.context
+            .collection_flow
+            .confirm_boundary(shared_domain_types::Boundary {
+                r#type: "Polygon".to_owned(),
+                coordinates: coordinates.clone(),
+            });
+        self.context
             .export_flow
             .confirm_boundary("Polygon", coordinates);
         Presentation::ready(self.context.page())
@@ -741,6 +746,7 @@ impl WorkspaceProductionAdapter {
             session.drawer.reset();
         }
         self.context.export_flow.reset_boundary();
+        self.context.collection_flow.reset_boundary();
         Presentation::ready(self.context.page())
     }
 
@@ -788,19 +794,15 @@ impl WorkspaceProductionAdapter {
     /// 两点模式或方位角模式提交的统一决策：首次设定直接保存；覆盖已有朝向
     /// 时先返回 F5 影响报告驱动的确认请求，确认后才落库（ADR-0027）。
     fn apply_orientation(&mut self, angle: f32) -> Presentation<WorkspacePageState> {
-        let (has_orientation, old_angle, counts) = {
+        let (has_orientation, old_angle) = {
             let session = self.context.session.borrow();
             match session
                 .active_plan_id
                 .as_ref()
                 .and_then(|plan_id| session.plans.get(plan_id))
             {
-                Some(state) => (
-                    state.has_orientation,
-                    state.orientation_angle,
-                    state.generated_category_counts.clone(),
-                ),
-                None => (false, None, HashMap::new()),
+                Some(state) => (state.has_orientation, state.orientation_angle),
+                None => (false, None),
             }
         };
         if has_orientation {
@@ -810,6 +812,9 @@ impl WorkspaceProductionAdapter {
             let Some(new_orientation) = Orientation::new(angle) else {
                 return self.orientation_save_failed();
             };
+            // 采集迁出后：已生成数据分布由 A1/F5 完整用例持有，本入口不再
+            // 拼接影响报告输入（当前空分布，与 S1-07 前行为一致）。
+            let counts = HashMap::new();
             let report = check_orientation_change_impact(&counts, Some(old), new_orientation);
             self.context.session.borrow_mut().pending_orientation_angle = Some(angle);
             let l10n = self.l10n();
@@ -951,7 +956,6 @@ impl WorkspaceProductionAdapter {
                 let state = session.plans.entry(plan_id).or_default();
                 state.has_orientation = false;
                 state.orientation_angle = None;
-                state.generated_category_counts.clear();
             }
         }
         self.context.export_flow.set_orientation(None);
@@ -1195,6 +1199,12 @@ impl WorkspaceProductionAdapter {
             let mut session = self.context.session.borrow_mut();
             session.drawer.load_determined(vertices);
         }
+        self.context
+            .collection_flow
+            .confirm_boundary(shared_domain_types::Boundary {
+                r#type: boundary_type.to_owned(),
+                coordinates: coordinates.clone(),
+            });
         self.context
             .export_flow
             .confirm_boundary(boundary_type, coordinates);

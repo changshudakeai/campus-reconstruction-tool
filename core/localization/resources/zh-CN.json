@@ -217,7 +217,16 @@
     "diff_updated": "更新",
     "diff_unchanged": "未变",
     "diff_summary": "新增 {added} 项 · 更新 {updated} 项 · 未变 {unchanged} 项",
-    "source_gaode": "高德地图"
+    "source_gaode": "高德地图",
+    "report_reviewable": "可评审 {count} 项",
+    "report_isolated": "已隔离 {count} 项",
+    "report_repaired": "自动修复 {count} 项",
+    "error_missing_input": "缺少已确认的方案边界，无法开始候选采集",
+    "error_busy": "已有采集正在进行，请等待完成或取消后再试",
+    "error_persistence": "采集数据保存失败，请重试",
+    "error_audit": "采集体检失败",
+    "error_expired": "本次采集已被取消",
+    "error_background": "采集后台任务异常中止"
   },
   "audit": {
     "source_tag": "采集体检",
