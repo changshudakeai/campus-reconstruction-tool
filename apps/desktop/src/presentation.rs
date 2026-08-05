@@ -13,7 +13,7 @@ use slint::{ModelRc, VecModel};
 
 use crate::{
     AppWindow, BoundaryPointData, CampusData, NoticeData, OperationPresentationState,
-    OrientationPointData, PlanCardData, TrashItemData,
+    OrientationPointData, PlanCardData, ReviewCandidateData, TrashItemData,
 };
 
 pub use notification_center::OpaqueNotificationAction;
@@ -859,7 +859,108 @@ impl WindowPageState for CollectionPageState {
         window.set_collection_report_body(self.report_body.clone().into());
     }
 }
-workspace_page_state!(ReviewPageState, 3, "评审入口的当前完整占位页状态。");
+/// 评审页一次返回的完整页面状态（F5 WorkbenchView 的呈现层）。
+#[derive(Clone)]
+pub struct ReviewPageState {
+    pub workspace: WorkspacePageState,
+    /// 评审台标题。
+    pub title: String,
+    /// 无候选空态文案（不得阻塞导出、不得伪造评审完成）。
+    pub empty_text: String,
+    /// 可评审候选总数（0 时显示空态）。
+    pub candidate_count: i32,
+    /// 六类标签页（按 ADR-0016 固定顺序）。
+    pub category_labels: Vec<String>,
+    /// 每类候选数。
+    pub category_counts: Vec<i32>,
+    /// 当前激活类别索引。
+    pub active_category: i32,
+    /// 当前类别候选卡片。
+    pub cards: Vec<ReviewCandidateData>,
+    /// 已选数量文案。
+    pub selected_count_label: String,
+    /// 勾选 >=2 时显示批量操作按钮。
+    pub bulk_buttons_visible: bool,
+    /// 批量按钮文案。
+    pub set_keep_label: String,
+    pub set_reject_label: String,
+    pub set_pending_label: String,
+    pub select_all_label: String,
+    pub deselect_all_label: String,
+    /// 单卡三态按钮文案。
+    pub card_pending_label: String,
+    pub card_keep_label: String,
+    pub card_reject_label: String,
+    /// 暂停/恢复/封账按钮文案。
+    pub pause_label: String,
+    pub resume_label: String,
+    pub seal_label: String,
+    /// 是否已封账（评审入口禁用信号）。
+    pub sealed: bool,
+    /// 封账成功后显示导出摘要。
+    pub summary_visible: bool,
+    /// 导出摘要文案。
+    pub summary_text: String,
+}
+
+impl WindowPageState for ReviewPageState {
+    fn render(&self, window: &AppWindow) {
+        self.workspace.render_with_step(window, 3);
+        window.set_review_title(self.title.clone().into());
+        window.set_review_empty_text(self.empty_text.clone().into());
+        window.set_review_candidate_count(self.candidate_count);
+        window.set_review_category_labels(string_model(&self.category_labels));
+        window
+            .set_review_category_counts(ModelRc::new(VecModel::from(self.category_counts.clone())));
+        window.set_review_active_category(self.active_category);
+        window.set_review_cards(ModelRc::new(VecModel::from(self.cards.clone())));
+        window.set_review_selected_count_label(self.selected_count_label.clone().into());
+        window.set_review_bulk_buttons_visible(self.bulk_buttons_visible);
+        window.set_review_set_keep_label(self.set_keep_label.clone().into());
+        window.set_review_set_reject_label(self.set_reject_label.clone().into());
+        window.set_review_set_pending_label(self.set_pending_label.clone().into());
+        window.set_review_select_all_label(self.select_all_label.clone().into());
+        window.set_review_deselect_all_label(self.deselect_all_label.clone().into());
+        window.set_review_card_pending_label(self.card_pending_label.clone().into());
+        window.set_review_card_keep_label(self.card_keep_label.clone().into());
+        window.set_review_card_reject_label(self.card_reject_label.clone().into());
+        window.set_review_pause_label(self.pause_label.clone().into());
+        window.set_review_resume_label(self.resume_label.clone().into());
+        window.set_review_seal_label(self.seal_label.clone().into());
+        window.set_review_sealed(self.sealed);
+        window.set_review_summary_visible(self.summary_visible);
+        window.set_review_summary_text(self.summary_text.clone().into());
+    }
+}
+
+/// 评审页一次请求：S1 只转发用户操作，F5 返回完整页面状态与通知事实。
+#[derive(Debug, Clone)]
+pub enum ReviewRequest {
+    /// 进入评审台：按当前方案从 B2 一次性装载 Reviewable 候选。
+    Open,
+    /// 切换六类标签页。
+    SetCategory { index: usize },
+    /// 逐项判定三态（state: pending/keep/remove）。
+    SetState { candidate_id: String, state: String },
+    /// 切换单卡复选。
+    ToggleSelected { candidate_id: String },
+    /// 全选当前类别。
+    SelectAllActive,
+    /// 取消全选当前类别。
+    DeselectAllActive,
+    /// 批量改为目标三态（state: pending/keep/remove）。
+    SetBulk { state: String },
+    /// 二次确认弹窗点了“确认”（批量剔除 >=5 项）。
+    ConfirmPending,
+    /// 二次确认弹窗点了“取消”。
+    CancelPending,
+    /// 暂停：会话状态写入临时文件。
+    Pause,
+    /// 恢复：从临时文件恢复会话状态。
+    Resume,
+    /// 封账：终态批量写回 B2。
+    Seal,
+}
 workspace_page_state!(CoveragePageState, 2, "覆盖率入口的当前完整占位页状态。");
 workspace_page_state!(ExportPageState, 4, "导出入口的当前完整占位页状态。");
 

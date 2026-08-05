@@ -16,9 +16,9 @@ pub use presentation::{
     CoveragePresentationEntry, ExportPageState, ExportPresentationEntry, ExportPresentationRequest,
     InvalidProgress, NavigationDecision, NotificationFact, NotificationPageState,
     NotificationPresentationEntry, OpaqueNotificationAction, OperationState, OrientationViewState,
-    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
-    SettingsPageState, SettingsPresentationEntry, SettingsRequest, StartupPageState,
-    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPageState,
+    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry,
+    ReviewRequest, Screen, SettingsPageState, SettingsPresentationEntry, SettingsRequest,
+    StartupPageState, StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPageState,
     TrashPresentationEntry, TrashRequest, WorkspacePageState, WorkspacePresentationEntry,
     WorkspaceRequest,
 };
@@ -45,5 +45,5 @@ mod generated {
 
 pub use generated::{
     AppWindow, BoundaryPointData, CampusData, NoticeData, OperationPresentationState,
-    OrientationPointData, PlanCardData, Theme, TrashItemData,
+    OrientationPointData, PlanCardData, ReviewCandidateData, Theme, TrashItemData,
 };

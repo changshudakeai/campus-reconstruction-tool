@@ -148,6 +148,11 @@ impl WorkspaceProductionContext {
         Rc::clone(&self.injector)
     }
 
+    /// 当前打开方案 ID（评审进台/封账按此方案装载会话）。
+    pub(crate) fn active_plan_id(&self) -> Option<String> {
+        self.session.borrow().active_plan_id.clone()
+    }
+
     /// 当前工作区页完整可观察状态（由功能入口侧状态派生，S1 只绘制）。
     pub(crate) fn page(&self) -> WorkspacePageState {
         let injector = self.injector.borrow();
