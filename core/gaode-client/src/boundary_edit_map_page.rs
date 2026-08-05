@@ -8,6 +8,7 @@
 //! **职责**: B3 高德客户端负责生成 HTML，壳层 WebView 加载渲染 —— 零业务计算
 //! 在壳内 (ADR-0017)
 
+use crate::boundary_edit_multipolygon_script::MULTI_AREA_SCRIPT;
 use crate::error::{Error, Result};
 
 /// 官方 CDN URL 模板 (v2.0 + PlaceSearch + PolygonEditor)
@@ -38,8 +39,10 @@ impl BoundaryEditPageConfig {
         Self {
             api_key: api_key.into(),
             security_key: security_key.into(),
-            anchor_lon: 116.397, // 默认北京 (会被实际调用方覆盖)
-            anchor_lat: 39.916,
+            // 锚点必须是调用方提供的真实校区坐标；没有真实锚点时构建页面明确失败，
+            // 不得以固定坐标/默认点代替用户数据（ADR-0042 §7）。
+            anchor_lon: f64::NAN,
+            anchor_lat: f64::NAN,
             height_px: 300,
             orientation_mode: false,
             existing_boundary_gcj02: None,
@@ -244,6 +247,11 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
             "高德安全密钥只能是字母或数字".to_owned(),
         ));
     }
+    if !config.anchor_lon.is_finite() || !config.anchor_lat.is_finite() {
+        return Err(Error::MalformedResponse(
+            "校区锚点缺失或无效：必须提供真实校区坐标".to_owned(),
+        ));
+    }
 
     let cdn_url = GAODE_CDN_URL_TEMPLATE.replace("{key}", &config.api_key);
     let height = config.effective_height_px();
@@ -323,6 +331,9 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 <script src="{cdn_url}"></script>
 <script>
   var map;
+  var polygon;          // 当前 OSM/编辑模式多边形（仅 OSM 绘制后赋值；必须显式声明，
+                        // 否则人工圈画兜底路径读取未声明变量会抛 ReferenceError）
+  var polygonEditor;    // 当前多边形编辑器（同上）
   var manualPoints = [];   // 人工圈画的点序列
   var isEditMode = false;  // true = 编辑模式 (有 OSM 边界), false = 人工圈画模式
   var previewLine = null;  // Manual mode preview line
@@ -544,6 +555,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 
     var confirmBtn = document.createElement('button');
     confirmBtn.className = 'control-btn primary';
+    confirmBtn.id = 'confirm-edit-btn';
     confirmBtn.textContent = '确认边界';
     confirmBtn.onclick = function() {{
       if (!polygon) {{ return; }}
@@ -553,12 +565,14 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
         return;
       }}
       setStatus('已提交边界 → 等待验证', 'success');
+      firstSubmittedRing = coords.slice();
       if (window.ipc && window.ipc.postMessage) {{
         window.ipc.postMessage(JSON.stringify({{
           type: 'confirm_boundary',
           coords: coords
         }}));
       }}
+      showAreaControls();
     }};
     toolbar.appendChild(confirmBtn);
 
@@ -599,26 +613,35 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     // Remove any previous click handler to prevent accumulation
     map.off('click');
 
-    // 地图点击事件 → 落点
-    map.on('click', function(e) {{
-      var loc = e.lnglat;
-      manualPoints.push([loc.lng, loc.lat]);
-
-      // 预览连线 + 刷新确认按钮计数
-      redrawPreviewLine();
-      showManualControls();
-
-      // IPC 上报最新状态
-      if (window.ipc && window.ipc.postMessage) {{
-        window.ipc.postMessage(JSON.stringify({{
-          type: 'manual_point',
-          point: [loc.lng, loc.lat],
-          total: manualPoints.length
-        }}));
-      }}
-    }});
+    // 地图点击事件 → 落点（区分首区域与附加区域）
+    map.on('click', function(e) {{ handleMapClick(e); }});
 
     showManualControls();
+  }}
+
+  function handleMapClick(e) {{
+    if (additionalMode) {{
+      addAdditionalPoint(e.lnglat);
+      return;
+    }}
+    addManualPoint(e.lnglat);
+  }}
+
+  function addManualPoint(loc) {{
+    manualPoints.push([loc.lng, loc.lat]);
+
+    // 预览连线 + 刷新确认按钮计数
+    redrawPreviewLine();
+    showManualControls();
+
+    // IPC 上报最新状态
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{
+        type: 'manual_point',
+        point: [loc.lng, loc.lat],
+        total: manualPoints.length
+      }}));
+    }}
   }}
 
   function redrawPreviewLine() {{
@@ -669,17 +692,20 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 
     var confirmBtn = document.createElement('button');
     confirmBtn.className = 'control-btn primary';
+    confirmBtn.id = 'confirm-manual-btn';
     confirmBtn.textContent = '确认边界 (' + manualPoints.length + '个点)';
     confirmBtn.disabled = manualPoints.length < 3;
     confirmBtn.onclick = function() {{
       if (manualPoints.length >= 3) {{
         setStatus('已确认 ' + manualPoints.length + ' 个点 → 待验证', 'success');
+        firstSubmittedRing = manualPoints.slice();
         if (window.ipc && window.ipc.postMessage) {{
           window.ipc.postMessage(JSON.stringify({{
             type: 'confirm_boundary',
             coords: manualPoints
           }}));
         }}
+        showAreaControls();
       }}
     }};
     toolbar.appendChild(confirmBtn);
@@ -692,6 +718,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     initWithConvertedAnchor();  // Convert anchor first, then init map
   }}
 </script>
+{multi_area_script}
 {orientation_script}
 </body>
 </html>"#,
@@ -702,6 +729,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
         anchor_lat = config.anchor_lat,
         orientation_mode = config.orientation_mode,
         existing_boundary_json = existing_boundary_json,
+        multi_area_script = MULTI_AREA_SCRIPT,
         orientation_script = if config.orientation_mode {
             ORIENTATION_SCRIPT
         } else {
@@ -728,7 +756,7 @@ mod tests {
 
     #[test]
     fn html_contains_gcj02_conversion() {
-        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("AMap.convertFrom"));
         assert!(html.contains("convertAndDraw"));
@@ -736,7 +764,7 @@ mod tests {
 
     #[test]
     fn html_contains_polygon_editor_plugin() {
-        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("plugin=AMap.PolygonEditor"));
         assert!(html.contains("PolygonEditor"));
@@ -744,7 +772,7 @@ mod tests {
 
     #[test]
     fn html_contains_manual_mode_fallback() {
-        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("enableManualMode"));
         assert!(html.contains("manualPoints"));
@@ -755,7 +783,7 @@ mod tests {
     fn html_contains_edit_mode_confirm_button() {
         // 验收③：编辑模式（OSM 边界已绘制）必须有确认路径——
         // 确认后步骤条打勾依赖此按钮发出 confirm_boundary
-        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("showEditControls"));
         assert!(html.contains("map-toolbar"));
@@ -768,7 +796,7 @@ mod tests {
     fn html_sorting_stays_out_of_js() {
         // 红线：排序逻辑必须在 Rust 且可单测，禁止只写进 JS——
         // JS 只发 osm_elements 等 Rust 回复 convertAndDraw/enableManualMode
-        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("osm_elements"));
         assert!(!html.contains("findBestMatch"));
@@ -778,6 +806,28 @@ mod tests {
     fn invalid_api_key_is_rejected() {
         let config = BoundaryEditPageConfig::new("bad@key", "xyz789");
         assert!(build_boundary_edit_page_html(&config).is_err());
+    }
+
+    #[test]
+    fn missing_anchor_is_rejected_instead_of_defaulting_to_a_fixed_point() {
+        // ADR-0042 §7：地图页不得以固定坐标/默认锚点代替真实校区数据。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789");
+        let error = build_boundary_edit_page_html(&config).expect_err("缺少锚点必须明确失败");
+        assert!(error.to_string().contains("锚点缺失"));
+    }
+
+    #[test]
+    fn html_supports_multi_area_multipolygon_submission() {
+        // ADR-0042 §3：地图 seam 必须能产生完整 MultiPolygon geometry。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("add-area-btn"));
+        assert!(html.contains("submit-boundary-btn"));
+        assert!(html.contains("confirm-area-btn"));
+        assert!(html.contains("MultiPolygon"));
+        assert!(html.contains("geometry"));
+        assert!(html.contains("submitBoundary"));
+        assert!(html.contains("handleMapClick"));
     }
 
     #[test]

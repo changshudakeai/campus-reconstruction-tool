@@ -356,8 +356,11 @@ impl WorkspaceProductionContext {
         }
     }
 
-    /// 地图密钥与校区锚点（锚点优先取当前方案的校区；兜底取上次校区/默认点）。
-    fn map_credentials(&self) -> ((String, String), (f64, f64)) {
+    /// 地图密钥与校区锚点（锚点优先取当前方案的校区，其次上次校区）。
+    ///
+    /// 没有真实校区锚点时返回 `None`：不得用固定坐标初始化地图或参与边界换算
+    /// （ADR-0042 §7 禁止以固定坐标/锚点代替用户数据）。
+    fn map_credentials(&self) -> Option<((String, String), (f64, f64))> {
         let injector = self.injector.borrow();
         let api_key = injector
             .settings()
@@ -377,16 +380,15 @@ impl WorkspaceProductionContext {
             .active_context
             .as_ref()
             .map(|context| (context.anchor_lng, context.anchor_lat))
-            .unwrap_or_else(|| {
+            .or_else(|| {
                 injector
                     .projects()
                     .landing_campus()
                     .ok()
                     .flatten()
                     .map(|campus| (campus.anchor_lng, campus.anchor_lat))
-                    .unwrap_or((116.397, 39.916))
-            });
-        ((api_key, security_key), anchor)
+            })?;
+        Some(((api_key, security_key), anchor))
     }
 
     fn mark_map_loading(&self) {
@@ -494,7 +496,16 @@ impl WorkspaceProductionAdapter {
         if let Some(context) = self.context.session.borrow().active_context.clone() {
             self.context.export_flow.set_plan(&context);
         }
-        let (keys, anchor) = self.context.map_credentials();
+        let Some((keys, anchor)) = self.context.map_credentials() else {
+            let l10n = self.l10n();
+            return Presentation::ready(self.context.page())
+                .with_notification(info_fact(
+                    &l10n,
+                    "boundary.map_notice_title",
+                    &l10n.t("boundary.map_load_failed"),
+                ))
+                .with_navigation(NavigationDecision::Show(Screen::Workspace));
+        };
         let page = self.context.page();
         let presentation = if keys.0.is_empty() || crate::map_webview::is_visible() {
             Presentation::ready(page)
@@ -545,7 +556,16 @@ impl WorkspaceProductionAdapter {
                 .with_navigation(NavigationDecision::Blocked);
         }
         if step == 0 {
-            let (keys, anchor) = self.context.map_credentials();
+            let Some((keys, anchor)) = self.context.map_credentials() else {
+                let l10n = self.l10n();
+                return Presentation::ready(self.context.page())
+                    .with_notification(info_fact(
+                        &l10n,
+                        "boundary.map_notice_title",
+                        &l10n.t("boundary.map_load_failed"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            };
             if keys.0.is_empty() {
                 let l10n = self.l10n();
                 return Presentation::needs_confirmation(
@@ -575,7 +595,16 @@ impl WorkspaceProductionAdapter {
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
         if step == 1 {
-            let (keys, anchor) = self.context.map_credentials();
+            let Some((keys, anchor)) = self.context.map_credentials() else {
+                let l10n = self.l10n();
+                return Presentation::ready(self.context.page())
+                    .with_notification(info_fact(
+                        &l10n,
+                        "boundary.map_notice_title",
+                        &l10n.t("boundary.map_load_failed"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            };
             self.context.session.borrow_mut().active_step = 1;
             let presentation = if keys.0.is_empty() {
                 Presentation::ready(self.context.page())
@@ -1028,22 +1057,37 @@ impl WorkspaceProductionAdapter {
         &mut self,
         elements: Vec<gaode_client::OsmElement>,
     ) -> Presentation<WorkspacePageState> {
-        let (anchor_lon, anchor_lat, campus_name) = {
+        let Some((anchor_lon, anchor_lat, campus_name)) = ({
             let session = self.context.session.borrow();
-            match &session.active_context {
-                Some(context) => (
-                    context.anchor_lng,
-                    context.anchor_lat,
-                    Some(context.campus_name.clone()),
-                ),
-                None => {
-                    let injector = self.context.injector.borrow();
-                    match injector.projects().landing_campus().ok().flatten() {
-                        Some(campus) => (campus.anchor_lng, campus.anchor_lat, Some(campus.name)),
-                        None => (116.397, 39.916, None),
-                    }
-                }
-            }
+            session
+                .active_context
+                .as_ref()
+                .map(|context| {
+                    (
+                        context.anchor_lng,
+                        context.anchor_lat,
+                        Some(context.campus_name.clone()),
+                    )
+                })
+                .or_else(|| {
+                    self.context
+                        .injector
+                        .borrow()
+                        .projects()
+                        .landing_campus()
+                        .ok()
+                        .flatten()
+                        .map(|campus| (campus.anchor_lng, campus.anchor_lat, Some(campus.name)))
+                })
+        }) else {
+            // 没有真实校区锚点时不得用固定坐标参与 OSM 排序：直接进入人工圈画。
+            crate::map_webview::evaluate_script("enableManualMode();");
+            let l10n = self.l10n();
+            return Presentation::ready(self.context.page()).with_notification(info_fact(
+                &l10n,
+                "boundary.osm_not_found_title",
+                &l10n.t("boundary.osm_not_found_body"),
+            ));
         };
         let sorted = BoundarySorter::sort_candidates(
             elements,

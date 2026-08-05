@@ -882,6 +882,11 @@ impl ProductionEntries {
                 self.show_settings(window);
             }
             PendingConfirmation::LeaveWorkspace { target } => {
+                // 与直接离开（NavigationDecision::Show）等价：离开工作区会使当前
+                // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
+                self.export_poll_timer.stop();
+                self.export
+                    .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.navigate_to(window, target);
             }
             PendingConfirmation::OrientationRecalc => {
