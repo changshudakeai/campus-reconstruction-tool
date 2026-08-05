@@ -12,7 +12,7 @@ use shared_domain_types::CandidateCategory;
 /// 由壳把 F5 `ReviewWorkbench::export_summary()` 与保留项标识列表
 /// 组装而成（F* 功能模块横向零依赖，本 crate 不 import F5 类型）。
 ///
-/// 保留项为零仍是合法请求——最小路径（只圈边界 + 定朝向）导出一块
+/// 保留项为零仍是合法请求——最小路径（只圈已确认边界）导出一块
 /// 平整空地，一切校验在弹窗内如实呈现，不做静默拦截（缝 5 契约）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportRequest {

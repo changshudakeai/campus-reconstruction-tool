@@ -10,6 +10,7 @@ use std::path::Path;
 use generation_engine::BlockModel;
 use sponge_export::VoxelModel;
 
+use crate::boundary_export::ExportFileSystem;
 use crate::data::ExportStage;
 use crate::error::{Error, Result};
 use crate::progress::ProgressTracker;
@@ -73,6 +74,38 @@ pub fn export_schematic(
     schematic_name: &str,
     progress: &ProgressTracker,
 ) -> Result<()> {
+    export_schematic_inner(model, output_path, schematic_name, progress, true)
+}
+
+/// F9 双文件事务使用的 B4 staging 写入：复用 B4 编码器，文件写入经
+/// 注入的窄端口完成，不让 B4 先发布一个可被误认的最终产物。
+pub(crate) fn export_schematic_staged_with_file_system(
+    model: &BlockModel,
+    output_path: &Path,
+    schematic_name: &str,
+    profile: sponge_export::SchematicProfile,
+    file_system: &dyn ExportFileSystem,
+    progress: &ProgressTracker,
+) -> Result<()> {
+    progress.set_stage(ExportStage::Generating);
+    let voxel = adapt_to_voxel_model(model)?;
+    progress.report_percent(80);
+    progress.set_stage(ExportStage::Writing);
+    let bytes = sponge_export::encode_schematic(schematic_name, &voxel, profile)
+        .map_err(|error| Error::SchematicWrite(error.to_string()))?;
+    file_system
+        .write(output_path, &bytes)
+        .map_err(|error| Error::SchematicWrite(error.to_string()))?;
+    Ok(())
+}
+
+fn export_schematic_inner(
+    model: &BlockModel,
+    output_path: &Path,
+    schematic_name: &str,
+    progress: &ProgressTracker,
+    finish: bool,
+) -> Result<()> {
     progress.set_stage(ExportStage::Generating);
     progress.report_percent(0);
 
@@ -82,7 +115,9 @@ pub fn export_schematic(
     progress.set_stage(ExportStage::Writing);
     sponge_export::write_schematic(output_path, schematic_name, &voxel)
         .map_err(|err| Error::SchematicWrite(err.to_string()))?;
-    progress.finish();
+    if finish {
+        progress.finish();
+    }
     Ok(())
 }
 

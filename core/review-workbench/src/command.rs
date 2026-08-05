@@ -89,11 +89,9 @@ impl ConfirmationRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared_domain_types::CandidateCategory;
-
     fn keys(count: usize) -> Vec<CandidateKey> {
         (0..count)
-            .map(|index| CandidateKey::new(CandidateCategory::Building, format!("way/{index}")))
+            .map(|index| CandidateKey::new(format!("way/{index}")))
             .collect()
     }
 

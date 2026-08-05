@@ -17,6 +17,8 @@ pub enum MaterialError {
 /// 方块用途角色（集中配置的查询键，禁止在生成逻辑里散写方块 ID）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialRole {
+    /// 边界直出：最小平整场地的地面。
+    FoundationGround,
     /// 建筑：地基。
     BuildingFoundation,
     /// 建筑：墙体。
@@ -55,6 +57,8 @@ pub enum MaterialRole {
 fn block_id_for_role(role: MaterialRole, table: &MaterialTable) -> String {
     let school = &table.building_presets.school;
     match role {
+        // 边界直出复用 B17 学校预设的地基方块，保持版本绑定与既有用料表一致。
+        MaterialRole::FoundationGround => school.foundation.clone(),
         MaterialRole::BuildingFoundation => school.foundation.clone(),
         MaterialRole::BuildingWall => school.wall.clone(),
         MaterialRole::BuildingWindow => school.window.clone(),
@@ -117,6 +121,7 @@ mod tests {
     fn every_role_resolves_on_v1_20_4() {
         let adapter = adapter();
         let roles = [
+            MaterialRole::FoundationGround,
             MaterialRole::BuildingFoundation,
             MaterialRole::BuildingWall,
             MaterialRole::BuildingWindow,

@@ -1,0 +1,20 @@
+[package]
+name = "export-flow"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "F9 boundary-only application flow: freeze input and submit the complete export use case"
+
+[dependencies]
+export-console = { workspace = true }
+global-settings = { workspace = true }
+project-management = { workspace = true }
+serde_json = { workspace = true }
+shared-domain-types = { workspace = true }
+
+[dev-dependencies]
+data-persistence = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

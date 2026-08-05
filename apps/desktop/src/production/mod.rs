@@ -8,18 +8,24 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use coverage_audit::AuditResult;
+use data_acquisition::GaodeDataSource;
+use export_flow::{BoundaryExportFlow, Error as ExportError};
 use localization::Localization;
-use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
+use notification_center::{
+    Notification, NotificationActionOutcome, NotificationCenter, OpaqueNotificationAction,
+};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::ComponentHandle;
 
 use crate::presentation::{
     CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
     CoveragePageState, CoveragePresentationEntry, ExportPageState, ExportPresentationEntry,
-    NavigationDecision, NotificationPageState, NotificationPresentationEntry, OperationState,
-    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
-    SettingsPresentationEntry, SettingsRequest, StartupPresentationEntry, StartupRequest,
-    ToolbarPageState, TrashPresentationEntry, TrashRequest, WorkspacePresentationEntry,
-    WorkspaceRequest,
+    ExportPresentationRequest, NavigationDecision, NotificationFact, NotificationPageState,
+    NotificationPresentationEntry, OperationState, Presentation, PresentationAdapter, Progress,
+    ReviewPageState, ReviewPresentationEntry, Screen, SettingsPresentationEntry, SettingsRequest,
+    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPresentationEntry,
+    TrashRequest, WindowPageState, WorkspacePresentationEntry, WorkspaceRequest,
 };
 mod campus_plan_trash;
 mod startup_settings;
@@ -53,17 +59,271 @@ pub(crate) fn entry_calls() -> [usize; 10] {
     std::array::from_fn(|index| ENTRY_CALLS[index].load(std::sync::atomic::Ordering::SeqCst))
 }
 
-struct CollectionProductionAdapter(WorkspaceProductionContext);
+struct CollectionProductionAdapter(CollectionCoordinator);
 
 impl PresentationAdapter<(), CollectionPageState> for CollectionProductionAdapter {
     fn present(&mut self, (): ()) -> Presentation<CollectionPageState> {
         #[cfg(test)]
         record_entry_call(3);
-        Presentation::ready(CollectionPageState {
-            workspace: self.0.page(),
-        })
-        .with_navigation(NavigationDecision::Show(Screen::Workspace))
+        Presentation::ready(self.0.page())
+            .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
+}
+
+const COLLECTION_CATEGORIES: [CandidateCategory; 6] = [
+    CandidateCategory::Building,
+    CandidateCategory::Road,
+    CandidateCategory::Water,
+    CandidateCategory::Vegetation,
+    CandidateCategory::Sports,
+    CandidateCategory::Other,
+];
+
+const COLLECTION_CATEGORY_KEYS: [&str; 6] = [
+    "collection.category_building",
+    "collection.category_road",
+    "collection.category_water",
+    "collection.category_vegetation",
+    "collection.category_sports",
+    "collection.category_other",
+];
+
+#[derive(Clone, Default)]
+enum CollectionPhase {
+    #[default]
+    Pending,
+    Fetching,
+    Failed,
+    Completed,
+}
+
+#[derive(Clone, Default)]
+struct CollectionState {
+    phase: CollectionPhase,
+    request_id: u64,
+    category_counts: [u32; 6],
+    diff_summary: String,
+    audit: Option<AuditResult>,
+    report_visible: bool,
+}
+
+/// S1-07 采集功能入口：F4 流水线与 F7 安静哨兵只在壳层协调。
+#[derive(Clone)]
+struct CollectionCoordinator {
+    context: WorkspaceProductionContext,
+    state: Rc<RefCell<CollectionState>>,
+}
+
+impl CollectionCoordinator {
+    fn new(context: WorkspaceProductionContext) -> Self {
+        Self {
+            context,
+            state: Rc::new(RefCell::new(CollectionState::default())),
+        }
+    }
+
+    fn page(&self) -> CollectionPageState {
+        let state = self.state.borrow();
+        let injector = self.context.injector();
+        let injector = injector.borrow();
+        let l10n = injector.l10n();
+        let statuses = match state.phase {
+            CollectionPhase::Pending => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
+            CollectionPhase::Fetching => {
+                vec![l10n.t("collection.progress_fetching"); COLLECTION_CATEGORIES.len()]
+            }
+            CollectionPhase::Failed => vec![l10n.t("common.pending"); COLLECTION_CATEGORIES.len()],
+            CollectionPhase::Completed => state
+                .category_counts
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        };
+        let report_body = state.audit.as_ref().map_or_else(String::new, |result| {
+            if !state.report_visible {
+                return String::new();
+            }
+            let view = injector.sentinel().report_view(result, l10n);
+            let mut lines = view.category_lines;
+            lines.extend(view.issue_lines);
+            if let Some(no_issues) = view.no_issues_line {
+                lines.push(no_issues);
+            }
+            lines.join("\n")
+        });
+        let progress_label = match state.phase {
+            CollectionPhase::Pending | CollectionPhase::Failed => {
+                l10n.t("collection.progress_title")
+            }
+            CollectionPhase::Fetching => l10n.t("collection.progress_fetching"),
+            CollectionPhase::Completed => l10n.t_with_args(
+                "collection.progress_done",
+                serde_json::json!({ "count": state.category_counts.iter().sum::<u32>() }),
+            ),
+        };
+        let source_label = l10n.t("collection.source_gaode");
+        let collect_label = l10n.t("collection.collect_button");
+        let category_labels = COLLECTION_CATEGORY_KEYS
+            .iter()
+            .map(|key| l10n.t(key))
+            .collect();
+        let category_skip_label = l10n.t("collection.skippable");
+        let report_entry_label = l10n.t("audit.report_entry");
+        drop(injector);
+        CollectionPageState {
+            workspace: self.context.page(),
+            source_label,
+            collect_label,
+            progress_label,
+            category_labels,
+            category_statuses: statuses,
+            category_skip_label,
+            diff_summary: state.diff_summary.clone(),
+            report_entry_label,
+            report_body,
+        }
+    }
+
+    fn start(&self, window: &AppWindow) {
+        let Some((_, boundary)) = self.collection_target() else {
+            self.fail();
+            self.page().render(window);
+            return;
+        };
+        let request_id = {
+            let mut state = self.state.borrow_mut();
+            state.request_id = state.request_id.wrapping_add(1);
+            state.phase = CollectionPhase::Fetching;
+            state.audit = None;
+            state.report_visible = false;
+            state.diff_summary.clear();
+            state.request_id
+        };
+        self.page().render(window);
+        let Some(center) = collection_centroid(&boundary.coordinates) else {
+            self.fail();
+            self.page().render(window);
+            return;
+        };
+        crate::map_webview::evaluate_script(&collection_request_script(request_id, center));
+    }
+
+    fn handle_map_response(&self, window: &AppWindow, message: &str) -> bool {
+        let Ok(envelope) = serde_json::from_str::<serde_json::Value>(message) else {
+            return false;
+        };
+        if envelope.get("type").and_then(serde_json::Value::as_str) != Some("collection_response") {
+            return false;
+        }
+        let Some(request_id) = envelope
+            .get("request_id")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return true;
+        };
+        let Some(payload) = envelope.get("payload").and_then(serde_json::Value::as_str) else {
+            self.fail();
+            self.page().render(window);
+            return true;
+        };
+        if self.state.borrow().request_id != request_id {
+            return true;
+        }
+        let Some((plan_id, boundary)) = self.collection_target() else {
+            self.fail();
+            self.page().render(window);
+            return true;
+        };
+        let response = payload.to_owned();
+        let source = GaodeDataSource::new(Box::new(move |_| Ok(response.clone())));
+        let result = {
+            let injector = self.context.injector();
+            let result = injector
+                .borrow_mut()
+                .collect_and_audit(&plan_id, &boundary, &source);
+            result
+        };
+        match result {
+            Ok((report, outcome)) => {
+                let counts = COLLECTION_CATEGORIES.map(|category| {
+                    u32::try_from(*report.category_counts.get(&category).unwrap_or(&0))
+                        .unwrap_or(u32::MAX)
+                });
+                let categories = COLLECTION_CATEGORIES
+                    .iter()
+                    .zip(counts)
+                    .map(|(category, count)| (*category, count as usize))
+                    .collect::<Vec<_>>();
+                self.record_collection(&categories);
+                let injector = self.context.injector();
+                let l10n = injector.borrow();
+                let mut state = self.state.borrow_mut();
+                state.phase = CollectionPhase::Completed;
+                state.category_counts = counts;
+                state.diff_summary = l10n.l10n().t_with_args(report.diff.summary_key(), serde_json::json!({ "added": report.diff.added_count(), "updated": report.diff.updated_count(), "unchanged": report.diff.unchanged_count() }));
+                state.audit = Some(outcome.result);
+            }
+            Err(_) => self.fail(),
+        }
+        self.page().render(window);
+        true
+    }
+
+    fn show_report(&self, window: &AppWindow) {
+        self.state.borrow_mut().report_visible = true;
+        self.page().render(window);
+    }
+    fn fail(&self) {
+        self.state.borrow_mut().phase = CollectionPhase::Failed;
+        let injector = self.context.injector();
+        let l10n = injector.borrow();
+        notification_center::error(
+            l10n.l10n().t("collection.source_gaode"),
+            l10n.l10n().t("dialog.error_title"),
+            l10n.l10n().t("collection.error_failed"),
+        );
+    }
+
+    fn collection_target(&self) -> Option<(PlanId, Boundary)> {
+        let session = self.context.session.borrow();
+        let plan_id = PlanId::parse(session.active_plan_id.as_ref()?).ok()?;
+        let boundary = self
+            .context
+            .export_flow
+            .boundary_view()
+            .map(|view| Boundary {
+                r#type: view.r#type,
+                coordinates: view.coordinates,
+            })?;
+        Some((plan_id, boundary))
+    }
+
+    fn record_collection(&self, counts: &[(CandidateCategory, usize)]) {
+        let mut session = self.context.session.borrow_mut();
+        let Some(plan_id) = session.active_plan_id.clone() else {
+            return;
+        };
+        let state = session.plans.entry(plan_id).or_default();
+        state.has_collection = true;
+        state.generated_category_counts = counts.iter().copied().collect();
+    }
+}
+
+fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
+    let points = coordinates.as_array()?.first()?.as_array()?;
+    let mut total = (0.0, 0.0);
+    let mut count = 0.0;
+    for point in points {
+        let pair = point.as_array()?;
+        total.0 += pair.first()?.as_f64()?;
+        total.1 += pair.get(1)?.as_f64()?;
+        count += 1.0;
+    }
+    (count > 0.0).then_some((total.0 / count, total.1 / count))
+}
+
+fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
+    format!("(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();", lon = center.0, lat = center.1)
 }
 
 struct ReviewProductionAdapter(WorkspaceProductionContext);
@@ -91,16 +351,198 @@ impl PresentationAdapter<(), CoveragePageState> for CoverageProductionAdapter {
     }
 }
 
-struct ExportProductionAdapter(WorkspaceProductionContext);
+struct ExportProductionAdapter {
+    context: WorkspaceProductionContext,
+    flow: Arc<BoundaryExportFlow>,
+    operation: Option<export_flow::BoundaryExportOperation>,
+}
 
-impl PresentationAdapter<(), ExportPageState> for ExportProductionAdapter {
-    fn present(&mut self, (): ()) -> Presentation<ExportPageState> {
+impl ExportProductionAdapter {
+    fn page_with_status(&self, title_key: &str, subtitle: impl Into<String>) -> ExportPageState {
+        let injector = self.context.injector();
+        let l10n = injector.borrow();
+        let mut workspace = self.context.page();
+        workspace.placeholder_title = l10n.l10n().t(title_key);
+        workspace.placeholder_subtitle = subtitle.into();
+        ExportPageState { workspace }
+    }
+    fn failure_presentation(&self, error: &ExportError) -> Presentation<ExportPageState> {
+        let (body, action) = {
+            let injector = self.context.injector();
+            let l10n = injector.borrow();
+            let category = l10n.l10n().t(export_error_category_key(error));
+            let body = l10n
+                .l10n()
+                .t_with_array("export.failure_user_message", &[&category]);
+            let diagnostic_source = l10n.l10n().t("app.source_tag");
+            let diagnostic_title = l10n.l10n().t("notice.diagnostic_action");
+            let diagnostic_detail = export_diagnostic_detail(error);
+            let action = OpaqueNotificationAction::new(move || {
+                NotificationActionOutcome::succeeded(Notification::info(
+                    diagnostic_source.clone(),
+                    diagnostic_title.clone(),
+                    diagnostic_detail.clone(),
+                ))
+            });
+            (body, action)
+        };
+        let injector = self.context.injector();
+        let l10n = injector.borrow();
+        let notification = NotificationFact::new(Notification::error(
+            l10n.l10n().t("app.source_tag"),
+            l10n.l10n().t("dialog.error_title"),
+            body.clone(),
+        ))
+        .with_diagnostic_action(action);
+        Presentation::failed(self.page_with_status("error.export_failed", body))
+            .with_notification(notification)
+    }
+}
+
+impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportProductionAdapter {
+    fn present(&mut self, request: ExportPresentationRequest) -> Presentation<ExportPageState> {
         #[cfg(test)]
         record_entry_call(6);
-        Presentation::ready(ExportPageState {
-            workspace: self.0.page(),
-        })
-        .with_navigation(NavigationDecision::Show(Screen::Workspace))
+        match request {
+            ExportPresentationRequest::Open => Presentation::ready(
+                self.page_with_status(
+                    "export.confirm_title",
+                    self.context
+                        .injector()
+                        .borrow()
+                        .l10n()
+                        .t("export.boundary_only_summary"),
+                ),
+            )
+            .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            ExportPresentationRequest::Start => match self.flow.start() {
+                Ok(operation) => {
+                    let progress = operation.progress_view();
+                    self.operation = Some(operation);
+                    Presentation::processing(
+                        self.page_with_status(
+                            progress.stage_key,
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                        Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                    )
+                }
+                Err(error) => self.failure_presentation(&error),
+            }
+            .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            ExportPresentationRequest::Poll => {
+                let Some(operation) = self.operation.as_mut() else {
+                    return Presentation::ready(
+                        self.page_with_status(
+                            "export.confirm_title",
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                    )
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                };
+                if let Some(result) = operation.try_complete() {
+                    self.operation = None;
+                    match result {
+                        Ok(result) => {
+                            let injector = self.context.injector();
+                            let l10n = injector.borrow();
+                            let dimensions = result.schematic_dimensions;
+                            let subtitle = l10n.l10n().t_with_array(
+                                "export.done_with_dimensions",
+                                &[
+                                    &result.schematic_path.display().to_string(),
+                                    &dimensions[0].to_string(),
+                                    &dimensions[1].to_string(),
+                                    &dimensions[2].to_string(),
+                                ],
+                            );
+                            let mut presentation = Presentation::succeeded(
+                                self.page_with_status("export.done", subtitle),
+                            );
+                            if let Some(detail) = result.cleanup_warning {
+                                let source = l10n.l10n().t("app.source_tag");
+                                let title = l10n.l10n().t("export.done");
+                                let warning_body = l10n.l10n().t("export.cleanup_warning");
+                                let diagnostic_title = l10n.l10n().t("notice.diagnostic_action");
+                                let diagnostic_source = source.clone();
+                                let action = OpaqueNotificationAction::new(move || {
+                                    NotificationActionOutcome::succeeded(Notification::info(
+                                        diagnostic_source.clone(),
+                                        diagnostic_title.clone(),
+                                        detail.clone(),
+                                    ))
+                                });
+                                presentation = presentation.with_notification(
+                                    NotificationFact::new(Notification::warn(
+                                        source,
+                                        title,
+                                        warning_body,
+                                    ))
+                                    .with_diagnostic_action(action),
+                                );
+                            }
+                            presentation
+                        }
+                        Err(error) => self.failure_presentation(&error),
+                    }
+                } else {
+                    let progress = operation.progress_view();
+                    Presentation::processing(
+                        self.page_with_status(
+                            progress.stage_key,
+                            self.context
+                                .injector()
+                                .borrow()
+                                .l10n()
+                                .t("export.boundary_only_summary"),
+                        ),
+                        Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                    )
+                }
+                .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            ExportPresentationRequest::Abandon => {
+                self.flow.leave();
+                self.operation = None;
+                Presentation::ready(
+                    self.page_with_status(
+                        "export.confirm_title",
+                        self.context
+                            .injector()
+                            .borrow()
+                            .l10n()
+                            .t("export.boundary_only_summary"),
+                    ),
+                )
+            }
+        }
+    }
+}
+
+fn export_diagnostic_detail(error: &ExportError) -> String {
+    error.to_string()
+}
+
+fn export_error_category_key(error: &ExportError) -> &'static str {
+    match error {
+        ExportError::Boundary(_) => "error.export_boundary_failed",
+        ExportError::SettingsRead(_) => "error.export_settings_failed",
+        ExportError::Version(_) => "error.export_version_failed",
+        ExportError::Generation(_) => "error.export_generation_failed",
+        ExportError::ManifestWrite(_) => "error.export_manifest_write_failed",
+        ExportError::SchematicWrite(_) => "error.export_schematic_write_failed",
+        ExportError::ArtifactWrite(_) => "error.export_artifact_write_failed",
+        ExportError::ArtifactRecovery(_) => "error.export_recovery_failed",
+        ExportError::BackgroundTask => "error.export_background_failed",
+        _ => "error.export_failed",
     }
 }
 
@@ -251,10 +693,11 @@ pub(crate) struct ProductionEntries {
     settings: SettingsPresentationEntry<'static, SettingsRequest>,
     campus_plan: CampusPlanPresentationEntry<'static, CampusPlanRequest>,
     collection: CollectionPresentationEntry<'static, ()>,
+    collection_coordinator: CollectionCoordinator,
     workspace: WorkspacePresentationEntry<'static, WorkspaceRequest>,
     review: ReviewPresentationEntry<'static, ()>,
     _coverage: CoveragePresentationEntry<'static, ()>,
-    export: ExportPresentationEntry<'static, ()>,
+    export: ExportPresentationEntry<'static, ExportPresentationRequest>,
     notification: NotificationPresentationEntry<'static, NotificationRequest>,
     trash: TrashPresentationEntry<'static, TrashRequest>,
     center: Arc<NotificationCenter>,
@@ -262,6 +705,7 @@ pub(crate) struct ProductionEntries {
     diagnostic_failure: DiagnosticFailureLabels,
     pending_confirmation: Option<PendingConfirmation>,
     pending_input: Option<PendingInput>,
+    export_poll_timer: slint::Timer,
 }
 
 impl ProductionEntries {
@@ -279,7 +723,15 @@ impl ProductionEntries {
                 panicked_body: injector.l10n().t("notice.diagnostic_action_panicked"),
             }
         };
-        let workspace = WorkspaceProductionContext::new(Rc::clone(&injector), window);
+        let export_flow = {
+            let injector_ref = injector.borrow();
+            let flow = injector_ref.export_flow();
+            flow.sync_settings(injector_ref.settings());
+            flow
+        };
+        let workspace =
+            WorkspaceProductionContext::new(Rc::clone(&injector), window, export_flow.clone());
+        let collection_coordinator = CollectionCoordinator::new(workspace.clone());
         Self {
             startup: StartupPresentationEntry::new(StartupProductionAdapter {
                 injector: Rc::clone(&injector),
@@ -293,14 +745,19 @@ impl ProductionEntries {
                 workspace: workspace.clone(),
             }),
             collection: CollectionPresentationEntry::new(CollectionProductionAdapter(
-                workspace.clone(),
+                collection_coordinator.clone(),
             )),
+            collection_coordinator,
             workspace: WorkspacePresentationEntry::new(WorkspaceProductionAdapter {
                 context: workspace.clone(),
             }),
             review: ReviewPresentationEntry::new(ReviewProductionAdapter(workspace.clone())),
             _coverage: CoveragePresentationEntry::new(CoverageProductionAdapter(workspace.clone())),
-            export: ExportPresentationEntry::new(ExportProductionAdapter(workspace.clone())),
+            export: ExportPresentationEntry::new(ExportProductionAdapter {
+                context: workspace.clone(),
+                flow: export_flow,
+                operation: None,
+            }),
             notification: NotificationPresentationEntry::new(NotificationProductionAdapter {
                 center: Arc::clone(&center),
                 labels,
@@ -313,6 +770,7 @@ impl ProductionEntries {
             diagnostic_failure,
             pending_confirmation: None,
             pending_input: None,
+            export_poll_timer: slint::Timer::default(),
         }
     }
 
@@ -424,6 +882,11 @@ impl ProductionEntries {
                 self.show_settings(window);
             }
             PendingConfirmation::LeaveWorkspace { target } => {
+                // 与直接离开（NavigationDecision::Show）等价：离开工作区会使当前
+                // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
+                self.export_poll_timer.stop();
+                self.export
+                    .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.navigate_to(window, target);
             }
             PendingConfirmation::OrientationRecalc => {
@@ -487,6 +950,14 @@ impl ProductionEntries {
         self.collection.show(window, &self.center, ());
     }
 
+    pub(crate) fn start_collection(&mut self, window: &AppWindow) {
+        self.collection_coordinator.start(window);
+    }
+
+    pub(crate) fn show_collection_report(&mut self, window: &AppWindow) {
+        self.collection_coordinator.show_report(window);
+    }
+
     pub(crate) fn show_review(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.review.show(window, &self.center, ());
@@ -494,7 +965,44 @@ impl ProductionEntries {
 
     pub(crate) fn show_export(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        self.export.show(window, &self.center, ());
+        self.export
+            .show(window, &self.center, ExportPresentationRequest::Open);
+    }
+
+    pub(crate) fn start_export(&mut self, window: &AppWindow) -> bool {
+        self.supersede_diagnostic(window);
+        let presentation = self
+            .export
+            .show(window, &self.center, ExportPresentationRequest::Start);
+        matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
+    fn poll_export(&mut self, window: &AppWindow) -> bool {
+        let presentation = self
+            .export
+            .show(window, &self.center, ExportPresentationRequest::Poll);
+        !matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
+    fn start_export_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().export_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let completed = entries.borrow_mut().poll_export(&window);
+                if completed {
+                    entries.borrow_mut().export_poll_timer.stop();
+                }
+            },
+        );
     }
 
     #[cfg(test)]
@@ -626,6 +1134,12 @@ impl ProductionEntries {
 
     /// 地图 WebView 转交的原始 IPC 消息：由工作区功能入口解析并应用规则。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
+        if self
+            .collection_coordinator
+            .handle_map_response(window, message)
+        {
+            return;
+        }
         let presentation = self.workspace.show(
             window,
             &self.center,
@@ -649,7 +1163,12 @@ impl ProductionEntries {
             self.workspace
                 .show(window, &self.center, WorkspaceRequest::Leave { target });
         match presentation.navigation() {
-            NavigationDecision::Show(screen) => self.navigate_to(window, screen),
+            NavigationDecision::Show(screen) => {
+                self.export_poll_timer.stop();
+                self.export
+                    .show(window, &self.center, ExportPresentationRequest::Abandon);
+                self.navigate_to(window, screen);
+            }
             // 必须停留：功能入口已呈现当前页，不导航
             NavigationDecision::Blocked => {}
             NavigationDecision::Stay => {
@@ -1008,6 +1527,33 @@ impl ProductionEntries {
                 shared
                     .borrow_mut()
                     .handle_orientation_mode_changed(&window, &mode);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_collection_start_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().start_collection(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_collection_report_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().show_collection_report(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_export_start_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                let processing = shared.borrow_mut().start_export(&window);
+                if processing {
+                    ProductionEntries::start_export_polling(&shared, &window);
+                }
             }
         });
 

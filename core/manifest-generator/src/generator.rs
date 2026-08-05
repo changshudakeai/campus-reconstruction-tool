@@ -6,7 +6,7 @@
 
 use shared_domain_types::{CandidateCategory, PlanId};
 
-use crate::manifest::FoundationManifest;
+use crate::manifest::{CandidateFacts, FoundationManifest, ManifestOrientation};
 
 /// 方案信息（由 F9 传入）
 #[derive(Debug, Clone)]
@@ -61,6 +61,26 @@ impl ManifestGenerator {
         manifest_id: impl Into<String>,
         exported_at: impl Into<String>,
     ) -> Result<FoundationManifest, GeneratorError> {
+        self.generate_manifest_with_facts(
+            plan_info,
+            review_decisions,
+            manifest_id,
+            exported_at,
+            None,
+            CandidateFacts::default(),
+        )
+    }
+
+    /// 生成带朝向与候选链事实的完整导出 Manifest。
+    pub fn generate_manifest_with_facts(
+        &self,
+        plan_info: &PlanInfo,
+        review_decisions: &[(CandidateCategory, bool)],
+        manifest_id: impl Into<String>,
+        exported_at: impl Into<String>,
+        orientation: Option<ManifestOrientation>,
+        candidate_facts: CandidateFacts,
+    ) -> Result<FoundationManifest, GeneratorError> {
         // 提取已保留的类别集合
         let included_categories: Vec<CandidateCategory> = review_decisions
             .iter()
@@ -68,7 +88,7 @@ impl ManifestGenerator {
             .map(|(category, _)| *category)
             .collect();
 
-        Ok(FoundationManifest::new(
+        let mut manifest = FoundationManifest::new(
             manifest_id,
             &plan_info.campus_name,
             plan_info.plan_id.to_string(),
@@ -76,7 +96,10 @@ impl ManifestGenerator {
             &plan_info.minecraft_version,
             &included_categories,
             exported_at,
-        ))
+        );
+        manifest.orientation = orientation;
+        manifest.candidate_facts = candidate_facts;
+        Ok(manifest)
     }
 
     /// 生成并写入文件
@@ -94,11 +117,27 @@ impl ManifestGenerator {
         dir_path: impl AsRef<std::path::Path>,
         filename: &str,
     ) -> Result<(), GeneratorError> {
+        self.write_to_file_with(manifest, dir_path, filename, |path, json| {
+            std::fs::write(path, json)
+        })
+    }
+
+    /// 序列化后经调用方提供的窄写入端口写入 manifest。
+    ///
+    /// F9 用此端口把 B17 生成的事实写入受控 staging 文件；B17 仍拥有
+    /// manifest 序列化逻辑，调用方不复制 JSON 结构。
+    pub fn write_to_file_with(
+        &self,
+        manifest: &FoundationManifest,
+        dir_path: impl AsRef<std::path::Path>,
+        filename: &str,
+        write: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), GeneratorError> {
         let json = manifest
             .to_json_pretty()
             .map_err(GeneratorError::Serialization)?;
         let path = dir_path.as_ref().join(filename);
-        std::fs::write(&path, json).map_err(|e| GeneratorError::Io(e, path))
+        write(&path, json.as_bytes()).map_err(|e| GeneratorError::Io(e, path))
     }
 }
 

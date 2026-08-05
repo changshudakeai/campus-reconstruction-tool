@@ -32,9 +32,12 @@ pub mod source;
 
 // 重新导出公共类型，方便 crate 外使用
 pub use error::{AcquisitionError, Result};
-pub use pipeline::{AcquisitionPipeline, CollectionReport};
+pub use pipeline::{AcquisitionBatch, AcquisitionPipeline, CandidateDraft, CollectionReport};
 pub use progress::{
     category_text_key, text_keys, CategoryProgress, CollectionProgressView, ALL_CATEGORIES,
 };
 pub use refresh::{DiffEntry, DiffKind, RefreshDiff};
-pub use source::{BridgeTransport, DataSource, GaodeDataSource, RawEntity};
+pub use source::{
+    BridgeTransport, DataSource, GaodeDataSource, OverpassDataSource, OverpassTransport, RawEntity,
+    SourceGeometry,
+};

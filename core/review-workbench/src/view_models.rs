@@ -96,8 +96,8 @@ pub struct CategoryTabView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CandidateCardView {
-    /// 实体 ID（点击卡片时回传给 `highlight_card`）
-    pub entity_id: String,
+    /// 稳定候选 ID（点击卡片时回传给高亮入口）。
+    pub candidate_id: String,
     /// 卡片标题（原始标签 name，无则实体 ID）
     pub title: String,
     /// 当前三态
@@ -114,8 +114,8 @@ pub struct CandidateCardView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MapObjectView {
-    /// 实体 ID（点击地图对象时回传给 `highlight_map_object`）
-    pub entity_id: String,
+    /// 稳定候选 ID（点击地图对象时回传给高亮入口）。
+    pub candidate_id: String,
     /// 类别（地图按类别着色）
     pub category: CandidateCategory,
     /// 当前三态（剔除态在地图上淡显）
@@ -160,7 +160,7 @@ pub struct WorkbenchView {
     pub info_panel: Option<InfoPanelView>,
     /// 当前勾选数（"已选 {count} 项"插值用）
     pub selected_count: usize,
-    /// 勾选 ≥2 个时自动浮现"[全选][取消全选]"按钮（ADR-0016）
+    /// 勾选 ≥2 个时自动浮现“全选/取消全选”按钮（ADR-0016）。
     pub bulk_buttons_visible: bool,
     /// 等待中的二次确认弹窗（批量剔除 ≥5 项时出现）
     pub pending_confirmation: Option<ConfirmationRequest>,

@@ -104,9 +104,9 @@ fn s1_06_orientation_flow_through_functional_entry() {
     assert_eq!(
         window.get_workspace_completed_steps(),
         1,
-        "未保存不得解锁采集步骤"
+        "未保存不改变边界直出资格"
     );
-    assert_eq!(window.get_workspace_step_locked().row_data(2), Some(true));
+    assert_eq!(window.get_workspace_step_locked().row_data(2), Some(false));
 
     // ── 3. 地图确认朝向：首次设定直接保存（无重算确认）──
     let confirm_two_points =
@@ -375,7 +375,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
     );
     assert_eq!(
         window.get_workspace_step_locked().row_data(2),
-        Some(true),
-        "朝向未完成不得进入采集"
+        Some(false),
+        "朝向重置不应重新锁住边界直出"
     );
 }

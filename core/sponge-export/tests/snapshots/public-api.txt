@@ -9,6 +9,7 @@
 ## Constants
 
 pub const SPONGE_SCHEMATIC_VERSION: i32 = 3
+pub const MINECRAFT_26_1_2_PROFILE: SchematicProfile
 pub const PINNED_DATA_VERSION: i32 = 3955
 
 ## Structures
@@ -20,6 +21,8 @@ pub struct VoxelModel {
     pub palette: Vec<String>,
     pub blocks: Vec<u16>,
 }
+
+pub struct SchematicProfile { pub minecraft_version: &'static str, pub data_version: i32 }
 
 pub struct SchematicInspection {
     pub sponge_version: i32,
@@ -37,8 +40,11 @@ pub struct SchematicInspection {
 ## Functions
 
 pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), anyhow::Error>
+pub fn write_schematic_with_profile(path: &Path, name: &str, model: &VoxelModel, profile: SchematicProfile) -> Result<(), anyhow::Error>
+pub fn encode_schematic(name: &str, model: &VoxelModel, profile: SchematicProfile) -> Result<Vec<u8>, anyhow::Error>
 pub fn inspect_schematic(path: &Path) -> Result<SchematicInspection, anyhow::Error>
 pub fn verify_worldedit_import_contract(path: &Path) -> Result<SchematicInspection, anyhow::Error>
+pub fn verify_schematic_profile(path: &Path, profile: SchematicProfile) -> Result<SchematicInspection, anyhow::Error>
 
 ## Traits & Implementations
 

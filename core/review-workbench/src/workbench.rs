@@ -6,7 +6,7 @@
 //! - [`ReviewWorkbench::seal`] 封账时把最终三态一次性批量写回 B2，
 //!   写回失败则封账不生效（评审状态保持可改）。
 
-use data_persistence::{Database, RawObservationsApi, ReviewDecision, ReviewDecisionsApi};
+use data_persistence::{CandidateProjectionsApi, Database, ReviewDecision, ReviewDecisionsApi};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::path::Path;
 
@@ -46,19 +46,17 @@ impl ReviewWorkbench {
 
     /// 进入评审台：向 B2 一次性读入候选集到内存。
     ///
-    /// 候选来自原始观测表（数据粮仓），初始态一律"待定"（ADR-0022）；
+    /// 候选只来自当前已发布且可评审的 B2 投影，初始态一律"待定"（ADR-0022）；
     /// 若评审终态表已有本方案的记录（上一轮封账结果），按候选标识对回。
     pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self> {
         let plan_key = plan_id.to_string();
-        let observations = db.list_raw_observations(&plan_key)?;
-        let mut candidates: Vec<Candidate> = observations
-            .iter()
-            .map(Candidate::from_observation)
-            .collect();
+        let projections = db.list_reviewable_candidate_projections(&plan_key)?;
+        let mut candidates: Vec<Candidate> =
+            projections.iter().map(Candidate::from_projection).collect();
 
         // 上一轮封账写回的终态对回内存（没有记录的保持"待定"）
         for decision in db.list_review_decisions(&plan_key)? {
-            let key = CandidateKey::new(decision.entity_type, decision.entity_id.clone());
+            let key = CandidateKey::new(decision.candidate_id.clone());
             if let Some(candidate) = candidates.iter_mut().find(|c| c.key == key) {
                 candidate.state = decision.review_state;
             }
@@ -66,7 +64,7 @@ impl ReviewWorkbench {
 
         let active_category = CATEGORY_ORDER
             .into_iter()
-            .find(|category| candidates.iter().any(|c| c.key.category == *category))
+            .find(|category| candidates.iter().any(|c| c.category == *category))
             .unwrap_or(CandidateCategory::Building);
 
         Ok(Self {
@@ -186,21 +184,21 @@ impl ReviewWorkbench {
         Ok(candidate.selected)
     }
 
-    /// 点"[全选]"：当前激活类别的所有卡片勾选
+    /// 点“全选”：当前激活类别的所有卡片勾选。
     pub fn select_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
-            if candidate.key.category == category {
+            if candidate.category == category {
                 candidate.selected = true;
             }
         }
     }
 
-    /// 点"[取消全选]"：当前激活类别的所有卡片取消勾选
+    /// 点“取消全选”：当前激活类别的所有卡片取消勾选。
     pub fn deselect_all_in_active_category(&mut self) {
         let category = self.active_category;
         for candidate in &mut self.candidates {
-            if candidate.key.category == category {
+            if candidate.category == category {
                 candidate.selected = false;
             }
         }
@@ -211,7 +209,7 @@ impl ReviewWorkbench {
         self.candidates.iter().filter(|c| c.selected).count()
     }
 
-    /// 勾选 ≥2 个时自动浮现"[全选][取消全选]"按钮（ADR-0016 交互规则）
+    /// 勾选 ≥2 个时自动浮现“全选/取消全选”按钮（ADR-0016 交互规则）。
     pub fn bulk_buttons_visible(&self) -> bool {
         self.selected_count() >= 2
     }
@@ -231,10 +229,12 @@ impl ReviewWorkbench {
     /// 高亮一个候选：点地图上的对象高亮对应卡片，点卡片高亮地图对象——
     /// 两个方向共用同一份高亮状态（双向联动）。
     pub fn highlight(&mut self, key: &CandidateKey) -> Result<()> {
-        if !self.candidates.iter().any(|c| &c.key == key) {
-            return Err(Error::CandidateNotFound(key.to_string()));
-        }
-        self.highlighted = Some(key.clone());
+        let candidate = self
+            .candidates
+            .iter()
+            .find(|candidate| &candidate.key == key)
+            .ok_or_else(|| Error::CandidateNotFound(key.to_string()))?;
+        self.highlighted = Some(candidate.key.clone());
         Ok(())
     }
 
@@ -256,8 +256,7 @@ impl ReviewWorkbench {
             .candidates
             .iter()
             .map(|c| SessionEntry {
-                category: c.key.category,
-                entity_id: c.key.entity_id.clone(),
+                candidate_id: c.key.candidate_id.clone(),
                 state: c.state.to_identifier().to_owned(),
                 selected: c.selected,
             })
@@ -268,7 +267,7 @@ impl ReviewWorkbench {
     /// 恢复评审：从临时文件把状态对回内存。
     ///
     /// 方案 ID 不匹配时拒绝（防串档）；文件里对不上现有候选的条目安静跳过
-    ///（候选集以原始观测为事实来源）。
+    ///（候选集以 B2 已发布投影为事实来源）。
     pub fn restore_session(&mut self, path: &Path) -> Result<()> {
         self.ensure_not_sealed()?;
         let snapshot = SessionSnapshot::load_from_file(path)?;
@@ -280,13 +279,22 @@ impl ReviewWorkbench {
         }
         for entry in &snapshot.entries {
             let state = SessionSnapshot::parse_state(entry)?;
-            let key = CandidateKey::new(entry.category, entry.entity_id.clone());
-            if let Some(candidate) = self.candidates.iter_mut().find(|c| c.key == key) {
+            if let Some(candidate) = self
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.key.candidate_id == entry.candidate_id)
+            {
                 candidate.state = state;
                 candidate.selected = entry.selected;
             }
         }
-        self.active_category = snapshot.active_category;
+        if self
+            .candidates
+            .iter()
+            .any(|candidate| candidate.category == snapshot.active_category)
+        {
+            self.active_category = snapshot.active_category;
+        }
         Ok(())
     }
 
@@ -299,7 +307,7 @@ impl ReviewWorkbench {
             let count = self
                 .candidates
                 .iter()
-                .filter(|c| c.key.category == category && c.state.is_keep())
+                .filter(|c| c.category == category && c.state.is_keep())
                 .count();
             if count > 0 {
                 keep_by_category.push((category, count));
@@ -333,8 +341,8 @@ impl ReviewWorkbench {
             .map(|c| {
                 ReviewDecision::new(
                     self.plan_id.clone(),
-                    c.key.category,
-                    c.key.entity_id.clone(),
+                    c.category,
+                    c.key.candidate_id.clone(),
                     c.state,
                 )
             })
@@ -362,7 +370,7 @@ impl ReviewWorkbench {
                 count: self
                     .candidates
                     .iter()
-                    .filter(|c| c.key.category == category)
+                    .filter(|c| c.category == category)
                     .count(),
                 active: category == self.active_category,
             })
@@ -371,9 +379,9 @@ impl ReviewWorkbench {
         let cards = self
             .candidates
             .iter()
-            .filter(|c| c.key.category == self.active_category)
+            .filter(|c| c.category == self.active_category)
             .map(|c| CandidateCardView {
-                entity_id: c.key.entity_id.clone(),
+                candidate_id: c.key.candidate_id.clone(),
                 title: c.title.clone(),
                 state: c.state,
                 state_key: state_text_key(c.state),
@@ -386,8 +394,8 @@ impl ReviewWorkbench {
             .candidates
             .iter()
             .map(|c| MapObjectView {
-                entity_id: c.key.entity_id.clone(),
-                category: c.key.category,
+                candidate_id: c.key.candidate_id.clone(),
+                category: c.category,
                 state: c.state,
                 highlighted: self.highlighted.as_ref() == Some(&c.key),
             })
@@ -400,7 +408,7 @@ impl ReviewWorkbench {
                 .map(|c| InfoPanelView {
                     title: c.title.clone(),
                     category_label_key: text_keys::INFO_CATEGORY,
-                    category_key: category_text_key(c.key.category),
+                    category_key: category_text_key(c.category),
                     tags_label_key: text_keys::INFO_TAGS,
                     tags: c.tags.clone(),
                     state_label_key: text_keys::STATE_LABEL,

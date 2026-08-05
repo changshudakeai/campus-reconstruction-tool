@@ -4,13 +4,16 @@
 # 本文件记录 F4 数据采集流水线的公开 API 结构
 # 任何增删都会在此文件中体现，PR diff 可见
 #
-# 最后更新: 2026-07-26 (T13 实施)
+# 最后更新: 2026-08-01 (ADR-0040 来源几何采集批次)
 
 ## Structures
 
-pub struct RawEntity { pub entity_id: String, pub name: String, pub tags: TagMap, pub source_payload: serde_json::Value }
+pub struct RawEntity { pub entity_id: String, pub name: String, pub tags: TagMap, pub source_payload: serde_json::Value, pub source_geometry: Option<SourceGeometry>, pub geometry_part_id: String }
 pub struct GaodeDataSource { .. }
+pub struct OverpassDataSource { .. }
 pub struct AcquisitionPipeline { .. }
+pub struct CandidateDraft { pub raw_observation_id: String, pub data_source_tag: String, pub source_entity_id: String, pub geometry_part_id: String, pub category: CandidateCategory, pub name: String, pub source_data: serde_json::Value, pub source_geometry: Option<SourceGeometry> }
+pub struct AcquisitionBatch { pub plan_id: String, pub source_tag: String, pub raw_observations: Vec<RawObservation>, pub candidate_drafts: Vec<CandidateDraft>, pub category_counts: BTreeMap<CandidateCategory, usize>, pub fallback_count: usize, pub diff: RefreshDiff, pub total_source_object_count: usize, pub geometry_object_count: usize, pub missing_geometry_object_count: usize }
 pub struct CollectionReport { pub plan_id: String, pub source_tag: String, pub total: usize, pub written: usize, pub category_counts: BTreeMap<CandidateCategory, usize>, pub fallback_count: usize, pub diff: RefreshDiff }
 pub struct DiffEntry { pub category: CandidateCategory, pub entity_id: String, pub kind: DiffKind }
 pub struct RefreshDiff { .. }
@@ -21,6 +24,7 @@ pub struct CollectionProgressView { pub title_key: &'static str, pub status_key:
 
 pub type Result<T> = std::result::Result<T, AcquisitionError>
 pub type BridgeTransport = Box<dyn Fn(&Boundary) -> std::result::Result<String, String> + Send + Sync>
+pub type OverpassTransport = BridgeTransport
 
 ## Constants
 
@@ -41,6 +45,7 @@ SOURCE_GAODE = "collection.source_gaode"
 ## Enums
 
 pub enum DiffKind { Added, Updated, Unchanged }
+pub enum SourceGeometry { Point((f64, f64)), LineString(Vec<(f64, f64)>), Polygon(Vec<(f64, f64)>) }
 pub enum AcquisitionError {                                #[non_exhaustive]
     EmptyBoundary,
     SourceUnreachable { source_tag: String, message: String },
@@ -58,6 +63,7 @@ pub trait DataSource {
 
 impl RawEntity {
     pub fn new(entity_id: impl Into<String>, name: impl Into<String>, tags: TagMap, source_payload: serde_json::Value) -> Self
+    pub fn with_geometry(...) -> Self
     pub fn to_source_data(&self) -> serde_json::Value
 }
 
@@ -66,12 +72,15 @@ impl GaodeDataSource {
     pub fn new(transport: BridgeTransport) -> Self
 }
 impl DataSource for GaodeDataSource
+impl OverpassDataSource { pub const SOURCE_TAG: &'static str; pub fn new(transport: OverpassTransport) -> Self }
+impl DataSource for OverpassDataSource
 
 impl AcquisitionPipeline {
     pub fn new() -> Result<Self>
     pub fn with_engine(engine: ClassifyEngine) -> Self
     pub fn engine(&self) -> &ClassifyEngine
     pub fn collect(&self, db: &mut Database, plan_id: &PlanId, boundary: &Boundary, source: &dyn DataSource) -> Result<CollectionReport>
+    pub fn acquire_batch(&self, db: &mut Database, plan_id: &PlanId, boundary: &Boundary, source: &dyn DataSource) -> Result<AcquisitionBatch>
 }
 
 impl DiffKind {

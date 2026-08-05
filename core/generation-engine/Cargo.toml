@@ -22,7 +22,7 @@ description = "B18 初始校园生成引擎：Arnis 建筑规则 + 六类生成�
 # B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）
 shared-domain-types = { workspace = true }
 # B17 用料表（只读调用：按 MC 版本取方块并验证）
-manifest-generator = { path = "../manifest-generator" }
+manifest-generator = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 

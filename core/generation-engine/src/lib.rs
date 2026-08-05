@@ -20,9 +20,10 @@ pub use building::{build_model, estimate_height, normalize_roof_shape, BuildingC
 pub use materials::{MaterialError, MaterialRole, MaterialsAdapter};
 pub use model::{Block, BlockModel, BlockPosition, BoundingBox};
 pub use rules::{
-    generate_other, generate_other_rail, generate_road, generate_sports_court, generate_vegetation,
-    generate_water, AreaInput, BuildingGenerator, GenerationError, Generator, OtherCandidate,
-    OtherGenerator, RoadGenerator, SportsGenerator, VegetationGenerator, WaterGenerator,
+    generate_flat_ground, generate_other, generate_other_rail, generate_road,
+    generate_sports_court, generate_vegetation, generate_water, AreaInput, BuildingGenerator,
+    GenerationError, Generator, OtherCandidate, OtherGenerator, RoadGenerator, SportsGenerator,
+    VegetationGenerator, WaterGenerator,
 };
 
 /// 生成引擎门面：持有版本绑定的用料适配器，按类别派发生成规则。
@@ -57,6 +58,21 @@ impl GenerationEngine {
     ) -> Result<BlockModel, GenerationError> {
         building::build_model(candidate, &self.adapter)
     }
+
+    /// 生成边界直出所需的最小平整场地。
+    pub fn generate_flat_ground(
+        &self,
+        width_blocks: usize,
+        length_blocks: usize,
+    ) -> Result<BlockModel, GenerationError> {
+        let width = i32::try_from(width_blocks).map_err(|_| {
+            GenerationError::InvalidParameter("平整场地宽度超出生成引擎范围".to_owned())
+        })?;
+        let length = i32::try_from(length_blocks).map_err(|_| {
+            GenerationError::InvalidParameter("平整场地长度超出生成引擎范围".to_owned())
+        })?;
+        generate_flat_ground(width, length, &self.adapter)
+    }
 }
 
 #[cfg(test)]
@@ -78,5 +94,13 @@ mod tests {
         let candidate = BuildingCandidate::new("b", 10, 10).with_height_m(15.0);
         let model = engine.generate_building(&candidate).unwrap();
         assert_eq!(model.bounding_box().unwrap().height(), 15);
+    }
+
+    #[test]
+    fn engine_generates_boundary_ground_via_facade() {
+        let engine = GenerationEngine::new(manifest_generator::MaterialTable::v1_20_4_school());
+        let model = engine.generate_flat_ground(3, 2).unwrap();
+        assert_eq!(model.block_count(), 6);
+        assert!(model.contains_block_id("minecraft:stone_bricks"));
     }
 }

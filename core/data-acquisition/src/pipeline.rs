@@ -13,7 +13,7 @@ use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 
 use crate::error::{AcquisitionError, Result};
 use crate::refresh::{DiffEntry, DiffKind, RefreshDiff};
-use crate::source::DataSource;
+use crate::source::{DataSource, SourceGeometry};
 
 /// 一次采集的结果报告（进度视图与差异展示的数据来源）
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +32,48 @@ pub struct CollectionReport {
     pub fallback_count: usize,
     /// 相对上次采集的增量差异（新增/更新/未变）
     pub diff: RefreshDiff,
+}
+
+/// F4 交给 A1 的完整、尚未发布候选投影的采集批次。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcquisitionBatch {
+    pub plan_id: String,
+    pub source_tag: String,
+    pub raw_observations: Vec<RawObservation>,
+    pub candidate_drafts: Vec<CandidateDraft>,
+    pub category_counts: BTreeMap<CandidateCategory, usize>,
+    pub fallback_count: usize,
+    pub diff: RefreshDiff,
+    pub total_source_object_count: usize,
+    pub geometry_object_count: usize,
+    pub missing_geometry_object_count: usize,
+}
+
+/// 采集来源派生的候选草稿；资格与验证结论留给 A1/B14。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateDraft {
+    pub raw_observation_id: String,
+    pub data_source_tag: String,
+    pub source_entity_id: String,
+    pub geometry_part_id: String,
+    pub category: CandidateCategory,
+    pub name: String,
+    pub source_data: serde_json::Value,
+    pub source_geometry: Option<SourceGeometry>,
+}
+
+impl AcquisitionBatch {
+    fn report(&self, written: usize) -> CollectionReport {
+        CollectionReport {
+            plan_id: self.plan_id.clone(),
+            source_tag: self.source_tag.clone(),
+            total: self.total_source_object_count,
+            written,
+            category_counts: self.category_counts.clone(),
+            fallback_count: self.fallback_count,
+            diff: self.diff.clone(),
+        }
+    }
 }
 
 /// 采集流水线：持有 B13 归类引擎，对任意 [`DataSource`] 执行缝 3 走线
@@ -70,34 +112,44 @@ impl AcquisitionPipeline {
         boundary: &Boundary,
         source: &dyn DataSource,
     ) -> Result<CollectionReport> {
+        let batch = self.acquire_batch(db, plan_id, boundary, source)?;
+        let written = db.write_raw_observations(&batch.raw_observations)?;
+        Ok(batch.report(written))
+    }
+
+    /// 采集、分类与增量比对，但不发布任何候选投影或调用其它功能模块。
+    pub fn acquire_batch(
+        &self,
+        db: &mut Database,
+        plan_id: &PlanId,
+        boundary: &Boundary,
+        source: &dyn DataSource,
+    ) -> Result<AcquisitionBatch> {
         if boundary.is_empty() {
             return Err(AcquisitionError::EmptyBoundary);
         }
-
         let entities = source.fetch_raw_entities(boundary)?;
         let plan_key = plan_id.to_string();
-
-        let mut observations = Vec::new();
+        let mut raw_observations = Vec::new();
+        let mut candidate_drafts = Vec::new();
         let mut diff_entries = Vec::new();
-        let mut category_counts: BTreeMap<CandidateCategory, usize> = BTreeMap::new();
-        let mut fallback_count = 0usize;
-
+        let mut category_counts = BTreeMap::new();
+        let mut fallback_count = 0;
         for entity in &entities {
             let classification = self.engine.classify(&entity.tags);
-            if classification.is_fallback {
-                fallback_count += 1;
-            }
+            fallback_count += usize::from(classification.is_fallback);
             let source_data = entity.to_source_data();
-            let digest = RawObservation::compute_digest(&source_data);
-
-            // 增量刷新检测：写库前与上次采集的内容指纹对照
             let kind = match db.find_raw_observation(
                 &plan_key,
                 classification.category,
                 &entity.entity_id,
             )? {
                 None => DiffKind::Added,
-                Some(existing) if existing.digest == digest => DiffKind::Unchanged,
+                Some(existing)
+                    if existing.digest == RawObservation::compute_digest(&source_data) =>
+                {
+                    DiffKind::Unchanged
+                }
                 Some(_) => DiffKind::Updated,
             };
             diff_entries.push(DiffEntry {
@@ -106,24 +158,37 @@ impl AcquisitionPipeline {
                 kind,
             });
             *category_counts.entry(classification.category).or_insert(0) += 1;
-
-            observations.push(RawObservation::new(
+            let observation = RawObservation::new(
                 &plan_key,
                 classification.category,
                 &entity.entity_id,
-                source_data,
+                source_data.clone(),
                 source.source_tag(),
-            ));
+            );
+            candidate_drafts.push(CandidateDraft {
+                raw_observation_id: observation.id.clone(),
+                data_source_tag: source.source_tag().to_owned(),
+                source_entity_id: entity.entity_id.clone(),
+                geometry_part_id: entity.geometry_part_id.clone(),
+                category: classification.category,
+                name: entity.name.clone(),
+                source_data,
+                source_geometry: entity.source_geometry.clone(),
+            });
+            raw_observations.push(observation);
         }
-
-        // 数据粮仓落库：单事务原子提交，未变的行由 B2 原样保留
-        let written = db.write_raw_observations(&observations)?;
-
-        Ok(CollectionReport {
+        let geometry_object_count = candidate_drafts
+            .iter()
+            .filter(|draft| draft.source_geometry.is_some())
+            .count();
+        Ok(AcquisitionBatch {
             plan_id: plan_key,
             source_tag: source.source_tag().to_owned(),
-            total: entities.len(),
-            written,
+            total_source_object_count: entities.len(),
+            missing_geometry_object_count: entities.len() - geometry_object_count,
+            geometry_object_count,
+            raw_observations,
+            candidate_drafts,
             category_counts,
             fallback_count,
             diff: RefreshDiff::new(diff_entries),

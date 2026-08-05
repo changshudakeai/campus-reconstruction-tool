@@ -26,7 +26,7 @@ pub struct OtherGenerator;
 
 ## Enums
 
-pub enum MaterialRole { BuildingFoundation, BuildingWall, BuildingWindow, BuildingFloor, BuildingRoof, BuildingEntrance, BuildingAccent, Road, Water, TreeTrunk, TreeLeaves, SportsCourt, SportsLine, OtherRail }
+pub enum MaterialRole { BuildingFoundation, FoundationGround, BuildingWall, BuildingWindow, BuildingFloor, BuildingRoof, BuildingEntrance, BuildingAccent, Road, Water, TreeTrunk, TreeLeaves, SportsCourt, SportsLine, OtherRail }
 pub enum MaterialError { MaterialUnavailable(String) }
 pub enum GenerationError { MaterialNotAvailable(String), InvalidParameter(String), UnsupportedTagFamily(String) }
 impl From<MaterialError> for GenerationError
@@ -56,6 +56,7 @@ pub fn generate_vegetation(mat: &MaterialsAdapter) -> Result<BlockModel, Generat
 pub fn generate_sports_court(w: i32, l: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
 pub fn generate_other_rail(length: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
 pub fn generate_other(candidate: &OtherCandidate, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
+pub fn generate_flat_ground(w: i32, l: i32, mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError>
 
 ## Impl blocks
 
@@ -64,6 +65,7 @@ impl GenerationEngine {
     pub fn version(&self) -> manifest_generator::MinecraftVersion
     pub fn materials(&self) -> &MaterialsAdapter
     pub fn generate_building(&self, candidate: &BuildingCandidate) -> Result<BlockModel, GenerationError>
+    pub fn generate_flat_ground(&self, width_blocks: usize, length_blocks: usize) -> Result<BlockModel, GenerationError>
 }
 
 impl MaterialsAdapter {

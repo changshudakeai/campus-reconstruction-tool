@@ -140,6 +140,33 @@ fn review_decision_same_key_in_one_batch_last_write_wins() {
 }
 
 #[test]
+fn review_decision_category_changes_without_duplicating_candidate_identity() {
+    let mut db = Database::open_in_memory().unwrap();
+    let candidate_id = "overpass:way/1:outer";
+
+    db.batch_update_review_decisions(&[ReviewDecision::new(
+        "plan-1",
+        CandidateCategory::Building,
+        candidate_id,
+        ReviewState::Keep,
+    )])
+    .unwrap();
+    db.batch_update_review_decisions(&[ReviewDecision::new(
+        "plan-1",
+        CandidateCategory::Road,
+        candidate_id,
+        ReviewState::Remove,
+    )])
+    .unwrap();
+
+    let rows = db.list_review_decisions("plan-1").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].category, CandidateCategory::Road);
+    assert_eq!(rows[0].candidate_id, candidate_id);
+    assert_eq!(rows[0].review_state, ReviewState::Remove);
+}
+
+#[test]
 fn review_decision_reseal_updates_state() {
     let mut db = Database::open_in_memory().unwrap();
     db.batch_update_review_decisions(&[ReviewDecision::new(

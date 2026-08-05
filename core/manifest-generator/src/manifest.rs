@@ -17,6 +17,41 @@ pub struct CategoryStatus {
     pub included: bool,
 }
 
+/// 完整导出实际采用的朝向来源。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestOrientationSource {
+    /// 用户没有自定义朝向，完整导出用例采用地图正北。
+    MapNorth,
+    /// 用户明确提供了朝向。
+    Custom,
+}
+
+/// Manifest 中记录的实际朝向。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestOrientation {
+    /// 方位角（正北为 0°，顺时针增加）。
+    pub degree: f32,
+    /// 朝向来源；MapNorth 不代表用户设置了自定义朝向。
+    pub source: ManifestOrientationSource,
+}
+
+/// 候选链事实：不因缺少采集/评审而伪造记录。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateFacts {
+    /// B2/B14 候选投影数量。
+    #[serde(default)]
+    pub candidate_projection_count: usize,
+    /// 已存在的评审决定数量。
+    #[serde(default)]
+    pub review_decision_count: usize,
+    /// 本次实际保留候选数量。
+    #[serde(default)]
+    pub retained_candidate_count: usize,
+}
+
 impl CategoryStatus {
     pub fn new(name: impl Into<String>, display_name: impl Into<String>, included: bool) -> Self {
         Self {
@@ -50,6 +85,12 @@ pub struct FoundationManifest {
     pub exported_at: String,
     /// 类别状态列表（含包含/缺失信息）
     pub categories: Vec<CategoryStatus>,
+    /// 完整导出实际采用的朝向；旧调用方未提供时保持 None。
+    #[serde(default)]
+    pub orientation: Option<ManifestOrientation>,
+    /// 候选采集与评审事实。
+    #[serde(default)]
+    pub candidate_facts: CandidateFacts,
 }
 
 impl FoundationManifest {
@@ -104,6 +145,8 @@ impl FoundationManifest {
             minecraft_version,
             exported_at: exported_at.into(),
             categories,
+            orientation: None,
+            candidate_facts: CandidateFacts::default(),
         }
     }
 

@@ -209,11 +209,15 @@ impl PresentationAdapter<SettingsRequest, SettingsPageState> for SettingsProduct
                 );
                 let page = settings_snapshot_page(&injector, injector.l10n());
                 match result {
-                    Ok(()) => Presentation::succeeded(page).with_notification(info_fact(
-                        injector.l10n(),
-                        "settings.save_success",
-                        "settings.save_general_success_body",
-                    )),
+                    Ok(()) => {
+                        let flow = injector.export_flow();
+                        flow.sync_settings(injector.settings());
+                        Presentation::succeeded(page).with_notification(info_fact(
+                            injector.l10n(),
+                            "settings.save_success",
+                            "settings.save_general_success_body",
+                        ))
+                    }
                     Err(error) => Presentation::failed(page)
                         .with_notification(error_fact(injector.l10n(), &error.to_string())),
                 }

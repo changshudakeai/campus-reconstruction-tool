@@ -1,0 +1,15 @@
+[package]
+name = "geometry-validator"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "B14 采集候选几何校验与安全修复（ADR-0032）"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+public-api.workspace = true

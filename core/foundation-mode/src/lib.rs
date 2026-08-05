@@ -1,7 +1,7 @@
 //! B5 地基模式 —— 边界绘制与朝向设定引擎
 //!
-//! **核心职责**（T14 / ADR-0012）：在高德地图上圈画方案边界、画两点参考线
-//! 设定朝向；朝向为必选步骤无默认值；修改朝向触发重算并明确告知影响范围。
+//! **核心职责**（T14 / ADR-0012）：在高德地图上圈画方案边界、可选地画两点参考线
+//! 设定朝向；未设置朝向时由完整导出用例采用地图正北；修改朝向触发重算并明确告知影响范围。
 //!
 //! ## 模块组织
 //!
@@ -25,6 +25,7 @@
 //! B3 自有 `OsmElement` 类型而归 B3 gaode-client（ADR-0029 允许 B3/B5 任一）。
 //! 错误文案暂为中文硬编码，待壳层经 B6 解析文本键。
 
+pub mod boundary_export;
 pub mod boundary_ui;
 pub mod coordinate;
 pub mod orientation;
@@ -32,6 +33,10 @@ pub mod validation;
 pub mod warning;
 
 // 重新导出公共类型，方便 crate 外使用
+pub use boundary_export::{
+    boundary_footprint, boundary_footprint_with_orientation, BoundaryFootprint,
+    BoundaryFootprintError,
+};
 pub use boundary_ui::{BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex};
 pub use coordinate::{CoordinateConverter, McBlockCoord, MercatorCoord, PlaneMileUnit};
 pub use orientation::{OrientationCalculator, OrientationLine, Point2D};

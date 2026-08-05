@@ -67,10 +67,24 @@ use sha2::{Digest, Sha256};
 
 /// Sponge Schematic specification version emitted by every export.
 pub const SPONGE_SCHEMATIC_VERSION: i32 = 3;
-/// NBT data version pinned by the Minecraft Java Edition 26.1.2 compatibility profile.
-pub const PINNED_DATA_VERSION: i32 = 3955;
+/// Minecraft Java Edition 26.1.2 compatibility profile.
+pub const MINECRAFT_26_1_2_PROFILE: SchematicProfile = SchematicProfile {
+    minecraft_version: "26.1.2",
+    data_version: 3955,
+};
+/// Backward-compatible name for the only production profile.
+pub const PINNED_DATA_VERSION: i32 = MINECRAFT_26_1_2_PROFILE.data_version;
 
 static EXPORT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Sponge output facts that must stay paired with the target Minecraft version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchematicProfile {
+    /// Canonical Minecraft version represented by the NBT DataVersion.
+    pub minecraft_version: &'static str,
+    /// NBT DataVersion written to the `.schem` root.
+    pub data_version: i32,
+}
 
 /// A 3D voxel model suitable for Sponge Schematic export.
 ///
@@ -173,8 +187,31 @@ fn encode_varint(mut value: u32, output: &mut Vec<i8>) {
     }
 }
 
-/// Writes a Sponge V3 .schem file to the given path.
+/// Writes a Sponge V3 .schem file using the product's 26.1.2 profile.
 pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<(), anyhow::Error> {
+    write_schematic_with_profile(path, name, model, MINECRAFT_26_1_2_PROFILE)
+}
+
+/// Writes a Sponge V3 `.schem` file with an explicitly selected profile.
+pub fn write_schematic_with_profile(
+    path: &Path,
+    name: &str,
+    model: &VoxelModel,
+    profile: SchematicProfile,
+) -> Result<(), anyhow::Error> {
+    let compressed = encode_schematic(name, model, profile)?;
+    publish_atomically(path, &compressed)
+}
+
+/// Encodes a validated voxel model without deciding where it is published.
+///
+/// F9 uses this B4 encoder to write a controlled staging file through its
+/// injectable artifact filesystem before publishing the manifest/file pair.
+pub fn encode_schematic(
+    name: &str,
+    model: &VoxelModel,
+    profile: SchematicProfile,
+) -> Result<Vec<u8>, anyhow::Error> {
     model.validate().map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Build the Sponge V3 structure with fastnbt::Value compounds
@@ -219,7 +256,7 @@ pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<()
     );
     schematic.insert(
         "DataVersion".to_string(),
-        fastnbt::Value::Int(PINNED_DATA_VERSION),
+        fastnbt::Value::Int(profile.data_version),
     );
     schematic.insert("Metadata".to_string(), fastnbt::Value::Compound(metadata));
     schematic.insert(
@@ -250,9 +287,7 @@ pub fn write_schematic(path: &Path, name: &str, model: &VoxelModel) -> Result<()
     let nbt = fastnbt::to_bytes(&fastnbt::Value::Compound(root))?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
     encoder.write_all(&nbt)?;
-    let compressed = encoder.finish()?;
-
-    publish_atomically(path, &compressed)
+    Ok(encoder.finish()?)
 }
 
 /// Inspection result after reading a .schem file.
@@ -427,6 +462,14 @@ fn get_byte_array(
 
 /// Verifies the file is valid for WorldEdit `//schem load` against the pinned profile.
 pub fn verify_worldedit_import_contract(path: &Path) -> Result<SchematicInspection, anyhow::Error> {
+    verify_schematic_profile(path, MINECRAFT_26_1_2_PROFILE)
+}
+
+/// Verifies a `.schem` file against an explicit Minecraft compatibility profile.
+pub fn verify_schematic_profile(
+    path: &Path,
+    profile: SchematicProfile,
+) -> Result<SchematicInspection, anyhow::Error> {
     if path.extension().is_none_or(|ext| ext != "schem") {
         return Err(anyhow::anyhow!(".schem extension required"));
     }
@@ -438,10 +481,10 @@ pub fn verify_worldedit_import_contract(path: &Path) -> Result<SchematicInspecti
             inspection.sponge_version
         ));
     }
-    if inspection.data_version != PINNED_DATA_VERSION {
+    if inspection.data_version != profile.data_version {
         return Err(anyhow::anyhow!(
             "expected DataVersion {}, found {}",
-            PINNED_DATA_VERSION,
+            profile.data_version,
             inspection.data_version
         ));
     }
@@ -472,7 +515,7 @@ fn publish_atomically(path: &Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
     let mut moved_previous = false;
     let mut published = false;
 
-    let result = (|| {
+    let result = (|| -> Result<(), anyhow::Error> {
         let mut file = File::create(&stage)?;
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -482,13 +525,7 @@ fn publish_atomically(path: &Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
             moved_previous = true;
         }
 
-        if let Err(error) = fs::rename(&stage, path) {
-            if moved_previous {
-                let _ = fs::rename(&backup, path);
-                moved_previous = false;
-            }
-            return Err(error.into());
-        }
+        fs::rename(&stage, path)?;
         published = true;
 
         if moved_previous {
@@ -498,19 +535,55 @@ fn publish_atomically(path: &Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
         Ok(())
     })();
 
-    if result.is_err() {
-        let _ = fs::remove_file(&stage);
-        if published {
-            let _ = fs::remove_file(path);
-        }
-        if moved_previous {
-            let _ = fs::rename(&backup, path);
-        } else {
-            let _ = fs::remove_file(&backup);
+    let Err(primary) = result else {
+        return Ok(());
+    };
+
+    let mut recovery = Vec::new();
+    if let Err(error) = remove_if_present(&stage) {
+        recovery.push(format!(
+            "remove staging {} failed: {error}",
+            stage.display()
+        ));
+    }
+    if published {
+        if let Err(error) = remove_if_present(path) {
+            recovery.push(format!(
+                "remove published {} failed: {error}",
+                path.display()
+            ));
         }
     }
+    if moved_previous {
+        if let Err(error) = fs::rename(&backup, path) {
+            recovery.push(format!(
+                "restore previous {} failed: {error}",
+                path.display()
+            ));
+        }
+    } else if let Err(error) = remove_if_present(&backup) {
+        recovery.push(format!(
+            "remove backup {} failed: {error}",
+            backup.display()
+        ));
+    }
 
-    result
+    if recovery.is_empty() {
+        Err(primary)
+    } else {
+        Err(anyhow::anyhow!(
+            "publish failed: {primary}; recovery failed: {}",
+            recovery.join("; ")
+        ))
+    }
+}
+
+fn remove_if_present(path: &Path) -> Result<(), std::io::Error> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]

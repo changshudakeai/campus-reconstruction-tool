@@ -36,19 +36,19 @@ CREATE INDEX idx_raw_observations_digest ON raw_observations(digest);
 -- ============================================
 --
 -- 仅在导出封账时批量写入；评审期间零写库。
--- 主键组合：plan_id + entity_type + entity_id
+-- 主键组合：plan_id + candidate_id；category 是候选的当前可变属性。
 -- plan_id 与原始观测表一样是弱引用：方案删除的清理策略由后续
 -- 方案管理 API 统一处理（原始观测永不删）。
 
 CREATE TABLE review_decisions (
     plan_id        TEXT NOT NULL,
-    entity_type    TEXT NOT NULL CHECK(entity_type IN ('Building', 'Road', 'Water', 'Vegetation', 'Sports', 'Other')),
-    entity_id      TEXT NOT NULL,
+    category       TEXT NOT NULL CHECK(category IN ('Building', 'Road', 'Water', 'Vegetation', 'Sports', 'Other')),
+    candidate_id   TEXT NOT NULL,
     review_state   TEXT NOT NULL CHECK(review_state IN ('pending', 'keep', 'remove')),  -- 三态
     reviewer_id    TEXT,                                                    -- 可选 reviewer ID（当前版本可填 "system" 或留空）
     updated_at     TEXT NOT NULL DEFAULT (datetime('now')),                -- 最后修改时间
 
-    PRIMARY KEY (plan_id, entity_type, entity_id)
+    PRIMARY KEY (plan_id, candidate_id)
 );
 
 CREATE INDEX idx_review_decisions_state ON review_decisions(review_state);

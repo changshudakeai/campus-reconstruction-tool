@@ -5,7 +5,7 @@
 # 导出失败回滚（封账失效、评审恢复可改）+ 成功跳转。
 # 依据 ADR-0016（评审交互三阶段）+ ADR-0021（弹窗铁律）+ ADR-0022（封账语义）。
 #
-# ⚖️ 本依赖段即白名单：F9 依赖 B1/B4/B6/B7/B18，不得依赖其他 F* 功能模块
+# ⚖️ 本依赖段即白名单：F9 依赖 B1/B4/B5/B6/B7/B17/B18，不得依赖其他 F* 功能模块
 # （xtask arch 断言 1 强制）。封账动作经 SealGate trait 由壳接线到 F5，
 # F5 只出现在 dev-dependencies（集成测试验证回滚语义，不入依赖图）。
 # slint 只准壳依赖：本 crate 只产出纯数据 ViewModel（deny.toml bans）。
@@ -34,6 +34,13 @@ localization = { workspace = true }
 notification-center = { workspace = true }
 # B18 生成引擎（缝 6：接收纯内存方块模型，只调公开 API）
 generation-engine = { workspace = true }
+# B5 边界几何能力（完整导出用例计算已确认边界的最小覆盖范围）
+foundation-mode = { workspace = true }
+# B17 manifest 与版本绑定用料表（完整导出用例的第二段）
+manifest-generator = { workspace = true }
+# F9 为 B17 生成导出事实所需的唯一 ID 与 RFC3339 时间戳
+uuid = { workspace = true }
+chrono = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 

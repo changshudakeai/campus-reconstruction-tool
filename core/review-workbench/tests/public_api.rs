@@ -1,80 +1,20 @@
-//! F5 公开 API 快照测试（执法清单 2.5）
-//!
-//! 任何公开类型的增删都会反映在本测试与 snapshots/public-api.txt 中，
-//! PR diff 可见。附带 B6 国际化验收：本 crate 产出的全部文本键必须在
-//! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
+//! F5 public API snapshot and localization contract tests.
 
-use data_persistence::{Database, RawObservation, RawObservationsApi};
 use localization::{Language, Localization};
-use review_workbench::{
-    text_keys, Candidate, CandidateKey, CommandOutcome, ConfirmationRequest, Error,
-    ReviewWorkbench, StateChange, WorkbenchView, BATCH_REMOVE_CONFIRM_THRESHOLD,
-};
-use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
+use review_workbench::text_keys;
 
 #[test]
-fn public_api_types_exist() {
-    // 常量：批量剔除确认阈值（ADR-0016）
-    assert_eq!(BATCH_REMOVE_CONFIRM_THRESHOLD, 5);
-
-    // CandidateKey / Candidate：复用 B1 的类别与三态枚举（不重新定义）
-    let key = CandidateKey::new(CandidateCategory::Building, "way/1");
-    assert_eq!(key.category, CandidateCategory::Building);
-    let observation = RawObservation::new(
-        "plan",
-        CandidateCategory::Building,
-        "way/1",
-        serde_json::json!({ "tags": { "name": "教学楼" } }),
-        "overpass",
-    );
-    let candidate = Candidate::from_observation(&observation);
-    assert_eq!(candidate.state, ReviewState::Pending);
-
-    // StateChange：明确的状态变更操作（B8 接口预留，ADR-0022）
-    let change = StateChange::single(key.clone(), ReviewState::Keep);
-    assert!(!change.needs_confirmation());
-
-    // ReviewWorkbench：进台一次性读入（缝 4）
-    let mut db = Database::open_in_memory().expect("内存库可打开");
-    let plan_id = PlanId::generate();
-    db.write_raw_observations(&[RawObservation::new(
-        plan_id.to_string(),
-        CandidateCategory::Building,
-        "way/1",
-        serde_json::json!({ "tags": { "name": "教学楼" } }),
-        "overpass",
-    )])
-    .unwrap();
-    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    assert_eq!(workbench.plan_id(), plan_id.to_string());
-    assert_eq!(workbench.candidate_count(), 1);
-
-    // 状态变更 + 视图产出
-    let outcome: CommandOutcome = workbench.submit(change).unwrap();
-    assert_eq!(outcome, CommandOutcome::Applied { changed: 1 });
-    let view: WorkbenchView = workbench.view();
-    assert_eq!(view.title_key, "review.workbench_title");
-    assert!(!view.sealed);
-
-    // 封账写回 + 汇总（缝 4/缝 5）
-    let summary = workbench.seal(&mut db).unwrap();
-    assert_eq!(summary.keep_total, 1);
-    assert!(workbench.is_sealed());
-
-    // Error #[non_exhaustive]：带类型错误可匹配
-    let err: Error = workbench
-        .submit(StateChange::single(key, ReviewState::Remove))
-        .unwrap_err();
-    assert!(matches!(err, Error::AlreadySealed));
-    assert!(!err.to_string().is_empty());
-
-    // ConfirmationRequest 走弹窗文本键（弹窗铁律 ADR-0021 + 文案外置 ADR-0005）
-    let request: Option<ConfirmationRequest> = view.pending_confirmation;
-    assert!(request.is_none());
+fn public_api_snapshot() {
+    let rustdoc_json = rustdoc_json::Builder::default()
+        .toolchain(public_api::MINIMUM_NIGHTLY_RUST_VERSION)
+        .build()
+        .unwrap();
+    let api = public_api::Builder::from_rustdoc_json(rustdoc_json)
+        .build()
+        .unwrap();
+    api.assert_eq_or_update("tests/snapshots/public-api.txt");
 }
 
-/// B6 国际化验收：本 crate 产出的全部文本键在 zh-CN.json 中逐条可解析
-/// （`t()` 查不到键时原样返回键名——据此断言解析结果不等于键名）。
 #[test]
 fn every_emitted_text_key_resolves_in_zh_cn() {
     let l10n = Localization::new(Language::ZhCn).expect("zh-CN.json 可加载");
@@ -100,7 +40,6 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
         text_keys::RESUME,
         text_keys::CONFIRM_BUTTON,
         text_keys::CANCEL_BUTTON,
-        // 类别显示名（与 tag-rules.json 同源的 collection 命名空间既有键）
         "collection.category_building",
         "collection.category_road",
         "collection.category_water",

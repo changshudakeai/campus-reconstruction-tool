@@ -9,17 +9,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
-use coverage_audit::QuietSentinel;
-use data_acquisition::AcquisitionPipeline;
+use coverage_audit::{AuditOutcome, QuietSentinel};
+use data_acquisition::{AcquisitionPipeline, CollectionReport, DataSource};
 use data_persistence::Database;
-use export_console::{ExportConsole, MockSealGate};
+use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::ProjectManager;
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::PlanId;
+use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::presenter::report_callback_error;
@@ -194,16 +194,23 @@ pub struct ViewModelInjector {
     review: Option<ReviewWorkbench>,
     /// F7 覆盖率审计安静哨兵
     sentinel: QuietSentinel,
-    /// F9 导出控制台。门控暂用 `MockSealGate` 占位——真门控随后续导出接线落地。
-    export: ExportConsole<MockSealGate>,
+    /// F9 完整导出入口的稳定输入能力端口状态。
+    export_flow: Arc<BoundaryExportFlow>,
 }
 
 impl ViewModelInjector {
     /// 构造并持有全部 F 模块实例（F1-F9，B8/F6/F8 未立户不在册）。
     pub fn new(db: ShellDatabases) -> Result<Self> {
+        Self::new_with_export_file_system(db, Arc::new(StdExportFileSystem))
+    }
+
+    pub fn new_with_export_file_system(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Result<Self> {
         let l10n = Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?;
-        // F2 引导进度与 F3 同库装载（生产环境两连接指向同一文件）
         let tutorial = OnboardingTutorial::load(&db.projects)?;
+        let export_flow = Arc::new(BoundaryExportFlow::new(file_system));
         Ok(Self {
             l10n,
             settings: SettingsManager::new(db.settings),
@@ -212,7 +219,7 @@ impl ViewModelInjector {
             acquisition: AcquisitionPipeline::new()?,
             review: None,
             sentinel: QuietSentinel::new(),
-            export: ExportConsole::new(MockSealGate::new()),
+            export_flow,
         })
     }
 
@@ -378,6 +385,10 @@ impl ViewModelInjector {
         &mut self.settings
     }
 
+    pub(crate) fn export_flow(&self) -> Arc<BoundaryExportFlow> {
+        self.export_flow.clone()
+    }
+
     /// F2 新手教程
     pub fn tutorial(&self) -> &OnboardingTutorial {
         &self.tutorial
@@ -430,6 +441,44 @@ impl ViewModelInjector {
         &mut self.projects
     }
 
+    /// S1-07: 由采集功能入口协调 F4 采集与 F7 体检；F4/F7 彼此保持零依赖。
+    pub(crate) fn collect_and_audit(
+        &mut self,
+        plan_id: &PlanId,
+        boundary: &Boundary,
+        source: &dyn DataSource,
+    ) -> Result<(CollectionReport, AuditOutcome)> {
+        let Self {
+            acquisition,
+            sentinel,
+            projects,
+            l10n,
+            ..
+        } = self;
+        let report = acquisition.collect(projects.database_mut(), plan_id, boundary, source)?;
+        let mut counts = [0_u32; 6];
+        for (category, count) in &report.category_counts {
+            let index = match category {
+                CandidateCategory::Building => 0,
+                CandidateCategory::Road => 1,
+                CandidateCategory::Water => 2,
+                CandidateCategory::Vegetation => 3,
+                CandidateCategory::Sports => 4,
+                CandidateCategory::Other => 5,
+                _ => 5,
+            };
+            counts[index] = u32::try_from(*count).unwrap_or(u32::MAX);
+        }
+        let outcome = sentinel.after_collection(
+            projects.database_mut(),
+            plan_id,
+            &counts,
+            Vec::new(),
+            l10n,
+        )?;
+        Ok((report, outcome))
+    }
+
     /// F4 采集流水线
     pub fn acquisition(&self) -> &AcquisitionPipeline {
         &self.acquisition
@@ -443,11 +492,6 @@ impl ViewModelInjector {
     /// F7 安静哨兵
     pub fn sentinel(&self) -> &QuietSentinel {
         &self.sentinel
-    }
-
-    /// F9 导出控制台
-    pub fn export(&self) -> &ExportConsole<MockSealGate> {
-        &self.export
     }
 }
 
@@ -772,7 +816,7 @@ mod tests {
         assert_eq!(workbench.candidate_count(), 0);
         // F7 / F9：实例可达
         let _sentinel = injector.sentinel();
-        let _export = injector.export();
+        let _export = injector.export_flow();
     }
 
     #[test]

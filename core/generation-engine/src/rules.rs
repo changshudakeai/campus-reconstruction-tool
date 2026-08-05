@@ -76,6 +76,15 @@ fn fill_flat_rect(
     Ok(model)
 }
 
+/// 边界直出：在 B5 计算出的覆盖范围内铺一层最小平整场地。
+pub fn generate_flat_ground(
+    w: i32,
+    l: i32,
+    mat: &MaterialsAdapter,
+) -> Result<BlockModel, GenerationError> {
+    fill_flat_rect(MaterialRole::FoundationGround, w, l, mat)
+}
+
 /// 道路：初始铺面。
 pub fn generate_road(
     w: i32,
@@ -310,6 +319,16 @@ mod tests {
             let bb = model.bounding_box().expect("铺面非空");
             assert_eq!(bb.height(), 1, "初始铺面应只占一层");
         }
+    }
+
+    #[test]
+    fn boundary_only_ground_is_one_flat_layer() {
+        let model = generate_flat_ground(4, 3, &adapter()).unwrap();
+        let bounds = model.bounding_box().expect("平整场地必须有方块");
+        assert_eq!(bounds.width(), 4);
+        assert_eq!(bounds.length(), 3);
+        assert_eq!(bounds.height(), 1);
+        assert!(model.contains_block_id("minecraft:stone_bricks"));
     }
 
     #[test]

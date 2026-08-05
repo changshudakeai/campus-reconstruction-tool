@@ -1,7 +1,9 @@
 # 调研报告：模块边界的执法机制——成熟 Rust 项目靠什么保证"写代码时不越界"
 
+> **后续决策（2026-08-01）**：ADR-0037 已收紧 S1，ADR-0039 为跨功能操作增加 A1 应用流程模块。本文早期关于“Slint 壳无需专门边界执法”的结论只覆盖 UI DSL 不能直接 I/O，不覆盖 `apps/desktop/src` 中 Rust 代码的运行期业务编排。S1 仍必须通过架构测试和行为测试验证“一次用户操作只调用一个完整入口”；与此冲突处以 ADR-0037/0039 为准。
+
 > 调研日期：2026-07-26（第四轮）
-> 背景：MCRebuild V2（Rust + Slint，30 crate 模块化单体，ADR-0017/0024）。前三轮回答了"模块怎么划"（见同目录 modular-desktop-architecture.md / desktop-module-catalog.md / data-pipeline-modules.md），本轮专攻"边界怎么执法"。
+> 背景：MCRebuild V2（Rust + Slint，规划 31 crate 的模块化单体，ADR-0017/0024/0039）。前三轮回答了"模块怎么划"（见同目录 modular-desktop-architecture.md / desktop-module-catalog.md / data-pipeline-modules.md），本轮专攻"边界怎么执法"。
 > 核心问题（产品负责人）：**成熟稳定的模块化应用，靠什么机制保证写代码时不越界、不耦合？**
 > 方法：全部一手来源——官方文档原文、真实仓库源码与配置文件（rust-lang/rust、rust-analyzer、zed、bevy、vscode 等），每条结论附文件路径与 URL。
 
@@ -30,7 +32,7 @@
 - 来源：https://doc.rust-lang.org/reference/names/preludes.html#extern-prelude
 - 来源：The Cargo Book — Specifying Dependencies：https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
 
-**推论**：ADR-0017 第三节的依赖图，唯一的"执法配置文件"就是 30 个 crate 各自的 `Cargo.toml`。评审一个 PR 是否越界，先看它有没有改动某个 `Cargo.toml` 的 `[dependencies]` 段——这也是后文 CODEOWNERS 要守卫的文件。
+**推论**：ADR-0017/0039 的依赖图，最直接的执法配置是规划模块各自的 `Cargo.toml`。评审一个 PR 是否越界，先看它有没有改动某个 `Cargo.toml` 的 `[dependencies]` 段——这也是后文 CODEOWNERS 要守卫的文件。
 
 ### 1.2 循环依赖被 Cargo 原生拒绝（修正 ADR-0017 的一处表述）
 
@@ -227,9 +229,10 @@ Rust 没有 ArchUnit（Java）那样的统一架构测试框架；社区讨论�
 **给本项目的具体实现**（放 `xtask`，随 `cargo test`/CI 跑，约 40 行）：
 1. `cargo metadata --format-version 1` 解析 workspace 成员依赖表；
 2. 断言一：任意两个 `F*` 功能 crate 之间无依赖边（横向零依赖）；
-3. 断言二：`desktop-shell` 的直接依赖 ⊆ 白名单 {F1..F9, B2-B7, B9-B11, B17, slint}（ADR-0017 的 S1 规则逐字翻译成代码，尤其"不得依赖 B12-B16"）；
+3. 断言二：`desktop-shell` 的直接依赖服从 ADR-0037 收紧后的白名单；旧 `{F1..F9, B2-B7, B9-B11, B17, slint}` 不能继续作为授权；
 4. 断言三：`shared-domain-types`（B1）的内部依赖数为 0；`sponge-export`/`foundation-mode` 等底座不依赖任何 `F*`（下不依上）；
 5. 断言四（负面清单，学 3.1）：`! cargo tree -p desktop-shell -i data-source-adapters` 等关键禁止边。
+6. 断言五：A1 `collection-flow` 只允许依赖 F4/F7/B1/B2/B14；S1 的采集回调只跨越 A1，F4/F7/B* 不得反向依赖 A1（ADR-0039）。
 
 ---
 
@@ -264,7 +267,7 @@ README 原话："a regular `cargo test` will fail if your public API is accident
 
 - 来源：https://github.com/obi1kenobi/cargo-semver-checks
 
-**对本项目的取舍**：semver-checks 主要服务于"发布到 crates.io 的库"；本项目 30 个 crate 全是内部 `version = "0.0.0"`，破坏性变更由编译器直接暴露（下游编译失败）。**建议只采用 cargo-public-api 快照测试，不引入 semver-checks**——避免为不存在的外部消费者付维护成本。
+**对本项目的取舍**：semver-checks 主要服务于"发布到 crates.io 的库"；本项目规划的 31 个 crate 均为内部模块，破坏性变更由编译器直接暴露（下游编译失败）。**建议只采用 cargo-public-api 快照测试，不引入 semver-checks**——避免为不存在的外部消费者付维护成本。
 
 ---
 
@@ -287,9 +290,9 @@ Slint Best Practices（本轮重新核实原文）：
 
 考证结论：Slint 官方**没有**提供"防止业务逻辑写进壳 crate"的机制（这超出 UI 框架职责）。真实执法组合：
 
-1. **依赖白名单（编译器层）**：`desktop-shell/Cargo.toml` 的 `[dependencies]` 只列 `slint` + 各功能 crate + 白名单基础 crate。壳里想直接调 `rusqlite`/`ureq`/几何库？没声明依赖，编译失败（§1.1 机制）。这正是 ADR-0017"S1 绝对不允许依赖 B12-B16"的免费执行方式。
+1. **依赖白名单（编译器层）**：`desktop-shell/Cargo.toml` 只保留 ADR-0037 允许的功能入口、显示类型和呈现能力。它能阻止越层依赖，但不能识别壳在一个回调中依次调用多个已获准功能入口。
 2. **架构测试兜底（CI 层）**：§3.4 断言二/四防止有人往壳的 Cargo.toml 里加依赖蒙混过关——改白名单本身会被测试和 CODEOWNERS（§六）双重拦截。
-3. **规模红线（CI 层）**：壳 crate 的 Rust 文件行数红线 + "ViewModel 绑定之外的逻辑必须下沉"的评审规则。业务逻辑渗入的第一征兆就是壳文件变长——1000 行红线会先于架构腐化报警。
+3. **运行期编排检查（CI 层）**：除规模红线外，必须有架构/行为测试证明一个 UI 操作只调用一个完整入口；采集操作的入口固定为 A1。文件未超 1000 行不等于符合 ADR-0037/0039。
 
 ---
 
@@ -335,7 +338,7 @@ rust-analyzer 的 conclusion job（§2.6）与 zed 的 tests_pass job 是同一�
 
 | # | 机制 | 要写的配置 | 检查内容 | 违规后果 | 状态 |
 |---|---|---|---|---|---|
-| 1.1 | `[dependencies]` 白名单 | 30 个 crate 各自的 Cargo.toml（依赖严格按 ADR-0017 依赖图声明） | 未声明的 crate 无法 `use` | 编译失败 | ✅（隐含；建议在 ARCHITECTURE.md 点明"Cargo.toml 即执法文件"） |
+| 1.1 | `[dependencies]` 白名单 | 规划模块各自的 Cargo.toml（依赖严格按 ADR-0017/0039 依赖图声明） | 未声明的 crate 无法 `use` | 编译失败 | ✅（隐含；建议在 ARCHITECTURE.md 点明"Cargo.toml 即执法文件"） |
 | 1.2 | `[workspace.dependencies]` 版本单点 | 根 Cargo.toml 集中声明 + 成员 `workspace = true` | 版本漂移 | 由 2.3 的 cargo-deny `workspace-dependencies.duplicates = 'deny'` 兜底 | 🆕 |
 | 1.3 | 默认私有 + `pub(crate)` + `unreachable_pub` | 根 Cargo.toml：`[workspace.lints.rust] unreachable_pub = "warn"`（CI `-D`） | 写了 pub 但外部够不到 | 编译警告→CI 失败 | 🆕（落实十戒第 4 条"pub 符号表最小化"） |
 | 1.4 | `#[non_exhaustive]` | `core/shared-domain-types` 的共享枚举/配置结构体 | 下游绕过构造器、match 不写兜底 | 编译失败 | 🆕 |
@@ -348,7 +351,7 @@ rust-analyzer 的 conclusion job（§2.6）与 zed 的 tests_pass job 是同一�
 | # | 工具 | 要写的配置/代码 | 检查内容 | 违规后果 | 状态 |
 |---|---|---|---|---|---|
 | 2.1 | xtask tidy（自写） | `xtask/src/tidy.rs`：行数红线（1000 行 + 显式豁免标记 `// ignore-tidy-filelength` 需评审）；每文件 `//!` 模块文档；禁 TODO 入主干 | 巨型文件、无文档模块 | CI 失败 | ✅（1000 行已定；豁免标记机制 🆕，抄 rustc；tidy 写成 `#[test]` 🆕，抄 ra） |
-| 2.2 | xtask 架构测试（自写，~40 行） | `cargo metadata` 断言：F* 横向零依赖；desktop-shell 依赖 ⊆ 白名单（禁 B12-B16）；B1 零内部依赖；底座不依赖 F*；关键禁止边用 `! cargo tree -p X -i Y` | 同层横向依赖、越层依赖、下依上 | CI 失败 | 🔧（ADR-0017 写的是 cargo-depgraph 查环——环由 Cargo 原生拒绝，真正要测的是这四条断言） |
+| 2.2 | xtask 架构测试 + S1 契约测试 | `cargo metadata` 断言 F* 横向零依赖、S1 依赖服从 ADR-0037、A1 只依赖 F4/F7/B1/B2/B14、B1 零内部依赖、底座不反依 A1/F*；另断言采集 UI 操作只调用 A1 | 同层依赖、越层依赖、下依上、S1 运行期业务编排 | CI 失败 | 🔧（现有依赖图检查尚未识别 A1，ADR-0037/0039 门禁需随代码立户补齐） |
 | 2.3 | cargo-deny | 根 deny.toml：`[licenses]` 白名单、`[bans] wildcards="deny"` + `deny = [{ crate = "rusqlite", wrappers = ["data-persistence"] }]` 等关系约束、`[bans.workspace-dependencies] duplicates="deny", unused="deny"`、`[sources] unknown-registry="deny"`、`[advisories]` | 依赖关系、许可证、漏洞、来源 | CI 失败 | 🆕（bevy dependencies.yml 四 job 直接抄） |
 | 2.4 | cargo-machete | 根 Cargo.toml `[workspace.metadata.cargo-machete]` 豁免表；CI 一步 `cargo machete` | 声明了但未用的依赖（白名单腐化） | CI 失败 | 🆕（zed/ra 均用；不选 cargo-udeps——需 nightly） |
 | 2.5 | cargo-public-api 快照测试 | 17 个基础 crate 各加 `tests/public_api.rs` + `tests/snapshots/public-api.txt` 入 git | 公开 API 任何增删改必须现形于 PR diff | cargo test 失败 | 🔧（替代 ADR-0017"cargo doc + 静态分析"的模糊描述；"trait ≤5 方法"由快照行数客观化；不引入 cargo-semver-checks——无外部消费者） |

@@ -21,7 +21,7 @@ pub trait ReviewDecisionsApi {
     /// 调用方（F5）据此保持封账不生效、评审状态可改。
     fn batch_update_review_decisions(&mut self, decisions: &[ReviewDecision]) -> Result<()>;
 
-    /// 列出方案下的全部评审终态（按类别、实体 ID 排序）
+    /// 列出方案下的全部评审终态（按稳定候选 ID 排序）。
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>>;
 
     /// 统计方案下各三态的条数，返回 (待定, 保留, 剔除)
@@ -34,9 +34,10 @@ impl ReviewDecisionsApi for Database {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO review_decisions
-                    (plan_id, entity_type, entity_id, review_state, reviewer_id, updated_at)
+                    (plan_id, category, candidate_id, review_state, reviewer_id, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(plan_id, entity_type, entity_id) DO UPDATE SET
+                 ON CONFLICT(plan_id, candidate_id) DO UPDATE SET
+                    category = excluded.category,
                     review_state = excluded.review_state,
                     reviewer_id = excluded.reviewer_id,
                     updated_at = excluded.updated_at",
@@ -44,8 +45,8 @@ impl ReviewDecisionsApi for Database {
             for decision in decisions {
                 stmt.execute(params![
                     decision.plan_id,
-                    category_to_db(decision.entity_type)?,
-                    decision.entity_id,
+                    category_to_db(decision.category)?,
+                    decision.candidate_id,
                     review_state_to_db(decision.review_state),
                     decision.reviewer_id,
                     timestamp_to_db(decision.updated_at),
@@ -58,9 +59,9 @@ impl ReviewDecisionsApi for Database {
 
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>> {
         let mut stmt = self.conn.prepare(
-            "SELECT plan_id, entity_type, entity_id, review_state, reviewer_id, updated_at
+            "SELECT plan_id, category, candidate_id, review_state, reviewer_id, updated_at
              FROM review_decisions WHERE plan_id = ?1
-             ORDER BY entity_type, entity_id",
+             ORDER BY candidate_id",
         )?;
         let mut rows = stmt.query(params![plan_id])?;
         let mut result = Vec::new();
@@ -68,8 +69,8 @@ impl ReviewDecisionsApi for Database {
             let updated_at: String = row.get(5)?;
             result.push(ReviewDecision {
                 plan_id: row.get(0)?,
-                entity_type: category_from_db(&row.get::<_, String>(1)?)?,
-                entity_id: row.get(2)?,
+                category: category_from_db(&row.get::<_, String>(1)?)?,
+                candidate_id: row.get(2)?,
                 review_state: review_state_from_db(&row.get::<_, String>(3)?)?,
                 reviewer_id: row.get(4)?,
                 updated_at: timestamp_from_db(&updated_at)?,

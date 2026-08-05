@@ -1,7 +1,7 @@
 //! 边界与朝向
 //!
-//! - **边界**：在地图上圈画的方案范围（将来扩展为几何多边形）
-//! - **朝向**：在高德地图上画两点参考线确定，没有默认值、不可跳过
+//! - **边界**：在地图上圈画的方案范围，支持 GeoJSON Polygon/MultiPolygon
+//! - **朝向**：可选的高德地图两点参考线方位角；未设置时由完整导出用例采用地图正北
 
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +47,7 @@ impl Default for Boundary {
 
 /// 朝向：由高德地图两点参考线计算出的方位角（0~360 度）
 ///
-/// 单位：度，北为 0°/360°，顺时针增加。**无默认值**，必须由用户在地图上明确设定。
+/// 单位：度，北为 0°/360°，顺时针增加。缺省值不存入此类型，默认判定属于完整导出用例。
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize)]
 pub struct Orientation(f32);
 

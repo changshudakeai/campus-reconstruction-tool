@@ -14,7 +14,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use export_flow::{BoundaryExportFlow, BoundaryView};
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryDrawer, BoundaryState,
     BoundaryUiEvent, CoordinateConverter, EventResult, MercatorCoord, Orientation,
@@ -40,26 +42,25 @@ use super::record_entry_call;
 /// 单方案进度状态（工作区功能入口持有；正式持久化归后续数据工单）。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlanProgressState {
-    pub(crate) has_boundary: bool,
     pub(crate) has_orientation: bool,
+    pub(crate) has_collection: bool,
     pub(crate) orientation_angle: Option<f32>,
-    pub(crate) boundary_gcj02: Option<Vec<[f64; 2]>>,
     /// 已生成数据分布（F5 重算影响报告的输入；采集/评审迁出后填充，当前为空）。
     pub(crate) generated_category_counts: HashMap<CandidateCategory, usize>,
 }
 
 impl PlanProgressState {
-    fn completed_steps(&self) -> u8 {
-        self.has_boundary as u8 + self.has_orientation as u8
+    fn completed_steps(&self, boundary_confirmed: bool) -> u8 {
+        boundary_confirmed as u8 + self.has_orientation as u8 + self.has_collection as u8
     }
 }
 
 /// 工作区会话状态：全部由功能入口持有，S1 呈现层不保存业务副本。
 #[derive(Default)]
 pub(crate) struct WorkspaceSessionState {
-    pub(crate) active_plan_id: Option<String>,
-    active_context: Option<project_management::PlanContextView>,
-    plans: HashMap<String, PlanProgressState>,
+    pub(super) active_plan_id: Option<String>,
+    pub(super) active_context: Option<project_management::PlanContextView>,
+    pub(super) plans: HashMap<String, PlanProgressState>,
     drawer: BoundaryDrawer,
     orientation_points: Vec<(f64, f64)>,
     orientation_angle: Option<f32>,
@@ -77,13 +78,13 @@ pub(crate) struct WorkspaceSessionState {
 }
 
 impl WorkspaceSessionState {
-    fn completed_steps(&self) -> u8 {
+    fn completed_steps(&self, boundary_confirmed: bool) -> u8 {
         match &self.active_plan_id {
             Some(plan_id) => self
                 .plans
                 .get(plan_id)
-                .map(PlanProgressState::completed_steps)
-                .unwrap_or(0),
+                .map(|state| state.completed_steps(boundary_confirmed))
+                .unwrap_or(boundary_confirmed as u8),
             None => self.adopted_completed_steps.unwrap_or(0),
         }
     }
@@ -119,11 +120,16 @@ impl WorkspaceSessionState {
 pub(crate) struct WorkspaceProductionContext {
     injector: Rc<RefCell<ViewModelInjector>>,
     window: slint::Weak<crate::AppWindow>,
-    session: Rc<RefCell<WorkspaceSessionState>>,
+    pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
+    pub(super) export_flow: Arc<BoundaryExportFlow>,
 }
 
 impl WorkspaceProductionContext {
-    pub(crate) fn new(injector: Rc<RefCell<ViewModelInjector>>, window: &crate::AppWindow) -> Self {
+    pub(crate) fn new(
+        injector: Rc<RefCell<ViewModelInjector>>,
+        window: &crate::AppWindow,
+        export_flow: Arc<BoundaryExportFlow>,
+    ) -> Self {
         let tutorial_dismiss_label = injector.borrow().l10n().t("tutorial.dismiss_button");
         Self {
             injector,
@@ -133,7 +139,12 @@ impl WorkspaceProductionContext {
                 tutorial_dismiss_label,
                 ..Default::default()
             })),
+            export_flow,
         }
+    }
+
+    pub(super) fn injector(&self) -> Rc<RefCell<ViewModelInjector>> {
+        Rc::clone(&self.injector)
     }
 
     /// 当前工作区页完整可观察状态（由功能入口侧状态派生，S1 只绘制）。
@@ -141,7 +152,19 @@ impl WorkspaceProductionContext {
         let injector = self.injector.borrow();
         let l10n = injector.l10n();
         let session = self.session.borrow();
-        let completed = session.completed_steps();
+        let boundary_confirmed =
+            session.active_plan_id.is_some() && self.export_flow.boundary_confirmed();
+        let completed = session.completed_steps(boundary_confirmed);
+        let has_orientation = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .is_some_and(|state| state.has_orientation);
+        let has_collection = session
+            .active_plan_id
+            .as_ref()
+            .and_then(|plan_id| session.plans.get(plan_id))
+            .is_some_and(|state| state.has_collection);
         let (campus_name, plan_name) = session
             .active_context
             .as_ref()
@@ -159,8 +182,18 @@ impl WorkspaceProductionContext {
             context_label,
             active_step: session.active_step,
             completed_steps: i32::from(completed),
-            step_locked: (0..5).map(|index| index > completed).collect(),
-            step_completed: (0..5).map(|index| index < completed).collect(),
+            // ADR-0041：边界确认后朝向、采集、评审与导出都可进入；
+            // 未确认边界时只有边界步骤可用。
+            step_locked: (0..5)
+                .map(|index| index != 0 && !boundary_confirmed)
+                .collect(),
+            step_completed: vec![
+                boundary_confirmed,
+                has_orientation,
+                has_collection,
+                false,
+                false,
+            ],
             placeholder_title: l10n.t("workspace.placeholder_title"),
             placeholder_subtitle: l10n.t("workspace.placeholder_subtitle"),
             pending_notice: l10n.t("workspace.step_pending_notice"),
@@ -169,7 +202,7 @@ impl WorkspaceProductionContext {
             orientation_step_label: l10n.t("collection.orientation_step"),
             collection_step_label: l10n.t("collection.collect_button"),
             review_step_label: l10n.t("review.workbench_title"),
-            export_step_label: l10n.t("export.confirm_title"),
+            export_step_label: l10n.t("export.start_button"),
             boundary: self.boundary_view(l10n, &session),
             orientation: self.orientation_view(l10n, &session),
             tutorial_visible: session.tutorial_visible,
@@ -183,19 +216,32 @@ impl WorkspaceProductionContext {
     /// 功能入口侧，数据结果不变）。
     pub(crate) fn plan_card_progress_text(&self, plan_id: &str, fallback: &str) -> String {
         let session = self.session.borrow();
-        match session.plans.get(plan_id) {
-            Some(state) if state.has_boundary && state.has_orientation => self
-                .injector
-                .borrow()
-                .l10n()
-                .t("plan.progress_next_collection"),
-            Some(state) if state.has_boundary => self
-                .injector
-                .borrow()
-                .l10n()
-                .t("plan.progress_boundary_done"),
-            _ => fallback.to_owned(),
+        if session
+            .plans
+            .get(plan_id)
+            .is_some_and(|state| state.has_collection)
+        {
+            return self.injector.borrow().l10n().t("plan.progress_next_review");
         }
+        if self.export_flow.plan_boundary_confirmed(plan_id) {
+            if session
+                .plans
+                .get(plan_id)
+                .is_some_and(|state| state.has_orientation)
+            {
+                return self
+                    .injector
+                    .borrow()
+                    .l10n()
+                    .t("plan.progress_next_collection");
+            }
+            return self
+                .injector
+                .borrow()
+                .l10n()
+                .t("plan.progress_boundary_done");
+        }
+        fallback.to_owned()
     }
 
     fn boundary_view(
@@ -310,8 +356,11 @@ impl WorkspaceProductionContext {
         }
     }
 
-    /// 地图密钥与校区锚点（锚点优先取当前方案的校区；兜底取上次校区/默认点）。
-    fn map_credentials(&self) -> ((String, String), (f64, f64)) {
+    /// 地图密钥与校区锚点（锚点优先取当前方案的校区，其次上次校区）。
+    ///
+    /// 没有真实校区锚点时返回 `None`：不得用固定坐标初始化地图或参与边界换算
+    /// （ADR-0042 §7 禁止以固定坐标/锚点代替用户数据）。
+    fn map_credentials(&self) -> Option<((String, String), (f64, f64))> {
         let injector = self.injector.borrow();
         let api_key = injector
             .settings()
@@ -331,16 +380,15 @@ impl WorkspaceProductionContext {
             .active_context
             .as_ref()
             .map(|context| (context.anchor_lng, context.anchor_lat))
-            .unwrap_or_else(|| {
+            .or_else(|| {
                 injector
                     .projects()
                     .landing_campus()
                     .ok()
                     .flatten()
                     .map(|campus| (campus.anchor_lng, campus.anchor_lat))
-                    .unwrap_or((116.397, 39.916))
-            });
-        ((api_key, security_key), anchor)
+            })?;
+        Some(((api_key, security_key), anchor))
     }
 
     fn mark_map_loading(&self) {
@@ -445,7 +493,19 @@ impl WorkspaceProductionAdapter {
                 }
             }
         }
-        let (keys, anchor) = self.context.map_credentials();
+        if let Some(context) = self.context.session.borrow().active_context.clone() {
+            self.context.export_flow.set_plan(&context);
+        }
+        let Some((keys, anchor)) = self.context.map_credentials() else {
+            let l10n = self.l10n();
+            return Presentation::ready(self.context.page())
+                .with_notification(info_fact(
+                    &l10n,
+                    "boundary.map_notice_title",
+                    &l10n.t("boundary.map_load_failed"),
+                ))
+                .with_navigation(NavigationDecision::Show(Screen::Workspace));
+        };
         let page = self.context.page();
         let presentation = if keys.0.is_empty() || crate::map_webview::is_visible() {
             Presentation::ready(page)
@@ -480,14 +540,32 @@ impl WorkspaceProductionAdapter {
                 session.adopt(completed);
             }
         }
-        let completed = self.context.session.borrow().completed_steps();
-        // 前跳上锁（ADR-0027）：第①格永远解锁
-        if step > i32::from(completed) && step != 0 {
+        let boundary_confirmed = {
+            let session = self.context.session.borrow();
+            if session.active_plan_id.is_some() {
+                self.context.export_flow.boundary_confirmed()
+            } else {
+                session
+                    .adopted_completed_steps
+                    .is_some_and(|completed| completed > 0)
+            }
+        };
+        // ADR-0041：边界确认是唯一门槛；其余步骤不再形成线性强制链。
+        if step != 0 && !boundary_confirmed {
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Blocked);
         }
         if step == 0 {
-            let (keys, anchor) = self.context.map_credentials();
+            let Some((keys, anchor)) = self.context.map_credentials() else {
+                let l10n = self.l10n();
+                return Presentation::ready(self.context.page())
+                    .with_notification(info_fact(
+                        &l10n,
+                        "boundary.map_notice_title",
+                        &l10n.t("boundary.map_load_failed"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            };
             if keys.0.is_empty() {
                 let l10n = self.l10n();
                 return Presentation::needs_confirmation(
@@ -517,30 +595,31 @@ impl WorkspaceProductionAdapter {
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
         if step == 1 {
-            let (keys, anchor) = self.context.map_credentials();
+            let Some((keys, anchor)) = self.context.map_credentials() else {
+                let l10n = self.l10n();
+                return Presentation::ready(self.context.page())
+                    .with_notification(info_fact(
+                        &l10n,
+                        "boundary.map_notice_title",
+                        &l10n.t("boundary.map_load_failed"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            };
             self.context.session.borrow_mut().active_step = 1;
             let presentation = if keys.0.is_empty() {
                 Presentation::ready(self.context.page())
             } else {
                 crate::map_webview::hide();
-                let existing_boundary_gcj02 = self
+                let existing_boundary = self
                     .context
-                    .session
-                    .borrow()
-                    .active_plan_id
+                    .export_flow
+                    .boundary_view()
                     .as_ref()
-                    .and_then(|plan_id| {
-                        self.context
-                            .session
-                            .borrow()
-                            .plans
-                            .get(plan_id)
-                            .and_then(|state| state.boundary_gcj02.clone())
-                    });
+                    .and_then(polygon_coordinates);
                 let config = BoundaryEditPageConfig::new(&keys.0, &keys.1)
                     .with_anchor(anchor.0, anchor.1)
                     .with_orientation_mode(true)
-                    .with_existing_boundary(existing_boundary_gcj02);
+                    .with_existing_boundary(existing_boundary);
                 crate::map_webview::show_with_config(self.context.window.clone(), config);
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
@@ -629,13 +708,7 @@ impl WorkspaceProductionAdapter {
         let rejected = {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
-                EventResult::Accepted => {
-                    if let Some(plan_id) = session.active_plan_id.clone() {
-                        let state = session.plans.entry(plan_id).or_default();
-                        state.has_boundary = true;
-                    }
-                    None
-                }
+                EventResult::Accepted => None,
                 EventResult::Rejected(message) => Some(message),
                 EventResult::Ignored => None,
             }
@@ -645,6 +718,20 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
         }
+        let coordinates = {
+            let session = self.context.session.borrow();
+            let Some(context) = session.active_context.as_ref() else {
+                return Presentation::failed(self.context.page());
+            };
+            serde_json::json!([plane_vertices_to_gcj02(
+                session.drawer.vertices(),
+                context.anchor_lng,
+                context.anchor_lat,
+            )])
+        };
+        self.context
+            .export_flow
+            .confirm_boundary("Polygon", coordinates);
         Presentation::ready(self.context.page())
     }
 
@@ -652,12 +739,8 @@ impl WorkspaceProductionAdapter {
         {
             let mut session = self.context.session.borrow_mut();
             session.drawer.reset();
-            if let Some(plan_id) = session.active_plan_id.clone() {
-                let state = session.plans.entry(plan_id).or_default();
-                state.has_boundary = false;
-                state.boundary_gcj02 = None;
-            }
         }
+        self.context.export_flow.reset_boundary();
         Presentation::ready(self.context.page())
     }
 
@@ -747,7 +830,10 @@ impl WorkspaceProductionAdapter {
     fn commit_orientation(&mut self, angle: f32) -> Presentation<WorkspacePageState> {
         let result = self.context.session.borrow_mut().commit_orientation(angle);
         match result {
-            Ok(()) => Presentation::ready(self.context.page()),
+            Ok(()) => {
+                self.context.export_flow.set_orientation(Some(angle));
+                Presentation::ready(self.context.page())
+            }
             Err(()) => self.orientation_save_failed(),
         }
     }
@@ -823,14 +909,15 @@ impl WorkspaceProductionAdapter {
     /// 把地图经纬度两点换算成画布平面坐标（原点取已确认边界重心，否则取
     /// 校区锚点；与边界顶点同一坐标系）。
     fn orientation_overlay_points(&self, points: [[f64; 2]; 2]) -> Vec<(f64, f64)> {
+        let boundary_center = self
+            .context
+            .export_flow
+            .boundary_view()
+            .as_ref()
+            .and_then(polygon_coordinates)
+            .and_then(|coords| centroid(&coords));
         let center = {
             let session = self.context.session.borrow();
-            let boundary_center = session
-                .active_plan_id
-                .as_ref()
-                .and_then(|plan_id| session.plans.get(plan_id))
-                .and_then(|state| state.boundary_gcj02.as_ref())
-                .and_then(|coords| centroid(coords));
             boundary_center.or_else(|| {
                 session
                     .active_context
@@ -867,6 +954,7 @@ impl WorkspaceProductionAdapter {
                 state.generated_category_counts.clear();
             }
         }
+        self.context.export_flow.set_orientation(None);
         Presentation::ready(self.context.page())
     }
 
@@ -941,7 +1029,12 @@ impl WorkspaceProductionAdapter {
         match parsed {
             IpcMessage::OsmElements { elements } => self.osm_elements(elements),
             IpcMessage::ConfirmBoundary { coords } => self.confirm_map_boundary(&coords),
+            IpcMessage::ConfirmBoundaryGeometry {
+                r#type,
+                coordinates,
+            } => self.confirm_map_geometry(&r#type, coordinates),
             IpcMessage::BoundaryUpdate { .. }
+            | IpcMessage::BoundaryGeometryUpdate { .. }
             | IpcMessage::ManualPoint { .. }
             | IpcMessage::ManualCancel
             | IpcMessage::ManualClear
@@ -964,22 +1057,37 @@ impl WorkspaceProductionAdapter {
         &mut self,
         elements: Vec<gaode_client::OsmElement>,
     ) -> Presentation<WorkspacePageState> {
-        let (anchor_lon, anchor_lat, campus_name) = {
+        let Some((anchor_lon, anchor_lat, campus_name)) = ({
             let session = self.context.session.borrow();
-            match &session.active_context {
-                Some(context) => (
-                    context.anchor_lng,
-                    context.anchor_lat,
-                    Some(context.campus_name.clone()),
-                ),
-                None => {
-                    let injector = self.context.injector.borrow();
-                    match injector.projects().landing_campus().ok().flatten() {
-                        Some(campus) => (campus.anchor_lng, campus.anchor_lat, Some(campus.name)),
-                        None => (116.397, 39.916, None),
-                    }
-                }
-            }
+            session
+                .active_context
+                .as_ref()
+                .map(|context| {
+                    (
+                        context.anchor_lng,
+                        context.anchor_lat,
+                        Some(context.campus_name.clone()),
+                    )
+                })
+                .or_else(|| {
+                    self.context
+                        .injector
+                        .borrow()
+                        .projects()
+                        .landing_campus()
+                        .ok()
+                        .flatten()
+                        .map(|campus| (campus.anchor_lng, campus.anchor_lat, Some(campus.name)))
+                })
+        }) else {
+            // 没有真实校区锚点时不得用固定坐标参与 OSM 排序：直接进入人工圈画。
+            crate::map_webview::evaluate_script("enableManualMode();");
+            let l10n = self.l10n();
+            return Presentation::ready(self.context.page()).with_notification(info_fact(
+                &l10n,
+                "boundary.osm_not_found_title",
+                &l10n.t("boundary.osm_not_found_body"),
+            ));
         };
         let sorted = BoundarySorter::sort_candidates(
             elements,
@@ -1040,12 +1148,25 @@ impl WorkspaceProductionAdapter {
     }
 
     fn confirm_map_boundary(&mut self, coords: &[[f64; 2]]) -> Presentation<WorkspacePageState> {
+        self.confirm_map_geometry("Polygon", serde_json::json!([coords]))
+    }
+
+    fn confirm_map_geometry(
+        &mut self,
+        boundary_type: &str,
+        coordinates: serde_json::Value,
+    ) -> Presentation<WorkspacePageState> {
+        let Some(coords) = first_outer_ring(boundary_type, &coordinates) else {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.error_too_few_points")));
+        };
         if coords.len() < 3 {
             let l10n = self.l10n();
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &l10n.t("boundary.error_too_few_points")));
         }
-        let Some((center_lon, center_lat)) = centroid(coords) else {
+        let Some((center_lon, center_lat)) = centroid(&coords) else {
             let l10n = self.l10n();
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &l10n.t("boundary.error_convert_failed")));
@@ -1053,7 +1174,7 @@ impl WorkspaceProductionAdapter {
         let mut converter = CoordinateConverter::default();
         converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
         let mut vertices = Vec::with_capacity(coords.len());
-        for [lon, lat] in coords {
+        for [lon, lat] in &coords {
             let mercator = MercatorCoord::from_lat_lon(*lat, *lon);
             let Some(plane) = converter.mercator_to_plane(mercator) else {
                 let l10n = self.l10n();
@@ -1072,17 +1193,15 @@ impl WorkspaceProductionAdapter {
         }
         {
             let mut session = self.context.session.borrow_mut();
-            if let Some(plan_id) = session.active_plan_id.clone() {
-                let state = session.plans.entry(plan_id).or_default();
-                state.boundary_gcj02 = Some(coords.to_vec());
-                state.has_boundary = true;
-            }
             session.drawer.load_determined(vertices);
         }
+        self.context
+            .export_flow
+            .confirm_boundary(boundary_type, coordinates);
         Presentation::ready(self.context.page())
     }
 
-    fn l10n(&self) -> std::cell::Ref<'_, Localization> {
+    pub(crate) fn l10n(&self) -> std::cell::Ref<'_, Localization> {
         std::cell::Ref::map(self.context.injector.borrow(), |injector| injector.l10n())
     }
 }
@@ -1094,6 +1213,23 @@ fn calculate_orientation_angle(points: [[f64; 2]; 2]) -> Option<f32> {
     OrientationLine::new(Point2D::new(x0, y0), Point2D::new(x1, y1))
         .and_then(|line| OrientationCalculator::calculate(&line))
         .map(|orientation| orientation.degree())
+}
+
+fn polygon_coordinates(boundary: &BoundaryView) -> Option<Vec<[f64; 2]>> {
+    first_outer_ring(&boundary.r#type, &boundary.coordinates)
+}
+
+fn first_outer_ring(boundary_type: &str, coordinates: &serde_json::Value) -> Option<Vec<[f64; 2]>> {
+    match boundary_type {
+        "Polygon" => serde_json::from_value::<Vec<Vec<[f64; 2]>>>(coordinates.clone())
+            .ok()
+            .and_then(|rings| rings.into_iter().next()),
+        "MultiPolygon" => serde_json::from_value::<Vec<Vec<Vec<[f64; 2]>>>>(coordinates.clone())
+            .ok()
+            .and_then(|polygons| polygons.into_iter().next())
+            .and_then(|rings| rings.into_iter().next()),
+        _ => None,
+    }
 }
 
 /// 坐标数组的简单重心（经纬度平均值）。
@@ -1108,6 +1244,24 @@ fn centroid(coords: &[[f64; 2]]) -> Option<(f64, f64)> {
         });
     let count = coords.len() as f64;
     Some((sum_lon / count, sum_lat / count))
+}
+
+/// 手动画布没有地图经纬度时，沿用 B5 的平面米语义以校区锚点反投影，
+/// 让“已确认边界”仍能交给 F9 完整导出用例，不在壳层计算导出尺寸。
+fn plane_vertices_to_gcj02(vertices: &[Vertex], anchor_lng: f64, anchor_lat: f64) -> Vec<[f64; 2]> {
+    let center = MercatorCoord::from_lat_lon(anchor_lat, anchor_lng);
+    let scale = anchor_lat.to_radians().cos();
+    vertices
+        .iter()
+        .map(|vertex| {
+            let mercator = MercatorCoord {
+                x: center.x + vertex.x / scale,
+                y: center.y + vertex.y / scale,
+            };
+            let (lat, lon) = mercator.to_lat_lon();
+            [lon, lat]
+        })
+        .collect()
 }
 
 /// 重算确认窗正文：沿用既有重算提示（collection.orientation_recalc_notice），

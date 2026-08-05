@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftVersion {
+    /// Minecraft Java 26.1.2（当前产品唯一生产导出配置）
+    V26_1_2,
     /// 1.20.4 (推荐)
     V1_20_4,
     /// 1.20.2
@@ -20,6 +22,7 @@ pub enum MinecraftVersion {
 impl std::fmt::Display for MinecraftVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::V26_1_2 => write!(f, "26.1.2"),
             Self::V1_20_4 => write!(f, "1.20.4"),
             Self::V1_20_2 => write!(f, "1.20.2"),
             Self::V1_21 => write!(f, "1.21"),
@@ -94,6 +97,20 @@ pub struct MaterialTable {
 }
 
 impl MaterialTable {
+    /// 创建产品生产导出使用的 Minecraft 26.1.2 School 用料表。
+    ///
+    /// 这是与 Sponge 26.1.2 DataVersion 3955 配套的明确配置；生产 F9
+    /// 必须同时核对三者，不能从旧版本表静默回退。
+    pub fn v26_1_2_school() -> Self {
+        Self {
+            minecraft_version: MinecraftVersion::V26_1_2,
+            building_presets: BuildingPresets {
+                school: BuildingBlocks::school_preset(),
+                residential: BuildingBlocks::residential_preset(),
+            },
+        }
+    }
+
     /// 创建 1.20.4 版本的 School 预设用料表
     pub fn v1_20_4_school() -> Self {
         Self {
@@ -130,18 +147,99 @@ impl MaterialTable {
         }
     }
 
-    /// 检查单个方块是否在目标版本存在
-    ///
-    /// # 注意
-    /// 这是简化实现。实际项目应从 MC 官方数据库或权威来源加载版本方块列表。
-    /// 这里仅校验格式是否规范。
+    /// 验证当前配置中的所有建筑用料方块。
+    pub fn validate_configured_blocks(&self) -> Result<Vec<String>, ValidationError> {
+        let school = &self.building_presets.school;
+        let residential = &self.building_presets.residential;
+        let blocks = [
+            &school.foundation,
+            &school.wall,
+            &school.window,
+            &school.floor,
+            &school.roof,
+            &school.entrance,
+            &school.accent,
+            &residential.foundation,
+            &residential.wall,
+            &residential.window,
+            &residential.floor,
+            &residential.roof,
+            &residential.entrance,
+            &residential.accent,
+        ]
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+        self.validate_blocks(&blocks)
+    }
+
+    /// Check one block ID against the authoritative allowlist for its Minecraft version.
     fn is_valid_block(&self, block: &str) -> bool {
-        // 简化：只校验 format，实际应动态检测版本兼容性
-        // 例如：minecraft:crafter 只在 1.21+ 可用
-        block.starts_with("minecraft:") && !block.is_empty()
+        block_id_is_allowed(self.minecraft_version, block)
     }
 }
 
+const MINECRAFT_26_1_2_ALLOWED_BLOCKS: &[&str] = &[
+    "minecraft:air",
+    "minecraft:bricks",
+    "minecraft:dark_oak_door",
+    "minecraft:dark_oak_slab",
+    "minecraft:dirt",
+    "minecraft:glass_pane",
+    "minecraft:grass_block",
+    "minecraft:light_gray_concrete",
+    "minecraft:oak_leaves",
+    "minecraft:oak_log",
+    "minecraft:oak_planks",
+    "minecraft:rail",
+    "minecraft:red_concrete",
+    "minecraft:smooth_sandstone",
+    "minecraft:smooth_stone",
+    "minecraft:spruce_door",
+    "minecraft:spruce_planks",
+    "minecraft:stone",
+    "minecraft:stone_bricks",
+    "minecraft:stone_slab",
+    "minecraft:water",
+    "minecraft:white_concrete",
+];
+
+const MINECRAFT_1_20_4_ALLOWED_BLOCKS: &[&str] = MINECRAFT_26_1_2_ALLOWED_BLOCKS;
+
+const MINECRAFT_1_21_ALLOWED_BLOCKS: &[&str] = &[
+    "minecraft:air",
+    "minecraft:bricks",
+    "minecraft:crafter",
+    "minecraft:dark_oak_door",
+    "minecraft:dark_oak_slab",
+    "minecraft:dirt",
+    "minecraft:glass_pane",
+    "minecraft:grass_block",
+    "minecraft:light_gray_concrete",
+    "minecraft:oak_leaves",
+    "minecraft:oak_log",
+    "minecraft:oak_planks",
+    "minecraft:rail",
+    "minecraft:red_concrete",
+    "minecraft:smooth_sandstone",
+    "minecraft:smooth_stone",
+    "minecraft:spruce_door",
+    "minecraft:spruce_planks",
+    "minecraft:stone",
+    "minecraft:stone_bricks",
+    "minecraft:stone_slab",
+    "minecraft:water",
+    "minecraft:white_concrete",
+];
+
+pub(crate) fn block_id_is_allowed(version: MinecraftVersion, block: &str) -> bool {
+    let allowed = match version {
+        MinecraftVersion::V26_1_2 => MINECRAFT_26_1_2_ALLOWED_BLOCKS,
+        MinecraftVersion::V1_20_4 | MinecraftVersion::V1_20_2 => MINECRAFT_1_20_4_ALLOWED_BLOCKS,
+        MinecraftVersion::V1_21 => MINECRAFT_1_21_ALLOWED_BLOCKS,
+    };
+    allowed.contains(&block)
+}
 /// 多套建筑预设
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -189,9 +287,9 @@ mod tests {
 
     #[test]
     fn test_material_table_creation() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
 
-        assert_eq!(table.minecraft_version, MinecraftVersion::V1_20_4);
+        assert_eq!(table.minecraft_version, MinecraftVersion::V26_1_2);
         assert_eq!(
             table.building_presets.school.foundation,
             "minecraft:stone_bricks"
@@ -204,7 +302,7 @@ mod tests {
 
     #[test]
     fn test_validate_blocks() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
         let blocks = vec![
             "minecraft:stone_bricks".to_string(),
             "minecraft:bricks".to_string(),
@@ -218,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_format() {
-        let table = MaterialTable::v1_20_4_school();
+        let table = MaterialTable::v26_1_2_school();
         let blocks = vec!["air".to_string(), "tnt".to_string()];
 
         // air 不是有效方块 ID 格式（无 namespace）
@@ -228,8 +326,28 @@ mod tests {
 
     #[test]
     fn test_display_minecraft_version() {
+        assert_eq!(format!("{}", MinecraftVersion::V26_1_2), "26.1.2");
         assert_eq!(format!("{}", MinecraftVersion::V1_20_4), "1.20.4");
         assert_eq!(format!("{}", MinecraftVersion::V1_20_2), "1.20.2");
         assert_eq!(format!("{}", MinecraftVersion::V1_21), "1.21");
+    }
+
+    #[test]
+    fn product_26_1_2_configuration_validates_all_known_blocks() {
+        assert!(MaterialTable::v26_1_2_school()
+            .validate_configured_blocks()
+            .is_ok());
+    }
+    #[test]
+    fn product_version_rejects_unknown_namespaced_block_id() {
+        let table = MaterialTable::v26_1_2_school();
+        let blocks = vec!["minecraft:not_a_real_block".to_owned()];
+
+        let error = table
+            .validate_blocks(&blocks)
+            .expect_err("an unknown namespaced block must not pass a prefix-only check");
+
+        assert_eq!(error.invalid_blocks, blocks);
+        assert_eq!(error.version, "26.1.2");
     }
 }

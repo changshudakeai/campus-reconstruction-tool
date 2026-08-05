@@ -21,6 +21,28 @@ fn read_workspace_file(relative: &str) -> String {
         panic!("无法读取书面契约 {}: {error}", path.display());
     })
 }
+
+fn read_desktop_sources() -> String {
+    fn append_sources(path: &Path, output: &mut String) {
+        let entries = fs::read_dir(path)
+            .unwrap_or_else(|error| panic!("无法读取 S1 源目录 {}: {error}", path.display()));
+        for entry in entries {
+            let entry = entry.expect("读取 S1 源目录项");
+            let path = entry.path();
+            if path.is_dir() {
+                append_sources(&path, output);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                output.push_str(&fs::read_to_string(&path).unwrap_or_else(|error| {
+                    panic!("无法读取 S1 源文件 {}: {error}", path.display())
+                }));
+            }
+        }
+    }
+
+    let mut source = String::new();
+    append_sources(&workspace_root().join("apps/desktop/src"), &mut source);
+    source
+}
 fn find_flow_row<'a>(baseline: &'a str, flow: &str) -> &'a str {
     let row_prefix = format!("| **{flow}** |");
     baseline
@@ -131,20 +153,43 @@ fn behavior_baseline_covers_every_flow_and_outcome_at_the_ui_seam() {
     );
     assert!(
         baseline.contains("不切换到内存数据或假首开页")
-            && baseline.contains("不存在失败后返回评审的行为"),
-        "基线必须如实固定启动读取失败与导出占位的现有可观察行为"
+            && baseline.contains("生成、版本核对或落盘失败时显示失败状态"),
+        "基线必须如实固定启动读取失败与 M1 导出失败的可观察行为"
     );
 }
 
 #[test]
-fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
+fn public_ui_seam_matches_startup_settings_and_m1_export() {
     let baseline =
         read_workspace_file("docs/behavior-baselines/s1-current-user-observable-behavior.md");
-    for flow in ["采集", "评审", "导出"] {
-        let row = find_flow_row(&baseline, flow);
+    let review_row = find_flow_row(&baseline, "评审");
+    assert!(
+        review_row.contains("当前仅显示占位页") && review_row.contains("没有可观察的"),
+        "评审仍应记录提交树中的占位现状"
+    );
+    let export_row = find_flow_row(&baseline, "导出");
+    for observable in [
+        "边界确认后",
+        "后台完成后",
+        "立即显示处理中",
+        "失败不显示成功产物",
+    ] {
         assert!(
-            row.contains("当前仅显示占位页") && row.contains("没有可观察的"),
-            "{flow} 必须记录提交树中的占位现状，不能提前冻结后续工单行为"
+            export_row.contains(observable),
+            "M1 导出基线缺少可观察事实：{observable}"
+        );
+    }
+
+    let collection_row = find_flow_row(&baseline, "采集");
+    for observable in [
+        "初始“待定”状态",
+        "正在从地图平台拉数据……",
+        "无疑点时静默通过",
+        "合并为一扇",
+    ] {
+        assert!(
+            collection_row.contains(observable),
+            "采集基线必须记录 s1-07 的可观察行为：{observable}"
         );
     }
 
@@ -184,4 +229,139 @@ fn public_ui_seam_matches_startup_settings_and_later_step_placeholders() {
         assert!(!window.get_error_dialog_visible());
         assert!(!window.get_confirm_dialog_visible());
     }
+}
+
+#[test]
+fn export_s1_seam_submits_one_complete_f9_intent() {
+    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let seam = source
+        .split("impl ExportProductionAdapter")
+        .nth(1)
+        .and_then(|tail| tail.split("struct NotificationLabels").next())
+        .expect("导出适配器必须存在");
+
+    assert!(seam.contains("ExportPresentationRequest::Start"));
+    assert_eq!(
+        seam.matches("self.flow.start()").count(),
+        1,
+        "S1 导出接缝只能提交一次 F9 完整开始意图"
+    );
+    for forbidden in [
+        "collect_and_audit(",
+        "database_mut(",
+        "BoundaryExportRequest",
+        "default_export_location",
+        "minecraft_version",
+        "boundary_gcj02",
+        "orientation_angle",
+        "session.plans",
+        "PathBuf",
+        "generate_flat_ground(",
+        "write_schematic(",
+        "ManifestGenerator",
+        "GenerationEngine",
+    ] {
+        assert!(
+            !seam.contains(forbidden),
+            "S1 导出适配器不得协调底层步骤：{forbidden}"
+        );
+    }
+    assert!(
+        seam.contains("Presentation::processing")
+            || seam.contains("ExportPresentationRequest::Poll"),
+        "S1 必须呈现 F9 的后台处理中状态，而不是同步等待结果"
+    );
+}
+
+#[test]
+fn export_input_assembly_is_not_kept_in_runtime_or_workspace_shell_files() {
+    for path in [
+        "apps/desktop/src/runtime.rs",
+        "apps/desktop/src/production/workspace_boundary.rs",
+    ] {
+        let source = read_workspace_file(path);
+        for forbidden in [
+            "BoundaryExportRequest",
+            "BoundaryExportInput",
+            "ExportInputSnapshot",
+            "ExportInputStore",
+            "BoundaryExportPort",
+            "load_request(",
+            "default_export_location",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} ??????? F9 ???????{forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_entire_s1_source_tree_has_no_formal_f9_input_assembly() {
+    let source = read_desktop_sources();
+    for forbidden in [
+        "BoundaryExportRequest",
+        "BoundaryExportInput",
+        "ExportInputSnapshot",
+        "ExportInputStore",
+        "BoundaryExportPort",
+        "load_request(",
+        "BoundaryExportFlow {",
+        "MockSealGate",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "S1 全部源文件不得持有或组装 F9 正式输入：{forbidden}"
+        );
+    }
+}
+
+#[test]
+fn export_failure_facts_have_a_localized_background_branch_and_diagnostic_seam() {
+    let resources = read_workspace_file("core/localization/resources/zh-CN.json");
+    assert!(
+        resources.contains("\"export_background_failed\"")
+            && resources.contains("\"failure_user_message\""),
+        "????????????????????"
+    );
+
+    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let failure = source
+        .split("fn failure_presentation")
+        .nth(1)
+        .and_then(|tail| tail.split("impl PresentationAdapter").next())
+        .expect("????????????");
+    assert!(
+        failure.contains("with_diagnostic_action"),
+        "????????? B7 ????????"
+    );
+    assert!(
+        !failure.contains("export.failure_detail")
+            && !failure.contains("let diagnostic = error.to_string()"),
+        "error.to_string() ?????????????"
+    );
+}
+
+#[test]
+fn workspace_shell_does_not_hold_formal_boundary_or_synthesize_collection_fallback() {
+    let workspace = read_workspace_file("apps/desktop/src/production/workspace_boundary.rs");
+    for forbidden in [
+        "use shared_domain_types::{Boundary",
+        "state.boundary",
+        "export_flow.set_boundary(",
+    ] {
+        assert!(
+            !workspace.contains(forbidden),
+            "S1 工作区不得持有或镜像正式边界：{forbidden}"
+        );
+    }
+
+    let production = read_workspace_file("apps/desktop/src/production/mod.rs");
+    assert!(
+        !production.contains("let delta = 0.0001")
+            && !production.contains("anchor_lng - delta")
+            && !production.contains("unwrap_or((116.397, 39.916))"),
+        "候选采集不得用校区锚点合成静默矩形后备"
+    );
 }

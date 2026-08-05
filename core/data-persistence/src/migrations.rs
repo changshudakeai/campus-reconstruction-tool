@@ -15,7 +15,10 @@ struct Migration {
     sql: &'static str,
 }
 
-/// 全部迁移，按版本号升序排列
+/// 全部迁移，按版本号升序排列。
+///
+/// V2 正式发布前，开发数据库在 schema 基线变化后删除重建；因此此处只描述
+/// 新装数据库的当前基线，不保留旧开发数据库的恢复分支。
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -37,10 +40,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "校区地址列：address（最近使用记录展示校区地址，ADR-0006）",
         sql: include_str!("../migrations/004_add_campus_address.sql"),
     },
+    Migration {
+        version: 5,
+        description: "候选投影与完整采集批次（ADR-0040）",
+        sql: include_str!("../migrations/005_add_candidate_projections.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 4;
+pub const LATEST_SCHEMA_VERSION: u32 = 5;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
@@ -65,9 +73,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
 
         let tx = conn.transaction()?;
         tx.execute_batch(migration.sql)
-            .map_err(|err| Error::MigrationFailed {
+            .map_err(|error| Error::MigrationFailed {
                 version: migration.version,
-                message: err.to_string(),
+                message: error.to_string(),
             })?;
         tx.execute(
             "INSERT INTO schema_migrations (version, description) VALUES (?1, ?2)",
@@ -93,16 +101,22 @@ mod tests {
 
     #[test]
     fn migrations_are_ordered_and_match_latest() {
-        let versions: Vec<u32> = MIGRATIONS.iter().map(|m| m.version).collect();
+        let versions: Vec<u32> = MIGRATIONS
+            .iter()
+            .map(|migration| migration.version)
+            .collect();
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(*versions.last().unwrap(), LATEST_SCHEMA_VERSION);
     }
 
     #[test]
-    fn run_migrations_is_idempotent() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        run_migrations(&mut conn).unwrap();
-        run_migrations(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
+    fn fresh_migration_chain_is_idempotent() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        run_migrations(&mut connection).unwrap();
+        assert_eq!(
+            current_version(&connection).unwrap(),
+            Some(LATEST_SCHEMA_VERSION)
+        );
     }
 }

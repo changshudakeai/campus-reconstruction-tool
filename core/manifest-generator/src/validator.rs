@@ -2,7 +2,7 @@
 //!
 //! 依据 ADR-0024：用料表与 MC 版本强绑定，只准用目标版本存在的方块。
 
-use crate::materials::{MinecraftVersion, ValidationError};
+use crate::materials::{block_id_is_allowed, MinecraftVersion, ValidationError};
 
 /// 用料表验证器
 pub struct MaterialValidator;
@@ -24,7 +24,6 @@ impl MaterialValidator {
     /// * `Err(ValidationError)` - 存在无效方块
     ///
     /// # 注意事项
-    /// 这是简化实现。实际项目应维护各版本的方块白名单数据库。
     pub fn validate_blocks_for_version(
         &self,
         version: MinecraftVersion,
@@ -51,38 +50,9 @@ impl MaterialValidator {
         }
     }
 
-    /// 检查单个方块在指定版本是否存在
-    ///
-    /// # 简化规则
-    /// - 所有支持版本都有 minecraft:* namespace 的常用方块
-    /// - 特定版本的方块会有标记（例如 "minecraft:crafter" 仅在 1.21+ 可用）
-    /// - 未实现的版本特异性规则会静默通过校验
-    ///
-    /// # 注意
-    /// 此方法为占位实现，真实场景应加载权威版本方块数据库
+    /// Check one block ID against the authoritative allowlist for its Minecraft version.
     fn is_valid_block(&self, version: MinecraftVersion, block: &str) -> bool {
-        if !block.starts_with("minecraft:") || block.is_empty() {
-            return false;
-        }
-
-        // 提取方块名（去除 namespace）
-        let block_name = &block[10..];
-
-        // 版本特异性检查（可扩展）
-        match version {
-            MinecraftVersion::V1_20_4 | MinecraftVersion::V1_20_2 => {
-                // 1.20.x 支持的方块子集
-                // 例：minecraft:crafter 只在 1.21+ 引入
-                if block_name == "crafter" {
-                    return false;
-                }
-                true
-            }
-            MinecraftVersion::V1_21 => {
-                // 1.21 新增方块全部可用
-                true
-            }
-        }
+        block_id_is_allowed(version, block)
     }
 
     /// 获取指定版本的基础方块列表（Arnis 默认用料）

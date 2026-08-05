@@ -27,6 +27,7 @@
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
 mod boundary_edit_map_page;
+mod boundary_edit_multipolygon_script;
 mod boundary_sorting;
 mod error;
 mod map_page;

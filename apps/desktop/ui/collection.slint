@@ -1,0 +1,32 @@
+// F4 采集页：仅呈现功能入口返回的状态，文案全部经 B6 注入。
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component CollectionView inherits Rectangle {
+    in property <string> source-label;
+    in property <string> collect-label;
+    in property <string> progress-label;
+    in property <[string]> category-labels;
+    in property <[string]> category-statuses;
+    in property <string> category-skip-label;
+    in property <string> diff-summary;
+    in property <string> report-entry-label;
+    in property <string> report-body;
+    callback start-clicked();
+    callback report-clicked();
+
+    background: Theme.surface;
+    VerticalLayout {
+        x: 16px; y: 8px; width: parent.width - 32px; spacing: 12px;
+        Text { text: root.source-label; color: Theme.text-secondary; }
+        Text { text: root.progress-label; color: Theme.text-primary; wrap: word-wrap; }
+        for label[i] in root.category-labels: HorizontalLayout {
+            Text { text: label; color: Theme.text-primary; }
+            Text { text: root.category-statuses[i] + " · " + root.category-skip-label; color: Theme.text-secondary; horizontal-stretch: 1; horizontal-alignment: right; }
+        }
+        Text { text: root.diff-summary; color: Theme.text-secondary; wrap: word-wrap; }
+        Button { text: root.collect-label; primary: true; clicked => { root.start-clicked(); } }
+        Button { text: root.report-entry-label; clicked => { root.report-clicked(); } }
+        Text { text: root.report-body; color: Theme.text-secondary; wrap: word-wrap; }
+    }
+}

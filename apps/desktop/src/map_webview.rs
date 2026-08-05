@@ -40,8 +40,6 @@ struct WebViewState {
     /// 上次使用的密钥（recreate 时复用）
     last_api_key: String,
     last_security_key: String,
-    /// 上次锚点（recreate 时复用）
-    last_anchor: (f64, f64),
     /// resize 跟随轮询定时器（hide 时 drop 即停）
     resize_timer: Option<slint::Timer>,
     /// 上次同步的（窗口逻辑宽度, 缩放因子）——变化才 set_bounds
@@ -57,7 +55,6 @@ thread_local! {
             status_handler: None,
             last_api_key: String::new(),
             last_security_key: String::new(),
-            last_anchor: (116.397, 39.916),
             resize_timer: None,
             last_size_scale: (0, 0.0),
         })
@@ -150,7 +147,6 @@ pub(crate) fn show(
         let mut state = s.borrow_mut();
         state.last_api_key = api_key.clone();
         state.last_security_key = security_key.clone();
-        state.last_anchor = (anchor_lon, anchor_lat);
     });
 
     let weak_for_timer = window_weak.clone();
@@ -214,7 +210,6 @@ pub(crate) fn show_with_config(
         let mut state = s.borrow_mut();
         state.last_api_key = config.api_key.clone();
         state.last_security_key = config.security_key.clone();
-        state.last_anchor = (config.anchor_lon, config.anchor_lat);
     });
 
     let weak_for_timer = window_weak.clone();

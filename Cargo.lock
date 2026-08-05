@@ -1279,9 +1279,11 @@ dependencies = [
  "chrono",
  "public-api",
  "rusqlite",
+ "rustdoc-json",
  "serde_json",
  "sha2",
  "shared-domain-types",
+ "tempfile",
  "thiserror 2.0.19",
  "uuid",
 ]
@@ -1352,7 +1354,7 @@ dependencies = [
  "coverage-audit",
  "data-acquisition",
  "data-persistence",
- "export-console",
+ "export-flow",
  "foundation-mode",
  "gaode-client",
  "global-settings",
@@ -1657,9 +1659,12 @@ dependencies = [
 name = "export-console"
 version = "2.0.0-dev"
 dependencies = [
+ "chrono",
  "data-persistence",
+ "foundation-mode",
  "generation-engine",
  "localization",
+ "manifest-generator",
  "notification-center",
  "public-api",
  "review-workbench",
@@ -1668,6 +1673,20 @@ dependencies = [
  "sponge-export",
  "tempfile",
  "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "export-flow"
+version = "2.0.0-dev"
+dependencies = [
+ "data-persistence",
+ "export-console",
+ "global-settings",
+ "project-management",
+ "serde_json",
+ "shared-domain-types",
+ "tempfile",
 ]
 
 [[package]]
@@ -1918,6 +1937,7 @@ dependencies = [
  "geo",
  "public-api",
  "serde",
+ "serde_json",
  "shared-domain-types",
  "thiserror 2.0.19",
 ]
@@ -2197,6 +2217,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5a7f08910fd98737a6eda7568e7c5e645093e073328eeef49758cfe8b0489c7"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "geometry-validator"
+version = "2.0.0-dev"
+dependencies = [
+ "public-api",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -5165,6 +5193,7 @@ dependencies = [
  "data-persistence",
  "localization",
  "public-api",
+ "rustdoc-json",
  "serde",
  "serde_json",
  "shared-domain-types",

@@ -3,6 +3,7 @@
 //! 每个入口把一次请求交给一个可替换适配器，并一次取得页面、操作、导航、
 //! 确认与通知的完整呈现结果。入口只认识呈现数据，不持有正式业务数据，
 //! 也不协调功能模块内部步骤。
+// ignore-tidy-filelength: 所有页面状态与统一渲染接缝集中于此；S1-07 追加采集可观察状态后略超红线，拆分会让页面接缝分散。
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -289,7 +290,7 @@ impl<Page> Presentation<Page> {
     }
 }
 
-trait WindowPageState {
+pub(crate) trait WindowPageState {
     fn render(&self, window: &AppWindow);
 }
 
@@ -714,6 +715,19 @@ pub enum WorkspaceRequest {
     OrientationModeChanged { mode: String },
 }
 
+/// S1 导出页面只提交“显示确认”或“一次开始导出”意图；完整业务链由 F9 接管。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportPresentationRequest {
+    /// 进入导出步骤，显示可导出的确认状态。
+    Open,
+    /// 用户点击一次开始导出按钮。
+    Start,
+    /// S1 内部观察 F9 已提交操作的真实进度或终态。
+    Poll,
+    /// 离开导出上下文，丢弃旧页面的结果交付。
+    Abandon,
+}
+
 /// 当前五步工作区页的全部可观察状态。
 #[derive(Clone)]
 pub struct WorkspacePageState {
@@ -769,6 +783,7 @@ impl WorkspacePageState {
         window.set_workspace_stepper_collection_label(self.collection_step_label.clone().into());
         window.set_workspace_stepper_review_label(self.review_step_label.clone().into());
         window.set_workspace_stepper_export_label(self.export_step_label.clone().into());
+        window.set_workspace_export_start_label(self.export_step_label.clone().into());
         window.set_workspace_tutorial_visible(self.tutorial_visible);
         window.set_workspace_tutorial_text(self.tutorial_text.clone().into());
         window.set_workspace_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());
@@ -799,7 +814,35 @@ macro_rules! workspace_page_state {
     };
 }
 
-workspace_page_state!(CollectionPageState, 2, "采集入口的当前完整占位页状态。");
+/// 采集步骤的完整可观察状态。
+#[derive(Clone)]
+pub struct CollectionPageState {
+    pub workspace: WorkspacePageState,
+    pub source_label: String,
+    pub collect_label: String,
+    pub progress_label: String,
+    pub category_labels: Vec<String>,
+    pub category_statuses: Vec<String>,
+    pub category_skip_label: String,
+    pub diff_summary: String,
+    pub report_entry_label: String,
+    pub report_body: String,
+}
+
+impl WindowPageState for CollectionPageState {
+    fn render(&self, window: &AppWindow) {
+        self.workspace.render_with_step(window, 2);
+        window.set_collection_source_label(self.source_label.clone().into());
+        window.set_collection_collect_label(self.collect_label.clone().into());
+        window.set_collection_progress_label(self.progress_label.clone().into());
+        window.set_collection_category_labels(string_model(&self.category_labels));
+        window.set_collection_category_statuses(string_model(&self.category_statuses));
+        window.set_collection_category_skip_label(self.category_skip_label.clone().into());
+        window.set_collection_diff_summary(self.diff_summary.clone().into());
+        window.set_collection_report_entry_label(self.report_entry_label.clone().into());
+        window.set_collection_report_body(self.report_body.clone().into());
+    }
+}
 workspace_page_state!(ReviewPageState, 3, "评审入口的当前完整占位页状态。");
 workspace_page_state!(CoveragePageState, 2, "覆盖率入口的当前完整占位页状态。");
 workspace_page_state!(ExportPageState, 4, "导出入口的当前完整占位页状态。");

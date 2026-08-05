@@ -181,7 +181,11 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
     );
     assert_eq!(window.get_workspace_completed_steps(), 1);
     assert_eq!(window.get_workspace_step_locked().row_data(1), Some(false));
-    assert_eq!(window.get_workspace_step_locked().row_data(2), Some(true));
+    assert_eq!(
+        window.get_workspace_step_locked().row_data(2),
+        Some(false),
+        "确认边界后采集与导出均可直接进入"
+    );
     assert_eq!(
         window.get_workspace_step_completed().row_data(0),
         Some(true)

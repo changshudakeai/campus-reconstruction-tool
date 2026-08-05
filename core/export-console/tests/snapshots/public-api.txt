@@ -21,6 +21,12 @@ CANCEL_BUTTON = "app.cancel_button"
 
 ## Structures
 
+pub struct BoundaryExportRequest { pub boundary: Option<shared_domain_types::Boundary>, pub boundary_confirmed: bool, pub orientation: Option<shared_domain_types::Orientation>, pub schematic_path: PathBuf, pub manifest_path: PathBuf }
+pub struct BoundaryExportResult { pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub manifest: manifest_generator::FoundationManifest, pub cleanup_warning: Option<String>, pub schematic_dimensions: [usize; 3] }
+pub struct BoundaryExportOperation { .. }
+pub struct BoundaryExportPort { .. }
+pub struct ExportFileKind
+pub struct StdExportFileSystem
 pub struct ExportRequest { pub plan_id: String, pub keep_by_category: Vec<(CandidateCategory, usize)>, pub keep_total: usize, pub pending_count: usize, pub remove_count: usize, pub keep_candidates: Vec<String> }
 pub struct ExportSummary { pub plan_id: String, pub export_count: usize, pub by_category: Vec<(CandidateCategory, usize)>, pub output_path: String }   #[non_exhaustive]
 pub struct ExportConsole<G: SealGate> { .. }
@@ -53,12 +59,24 @@ pub enum NavigationTarget {
 }
 
 pub enum Error {
+    Boundary(BoundaryError),
+    Version(VersionError),
     InvalidState(&'static str),
     BadPlanId(String),
     SealFailed(String),
     Generation(generation_engine::GenerationError),
     SchematicWrite(String),
+    ManifestWrite(String),
+    ArtifactWrite(ArtifactWriteError),
+    ArtifactRecovery(ArtifactRecoveryError),
+    BackgroundTask,
 }
+
+pub enum BoundaryError { Missing, NotConfirmed, Invalid(String) }
+pub enum VersionError { Unsupported { requested: String }, MaterialTableMismatch { requested: String, material_table: String }, SchematicProfileMismatch { requested: String, data_version: i32 }, InvalidMaterialTable { version: String, detail: String } }
+pub enum ArtifactKind { Schematic, Manifest }
+pub enum ArtifactWriteError { InvalidTarget { detail: String }, Publish { artifact: ArtifactKind, path: PathBuf, detail: String }, Cleanup { path: PathBuf, detail: String } }
+pub enum ArtifactRecoveryError { Failed { primary: String, recovery: String, paths: Vec<PathBuf> } }
 
 ## Traits & Implementations
 
@@ -66,9 +84,25 @@ pub trait SealGate: Send + Sync {
     fn seal(&self, plan_id: &PlanId) -> Result<(), String>
     fn release(&self, plan_id: &PlanId) -> Result<(), String>
 }
+pub trait BoundaryExportInput: Send + Sync
+pub trait ExportFileSystem: Send + Sync
 
 impl ExportRequest {
     pub fn new(plan_id: String, keep_by_category: Vec<(CandidateCategory, usize)>, keep_total: usize, pending_count: usize, remove_count: usize, keep_candidates: Vec<String>) -> Self
+}
+
+impl BoundaryExportRequest {
+    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self
+    pub fn from_plan_info(plan: manifest_generator::PlanInfo, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self
+}
+
+impl BoundaryExportOperation {
+    pub fn progress_view(&self) -> ExportProgressView
+    pub fn try_complete(&mut self) -> Option<Result<BoundaryExportResult>>
+}
+
+impl BoundaryExportPort {
+    pub fn start(&self) -> Result<BoundaryExportOperation>
 }
 
 impl ExportStage {
@@ -96,6 +130,11 @@ impl SealGate for MockSealGate
 impl<G: SealGate> ExportConsole<G> {
     // 缝 5：接收导出请求 + 确认弹窗
     pub fn new(gate: G) -> Self
+    pub fn new_with_material_table(gate: G, material_table: manifest_generator::MaterialTable) -> Self
+    pub fn new_with_material_table_and_file_system(gate: G, material_table: manifest_generator::MaterialTable, file_system: Arc<dyn ExportFileSystem>) -> Self
+    pub fn boundary_export_port(&self, input: Arc<dyn BoundaryExportInput>) -> BoundaryExportPort
+    pub fn start_boundary_export(&self, input: Arc<dyn BoundaryExportInput>) -> Result<BoundaryExportOperation>
+    pub fn export_confirmed_boundary(&mut self, request: BoundaryExportRequest) -> Result<BoundaryExportResult>
     pub fn load_request(&mut self, request: ExportRequest) -> Result<()>
     pub fn confirm_dialog_view(&self) -> Option<ExportConfirmDialogView>
     pub fn cancel(&mut self) -> Result<()>
