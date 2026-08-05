@@ -88,9 +88,34 @@ impl QuietSentinel {
         skipped_categories: Vec<CandidateCategory>,
         l10n: &Localization,
     ) -> Result<AuditOutcome> {
+        let outcome = self.after_collection_facts(db, plan_id, counts, skipped_categories, l10n)?;
+        if let Some(popup) = &outcome.popup {
+            notification_center::error(
+                l10n.t("audit.source_tag"),
+                popup.title.clone(),
+                popup.body.clone(),
+            );
+        }
+        Ok(outcome)
+    }
+
+    /// 采集结束后的体检编排（**事实变体**）：返回审计结果与待呈现的合并
+    /// 疑点窗，**不调用 B7 呈现**。
+    ///
+    /// 供后台执行的 A1 collection-flow 在接口后汇总影响，并把弹窗事实交给
+    /// S1 通知能力在 UI 线程呈现（ADR-0039：S1 只呈现 A1 返回的页面状态与
+    /// 通知事实）；裁决记忆仍在此处按同一规则落库。
+    pub fn after_collection_facts(
+        &self,
+        db: &mut impl AppSettingsApi,
+        plan_id: &PlanId,
+        counts: &[u32; 6],
+        skipped_categories: Vec<CandidateCategory>,
+        l10n: &Localization,
+    ) -> Result<AuditOutcome> {
         let result = self.audit.audit(counts, skipped_categories);
         let mut resolver = DecisionResolver::new(); // 重新采集：旧裁决作废
-        let popup = self.present_issues(&result, &mut resolver, l10n);
+        let popup = self.build_popup(&result, &mut resolver, l10n);
         resolver.save(db, plan_id)?;
         Ok(AuditOutcome { result, popup })
     }
@@ -109,7 +134,14 @@ impl QuietSentinel {
     ) -> Result<AuditOutcome> {
         let result = self.audit.audit(counts, skipped_categories);
         let mut resolver = DecisionResolver::load(db, plan_id)?;
-        let popup = self.present_issues(&result, &mut resolver, l10n);
+        let popup = self.build_popup(&result, &mut resolver, l10n);
+        if let Some(popup) = &popup {
+            notification_center::error(
+                l10n.t("audit.source_tag"),
+                popup.title.clone(),
+                popup.body.clone(),
+            );
+        }
         resolver.save(db, plan_id)?;
         Ok(AuditOutcome { result, popup })
     }
@@ -152,10 +184,11 @@ impl QuietSentinel {
         }
     }
 
-    /// 疑点呈现共通流程：过滤已裁决 → 合并一窗经 B7 弹出 → 记住裁决。
+    /// 疑点合并共通流程：过滤已裁决 → 合并一窗 → 记住裁决。
     ///
-    /// 返回弹出的窗口视图；无待弹疑点时返回 None（安静通过）。
-    fn present_issues(
+    /// 返回待呈现的窗口视图（不含 B7 呈现调用）；无待弹疑点时返回 None
+    /// （安静通过）。
+    fn build_popup(
         &self,
         result: &AuditResult,
         resolver: &mut DecisionResolver,
@@ -175,15 +208,6 @@ impl QuietSentinel {
                 .join("\n"),
             ack_label: l10n.t("dialog.ok_button"),
         };
-
-        // 弹窗铁律（ADR-0021）：疑点关乎采集数据质量 → error 级模态弹窗，
-        // 禁横幅；B7 同步留底进公告栏。壳注册的 Presenter 会阻塞到用户
-        // 点"知道了"才返回 —— 返回即视为裁决完成。
-        notification_center::error(
-            l10n.t("audit.source_tag"),
-            view.title.clone(),
-            view.body.clone(),
-        );
 
         for issue in &result.issues {
             resolver.record_decision(issue);

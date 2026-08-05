@@ -173,6 +173,14 @@ impl CollectionFlow {
             .is_some_and(PlanCollectionState::review_unlocked)
     }
 
+    /// 把结构化错误汇总为页面状态 + B7 通知事实（A1 决定影响范围，不吞错）。
+    ///
+    /// Start 同步错误（无后台操作）与后台失败共用同一汇总，S1 只绘制并
+    /// 把通知事实交给 B7。
+    pub fn failure_view(&self, error: &CollectionError) -> CollectionFailure {
+        failure_view(&self.l10n, error)
+    }
+
     fn mark_fetching(&self) {
         let Some(plan_id) = self.input.active_plan_id() else {
             return;
@@ -292,30 +300,7 @@ impl CollectionWorker {
 
     /// 采集错误 → 页面状态 + B7 通知事实（A1 汇总影响，不吞错）。
     fn failure(&self, error: &CollectionError) -> CollectionFailure {
-        let message = self.l10n.t(error.user_message_key());
-        let notification = match error {
-            CollectionError::Expired => None,
-            _ => Some(Notification::error(
-                self.l10n.t("app.source_tag"),
-                self.l10n.t("dialog.error_title"),
-                message.clone(),
-            )),
-        };
-        CollectionFailure {
-            page: CollectionPageView {
-                status: CollectionStatus::Failed,
-                progress: CollectionProgressView::fetching(),
-                diff_summary: None,
-                report: None,
-                review_unlocked: false,
-                failure: Some(CollectionFailureView {
-                    message: message.clone(),
-                    diagnostic: error.to_string(),
-                }),
-            },
-            notification,
-            diagnostic: error.to_string(),
-        }
+        failure_view(&self.l10n, error)
     }
 
     /// 完整采集链：F4 采集批次 → B2 原始观测落库 → B14 点线面验证 →
@@ -363,12 +348,13 @@ impl CollectionWorker {
             .candidate_batch_summary(&candidate_batch.id)
             .map_err(CollectionError::Persistence)?;
 
-        // 5. F7：覆盖体检（安静哨兵；疑点经 B7 合并弹窗呈现）。
+        // 5. F7：覆盖体检（安静哨兵；事实变体返回合并疑点窗，弹窗事实由
+        //    A1 汇总后交给 S1/B7 在 UI 线程呈现）。
         let counts = category_counts(&batch);
         let database: &mut Database = &mut db;
         let audit = self
             .sentinel
-            .after_collection(
+            .after_collection_facts(
                 database,
                 &self.request.plan_id,
                 &counts,
@@ -397,6 +383,13 @@ impl CollectionWorker {
             }),
         );
         let report_view = self.build_report_view(&audit, &batch_summary);
+        let notification = audit.popup.as_ref().map(|popup| {
+            Notification::error(
+                self.l10n.t("audit.source_tag"),
+                popup.title.clone(),
+                popup.body.clone(),
+            )
+        });
         Ok(CollectionSummary {
             page: CollectionPageView {
                 status: CollectionStatus::Completed,
@@ -406,7 +399,7 @@ impl CollectionWorker {
                 review_unlocked: true,
                 failure: None,
             },
-            notification: None,
+            notification,
         })
     }
 
@@ -438,6 +431,34 @@ impl CollectionWorker {
             issue_lines: audit_view.issue_lines,
             no_issues_line: audit_view.no_issues_line,
         }
+    }
+}
+
+/// 采集错误 → 页面状态 + B7 通知事实（A1 汇总影响，不吞错）。
+fn failure_view(l10n: &Localization, error: &CollectionError) -> CollectionFailure {
+    let message = l10n.t(error.user_message_key());
+    let notification = match error {
+        CollectionError::Expired => None,
+        _ => Some(Notification::error(
+            l10n.t("app.source_tag"),
+            l10n.t("dialog.error_title"),
+            message.clone(),
+        )),
+    };
+    CollectionFailure {
+        page: CollectionPageView {
+            status: CollectionStatus::Failed,
+            progress: CollectionProgressView::fetching(),
+            diff_summary: None,
+            report: None,
+            review_unlocked: false,
+            failure: Some(CollectionFailureView {
+                message: message.clone(),
+                diagnostic: error.to_string(),
+            }),
+        },
+        notification,
+        diagnostic: error.to_string(),
     }
 }
 

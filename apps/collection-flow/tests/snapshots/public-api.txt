@@ -236,6 +236,7 @@ pub struct collection_flow::CollectionFlow
 impl collection_flow::CollectionFlow
 pub fn collection_flow::CollectionFlow::cancel(&self)
 pub fn collection_flow::CollectionFlow::confirm_boundary(&self, boundary: shared_domain_types::boundary::Boundary)
+pub fn collection_flow::CollectionFlow::failure_view(&self, error: &collection_flow::CollectionError) -> collection_flow::CollectionFailure
 pub fn collection_flow::CollectionFlow::is_review_unlocked(&self, plan_id: &str) -> bool
 pub fn collection_flow::CollectionFlow::leave(&self)
 pub fn collection_flow::CollectionFlow::new(db: alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>, source: alloc::sync::Arc<(dyn data_acquisition::source::DataSource + core::marker::Send + core::marker::Sync)>, l10n: alloc::sync::Arc<localization::Localization>) -> Self
