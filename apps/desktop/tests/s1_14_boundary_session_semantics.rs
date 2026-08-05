@@ -17,25 +17,36 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
 use slint::ComponentHandle;
 
-fn pump_until_terminal(window: &AppWindow) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+/// 轮询直到导出到达终态（Succeeded/Failed），不再依赖固定短超时。
+///
+/// CI（windows-latest 冷缓存/负载）下导出可能超过 5 秒；这里以 30 秒作为宽松
+/// 兜底。超时（仍为 Processing）时返回当前状态，由调用方在断言信息中输出，
+/// 便于 CI 定位。
+fn pump_until_terminal(window: &AppWindow) -> OperationPresentationState {
+    let deadline = Instant::now() + Duration::from_secs(30);
     let weak = window.as_weak();
+    let terminal = std::sync::Arc::new(std::sync::Mutex::new(
+        OperationPresentationState::Processing,
+    ));
+    let terminal_flag = Arc::clone(&terminal);
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(10),
+        Duration::from_millis(20),
         move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
-            if window.get_operation_state() != OperationPresentationState::Processing
-                || Instant::now() >= deadline
-            {
+            let state = window.get_operation_state();
+            if state != OperationPresentationState::Processing || Instant::now() >= deadline {
+                *terminal_flag.lock().expect("terminal state lock") = state;
                 slint::quit_event_loop().expect("stop session semantics export loop");
             }
         },
     );
     slint::run_event_loop_until_quit().expect("run session semantics export loop");
+    let terminal_value = *terminal.lock().expect("terminal state lock");
+    terminal_value
 }
 
 #[test]
@@ -97,10 +108,11 @@ fn confirmed_boundary_is_session_only_and_restart_refuses_without_it() {
             window.get_operation_state(),
             OperationPresentationState::Processing
         );
-        pump_until_terminal(&window);
+        let terminal = pump_until_terminal(&window);
         assert_eq!(
-            window.get_operation_state(),
-            OperationPresentationState::Succeeded
+            terminal,
+            OperationPresentationState::Succeeded,
+            "第一段会话导出必须成功；等待超时或异常状态：{terminal:?}"
         );
         assert!(export_dir.join(format!("{plan_id}.schem")).is_file());
         plan_id.to_string()
@@ -131,11 +143,11 @@ fn confirmed_boundary_is_session_only_and_restart_refuses_without_it() {
     // 无边界时导出必须明确拒绝，而不是静默成功或伪造边界。
     window.invoke_workspace_step_clicked(4);
     window.invoke_workspace_export_start_clicked();
-    pump_until_terminal(&window);
+    let terminal = pump_until_terminal(&window);
     assert_eq!(
-        window.get_operation_state(),
+        terminal,
         OperationPresentationState::Failed,
-        "重启后没有已确认边界时导出必须明确失败"
+        "重启后没有已确认边界时导出必须明确失败；当前状态：{terminal:?}"
     );
     assert!(window.get_error_dialog_visible());
     let expected_body = l10n.t_with_array(

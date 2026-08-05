@@ -241,7 +241,8 @@ fn leave_confirmation_paths_expire_or_preserve_background_export() {
     assert_ne!(app.window.get_active_screen(), 4, "确认后必须离开工作区");
 
     file_system.release_manifest_block();
-    wait_for_file(&app.manifest_path(), Duration::from_secs(5));
+    // CI 冷缓存/负载下 worker 可能超过 5 秒才落盘；用 30 秒宽松兜底。
+    wait_for_file(&app.manifest_path(), Duration::from_secs(30));
     // 给任何仍存活的轮询一个机会把旧结果画回工作区；修复后不会发生。
     let stayed_away = pump_until(
         &app.window,
@@ -300,9 +301,13 @@ fn leave_confirmation_paths_expire_or_preserve_background_export() {
             window.get_operation_state() == OperationPresentationState::Succeeded
                 || window.get_operation_state() == OperationPresentationState::Failed
         },
-        Duration::from_secs(5),
+        Duration::from_secs(30),
     );
-    assert!(succeeded, "停留时后台导出必须到达终态");
+    assert!(
+        succeeded,
+        "停留时后台导出必须到达终态；当前状态：{:?}",
+        app.window.get_operation_state()
+    );
     assert_eq!(
         app.window.get_operation_state(),
         OperationPresentationState::Succeeded,

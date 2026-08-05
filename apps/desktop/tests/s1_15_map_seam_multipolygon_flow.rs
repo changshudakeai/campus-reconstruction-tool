@@ -172,25 +172,33 @@ impl Driver {
     }
 }
 
-fn pump_until_terminal(window: &AppWindow) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+/// 轮询直到导出终态（Succeeded/Failed），30 秒宽松兜底；超时返回当前状态，
+/// 由调用方在断言信息中输出，便于 CI 定位（与 s1_14 同一加固模式）。
+fn pump_until_terminal(window: &AppWindow) -> OperationPresentationState {
+    let deadline = Instant::now() + Duration::from_secs(30);
     let weak = window.as_weak();
+    let terminal = std::sync::Arc::new(std::sync::Mutex::new(
+        OperationPresentationState::Processing,
+    ));
+    let terminal_flag = Arc::clone(&terminal);
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(10),
+        Duration::from_millis(20),
         move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
-            if window.get_operation_state() != OperationPresentationState::Processing
-                || Instant::now() >= deadline
-            {
+            let state = window.get_operation_state();
+            if state != OperationPresentationState::Processing || Instant::now() >= deadline {
+                *terminal_flag.lock().expect("terminal state lock") = state;
                 slint::quit_event_loop().expect("stop seam export loop");
             }
         },
     );
     slint::run_event_loop_until_quit().expect("run seam export loop");
+    let terminal_value = *terminal.lock().expect("terminal state lock");
+    terminal_value
 }
 
 #[test]
@@ -286,7 +294,8 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
     let pump_timer = Rc::new(RefCell::new(slint::Timer::default()));
     let timer_for_pump = Rc::clone(&pump_timer);
     let weak_window = window.as_weak();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // CI 冷启动 WebView2 可能较慢；页面加载/驱动以 60 秒作宽松兜底。
+    let deadline = Instant::now() + Duration::from_secs(60);
     let debug_state = Rc::new(RefCell::new(String::new()));
     let debug_weak = Rc::downgrade(&debug_state);
     pump_timer.borrow().start(
@@ -389,10 +398,11 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
         window.get_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until_terminal(&window);
+    let terminal = pump_until_terminal(&window);
     assert_eq!(
-        window.get_operation_state(),
-        OperationPresentationState::Succeeded
+        terminal,
+        OperationPresentationState::Succeeded,
+        "导出必须成功；等待超时或异常状态：{terminal:?}"
     );
     assert!(export_dir.join(format!("{plan_id}.schem")).is_file());
     assert!(export_dir
