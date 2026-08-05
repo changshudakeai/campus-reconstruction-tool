@@ -138,25 +138,7 @@ fn collection_page_forwards_start_intent_and_presents_a1_outcome() {
                 .as_str()
                 .contains('0')
     });
-    // assert!(
-    //     window.get_error_dialog_visible(),
-    //     "有疑点必须经 B7 弹窗呈现（A1 汇总事实、S1 在 UI 线程发布）"
-    // );
-    // assert_eq!(
-    //     window.get_error_dialog_body().lines().count(),
-    //     6,
-    //     "所有覆盖率疑点必须合并到同一扇窗口"
-    // );
 
-    // 用户点“知道了”：S1 关闭弹窗；A1 后台链继续完成（无需阻塞 worker）。
-    // window.invoke_error_dialog_dismissed();
-    // pump_until(&window, Duration::from_secs(5), |window| {
-    //     window.get_workspace_completed_steps() == 3
-    //         && window
-    //             .get_collection_progress_label()
-    //             .as_str()
-    //             .contains('0')
-    // });
     assert!(
         window
             .get_collection_progress_label()
