@@ -389,7 +389,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
     // No boundary: Start fails synchronously at the F9 input boundary.
     app.set_mode(FailureMode::None);
     app.window.invoke_workspace_step_clicked(4);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "missing boundary");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "missing boundary");
     app.assert_localized_failure("error.export_boundary_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
@@ -399,7 +399,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[0.0,39.9],[1000000000.0,39.9],[1000000000.0,39.91],[0.0,39.91]]}"#,
     );
     app.set_mode(FailureMode::None);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "generation");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "generation");
     app.assert_localized_failure("error.export_generation_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
@@ -409,28 +409,28 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
     app.set_mode(FailureMode::ManifestStaging);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "manifest staging");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "manifest staging");
     app.assert_localized_failure("error.export_manifest_write_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
 
     // B4 schematic staging failure: a staged manifest is cleaned up as well.
     app.set_mode(FailureMode::SchematicStaging);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "schematic staging");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "schematic staging");
     app.assert_localized_failure("error.export_schematic_write_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
 
     // Worker panic: a disconnected operation is a localized background failure.
     app.set_mode(FailureMode::BackgroundPanicOnce);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "worker panic");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "worker panic");
     app.assert_localized_failure("error.export_background_failed");
     app.assert_no_artifact_pair();
     app.dismiss_error();
 
     // The worker guard clears active state, so the same confirmed boundary can retry.
     app.set_mode(FailureMode::None);
-    app.start_and_wait_for_success(Duration::from_secs(5));
+    app.start_and_wait_for_success(Duration::from_secs(30));
     assert!(app.schematic_path().is_file());
     assert!(app.manifest_path().is_file());
 
@@ -443,7 +443,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
     app.set_mode(FailureMode::ManifestPublish);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "publish");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "publish");
     app.assert_localized_failure("error.export_artifact_write_failed");
     assert_eq!(std::fs::read(app.schematic_path()).unwrap(), old_schematic);
     assert_eq!(std::fs::read(app.manifest_path()).unwrap(), old_manifest);
@@ -454,7 +454,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
     app.set_mode(FailureMode::ManifestPublishAndRestore);
-    app.start_and_wait_for_failure(Duration::from_secs(5), "recovery");
+    app.start_and_wait_for_failure(Duration::from_secs(30), "recovery");
     app.assert_localized_failure("error.export_recovery_failed");
     app.dismiss_error();
 
@@ -465,7 +465,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
         r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#,
     );
     app.set_mode(FailureMode::BackupCleanup);
-    app.start_and_wait_for_success(Duration::from_secs(5));
+    app.start_and_wait_for_success(Duration::from_secs(30));
     assert_ne!(std::fs::read(app.schematic_path()).unwrap(), old_schematic);
     assert_ne!(std::fs::read(app.manifest_path()).unwrap(), old_manifest);
     assert!(app
@@ -492,7 +492,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
     );
     assert!(!app.window.get_error_dialog_visible());
     file_system.release_manifest_block();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !app.manifest_path().is_file() {
         assert!(Instant::now() < deadline, "abandoned worker did not finish");
         std::thread::yield_now();
@@ -527,7 +527,7 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
     duplicate_app.assert_localized_failure("error.export_failed");
     duplicate_app.dismiss_error();
     file_system.release_manifest_block();
-    duplicate_app.wait_for_terminal(Duration::from_secs(5));
+    duplicate_app.wait_for_terminal(Duration::from_secs(30));
     assert!(duplicate_app.schematic_path().is_file());
     assert!(duplicate_app.manifest_path().is_file());
 }

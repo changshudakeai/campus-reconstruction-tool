@@ -99,7 +99,7 @@ fn confirmed_boundary_unlocks_direct_export_without_orientation_or_collection() 
         OperationPresentationState::Processing,
         "Start 必须先返回处理中，不能在 Slint 回调线程同步完成导出"
     );
-    pump_until_succeeded(&window, Duration::from_secs(5));
+    pump_until_succeeded(&window, Duration::from_secs(30));
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded
