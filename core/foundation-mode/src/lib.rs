@@ -35,7 +35,7 @@ pub mod warning;
 // 重新导出公共类型，方便 crate 外使用
 pub use boundary_export::{
     boundary_footprint, boundary_footprint_with_orientation, BoundaryFootprint,
-    BoundaryFootprintError,
+    BoundaryFootprintError, BoundaryProjection, BoundaryProjector, CandidateBlockBounds,
 };
 pub use boundary_ui::{BoundaryDrawer, BoundaryState, BoundaryUiEvent, EventResult, Vertex};
 pub use coordinate::{CoordinateConverter, McBlockCoord, MercatorCoord, PlaneMileUnit};

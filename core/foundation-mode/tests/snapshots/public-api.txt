@@ -17,6 +17,9 @@ pub struct PlaneMileUnit { pub x: f64, pub y: f64 }
 pub struct McBlockCoord { pub block_x: i32, pub block_z: i32 }
 pub struct CoordinateConverter { /* private: center_mercator, blocks_per_meter */ }
 pub struct BoundaryFootprint { pub width_blocks: usize, pub length_blocks: usize }
+pub struct BoundaryProjection { pub width_blocks: usize, pub length_blocks: usize, pub min_block_x: i32, pub min_block_z: i32 }
+pub struct CandidateBlockBounds { pub min_x: i32, pub min_z: i32, pub width_blocks: usize, pub length_blocks: usize }
+pub struct BoundaryProjector { /* private: center, sin, cos, projection */ }
 pub struct BoundaryDrawer { /* private: vertices, state, max_vertices */ }
 pub struct ValidationResult { pub is_valid: bool, pub errors: Vec<BoundaryValidationError>, pub area: Option<f64> }
 pub struct ImpactItem { pub category: CandidateCategory, pub count: usize, pub requires_confirmation: bool }
@@ -39,6 +42,30 @@ pub fn should_show_confirmation_dialog(report: &OrientationImpactReport) -> bool
 pub fn format_impact_details(report: &OrientationImpactReport) -> String
 pub fn boundary_footprint(boundary: &shared_domain_types::Boundary) -> Result<BoundaryFootprint, BoundaryFootprintError>
 pub fn boundary_footprint_with_orientation(boundary: &shared_domain_types::Boundary, orientation: shared_domain_types::Orientation) -> Result<BoundaryFootprint, BoundaryFootprintError>
+
+impl BoundaryProjection {
+    pub fn footprint(&self) -> BoundaryFootprint
+}
+
+impl BoundaryProjector {
+    pub fn for_boundary_with_orientation(boundary: &shared_domain_types::Boundary, orientation: shared_domain_types::Orientation) -> Result<Self, BoundaryFootprintError>
+    pub fn footprint(&self) -> BoundaryFootprint
+    pub fn bounds(&self) -> BoundaryProjection
+    pub fn candidate_bounds(&self, coordinates: &serde_json::Value) -> Result<CandidateBlockBounds, BoundaryFootprintError>
+}
+
+impl std::fmt::Debug for BoundaryProjection
+impl Clone Copy for BoundaryProjection
+impl PartialEq for BoundaryProjection
+impl Eq for BoundaryProjection
+
+impl std::fmt::Debug for CandidateBlockBounds
+impl Clone Copy for CandidateBlockBounds
+impl PartialEq for CandidateBlockBounds
+impl Eq for CandidateBlockBounds
+
+impl std::fmt::Debug for BoundaryProjector
+impl Clone for BoundaryProjector
 
 ## Re-exports（B1 共享类型透传）
 

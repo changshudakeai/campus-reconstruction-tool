@@ -19,6 +19,42 @@ pub struct BoundaryFootprint {
     pub length_blocks: usize,
 }
 
+/// 边界投影到块坐标系后的外接范围视图（B5 丈量员）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundaryProjection {
+    /// 东西方向尺寸（X）。
+    pub width_blocks: usize,
+    /// 南北方向尺寸（Z）。
+    pub length_blocks: usize,
+    /// 外接范围最小块坐标（X，东向为正）。
+    pub min_block_x: i32,
+    /// 外接范围最小块坐标（Z，南向为正）。
+    pub min_block_z: i32,
+}
+
+impl BoundaryProjection {
+    /// 尺寸视图（与既有 [`BoundaryFootprint`] 一致）。
+    pub fn footprint(&self) -> BoundaryFootprint {
+        BoundaryFootprint {
+            width_blocks: self.width_blocks,
+            length_blocks: self.length_blocks,
+        }
+    }
+}
+
+/// 单个候选多边形在边界投影块坐标系中的外接范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CandidateBlockBounds {
+    /// 最小块坐标（X）。
+    pub min_x: i32,
+    /// 最小块坐标（Z）。
+    pub min_z: i32,
+    /// X 方向尺寸（格）。
+    pub width_blocks: usize,
+    /// Z 方向尺寸（格）。
+    pub length_blocks: usize,
+}
+
 /// 从边界计算最小覆盖范围时的结构化错误。
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -44,7 +80,11 @@ pub enum BoundaryFootprintError {
 pub fn boundary_footprint(
     boundary: &Boundary,
 ) -> Result<BoundaryFootprint, BoundaryFootprintError> {
-    footprint_for_orientation(boundary, 0.0)
+    BoundaryProjector::for_boundary_with_orientation(
+        boundary,
+        shared_domain_types::Orientation::new(0.0).expect("地图正北是合法朝向"),
+    )
+    .map(|projector| projector.footprint())
 }
 
 /// 计算 GeoJSON 边界按实际导出朝向旋转后的最小矩形块范围。
@@ -55,89 +95,217 @@ pub fn boundary_footprint_with_orientation(
     boundary: &Boundary,
     orientation: Orientation,
 ) -> Result<BoundaryFootprint, BoundaryFootprintError> {
-    footprint_for_orientation(boundary, orientation.degree())
+    BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
+        .map(|projector| projector.footprint())
 }
 
-fn footprint_for_orientation(
-    boundary: &Boundary,
-    degree: f32,
-) -> Result<BoundaryFootprint, BoundaryFootprintError> {
-    if boundary.is_empty() {
-        return Err(BoundaryFootprintError::Empty);
-    }
+/// 已确认边界 + 实际朝向的投影上下文。
+///
+/// F9 增强导出用它把边界外接范围与后续候选多边形投影到**同一块坐标系**，
+/// 保证候选落位与场地尺寸来自同一中心与朝向（ADR-0043）。
+#[derive(Debug, Clone)]
+pub struct BoundaryProjector {
+    center: MercatorCoord,
+    sin: f64,
+    cos: f64,
+    projection: BoundaryProjection,
+}
 
-    let rings = outer_rings(boundary)?;
-    if rings.is_empty() {
-        return Err(BoundaryFootprintError::Empty);
-    }
-    let points = rings
-        .iter()
-        .map(|ring| {
-            let points = ring
-                .iter()
-                .map(parse_point)
-                .collect::<Result<Vec<_>, _>>()?;
-            if points.len() < 3 {
-                return Err(BoundaryFootprintError::InvalidGeometry(
-                    "每个边界分片至少需要 3 个边界点".to_owned(),
-                ));
-            }
-            Ok(points)
-        })
-        .collect::<Result<Vec<Vec<[f64; 2]>>, BoundaryFootprintError>>()?;
-
-    let (center_lon, center_lat, count) = points
-        .iter()
-        .flatten()
-        .fold((0.0, 0.0, 0_usize), |(lon, lat, count), point| {
-            (lon + point[0], lat + point[1], count + 1)
-        });
-    let count = count as f64;
-    let center_lon = center_lon / count;
-    let center_lat = center_lat / count;
-    if !(-85.0..=85.0).contains(&center_lat) {
-        return Err(BoundaryFootprintError::InvalidGeometry(
-            "中心纬度不在可投影范围内".to_owned(),
-        ));
-    }
-
-    let mut converter = CoordinateConverter::default();
-    converter.set_center(MercatorCoord::from_lat_lon(center_lat, center_lon));
-    let radians = f64::from(degree).to_radians();
-    let (sin, cos) = radians.sin_cos();
-    let mut projected = Vec::new();
-    for points in &points {
-        let vertices = points
-            .iter()
-            .map(|[lon, lat]| {
-                let mercator = MercatorCoord::from_lat_lon(*lat, *lon);
-                converter
-                    .mercator_to_plane(mercator)
-                    .map(|plane| Vertex::new(plane.x, plane.y))
-                    .ok_or(BoundaryFootprintError::InvalidGeometry(
-                        "边界坐标无法转换".to_owned(),
-                    ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let validation = validate_polygon_closure(&vertices);
-        if !validation.is_valid {
-            let detail = validation
-                .errors
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(BoundaryFootprintError::InvalidGeometry(detail));
+impl BoundaryProjector {
+    /// 用边界与完整导出实际朝向建立投影上下文。
+    pub fn for_boundary_with_orientation(
+        boundary: &Boundary,
+        orientation: Orientation,
+    ) -> Result<Self, BoundaryFootprintError> {
+        if boundary.is_empty() {
+            return Err(BoundaryFootprintError::Empty);
         }
-        projected.extend(vertices.into_iter().map(|vertex| {
-            Vertex::new(
-                vertex.x * cos - vertex.y * sin,
-                vertex.x * sin + vertex.y * cos,
-            )
-        }));
+
+        let rings = outer_rings(boundary)?;
+        if rings.is_empty() {
+            return Err(BoundaryFootprintError::Empty);
+        }
+        let points = rings
+            .iter()
+            .map(|ring| {
+                let points = ring
+                    .iter()
+                    .map(parse_point)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if points.len() < 3 {
+                    return Err(BoundaryFootprintError::InvalidGeometry(
+                        "每个边界分片至少需要 3 个边界点".to_owned(),
+                    ));
+                }
+                Ok(points)
+            })
+            .collect::<Result<Vec<Vec<[f64; 2]>>, BoundaryFootprintError>>()?;
+
+        let (center_lon, center_lat, count) = points
+            .iter()
+            .flatten()
+            .fold((0.0, 0.0, 0_usize), |(lon, lat, count), point| {
+                (lon + point[0], lat + point[1], count + 1)
+            });
+        let count = count as f64;
+        let center_lon = center_lon / count;
+        let center_lat = center_lat / count;
+        if !(-85.0..=85.0).contains(&center_lat) {
+            return Err(BoundaryFootprintError::InvalidGeometry(
+                "中心纬度不在可投影范围内".to_owned(),
+            ));
+        }
+        let center = MercatorCoord::from_lat_lon(center_lat, center_lon);
+        let radians = f64::from(orientation.degree()).to_radians();
+        let (sin, cos) = radians.sin_cos();
+
+        let mut converter = CoordinateConverter::default();
+        converter.set_center(center);
+        let mut projected = Vec::new();
+        for points in &points {
+            let vertices = points
+                .iter()
+                .map(|[lon, lat]| {
+                    let mercator = MercatorCoord::from_lat_lon(*lat, *lon);
+                    converter
+                        .mercator_to_plane(mercator)
+                        .map(|plane| Vertex::new(plane.x, plane.y))
+                        .ok_or(BoundaryFootprintError::InvalidGeometry(
+                            "边界坐标无法转换".to_owned(),
+                        ))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let validation = validate_polygon_closure(&vertices);
+            if !validation.is_valid {
+                let detail = validation
+                    .errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(BoundaryFootprintError::InvalidGeometry(detail));
+            }
+            projected.extend(vertices.into_iter().map(|vertex| {
+                Vertex::new(
+                    vertex.x * cos - vertex.y * sin,
+                    vertex.x * sin + vertex.y * cos,
+                )
+            }));
+        }
+
+        let projection = projected_bounds_to_blocks(&projected)?;
+        Ok(Self {
+            center,
+            sin,
+            cos,
+            projection,
+        })
     }
 
+    /// 边界覆盖范围尺寸（与既有 footprint API 一致）。
+    pub fn footprint(&self) -> BoundaryFootprint {
+        self.projection.footprint()
+    }
+
+    /// 边界在块坐标系中的外接范围视图。
+    pub fn bounds(&self) -> BoundaryProjection {
+        self.projection
+    }
+
+    /// 把候选多边形（GeoJSON coordinates）投影到与边界同一块坐标系。
+    ///
+    /// 只做几何换算，不判断候选资格；F9 在调用前已完成 Reviewable/保留筛选。
+    pub fn candidate_bounds(
+        &self,
+        coordinates: &serde_json::Value,
+    ) -> Result<CandidateBlockBounds, BoundaryFootprintError> {
+        let points = candidate_points(coordinates)?;
+        let mut converter = CoordinateConverter::default();
+        converter.set_center(self.center);
+        let mut projected = Vec::with_capacity(points.len());
+        for [lon, lat] in points {
+            let mercator = MercatorCoord::from_lat_lon(lat, lon);
+            let plane = converter.mercator_to_plane(mercator).ok_or(
+                BoundaryFootprintError::InvalidGeometry("候选坐标无法转换".to_owned()),
+            )?;
+            projected.push(Vertex::new(
+                plane.x * self.cos - plane.y * self.sin,
+                plane.x * self.sin + plane.y * self.cos,
+            ));
+        }
+        let bounds = projected_bounds_to_blocks(&projected)?;
+        Ok(CandidateBlockBounds {
+            min_x: bounds.min_block_x,
+            min_z: bounds.min_block_z,
+            width_blocks: bounds.width_blocks,
+            length_blocks: bounds.length_blocks,
+        })
+    }
+}
+
+/// 候选坐标数组 → 点序列：支持单点、线串与面环（取外环）。
+fn candidate_points(
+    coordinates: &serde_json::Value,
+) -> Result<Vec<[f64; 2]>, BoundaryFootprintError> {
+    let array = coordinates
+        .as_array()
+        .ok_or(BoundaryFootprintError::MalformedCoordinates)?;
+    if array.is_empty() {
+        return Err(BoundaryFootprintError::MalformedCoordinates);
+    }
+    // 单点：[lon, lat]
+    if array.len() == 2 {
+        if let (Some(lon), Some(lat)) = (array[0].as_f64(), array[1].as_f64()) {
+            if lon.is_finite() && lat.is_finite() {
+                return Ok(vec![[lon, lat]]);
+            }
+        }
+    }
+    // 面环：[[[lon, lat], ...], ...]（取第一个外环）
+    if array[0]
+        .as_array()
+        .is_some_and(|ring| ring.first().and_then(serde_json::Value::as_array).is_some())
+    {
+        let ring = array
+            .first()
+            .and_then(serde_json::Value::as_array)
+            .ok_or(BoundaryFootprintError::MalformedCoordinates)?;
+        return ring
+            .iter()
+            .map(parse_point_value)
+            .collect::<Result<Vec<_>, _>>();
+    }
+    // 线串：[[lon, lat], ...]
+    array
+        .iter()
+        .map(parse_point_value)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn parse_point_value(value: &serde_json::Value) -> Result<[f64; 2], BoundaryFootprintError> {
+    let point = value
+        .as_array()
+        .ok_or(BoundaryFootprintError::MalformedCoordinates)?;
+    if point.len() != 2 {
+        return Err(BoundaryFootprintError::MalformedCoordinates);
+    }
+    let lon = point[0]
+        .as_f64()
+        .ok_or(BoundaryFootprintError::MalformedCoordinates)?;
+    let lat = point[1]
+        .as_f64()
+        .ok_or(BoundaryFootprintError::MalformedCoordinates)?;
+    if !lon.is_finite() || !lat.is_finite() {
+        return Err(BoundaryFootprintError::MalformedCoordinates);
+    }
+    Ok([lon, lat])
+}
+
+/// 旋转后平面点集 → 块坐标外接范围（X 东向、Z 南向）。
+fn projected_bounds_to_blocks(
+    projected: &[Vertex],
+) -> Result<BoundaryProjection, BoundaryFootprintError> {
     let (min_x, max_x, min_y, max_y) = projected.iter().fold(
         (
             f64::INFINITY,
@@ -154,10 +322,11 @@ fn footprint_for_orientation(
             )
         },
     );
-
-    Ok(BoundaryFootprint {
+    Ok(BoundaryProjection {
         width_blocks: span_to_blocks(max_x - min_x)?,
         length_blocks: span_to_blocks(max_y - min_y)?,
+        min_block_x: min_x.floor() as i32,
+        min_block_z: (-max_y).floor() as i32,
     })
 }
 
@@ -312,5 +481,63 @@ mod tests {
         )
         .unwrap();
         assert_ne!(north, rotated);
+    }
+
+    #[test]
+    fn projector_projects_candidate_inside_footprint_bounds() {
+        let boundary = square();
+        let projector = BoundaryProjector::for_boundary_with_orientation(
+            &boundary,
+            Orientation::new(0.0).unwrap(),
+        )
+        .unwrap();
+        let bounds = projector.bounds();
+        assert_eq!(bounds.footprint(), boundary_footprint(&boundary).unwrap());
+
+        // 边界内部的候选多边形必须落在外接范围内。
+        let candidate = serde_json::json!([
+            [116.0002, 39.0002],
+            [116.0006, 39.0002],
+            [116.0006, 39.0006],
+            [116.0002, 39.0002]
+        ]);
+        let candidate_bounds = projector.candidate_bounds(&candidate).unwrap();
+        assert!(candidate_bounds.min_x >= bounds.min_block_x);
+        assert!(candidate_bounds.min_z >= bounds.min_block_z);
+        assert!(
+            candidate_bounds.min_x + candidate_bounds.width_blocks as i32
+                <= bounds.min_block_x + bounds.width_blocks as i32
+        );
+        assert!(
+            candidate_bounds.min_z + candidate_bounds.length_blocks as i32
+                <= bounds.min_block_z + bounds.length_blocks as i32
+        );
+        assert!(candidate_bounds.width_blocks > 0);
+        assert!(candidate_bounds.length_blocks > 0);
+    }
+
+    #[test]
+    fn candidate_bounds_accepts_point_line_and_polygon_coordinates() {
+        let projector = BoundaryProjector::for_boundary_with_orientation(
+            &square(),
+            Orientation::new(0.0).unwrap(),
+        )
+        .unwrap();
+        let point = projector
+            .candidate_bounds(&serde_json::json!([116.0005, 39.0005]))
+            .unwrap();
+        assert_eq!((point.width_blocks, point.length_blocks), (1, 1));
+        let line = projector
+            .candidate_bounds(&serde_json::json!([
+                [116.0002, 39.0002],
+                [116.0008, 39.0002]
+            ]))
+            .unwrap();
+        assert!(line.width_blocks >= 1);
+        let malformed = projector.candidate_bounds(&serde_json::json!([]));
+        assert!(matches!(
+            malformed,
+            Err(BoundaryFootprintError::MalformedCoordinates)
+        ));
     }
 }
