@@ -728,6 +728,22 @@ pub enum ExportPresentationRequest {
     Abandon,
 }
 
+/// S1 采集页只提交一次完整用户意图（开始采集/查看采集报告/轮询/离开）；
+/// F4 → B2 → B14 → F7 的完整业务链由 A1 collection-flow 接管（ADR-0039）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionRequest {
+    /// 进入采集页，呈现 A1 已决定的当前状态。
+    Open,
+    /// 用户点击一次“采集”按钮（完整开始意图）。
+    Start,
+    /// S1 内部轮询 A1 后台操作的真实进度或终态。
+    Poll,
+    /// 用户点击“查看采集报告”（完整报告操作）。
+    ShowReport,
+    /// 离开采集上下文，过期旧结果交付（export-flow 模板）。
+    Abandon,
+}
+
 /// 当前五步工作区页的全部可观察状态。
 #[derive(Clone)]
 pub struct WorkspacePageState {

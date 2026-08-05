@@ -12,7 +12,7 @@ mod runtime;
 
 pub use presentation::{
     BoundaryViewState, CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
-    CollectionPresentationEntry, ConfirmationPresentation, CoveragePageState,
+    CollectionPresentationEntry, CollectionRequest, ConfirmationPresentation, CoveragePageState,
     CoveragePresentationEntry, ExportPageState, ExportPresentationEntry, ExportPresentationRequest,
     InvalidProgress, NavigationDecision, NotificationFact, NotificationPageState,
     NotificationPresentationEntry, OpaqueNotificationAction, OperationState, OrientationViewState,
