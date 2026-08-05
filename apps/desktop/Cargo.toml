@@ -64,6 +64,8 @@ log = { workspace = true }
 
 [dev-dependencies]
 # 跨模块落库断言用同一临时文件连接组（内存库两连接各自独立）
+manifest-generator = { workspace = true }
+sponge-export = { workspace = true }
 tempfile = { workspace = true }
 
 [package.metadata.cargo-machete]

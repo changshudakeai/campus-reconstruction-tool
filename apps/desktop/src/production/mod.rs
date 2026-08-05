@@ -705,6 +705,39 @@ impl ExportProductionAdapter {
         workspace.placeholder_subtitle = subtitle.into();
         ExportPageState { workspace }
     }
+
+    /// 导出页副标题：存在已封账保留候选时显示增强导出内容提示，否则显示
+    /// 边界直出说明（S1 只呈现 A2 返回的结构化计数，不判断业务条件）。
+    fn export_subtitle(&self) -> String {
+        let injector = self.context.injector();
+        let l10n = injector.borrow();
+        let hint = self.flow.enhanced_hint().ok().flatten();
+        if let Some(hint) = hint {
+            let categories = hint
+                .keep_by_category
+                .iter()
+                .map(|(category, count)| {
+                    format!(
+                        "{} {count}",
+                        l10n.l10n().t(export_category_label_key(*category))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            l10n.l10n().t_with_array(
+                "export.enhanced_summary",
+                &[
+                    &hint.keep_total.to_string(),
+                    &categories,
+                    &hint.pending_count.to_string(),
+                    &hint.remove_count.to_string(),
+                ],
+            )
+        } else {
+            l10n.l10n().t("export.boundary_only_summary")
+        }
+    }
+
     fn failure_presentation(&self, error: &ExportError) -> Presentation<ExportPageState> {
         let (body, action) = {
             let injector = self.context.injector();
@@ -744,14 +777,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
         record_entry_call(6);
         match request {
             ExportPresentationRequest::Open => Presentation::ready(
-                self.page_with_status(
-                    "export.confirm_title",
-                    self.context
-                        .injector()
-                        .borrow()
-                        .l10n()
-                        .t("export.boundary_only_summary"),
-                ),
+                self.page_with_status("export.confirm_title", self.export_subtitle()),
             )
             .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             ExportPresentationRequest::Start => match self.flow.start() {
@@ -759,14 +785,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                     let progress = operation.progress_view();
                     self.operation = Some(operation);
                     Presentation::processing(
-                        self.page_with_status(
-                            progress.stage_key,
-                            self.context
-                                .injector()
-                                .borrow()
-                                .l10n()
-                                .t("export.boundary_only_summary"),
-                        ),
+                        self.page_with_status(progress.stage_key, self.export_subtitle()),
                         Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
                     )
                 }
@@ -776,14 +795,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
             ExportPresentationRequest::Poll => {
                 let Some(operation) = self.operation.as_mut() else {
                     return Presentation::ready(
-                        self.page_with_status(
-                            "export.confirm_title",
-                            self.context
-                                .injector()
-                                .borrow()
-                                .l10n()
-                                .t("export.boundary_only_summary"),
-                        ),
+                        self.page_with_status("export.confirm_title", self.export_subtitle()),
                     )
                     .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
@@ -835,14 +847,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 } else {
                     let progress = operation.progress_view();
                     Presentation::processing(
-                        self.page_with_status(
-                            progress.stage_key,
-                            self.context
-                                .injector()
-                                .borrow()
-                                .l10n()
-                                .t("export.boundary_only_summary"),
-                        ),
+                        self.page_with_status(progress.stage_key, self.export_subtitle()),
                         Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
                     )
                 }
@@ -852,14 +857,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 self.flow.leave();
                 self.operation = None;
                 Presentation::ready(
-                    self.page_with_status(
-                        "export.confirm_title",
-                        self.context
-                            .injector()
-                            .borrow()
-                            .l10n()
-                            .t("export.boundary_only_summary"),
-                    ),
+                    self.page_with_status("export.confirm_title", self.export_subtitle()),
                 )
             }
         }
@@ -882,6 +880,19 @@ fn export_error_category_key(error: &ExportError) -> &'static str {
         ExportError::ArtifactRecovery(_) => "error.export_recovery_failed",
         ExportError::BackgroundTask => "error.export_background_failed",
         _ => "error.export_failed",
+    }
+}
+
+/// 类别 → 显示名文本键（collection 命名空间既有键，与 F5 同源）。
+fn export_category_label_key(category: CandidateCategory) -> &'static str {
+    match category {
+        CandidateCategory::Building => "collection.category_building",
+        CandidateCategory::Road => "collection.category_road",
+        CandidateCategory::Water => "collection.category_water",
+        CandidateCategory::Vegetation => "collection.category_vegetation",
+        CandidateCategory::Sports => "collection.category_sports",
+        CandidateCategory::Other => "collection.category_other",
+        _ => "collection.category_other",
     }
 }
 
