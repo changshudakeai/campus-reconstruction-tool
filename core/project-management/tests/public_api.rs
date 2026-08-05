@@ -1,7 +1,10 @@
 //! F3 公开 API 快照测试（执法清单 2.5）
 //!
-//! 任何公开类型的增删都会反映在本测试中，PR diff 可见。
-//! 简单方式：检查所有公开类型可实例化、ViewModel 的关键行为可调用。
+//! 快照测试保证任何公开类型的增删显形于 PR diff；行为断言补充在
+//! `public_api_types_exist`（用 B2 内存库验证关键行为可调用）。
+
+use localization::Language;
+use localization::Localization;
 
 use data_persistence::Database;
 use project_management::{
@@ -11,7 +14,25 @@ use project_management::{
 use shared_domain_types::{CampusId, PlanId};
 
 #[test]
+fn public_api_snapshot() {
+    let rustdoc_json = rustdoc_json::Builder::default()
+        .toolchain(public_api::MINIMUM_NIGHTLY_RUST_VERSION)
+        .build()
+        .unwrap();
+    let api = public_api::Builder::from_rustdoc_json(rustdoc_json)
+        .build()
+        .unwrap();
+    api.assert_eq_or_update("tests/snapshots/public-api.txt");
+}
+
+#[test]
 fn public_api_types_exist() {
+    // 断言项目自述的本地化文本键在 zh-CN 中可解析（ADR-0005）。
+    let l10n = Localization::new(Language::ZhCn).expect("zh-CN.json 可加载");
+    for key in [DUPLICATE_SUFFIX_KEY, RESTORE_NAME_TEMPLATE_KEY] {
+        assert!(!l10n.t(key).is_empty(), "文本键 {key} 必须可解析");
+    }
+
     // 常量：副本后缀与恢复名称模板文本键（文案外置，ADR-0005）
     assert_eq!(DUPLICATE_SUFFIX_KEY, "plan.duplicate_suffix");
     assert_eq!(RESTORE_NAME_TEMPLATE_KEY, "plan.restore_name_template");

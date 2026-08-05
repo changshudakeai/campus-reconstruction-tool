@@ -4864,7 +4864,9 @@ version = "2.0.0-dev"
 dependencies = [
  "chrono",
  "data-persistence",
+ "localization",
  "public-api",
+ "rustdoc-json",
  "shared-domain-types",
  "thiserror 2.0.19",
 ]
