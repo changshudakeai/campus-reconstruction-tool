@@ -237,11 +237,19 @@ fn stable_candidate_id_reads_the_same_normalized_geometry_for_downstream_consume
     let mut db = Database::open_in_memory().expect("内存库");
     let batch = db.prepare_candidate_batch("plan-1").unwrap();
     let mut candidate = projection("geometry", CandidateEligibility::Reviewable);
-    candidate.shape = CandidateShape::line_string(serde_json::json!([[121.4, 31.2], [121.5, 31.3]]));
-    db.write_candidate_projections(&batch.id, &[candidate]).unwrap();
+    candidate.shape =
+        CandidateShape::line_string(serde_json::json!([[121.4, 31.2], [121.5, 31.3]]));
+    db.write_candidate_projections(&batch.id, &[candidate])
+        .unwrap();
     db.publish_candidate_batch(&batch.id).unwrap();
 
-    let projection = db.get_current_candidate_projection("plan-1", "geometry").unwrap().unwrap();
+    let projection = db
+        .get_current_candidate_projection("plan-1", "geometry")
+        .unwrap()
+        .unwrap();
     assert_eq!(projection.shape.kind, "line_string");
-    assert_eq!(projection.shape.coordinates, serde_json::json!([[121.4, 31.2], [121.5, 31.3]]));
+    assert_eq!(
+        projection.shape.coordinates,
+        serde_json::json!([[121.4, 31.2], [121.5, 31.3]])
+    );
 }
