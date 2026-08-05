@@ -467,6 +467,22 @@ impl ViewModelInjector {
     pub fn review(&self) -> Option<&ReviewWorkbench> {
         self.review.as_ref()
     }
+
+    /// F5 评审工作台的可变访问（逐项判定/批量确认/暂停恢复）。
+    pub fn review_mut(&mut self) -> Option<&mut ReviewWorkbench> {
+        self.review.as_mut()
+    }
+
+    /// 封账：一次性取得评审工作台与 F3 共享数据库连接，终态批量写回 B2。
+    ///
+    /// 写回失败返回 `Err` 且封账不生效（评审状态保持可改）；无评审会话时返回 `None`。
+    pub fn seal_review(
+        &mut self,
+    ) -> Option<review_workbench::Result<review_workbench::ExportSummary>> {
+        let workbench = self.review.as_mut()?;
+        let mut database = self.projects.database();
+        Some(workbench.seal(&mut database))
+    }
 }
 
 /// 采集查询请求序号（WebView 桥响应与请求配对，防旧响应串台）。

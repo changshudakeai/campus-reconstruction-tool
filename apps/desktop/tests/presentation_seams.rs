@@ -10,7 +10,7 @@ use desktop_shell::{
     ExportPresentationEntry, NavigationDecision, NoticeData, NotificationFact,
     NotificationPageState, NotificationPresentationEntry, OpaqueNotificationAction,
     OperationPresentationState, OrientationViewState, PlanCardData, Presentation,
-    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, Screen,
+    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, ReviewRequest, Screen,
     SettingsPageState, SettingsPresentationEntry, ShellDatabases, StartupPageState,
     StartupPresentationEntry, ToolbarPageState, ViewModelInjector, WorkspacePageState,
 };
@@ -309,10 +309,33 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         ReviewPresentationEntry::new(TestAdapter::returning(Presentation::needs_confirmation(
             ReviewPageState {
                 workspace: workspace("评审"),
+                title: "评审工作台".into(),
+                empty_text: "暂无候选评审".into(),
+                candidate_count: 0,
+                category_labels: Vec::new(),
+                category_counts: Vec::new(),
+                active_category: 0,
+                cards: Vec::new(),
+                selected_count_label: String::new(),
+                bulk_buttons_visible: false,
+                set_keep_label: "改为保留".into(),
+                set_reject_label: "改为剔除".into(),
+                set_pending_label: "改回待定".into(),
+                select_all_label: "全选".into(),
+                deselect_all_label: "取消全选".into(),
+                card_pending_label: "待定".into(),
+                card_keep_label: "保留".into(),
+                card_reject_label: "剔除".into(),
+                pause_label: "暂停评审".into(),
+                resume_label: "继续评审".into(),
+                seal_label: "封账完成评审".into(),
+                sealed: false,
+                summary_visible: false,
+                summary_text: String::new(),
             },
             ConfirmationPresentation::new("确认", "影响", "继续", "取消"),
         )));
-    review_entry.show(&window, &center, ());
+    review_entry.show(&window, &center, ReviewRequest::Open);
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::NeedsConfirmation
@@ -459,7 +482,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     assert_eq!(
         window.get_workspace_active_step(),
         3,
-        "点击评审步骤只能呈现评审占位页，不得同时串到其他步骤入口"
+        "点击评审步骤只能呈现评审页，不得同时串到其他步骤入口"
     );
     window.set_operation_state(OperationPresentationState::Failed);
     window.invoke_workspace_step_clicked(4);

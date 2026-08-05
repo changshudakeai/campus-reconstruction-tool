@@ -1,0 +1,187 @@
+// F5 评审页（M3）：仅呈现 F5 WorkbenchView 返回的页面状态并转发用户操作。
+// 三态判定、批量确认、暂停/恢复、封账全部由 F5 评审工作台入口完成。
+import { Button, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// 评审页上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
+export struct ReviewCandidateData {
+    /// 稳定候选 ID（三态判定与复选操作回传）。
+    candidate-id: string,
+    /// 卡片标题。
+    title: string,
+    /// 当前三态显示名。
+    state-label: string,
+    /// 当前三态标识（pending/keep/remove）。
+    state-key: string,
+    /// 复选状态。
+    selected: bool,
+}
+
+export component ReviewView inherits Rectangle {
+    in property <string> title;
+    in property <string> empty-text;
+    in property <int> candidate-count;
+    in property <[string]> category-labels;
+    in property <[int]> category-counts;
+    in property <int> active-category;
+    in property <[ReviewCandidateData]> cards;
+    in property <string> selected-count-label;
+    in property <bool> bulk-buttons-visible;
+    in property <string> set-keep-label;
+    in property <string> set-reject-label;
+    in property <string> set-pending-label;
+    in property <string> select-all-label;
+    in property <string> deselect-all-label;
+    in property <string> card-pending-label;
+    in property <string> card-keep-label;
+    in property <string> card-reject-label;
+    in property <string> pause-label;
+    in property <string> resume-label;
+    in property <string> seal-label;
+    in property <bool> sealed;
+    in property <bool> summary-visible;
+    in property <string> summary-text;
+    callback category-clicked(index: int);
+    callback card-state-clicked(candidate-id: string, state: string);
+    callback card-selection-toggled(candidate-id: string);
+    callback select-all-clicked();
+    callback deselect-all-clicked();
+    callback bulk-state-clicked(state: string);
+    callback pause-clicked();
+    callback resume-clicked();
+    callback seal-clicked();
+
+    background: Theme.surface;
+    VerticalLayout {
+        x: 16px;
+        y: 8px;
+        width: parent.width - 32px;
+        spacing: 12px;
+
+        Text {
+            text: root.title;
+            color: Theme.text-primary;
+            font-size: 16px;
+        }
+
+        // 无候选空态：明确提示可跳过，不阻塞导出、不伪造评审完成。
+        if root.candidate-count == 0: Text {
+            text: root.empty-text;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        if root.candidate-count > 0: VerticalLayout {
+            spacing: 10px;
+
+            // 六类标签页（ADR-0016 固定顺序）。
+            HorizontalLayout {
+                spacing: 6px;
+                for label[i] in root.category-labels:
+                    Button {
+                        text: label + " (" + root.category-counts[i] + ")";
+                        primary: root.active-category == i;
+                        clicked => { root.category-clicked(i); }
+                    }
+            }
+
+            // 候选卡片：复选 + 三态判定（点错可直接改另一态）。
+            for card in root.cards:
+                HorizontalLayout {
+                    spacing: 8px;
+                    CheckBox {
+                        checked: card.selected;
+                        enabled: !root.sealed;
+                        toggled => { root.card-selection-toggled(card.candidate-id); }
+                    }
+                    Text {
+                        text: card.title;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: card.state-label;
+                        color: Theme.text-secondary;
+                    }
+                    Button {
+                        text: root.card-pending-label;
+                        enabled: !root.sealed;
+                        clicked => { root.card-state-clicked(card.candidate-id, "pending"); }
+                    }
+                    Button {
+                        text: root.card-keep-label;
+                        enabled: !root.sealed;
+                        clicked => { root.card-state-clicked(card.candidate-id, "keep"); }
+                    }
+                    Button {
+                        text: root.card-reject-label;
+                        enabled: !root.sealed;
+                        clicked => { root.card-state-clicked(card.candidate-id, "remove"); }
+                    }
+                }
+
+            Text {
+                text: root.selected-count-label;
+                color: Theme.text-secondary;
+            }
+
+            // 批量操作：勾选 >=2 时浮现（ADR-0016 交互规则）。
+            if root.bulk-buttons-visible: HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: root.select-all-label;
+                    enabled: !root.sealed;
+                    clicked => { root.select-all-clicked(); }
+                }
+                Button {
+                    text: root.deselect-all-label;
+                    enabled: !root.sealed;
+                    clicked => { root.deselect-all-clicked(); }
+                }
+                Button {
+                    text: root.set-keep-label;
+                    enabled: !root.sealed;
+                    clicked => { root.bulk-state-clicked("keep"); }
+                }
+                Button {
+                    text: root.set-reject-label;
+                    enabled: !root.sealed;
+                    clicked => { root.bulk-state-clicked("remove"); }
+                }
+                Button {
+                    text: root.set-pending-label;
+                    enabled: !root.sealed;
+                    clicked => { root.bulk-state-clicked("pending"); }
+                }
+            }
+
+            // 暂停/恢复会话与封账。
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: root.pause-label;
+                    enabled: !root.sealed;
+                    clicked => { root.pause-clicked(); }
+                }
+                Button {
+                    text: root.resume-label;
+                    enabled: !root.sealed;
+                    clicked => { root.resume-clicked(); }
+                }
+                Button {
+                    text: root.seal-label;
+                    primary: true;
+                    enabled: !root.sealed;
+                    clicked => { root.seal-clicked(); }
+                }
+            }
+
+            // 封账成功后的导出摘要。
+            if root.summary-visible: Text {
+                text: root.summary-text;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

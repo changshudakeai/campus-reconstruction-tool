@@ -18,6 +18,7 @@ import { Stepper } from "stepper.slint";
 import { BoundaryEditor, BoundaryPointData } from "boundary_edit.slint";
 import { OrientationView, OrientationPointData } from "orientation.slint";
 import { CollectionView } from "collection.slint";
+import { ReviewView, ReviewCandidateData } from "review.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -212,6 +213,39 @@ export component AppWindow inherits Window {
     in property <string> collection-report-body;
     callback collection-start-clicked();
     callback collection-report-clicked();
+    // M3 评审页（F5 呈现层）
+    in property <string> review-title;
+    in property <string> review-empty-text;
+    in property <int> review-candidate-count;
+    in property <[string]> review-category-labels;
+    in property <[int]> review-category-counts;
+    in property <int> review-active-category;
+    in property <[ReviewCandidateData]> review-cards;
+    in property <string> review-selected-count-label;
+    in property <bool> review-bulk-buttons-visible;
+    in property <string> review-set-keep-label;
+    in property <string> review-set-reject-label;
+    in property <string> review-set-pending-label;
+    in property <string> review-select-all-label;
+    in property <string> review-deselect-all-label;
+    in property <string> review-card-pending-label;
+    in property <string> review-card-keep-label;
+    in property <string> review-card-reject-label;
+    in property <string> review-pause-label;
+    in property <string> review-resume-label;
+    in property <string> review-seal-label;
+    in property <bool> review-sealed;
+    in property <bool> review-summary-visible;
+    in property <string> review-summary-text;
+    callback review-category-clicked(index: int);
+    callback review-card-state-clicked(candidate-id: string, state: string);
+    callback review-card-selection-toggled(candidate-id: string);
+    callback review-select-all-clicked();
+    callback review-deselect-all-clicked();
+    callback review-bulk-state-clicked(state: string);
+    callback review-pause-clicked();
+    callback review-resume-clicked();
+    callback review-seal-clicked();
     callback workspace-export-start-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
@@ -893,7 +927,44 @@ export component AppWindow inherits Window {
             }
 
             // 步骤④+: 占位 (Phase 2 Step C 后续实现)
-            if root.workspace-active-step >= 3 && root.workspace-active-step <= 4: Rectangle {
+            if root.workspace-active-step == 3: ReviewView {
+                x: 16px;
+                y: 72px;
+                title: root.review-title;
+                empty-text: root.review-empty-text;
+                candidate-count: root.review-candidate-count;
+                category-labels: root.review-category-labels;
+                category-counts: root.review-category-counts;
+                active-category: root.review-active-category;
+                cards: root.review-cards;
+                selected-count-label: root.review-selected-count-label;
+                bulk-buttons-visible: root.review-bulk-buttons-visible;
+                set-keep-label: root.review-set-keep-label;
+                set-reject-label: root.review-set-reject-label;
+                set-pending-label: root.review-set-pending-label;
+                select-all-label: root.review-select-all-label;
+                deselect-all-label: root.review-deselect-all-label;
+                card-pending-label: root.review-card-pending-label;
+                card-keep-label: root.review-card-keep-label;
+                card-reject-label: root.review-card-reject-label;
+                pause-label: root.review-pause-label;
+                resume-label: root.review-resume-label;
+                seal-label: root.review-seal-label;
+                sealed: root.review-sealed;
+                summary-visible: root.review-summary-visible;
+                summary-text: root.review-summary-text;
+                category-clicked(index) => { root.review-category-clicked(index); }
+                card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
+                card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }
+                select-all-clicked => { root.review-select-all-clicked(); }
+                deselect-all-clicked => { root.review-deselect-all-clicked(); }
+                bulk-state-clicked(state) => { root.review-bulk-state-clicked(state); }
+                pause-clicked => { root.review-pause-clicked(); }
+                resume-clicked => { root.review-resume-clicked(); }
+                seal-clicked => { root.review-seal-clicked(); }
+            }
+
+            if root.workspace-active-step == 4: Rectangle {
                 x: 16px;
                 y: 120px;
                 width: parent.width - 32px;
