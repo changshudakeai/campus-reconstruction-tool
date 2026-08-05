@@ -978,6 +978,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "collection-flow"
+version = "2.0.0-dev"
+dependencies = [
+ "coverage-audit",
+ "data-acquisition",
+ "data-persistence",
+ "data-transformers",
+ "export-flow",
+ "geometry-validator",
+ "global-settings",
+ "localization",
+ "notification-center",
+ "project-management",
+ "public-api",
+ "rustdoc-json",
+ "serde_json",
+ "shared-domain-types",
+ "tempfile",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

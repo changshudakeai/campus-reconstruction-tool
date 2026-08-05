@@ -1,0 +1,453 @@
+pub mod collection_flow
+#[non_exhaustive] pub enum collection_flow::CollectionError
+pub collection_flow::CollectionError::Acquisition(data_acquisition::error::AcquisitionError)
+pub collection_flow::CollectionError::Audit(coverage_audit::error::Error)
+pub collection_flow::CollectionError::BackgroundTask
+pub collection_flow::CollectionError::Busy
+pub collection_flow::CollectionError::Expired
+pub collection_flow::CollectionError::MissingInput
+pub collection_flow::CollectionError::Persistence(data_persistence::error::Error)
+impl collection_flow::CollectionError
+pub fn collection_flow::CollectionError::user_message_key(&self) -> &'static str
+impl core::convert::From<coverage_audit::error::Error> for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::from(source: coverage_audit::error::Error) -> Self
+impl core::convert::From<data_acquisition::error::AcquisitionError> for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::from(source: data_acquisition::error::AcquisitionError) -> Self
+impl core::convert::From<data_persistence::error::Error> for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::from(source: data_persistence::error::Error) -> Self
+impl core::error::Error for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for collection_flow::CollectionError
+impl core::marker::Send for collection_flow::CollectionError
+impl core::marker::Sync for collection_flow::CollectionError
+impl core::marker::Unpin for collection_flow::CollectionError
+impl !core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionError
+impl !core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionError
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionError where U: core::convert::From<T>
+pub fn collection_flow::CollectionError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionError where U: core::convert::Into<T>
+pub type collection_flow::CollectionError::Error = core::convert::Infallible
+pub fn collection_flow::CollectionError::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionError where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for collection_flow::CollectionError where T: core::fmt::Display + ?core::marker::Sized
+pub fn collection_flow::CollectionError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for collection_flow::CollectionError where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionError where T: ?core::marker::Sized
+pub fn collection_flow::CollectionError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionError where T: ?core::marker::Sized
+pub fn collection_flow::CollectionError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for collection_flow::CollectionError
+pub fn collection_flow::CollectionError::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionError
+pub type collection_flow::CollectionError::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionError where T: ?core::marker::Sized
+pub enum collection_flow::CollectionOutcome
+pub collection_flow::CollectionOutcome::Failed(collection_flow::CollectionFailure)
+pub collection_flow::CollectionOutcome::Succeeded(collection_flow::CollectionSummary)
+impl core::clone::Clone for collection_flow::CollectionOutcome
+pub fn collection_flow::CollectionOutcome::clone(&self) -> collection_flow::CollectionOutcome
+impl core::cmp::PartialEq for collection_flow::CollectionOutcome
+pub fn collection_flow::CollectionOutcome::eq(&self, other: &collection_flow::CollectionOutcome) -> bool
+impl core::fmt::Debug for collection_flow::CollectionOutcome
+pub fn collection_flow::CollectionOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionOutcome
+impl core::marker::Freeze for collection_flow::CollectionOutcome
+impl core::marker::Send for collection_flow::CollectionOutcome
+impl core::marker::Sync for collection_flow::CollectionOutcome
+impl core::marker::Unpin for collection_flow::CollectionOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionOutcome
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionOutcome
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionOutcome where U: core::convert::From<T>
+pub fn collection_flow::CollectionOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionOutcome where U: core::convert::Into<T>
+pub type collection_flow::CollectionOutcome::Error = core::convert::Infallible
+pub fn collection_flow::CollectionOutcome::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionOutcome where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionOutcome where T: core::clone::Clone
+pub type collection_flow::CollectionOutcome::Owned = T
+pub fn collection_flow::CollectionOutcome::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionOutcome where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionOutcome where T: ?core::marker::Sized
+pub fn collection_flow::CollectionOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionOutcome where T: ?core::marker::Sized
+pub fn collection_flow::CollectionOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionOutcome where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionOutcome::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionOutcome
+pub fn collection_flow::CollectionOutcome::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionOutcome
+pub type collection_flow::CollectionOutcome::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionOutcome where T: ?core::marker::Sized
+pub enum collection_flow::CollectionStatus
+pub collection_flow::CollectionStatus::Completed
+pub collection_flow::CollectionStatus::Failed
+pub collection_flow::CollectionStatus::Fetching
+pub collection_flow::CollectionStatus::Pending
+impl core::clone::Clone for collection_flow::CollectionStatus
+pub fn collection_flow::CollectionStatus::clone(&self) -> collection_flow::CollectionStatus
+impl core::cmp::Eq for collection_flow::CollectionStatus
+impl core::cmp::PartialEq for collection_flow::CollectionStatus
+pub fn collection_flow::CollectionStatus::eq(&self, other: &collection_flow::CollectionStatus) -> bool
+impl core::fmt::Debug for collection_flow::CollectionStatus
+pub fn collection_flow::CollectionStatus::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for collection_flow::CollectionStatus
+impl core::marker::StructuralPartialEq for collection_flow::CollectionStatus
+impl core::marker::Freeze for collection_flow::CollectionStatus
+impl core::marker::Send for collection_flow::CollectionStatus
+impl core::marker::Sync for collection_flow::CollectionStatus
+impl core::marker::Unpin for collection_flow::CollectionStatus
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionStatus
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionStatus
+impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionStatus where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn collection_flow::CollectionStatus::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionStatus where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionStatus where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionStatus where U: core::convert::From<T>
+pub fn collection_flow::CollectionStatus::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionStatus where U: core::convert::Into<T>
+pub type collection_flow::CollectionStatus::Error = core::convert::Infallible
+pub fn collection_flow::CollectionStatus::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionStatus where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionStatus::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionStatus::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionStatus where T: core::clone::Clone
+pub type collection_flow::CollectionStatus::Owned = T
+pub fn collection_flow::CollectionStatus::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionStatus::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionStatus where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionStatus::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionStatus where T: ?core::marker::Sized
+pub fn collection_flow::CollectionStatus::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionStatus where T: ?core::marker::Sized
+pub fn collection_flow::CollectionStatus::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionStatus where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionStatus::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionStatus
+pub fn collection_flow::CollectionStatus::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionStatus
+pub type collection_flow::CollectionStatus::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionStatus where T: ?core::marker::Sized
+pub struct collection_flow::CollectionFailure
+pub collection_flow::CollectionFailure::diagnostic: alloc::string::String
+pub collection_flow::CollectionFailure::notification: core::option::Option<notification_center::message::Notification>
+pub collection_flow::CollectionFailure::page: collection_flow::CollectionPageView
+impl core::clone::Clone for collection_flow::CollectionFailure
+pub fn collection_flow::CollectionFailure::clone(&self) -> collection_flow::CollectionFailure
+impl core::cmp::PartialEq for collection_flow::CollectionFailure
+pub fn collection_flow::CollectionFailure::eq(&self, other: &collection_flow::CollectionFailure) -> bool
+impl core::fmt::Debug for collection_flow::CollectionFailure
+pub fn collection_flow::CollectionFailure::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionFailure
+impl core::marker::Freeze for collection_flow::CollectionFailure
+impl core::marker::Send for collection_flow::CollectionFailure
+impl core::marker::Sync for collection_flow::CollectionFailure
+impl core::marker::Unpin for collection_flow::CollectionFailure
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFailure
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFailure
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFailure where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionFailure where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionFailure where U: core::convert::From<T>
+pub fn collection_flow::CollectionFailure::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionFailure where U: core::convert::Into<T>
+pub type collection_flow::CollectionFailure::Error = core::convert::Infallible
+pub fn collection_flow::CollectionFailure::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionFailure where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionFailure::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionFailure::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionFailure where T: core::clone::Clone
+pub type collection_flow::CollectionFailure::Owned = T
+pub fn collection_flow::CollectionFailure::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionFailure::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionFailure where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionFailure::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionFailure where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFailure::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionFailure where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFailure::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionFailure where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionFailure::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionFailure
+pub fn collection_flow::CollectionFailure::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionFailure
+pub type collection_flow::CollectionFailure::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFailure where T: ?core::marker::Sized
+pub struct collection_flow::CollectionFailureView
+pub collection_flow::CollectionFailureView::diagnostic: alloc::string::String
+pub collection_flow::CollectionFailureView::message: alloc::string::String
+impl core::clone::Clone for collection_flow::CollectionFailureView
+pub fn collection_flow::CollectionFailureView::clone(&self) -> collection_flow::CollectionFailureView
+impl core::cmp::Eq for collection_flow::CollectionFailureView
+impl core::cmp::PartialEq for collection_flow::CollectionFailureView
+pub fn collection_flow::CollectionFailureView::eq(&self, other: &collection_flow::CollectionFailureView) -> bool
+impl core::fmt::Debug for collection_flow::CollectionFailureView
+pub fn collection_flow::CollectionFailureView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionFailureView
+impl core::marker::Freeze for collection_flow::CollectionFailureView
+impl core::marker::Send for collection_flow::CollectionFailureView
+impl core::marker::Sync for collection_flow::CollectionFailureView
+impl core::marker::Unpin for collection_flow::CollectionFailureView
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFailureView
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFailureView
+impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionFailureView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn collection_flow::CollectionFailureView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFailureView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionFailureView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionFailureView where U: core::convert::From<T>
+pub fn collection_flow::CollectionFailureView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionFailureView where U: core::convert::Into<T>
+pub type collection_flow::CollectionFailureView::Error = core::convert::Infallible
+pub fn collection_flow::CollectionFailureView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionFailureView where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionFailureView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionFailureView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionFailureView where T: core::clone::Clone
+pub type collection_flow::CollectionFailureView::Owned = T
+pub fn collection_flow::CollectionFailureView::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionFailureView::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionFailureView where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionFailureView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionFailureView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFailureView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionFailureView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFailureView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionFailureView where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionFailureView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionFailureView
+pub fn collection_flow::CollectionFailureView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionFailureView
+pub type collection_flow::CollectionFailureView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFailureView where T: ?core::marker::Sized
+pub struct collection_flow::CollectionFlow
+impl collection_flow::CollectionFlow
+pub fn collection_flow::CollectionFlow::cancel(&self)
+pub fn collection_flow::CollectionFlow::confirm_boundary(&self, boundary: shared_domain_types::boundary::Boundary)
+pub fn collection_flow::CollectionFlow::is_review_unlocked(&self, plan_id: &str) -> bool
+pub fn collection_flow::CollectionFlow::leave(&self)
+pub fn collection_flow::CollectionFlow::new(db: alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>, source: alloc::sync::Arc<(dyn data_acquisition::source::DataSource + core::marker::Send + core::marker::Sync)>, l10n: alloc::sync::Arc<localization::Localization>) -> Self
+pub fn collection_flow::CollectionFlow::page_view(&self) -> collection_flow::CollectionPageView
+pub fn collection_flow::CollectionFlow::report_view(&self) -> core::option::Option<collection_flow::CollectionReportView>
+pub fn collection_flow::CollectionFlow::reset_boundary(&self)
+pub fn collection_flow::CollectionFlow::set_plan(&self, plan_id: &shared_domain_types::id::PlanId)
+pub fn collection_flow::CollectionFlow::start(&self) -> collection_flow::Result<collection_flow::CollectionOperation>
+impl core::clone::Clone for collection_flow::CollectionFlow
+pub fn collection_flow::CollectionFlow::clone(&self) -> collection_flow::CollectionFlow
+impl core::marker::Freeze for collection_flow::CollectionFlow
+impl core::marker::Send for collection_flow::CollectionFlow
+impl core::marker::Sync for collection_flow::CollectionFlow
+impl core::marker::Unpin for collection_flow::CollectionFlow
+impl !core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFlow
+impl !core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFlow
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFlow where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionFlow where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionFlow where U: core::convert::From<T>
+pub fn collection_flow::CollectionFlow::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionFlow where U: core::convert::Into<T>
+pub type collection_flow::CollectionFlow::Error = core::convert::Infallible
+pub fn collection_flow::CollectionFlow::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionFlow where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionFlow::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionFlow::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionFlow where T: core::clone::Clone
+pub type collection_flow::CollectionFlow::Owned = T
+pub fn collection_flow::CollectionFlow::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionFlow::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionFlow where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionFlow::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionFlow where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFlow::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionFlow where T: ?core::marker::Sized
+pub fn collection_flow::CollectionFlow::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionFlow where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionFlow::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionFlow
+pub fn collection_flow::CollectionFlow::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionFlow
+pub type collection_flow::CollectionFlow::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFlow where T: ?core::marker::Sized
+pub struct collection_flow::CollectionOperation
+impl collection_flow::CollectionOperation
+pub fn collection_flow::CollectionOperation::progress_view(&self) -> data_acquisition::progress::CollectionProgressView
+pub fn collection_flow::CollectionOperation::try_complete(&mut self) -> core::option::Option<collection_flow::Result<collection_flow::CollectionOutcome>>
+impl core::marker::Freeze for collection_flow::CollectionOperation
+impl core::marker::Send for collection_flow::CollectionOperation
+impl !core::marker::Sync for collection_flow::CollectionOperation
+impl core::marker::Unpin for collection_flow::CollectionOperation
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionOperation
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionOperation
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionOperation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionOperation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionOperation where U: core::convert::From<T>
+pub fn collection_flow::CollectionOperation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionOperation where U: core::convert::Into<T>
+pub type collection_flow::CollectionOperation::Error = core::convert::Infallible
+pub fn collection_flow::CollectionOperation::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionOperation where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionOperation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionOperation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for collection_flow::CollectionOperation where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionOperation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionOperation where T: ?core::marker::Sized
+pub fn collection_flow::CollectionOperation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionOperation where T: ?core::marker::Sized
+pub fn collection_flow::CollectionOperation::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for collection_flow::CollectionOperation
+pub fn collection_flow::CollectionOperation::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionOperation
+pub type collection_flow::CollectionOperation::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionOperation where T: ?core::marker::Sized
+pub struct collection_flow::CollectionPageView
+pub collection_flow::CollectionPageView::diff_summary: core::option::Option<alloc::string::String>
+pub collection_flow::CollectionPageView::failure: core::option::Option<collection_flow::CollectionFailureView>
+pub collection_flow::CollectionPageView::progress: data_acquisition::progress::CollectionProgressView
+pub collection_flow::CollectionPageView::report: core::option::Option<collection_flow::CollectionReportView>
+pub collection_flow::CollectionPageView::review_unlocked: bool
+pub collection_flow::CollectionPageView::status: collection_flow::CollectionStatus
+impl core::clone::Clone for collection_flow::CollectionPageView
+pub fn collection_flow::CollectionPageView::clone(&self) -> collection_flow::CollectionPageView
+impl core::cmp::PartialEq for collection_flow::CollectionPageView
+pub fn collection_flow::CollectionPageView::eq(&self, other: &collection_flow::CollectionPageView) -> bool
+impl core::fmt::Debug for collection_flow::CollectionPageView
+pub fn collection_flow::CollectionPageView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionPageView
+impl core::marker::Freeze for collection_flow::CollectionPageView
+impl core::marker::Send for collection_flow::CollectionPageView
+impl core::marker::Sync for collection_flow::CollectionPageView
+impl core::marker::Unpin for collection_flow::CollectionPageView
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionPageView
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionPageView
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionPageView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionPageView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionPageView where U: core::convert::From<T>
+pub fn collection_flow::CollectionPageView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionPageView where U: core::convert::Into<T>
+pub type collection_flow::CollectionPageView::Error = core::convert::Infallible
+pub fn collection_flow::CollectionPageView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionPageView where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionPageView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionPageView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionPageView where T: core::clone::Clone
+pub type collection_flow::CollectionPageView::Owned = T
+pub fn collection_flow::CollectionPageView::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionPageView::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionPageView where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionPageView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionPageView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionPageView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionPageView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionPageView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionPageView where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionPageView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionPageView
+pub fn collection_flow::CollectionPageView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionPageView
+pub type collection_flow::CollectionPageView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionPageView where T: ?core::marker::Sized
+pub struct collection_flow::CollectionReportView
+pub collection_flow::CollectionReportView::candidate_lines: alloc::vec::Vec<alloc::string::String>
+pub collection_flow::CollectionReportView::category_lines: alloc::vec::Vec<alloc::string::String>
+pub collection_flow::CollectionReportView::entry_label: alloc::string::String
+pub collection_flow::CollectionReportView::issue_lines: alloc::vec::Vec<alloc::string::String>
+pub collection_flow::CollectionReportView::no_issues_line: core::option::Option<alloc::string::String>
+pub collection_flow::CollectionReportView::title: alloc::string::String
+impl core::clone::Clone for collection_flow::CollectionReportView
+pub fn collection_flow::CollectionReportView::clone(&self) -> collection_flow::CollectionReportView
+impl core::cmp::Eq for collection_flow::CollectionReportView
+impl core::cmp::PartialEq for collection_flow::CollectionReportView
+pub fn collection_flow::CollectionReportView::eq(&self, other: &collection_flow::CollectionReportView) -> bool
+impl core::fmt::Debug for collection_flow::CollectionReportView
+pub fn collection_flow::CollectionReportView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionReportView
+impl core::marker::Freeze for collection_flow::CollectionReportView
+impl core::marker::Send for collection_flow::CollectionReportView
+impl core::marker::Sync for collection_flow::CollectionReportView
+impl core::marker::Unpin for collection_flow::CollectionReportView
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionReportView
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionReportView
+impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionReportView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn collection_flow::CollectionReportView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionReportView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionReportView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionReportView where U: core::convert::From<T>
+pub fn collection_flow::CollectionReportView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionReportView where U: core::convert::Into<T>
+pub type collection_flow::CollectionReportView::Error = core::convert::Infallible
+pub fn collection_flow::CollectionReportView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionReportView where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionReportView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionReportView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionReportView where T: core::clone::Clone
+pub type collection_flow::CollectionReportView::Owned = T
+pub fn collection_flow::CollectionReportView::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionReportView::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionReportView where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionReportView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionReportView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionReportView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionReportView where T: ?core::marker::Sized
+pub fn collection_flow::CollectionReportView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionReportView where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionReportView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionReportView
+pub fn collection_flow::CollectionReportView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionReportView
+pub type collection_flow::CollectionReportView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionReportView where T: ?core::marker::Sized
+pub struct collection_flow::CollectionSummary
+pub collection_flow::CollectionSummary::notification: core::option::Option<notification_center::message::Notification>
+pub collection_flow::CollectionSummary::page: collection_flow::CollectionPageView
+impl core::clone::Clone for collection_flow::CollectionSummary
+pub fn collection_flow::CollectionSummary::clone(&self) -> collection_flow::CollectionSummary
+impl core::cmp::PartialEq for collection_flow::CollectionSummary
+pub fn collection_flow::CollectionSummary::eq(&self, other: &collection_flow::CollectionSummary) -> bool
+impl core::fmt::Debug for collection_flow::CollectionSummary
+pub fn collection_flow::CollectionSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::CollectionSummary
+impl core::marker::Freeze for collection_flow::CollectionSummary
+impl core::marker::Send for collection_flow::CollectionSummary
+impl core::marker::Sync for collection_flow::CollectionSummary
+impl core::marker::Unpin for collection_flow::CollectionSummary
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionSummary
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionSummary
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionSummary where U: core::convert::From<T>
+pub fn collection_flow::CollectionSummary::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionSummary where U: core::convert::Into<T>
+pub type collection_flow::CollectionSummary::Error = core::convert::Infallible
+pub fn collection_flow::CollectionSummary::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionSummary where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionSummary::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionSummary::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionSummary where T: core::clone::Clone
+pub type collection_flow::CollectionSummary::Owned = T
+pub fn collection_flow::CollectionSummary::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionSummary::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionSummary where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionSummary::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionSummary where T: ?core::marker::Sized
+pub fn collection_flow::CollectionSummary::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionSummary where T: ?core::marker::Sized
+pub fn collection_flow::CollectionSummary::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionSummary where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionSummary::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionSummary
+pub fn collection_flow::CollectionSummary::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionSummary
+pub type collection_flow::CollectionSummary::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionSummary where T: ?core::marker::Sized
+pub type collection_flow::Result<T> = core::result::Result<T, collection_flow::CollectionError>

@@ -1,0 +1,52 @@
+# MCRebuild V2 —— A1 候选采集完整用例（application-flow 层）
+#
+# 依据 ADR-0039（应用流程模块）+ ADR-0040（原始观测/候选投影契约）。
+# A1 是非 S1 的深模块：外部接口只表达完整用户操作（开始采集、查看采集报告、
+# 取消/进度），接口后协调 F4 → B2 → B14 → F7 并返回已决定的页面状态、
+# 进度、导航结果和通知事实；禁止 F4→F7 直接边（xtask arch 白名单强制）。
+
+[package]
+name = "collection-flow"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "A1 collection-flow: complete candidate acquisition use case (F4 -> B2 -> B14 -> F7)"
+
+[dependencies]
+# F4 数据采集（可插拔 DataSource + 采集批次；A1 只消费其公开接口）
+data-acquisition = { workspace = true }
+# F7 覆盖率审计（安静哨兵；A1 组合采集后体检）
+coverage-audit = { workspace = true }
+# B2 数据持久化（原始观测落库 + 候选投影批次原子发布）
+data-persistence = { workspace = true }
+# B14 候选几何校验（点/线/面逐对象验证与隔离）
+geometry-validator = { workspace = true }
+# B6 国际化（用户可见文案全部走 zh-CN.json 文本键）
+localization = { workspace = true }
+# B7 通知中心（A1 汇总影响后交给 B7 的通知事实）
+notification-center = { workspace = true }
+# B1 共享领域类型（PlanId/Boundary/CandidateCategory）
+shared-domain-types = { workspace = true }
+# 稳定候选投影标识（ADR-0040：投影必须有稳定候选 ID）
+uuid = { workspace = true }
+# JSON 值承载（边界坐标、source_data 标签展示）
+serde_json = { workspace = true }
+# 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# F9 边界直出完整用例（验收：采集失败不得取消基础导出资格）
+export-flow = { workspace = true }
+global-settings = { workspace = true }
+# 测试替身数据源用标签映射表（与 F4 测试同源）
+data-transformers = { workspace = true }
+# 导出资格验收用 PlanContextView（F9 输入模板）
+project-management = { workspace = true }
+# 临时导出目录
+tempfile = { workspace = true }
+# public-api snapshot testing（B1 模式：rustdoc-json + public-api）
+public-api.workspace = true
+rustdoc-json.workspace = true
+
+[lints]
+workspace = true
