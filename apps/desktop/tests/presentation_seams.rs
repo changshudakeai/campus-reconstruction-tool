@@ -482,7 +482,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     assert_eq!(
         window.get_workspace_active_step(),
         3,
-        "点击评审步骤只能呈现评审占位页，不得同时串到其他步骤入口"
+        "点击评审步骤只能呈现评审页，不得同时串到其他步骤入口"
     );
     window.set_operation_state(OperationPresentationState::Failed);
     window.invoke_workspace_step_clicked(4);
