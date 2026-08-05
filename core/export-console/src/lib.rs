@@ -38,6 +38,7 @@
 mod boundary_export;
 mod console;
 mod data;
+mod enhanced;
 mod error;
 mod pipeline;
 mod progress;
@@ -50,6 +51,10 @@ pub use boundary_export::{
 };
 pub use console::ExportConsole;
 pub use data::{ExportRequest, ExportStage, ExportSummary};
+pub use enhanced::{
+    CandidateExportReader, CandidateExportSummary, EnhancedExportInput, EnhancedExportPort,
+    EnhancedExportRequest, KeptCandidateProjection,
+};
 pub use error::{
     ArtifactKind, ArtifactRecoveryError, ArtifactWriteError, BoundaryError, Error, Result,
     VersionError,

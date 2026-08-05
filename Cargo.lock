@@ -1383,6 +1383,7 @@ dependencies = [
  "global-settings",
  "localization",
  "log",
+ "manifest-generator",
  "notification-center",
  "onboarding-tutorial",
  "project-management",
@@ -1392,6 +1393,7 @@ dependencies = [
  "shared-domain-types",
  "slint",
  "slint-build",
+ "sponge-export",
  "tempfile",
  "wry",
 ]
@@ -1706,9 +1708,11 @@ dependencies = [
  "data-persistence",
  "export-console",
  "global-settings",
+ "manifest-generator",
  "project-management",
  "serde_json",
  "shared-domain-types",
+ "sponge-export",
  "tempfile",
 ]
 

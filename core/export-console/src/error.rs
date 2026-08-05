@@ -119,6 +119,15 @@ pub enum Error {
     /// 封账失败（F5 批量写回失败等；封账不生效，评审保持可改）
     #[error("封账失败：{0}")]
     SealFailed(String),
+    /// 增强导出的候选/封账事实读取失败（B2 层；应用流程读取后传入 F9）。
+    #[error("候选导出事实读取失败：{0}")]
+    CandidateRead(String),
+    /// 保留候选不再满足导出资格（投影缺失或已隔离，ADR-0040）。
+    #[error("保留候选不再满足导出资格：{0}")]
+    CandidateEligibility(String),
+    /// 封账摘要与保留候选列表不一致，禁止伪成功产物。
+    #[error("候选导出事实不一致：{0}")]
+    CandidateFactsMismatch(String),
     /// F1 设置读取失败；与缺失设置键触发的合法默认值区分。
     #[error("导出设置读取失败：{0}")]
     SettingsRead(String),

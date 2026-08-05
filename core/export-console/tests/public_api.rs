@@ -5,8 +5,9 @@
 //! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
 
 use export_console::{
-    adapt_to_voxel_model, text_keys, Error, ExportConsole, ExportProgressView, ExportRequest,
-    ExportStage, MockExportConsole, MockSealGate, NavigationTarget, ProgressTracker, SealGate,
+    adapt_to_voxel_model, text_keys, CandidateExportSummary, EnhancedExportRequest, Error,
+    ExportConsole, ExportProgressView, ExportRequest, ExportStage, KeptCandidateProjection,
+    MockExportConsole, MockSealGate, NavigationTarget, ProgressTracker, SealGate,
 };
 use generation_engine::{BlockModel, BlockPosition};
 use shared_domain_types::{CandidateCategory, PlanId};
@@ -96,6 +97,40 @@ fn public_api_types_exist() {
     let err: Error = idle.confirm_export().unwrap_err();
     assert!(matches!(err, Error::InvalidState(_)));
     assert!(!err.to_string().is_empty());
+
+    // 增强导出（M4）：请求携带封账摘要与保留候选标识
+    let summary = CandidateExportSummary {
+        candidate_projection_count: 2,
+        review_decision_count: 2,
+        keep_total: 1,
+        keep_by_category: vec![(CandidateCategory::Building, 1)],
+        pending_count: 1,
+        remove_count: 0,
+    };
+    let enhanced = EnhancedExportRequest::new(
+        "校区",
+        plan_id,
+        "方案",
+        "26.1.2",
+        None,
+        false,
+        None,
+        "campus.schem",
+        "manifest.json",
+        summary,
+        vec!["keep/b1".to_owned()],
+    );
+    assert_eq!(enhanced.kept_candidate_ids.len(), 1);
+    let projection = KeptCandidateProjection {
+        candidate_id: "keep/b1".to_owned(),
+        category: CandidateCategory::Building,
+        display_title: "教学楼".to_owned(),
+        tags: vec![],
+        shape_kind: "polygon".to_owned(),
+        coordinates: serde_json::json!([]),
+        reviewable: true,
+    };
+    assert!(projection.reviewable);
 }
 
 /// B6 国际化验收：本 crate 产出的全部文本键在 zh-CN.json 中逐条可解析

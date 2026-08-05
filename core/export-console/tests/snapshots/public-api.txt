@@ -25,6 +25,10 @@ pub struct BoundaryExportRequest { pub boundary: Option<shared_domain_types::Bou
 pub struct BoundaryExportResult { pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub manifest: manifest_generator::FoundationManifest, pub cleanup_warning: Option<String>, pub schematic_dimensions: [usize; 3] }
 pub struct BoundaryExportOperation { .. }
 pub struct BoundaryExportPort { .. }
+pub struct EnhancedExportRequest { pub boundary: Option<shared_domain_types::Boundary>, pub boundary_confirmed: bool, pub orientation: Option<shared_domain_types::Orientation>, pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub summary: CandidateExportSummary, pub kept_candidate_ids: Vec<String> }
+pub struct CandidateExportSummary { pub candidate_projection_count: usize, pub review_decision_count: usize, pub keep_total: usize, pub keep_by_category: Vec<(shared_domain_types::CandidateCategory, usize)>, pub pending_count: usize, pub remove_count: usize }
+pub struct KeptCandidateProjection { pub candidate_id: String, pub category: shared_domain_types::CandidateCategory, pub display_title: String, pub tags: Vec<(String, String)>, pub shape_kind: String, pub coordinates: serde_json::Value, pub reviewable: bool }
+pub struct EnhancedExportPort { .. }
 pub struct ExportFileKind
 pub struct StdExportFileSystem
 pub struct ExportRequest { pub plan_id: String, pub keep_by_category: Vec<(CandidateCategory, usize)>, pub keep_total: usize, pub pending_count: usize, pub remove_count: usize, pub keep_candidates: Vec<String> }
@@ -40,6 +44,16 @@ pub struct ExportProgressView { pub visible: bool, pub percent: u32, pub stage_k
 
 pub type Result<T> = std::result::Result<T, Error>
 pub type MockExportConsole = ExportConsole<MockSealGate>
+
+## Traits
+
+pub trait CandidateExportReader: Send + Sync {
+    pub fn kept_projection(&self, plan_id: &str, candidate_id: &str) -> Result<Option<KeptCandidateProjection>>
+}
+
+pub trait EnhancedExportInput: Send + Sync {
+    pub fn load_request(&self) -> Result<EnhancedExportRequest>
+}
 
 ## Enums #[non_exhaustive]
 
@@ -57,6 +71,24 @@ pub enum NavigationTarget {
     PlanList,
     ContinueReview,
 }
+
+## Error Variants (pub enum Error, #[non_exhaustive])
+
+Error::CandidateRead(String)
+Error::CandidateEligibility(String)
+Error::CandidateFactsMismatch(String)
+
+impl EnhancedExportRequest {
+    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>, summary: CandidateExportSummary, kept_candidate_ids: Vec<String>) -> Self
+}
+
+impl EnhancedExportPort {
+    pub fn new_enhanced_v26_1_2(input: Arc<dyn EnhancedExportInput>, reader: Arc<dyn CandidateExportReader>, file_system: Arc<dyn ExportFileSystem>) -> Self
+    pub fn start(&self) -> Result<BoundaryExportOperation>
+    pub fn expire_active(&self)
+}
+
+impl Clone for EnhancedExportPort
 
 pub enum Error {
     Boundary(BoundaryError),

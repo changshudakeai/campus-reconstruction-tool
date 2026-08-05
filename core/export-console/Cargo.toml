@@ -43,6 +43,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
+# 增强导出的规范化候选投影几何与展示标签（JSON 值承载）
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

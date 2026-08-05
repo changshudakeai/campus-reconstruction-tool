@@ -1,0 +1,518 @@
+//! F9 增强导出完整用例（ADR-0040/0041/0043）。
+//!
+//! 边界直出（`boundary_export`）保持不变；本模块是独立的增强导出入口：
+//! 只消费应用流程从 B2 读取的“封账后状态为保留”的稳定候选标识，并按同一份
+//! 规范化候选投影生成初始校园内容。F9 不依赖 F5，也不查询原始观测。
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
+
+use chrono::Utc;
+use foundation_mode::{BoundaryProjector, CandidateBlockBounds};
+use generation_engine::{
+    rules::{
+        generate_other, generate_road, generate_sports_court, generate_vegetation, generate_water,
+        OtherCandidate,
+    },
+    BlockModel, BlockPosition, BuildingCandidate, GenerationEngine,
+};
+use manifest_generator::{
+    CandidateFacts, CategoryCount, ExportKind, ManifestGenerator, ManifestOrientation,
+    ManifestOrientationSource, MaterialTable, PlanInfo,
+};
+use shared_domain_types::{Boundary, CandidateCategory, Orientation};
+
+use crate::boundary_export::{
+    guarded_export, staged_path, validate_targets, version_contract, write_and_publish,
+    ActiveTaskGuard, BoundaryExportOperation, BoundaryExportResult, ExportFileSystem,
+};
+use crate::data::ExportStage;
+use crate::error::{BoundaryError, Error, Result, VersionError};
+use crate::progress::ProgressTracker;
+
+/// 增强导出内部完整用例；不向 S1 暴露 B18/B17/B4 的分段接口。
+pub(crate) struct EnhancedExportUseCase {
+    material_table: MaterialTable,
+    file_system: Arc<dyn ExportFileSystem>,
+}
+
+impl EnhancedExportUseCase {
+    pub(crate) fn new(
+        material_table: MaterialTable,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Self {
+        Self {
+            material_table,
+            file_system,
+        }
+    }
+
+    pub(crate) fn export(
+        &self,
+        request: &EnhancedExportRequest,
+        reader: &dyn CandidateExportReader,
+        progress: &ProgressTracker,
+    ) -> Result<BoundaryExportResult> {
+        let staged_schematic = staged_path(&request.schematic_path, "schem")?;
+        let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
+        guarded_export(
+            self.file_system.as_ref(),
+            progress,
+            &staged_schematic,
+            &staged_manifest,
+            |staged_schematic, staged_manifest| {
+                self.export_inner(request, reader, progress, staged_schematic, staged_manifest)
+            },
+        )
+    }
+
+    fn export_inner(
+        &self,
+        request: &EnhancedExportRequest,
+        reader: &dyn CandidateExportReader,
+        progress: &ProgressTracker,
+        staged_schematic: &std::path::Path,
+        staged_manifest: &std::path::Path,
+    ) -> Result<BoundaryExportResult> {
+        let boundary = request
+            .boundary
+            .as_ref()
+            .ok_or(Error::Boundary(BoundaryError::Missing))?;
+        if !request.boundary_confirmed {
+            return Err(Error::Boundary(BoundaryError::NotConfirmed));
+        }
+        let contract = version_contract(
+            request.plan.minecraft_version.as_str(),
+            &self.material_table,
+        )?;
+        self.material_table
+            .validate_configured_blocks()
+            .map_err(|error| {
+                Error::Version(VersionError::InvalidMaterialTable {
+                    version: self.material_table.minecraft_version.to_string(),
+                    detail: error.to_string(),
+                })
+            })?;
+        validate_targets(
+            &request.schematic_path,
+            &request.manifest_path,
+            self.file_system.as_ref(),
+        )?;
+        if request.summary.keep_total != request.kept_candidate_ids.len() {
+            return Err(Error::CandidateFactsMismatch(format!(
+                "摘要保留数 {} 与候选标识数 {} 不一致",
+                request.summary.keep_total,
+                request.kept_candidate_ids.len()
+            )));
+        }
+
+        let (orientation, degree, source) = match request.orientation {
+            Some(orientation) => (
+                orientation,
+                orientation.degree(),
+                ManifestOrientationSource::Custom,
+            ),
+            None => (
+                Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
+                0.0,
+                ManifestOrientationSource::MapNorth,
+            ),
+        };
+
+        let projector = BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
+            .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
+        let footprint = projector.footprint();
+        let bounds = projector.bounds();
+
+        progress.set_stage(ExportStage::Generating);
+        progress.report_percent(5);
+        let engine = GenerationEngine::new(self.material_table.clone());
+        let mut model =
+            engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
+        progress.report_percent(20);
+
+        let plan_key = request.plan.plan_id.to_string();
+        let mut generated = 0usize;
+        for candidate_id in &request.kept_candidate_ids {
+            let projection = reader
+                .kept_projection(&plan_key, candidate_id)?
+                .ok_or_else(|| {
+                    Error::CandidateEligibility(format!("候选 {candidate_id} 的规范化投影缺失"))
+                })?;
+            if !projection.reviewable {
+                return Err(Error::CandidateEligibility(format!(
+                    "候选 {} 的当前投影不再满足 Reviewable 资格",
+                    projection.candidate_id
+                )));
+            }
+            let candidate_bounds = projector
+                .candidate_bounds(&projection.coordinates)
+                .map_err(|error| {
+                    Error::CandidateEligibility(format!(
+                        "候选 {} 几何投影失败：{error}",
+                        projection.candidate_id
+                    ))
+                })?;
+            let candidate_model = generate_candidate_model(&projection, candidate_bounds, &engine)?;
+            let offset_x = (candidate_bounds.min_x - bounds.min_block_x).max(0);
+            let offset_z = (candidate_bounds.min_z - bounds.min_block_z).max(0);
+            merge_models(&mut model, &candidate_model, offset_x, offset_z);
+            generated += 1;
+            let percent = 20 + (generated * 45 / request.kept_candidate_ids.len().max(1));
+            progress.report_percent(percent as u32);
+        }
+        if generated != request.summary.keep_total {
+            return Err(Error::CandidateFactsMismatch(format!(
+                "实际生成 {} 项，摘要保留 {} 项",
+                generated, request.summary.keep_total
+            )));
+        }
+
+        let actual_plan = PlanInfo::new(
+            request.plan.campus_name.clone(),
+            request.plan.plan_id,
+            request.plan.plan_name.clone(),
+            contract.version,
+        );
+        let keep_decisions: Vec<(CandidateCategory, bool)> = request
+            .summary
+            .keep_by_category
+            .iter()
+            .map(|(category, _)| (*category, true))
+            .collect();
+        let candidate_facts = facts_from_summary(&request.summary);
+        let mut manifest = ManifestGenerator::new()
+            .generate_manifest_with_facts(
+                &actual_plan,
+                &keep_decisions,
+                uuid::Uuid::new_v4().to_string(),
+                Utc::now().to_rfc3339(),
+                Some(ManifestOrientation { degree, source }),
+                candidate_facts,
+            )
+            .map_err(|error| Error::ManifestWrite(error.to_string()))?;
+        manifest.export_kind = ExportKind::Enhanced;
+        progress.report_percent(70);
+
+        let dimensions = model
+            .bounding_box()
+            .map(|bbox| {
+                [
+                    bbox.width() as usize,
+                    bbox.height() as usize,
+                    bbox.length() as usize,
+                ]
+            })
+            .unwrap_or([footprint.width_blocks, 1, footprint.length_blocks]);
+
+        write_and_publish(
+            self.file_system.as_ref(),
+            &request.schematic_path,
+            &request.manifest_path,
+            &manifest,
+            &model,
+            contract,
+            progress,
+            staged_schematic,
+            staged_manifest,
+            dimensions,
+        )
+    }
+}
+
+/// 封账摘要：应用流程从 B2 读取后传入 F9（F9 对 F5 零依赖）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateExportSummary {
+    /// 当前已发布候选投影数量（Reviewable）。
+    pub candidate_projection_count: usize,
+    /// 已存在的评审决定数量（真实封账写回条数）。
+    pub review_decision_count: usize,
+    /// 本次实际保留候选数量。
+    pub keep_total: usize,
+    /// 保留候选按类别计数（仅列出保留数 > 0 的类别）。
+    pub keep_by_category: Vec<(CandidateCategory, usize)>,
+    /// 待定项数（如实报数，不导出）。
+    pub pending_count: usize,
+    /// 剔除项数（如实报数，不导出）。
+    pub remove_count: usize,
+}
+
+/// 单个保留候选的规范化投影值（F9 消费的同一份投影；不含原始观测）。
+#[derive(Debug, Clone)]
+pub struct KeptCandidateProjection {
+    /// B2 候选投影的稳定标识。
+    pub candidate_id: String,
+    /// 六类别。
+    pub category: CandidateCategory,
+    /// 展示标题（来源名称）。
+    pub display_title: String,
+    /// 展示标签（高度/层数/屋顶/标签家族等）。
+    pub tags: Vec<(String, String)>,
+    /// 形状种类（point/line_string/polygon）。
+    pub shape_kind: String,
+    /// 规范化投影几何（GeoJSON coordinates）。
+    pub coordinates: serde_json::Value,
+    /// 当前投影是否仍具备 Reviewable 资格（ADR-0040 复核）。
+    pub reviewable: bool,
+}
+
+/// 窄读者 seam：只按稳定候选标识读取规范化候选投影。
+///
+/// 生产实现由 A2 经 B2 `CandidateProjectionsApi` 读取当前已发布批次；
+/// F9 借此“只读 B2 保留标识与规范化投影”，不接触原始观测。
+pub trait CandidateExportReader: Send + Sync {
+    /// 读取一个保留候选的当前规范化投影；无投影时返回 `Ok(None)`。
+    fn kept_projection(
+        &self,
+        plan_id: &str,
+        candidate_id: &str,
+    ) -> Result<Option<KeptCandidateProjection>>;
+}
+
+/// 增强导出的完整输入（Start 返回前冻结）。
+#[derive(Debug, Clone)]
+pub struct EnhancedExportRequest {
+    pub(crate) plan: PlanInfo,
+    /// 方案边界；None 表示没有取得边界。
+    pub boundary: Option<Boundary>,
+    /// 边界是否已经通过用户确认。
+    pub boundary_confirmed: bool,
+    /// 用户自定义朝向；None 由本用例决定为地图正北。
+    pub orientation: Option<Orientation>,
+    /// 最终 `.schem` 目标路径。
+    pub schematic_path: PathBuf,
+    /// 最终 manifest 目标路径。
+    pub manifest_path: PathBuf,
+    /// 封账摘要（应用流程从 B2 读取后传入）。
+    pub summary: CandidateExportSummary,
+    /// 封账后状态为保留的稳定候选标识。
+    pub kept_candidate_ids: Vec<String>,
+}
+
+impl EnhancedExportRequest {
+    /// 创建一次增强导出请求。
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "增强导出输入在稳定能力端口显式展开，与 M1 请求同一纪律"
+    )]
+    pub fn new(
+        campus_name: impl Into<String>,
+        plan_id: shared_domain_types::PlanId,
+        plan_name: impl Into<String>,
+        minecraft_version: impl Into<String>,
+        boundary: Option<Boundary>,
+        boundary_confirmed: bool,
+        orientation: Option<Orientation>,
+        schematic_path: impl Into<PathBuf>,
+        manifest_path: impl Into<PathBuf>,
+        summary: CandidateExportSummary,
+        kept_candidate_ids: Vec<String>,
+    ) -> Self {
+        Self {
+            plan: PlanInfo::new(campus_name, plan_id, plan_name, minecraft_version),
+            boundary,
+            boundary_confirmed,
+            orientation,
+            schematic_path: schematic_path.into(),
+            manifest_path: manifest_path.into(),
+            summary,
+            kept_candidate_ids,
+        }
+    }
+}
+
+/// F9 从组合根取得增强导出完整输入的稳定能力端口。
+pub trait EnhancedExportInput: Send + Sync {
+    /// 一次读取完整增强导出输入（含封账摘要与保留标识）。
+    fn load_request(&self) -> Result<EnhancedExportRequest>;
+}
+
+/// F9 稳定的增强导出能力端口；S1 只调用一次开始意图（经 A2 路由）。
+#[derive(Clone)]
+pub struct EnhancedExportPort {
+    use_case: Arc<EnhancedExportUseCase>,
+    input: Arc<dyn EnhancedExportInput>,
+    reader: Arc<dyn CandidateExportReader>,
+    active: Arc<AtomicBool>,
+    lifecycle: Arc<AtomicU64>,
+}
+
+impl EnhancedExportPort {
+    /// Construct the production enhanced F9 port with the authoritative 26.1.2 contract.
+    pub fn new_enhanced_v26_1_2(
+        input: Arc<dyn EnhancedExportInput>,
+        reader: Arc<dyn CandidateExportReader>,
+        file_system: Arc<dyn ExportFileSystem>,
+    ) -> Self {
+        Self {
+            use_case: Arc::new(EnhancedExportUseCase::new(
+                MaterialTable::v26_1_2_school(),
+                file_system,
+            )),
+            input,
+            reader,
+            active: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// 提交一次增强开始意图；输入取得与完整导出均由 F9 端口拥有。
+    pub fn start(&self) -> Result<BoundaryExportOperation> {
+        if self.active.swap(true, Ordering::SeqCst) {
+            return Err(Error::InvalidState("增强导出进行中，不接受新的导出请求"));
+        }
+
+        let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.input.load_request()
+        })) {
+            Ok(Ok(request)) => request,
+            Ok(Err(error)) => {
+                self.active.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+            Err(_) => {
+                self.active.store(false, Ordering::SeqCst);
+                return Err(Error::BackgroundTask);
+            }
+        };
+        let progress = ProgressTracker::new();
+        let worker_progress = progress.clone();
+        let use_case = Arc::clone(&self.use_case);
+        let reader = Arc::clone(&self.reader);
+        let active = Arc::clone(&self.active);
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let generation = lifecycle.load(Ordering::SeqCst);
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = std::thread::Builder::new().spawn(move || {
+            let result = {
+                let _active_guard = ActiveTaskGuard(active);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    use_case.export(&request, reader.as_ref(), &worker_progress)
+                }))
+                .unwrap_or_else(|_| {
+                    worker_progress.fail();
+                    Err(Error::BackgroundTask)
+                })
+            };
+            let _ = sender.send(result);
+        });
+        if spawn_result.is_err() {
+            self.active.store(false, Ordering::SeqCst);
+            return Err(Error::BackgroundTask);
+        }
+        Ok(BoundaryExportOperation::new(
+            progress, receiver, lifecycle, generation,
+        ))
+    }
+
+    /// Expire an operation result when its presentation context is left.
+    pub fn expire_active(&self) {
+        self.lifecycle.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// 把一个保留候选投影 + 块坐标外接范围生成初始校园内容（B18）。
+pub(crate) fn generate_candidate_model(
+    projection: &KeptCandidateProjection,
+    bounds: CandidateBlockBounds,
+    engine: &GenerationEngine,
+) -> Result<BlockModel> {
+    let width = bounds.width_blocks.max(1) as i32;
+    let length = bounds.length_blocks.max(1) as i32;
+    match projection.category {
+        CandidateCategory::Building => {
+            // 建筑至少 3x3 格才可渲染（B18 参数约束）；尺寸仍来自投影外接范围。
+            let width = bounds.width_blocks.max(3) as i32;
+            let length = bounds.length_blocks.max(3) as i32;
+            let mut candidate = BuildingCandidate::new(&projection.candidate_id, width, length);
+            for (key, value) in &projection.tags {
+                match key.to_ascii_lowercase().as_str() {
+                    "height" => {
+                        if let Ok(height_m) = value.parse::<f64>() {
+                            candidate = candidate.with_height_m(height_m);
+                        }
+                    }
+                    "levels" => {
+                        if let Ok(levels) = value.parse::<u32>() {
+                            candidate = candidate.with_levels(levels);
+                        }
+                    }
+                    "roof" => candidate = candidate.with_roof_shape(value),
+                    _ => {}
+                }
+            }
+            engine.generate_building(&candidate).map_err(Into::into)
+        }
+        CandidateCategory::Road => {
+            generate_road(width, length, engine.materials()).map_err(Into::into)
+        }
+        CandidateCategory::Water => {
+            generate_water(width, length, engine.materials()).map_err(Into::into)
+        }
+        CandidateCategory::Vegetation => {
+            generate_vegetation(engine.materials()).map_err(Into::into)
+        }
+        CandidateCategory::Sports => {
+            generate_sports_court(width, length, engine.materials()).map_err(Into::into)
+        }
+        CandidateCategory::Other => {
+            let mut other = OtherCandidate::new(&projection.candidate_id);
+            for (key, value) in &projection.tags {
+                other.tags.insert(key.clone(), value.clone());
+            }
+            generate_other(&other, engine.materials()).map_err(Into::into)
+        }
+        _ => Err(Error::CandidateEligibility(format!(
+            "候选 {} 的类别 {} 尚无生成规则",
+            projection.candidate_id,
+            projection.category.display_name()
+        ))),
+    }
+}
+
+/// 把候选模型按块坐标偏移合并进场地模型（后写覆盖先写）。
+pub(crate) fn merge_models(
+    target: &mut BlockModel,
+    candidate: &BlockModel,
+    offset_x: i32,
+    offset_z: i32,
+) {
+    for block in candidate.blocks() {
+        target.set_block(
+            BlockPosition::new(
+                block.position.x + offset_x,
+                block.position.y,
+                block.position.z + offset_z,
+            ),
+            &block.block_id,
+        );
+    }
+}
+
+/// 封账摘要 → manifest 候选链事实（保留类别与数量如实记录）。
+pub(crate) fn facts_from_summary(summary: &CandidateExportSummary) -> CandidateFacts {
+    CandidateFacts {
+        candidate_projection_count: summary.candidate_projection_count,
+        review_decision_count: summary.review_decision_count,
+        retained_candidate_count: summary.keep_total,
+        keep_by_category: summary
+            .keep_by_category
+            .iter()
+            .map(|(category, count)| CategoryCount::new(category_identifier(*category), *count))
+            .collect(),
+    }
+}
+
+/// 类别 → manifest 稳定标识（与 B2 数据库词汇一致）。
+pub(crate) fn category_identifier(category: CandidateCategory) -> &'static str {
+    match category {
+        CandidateCategory::Building => "Building",
+        CandidateCategory::Road => "Road",
+        CandidateCategory::Water => "Water",
+        CandidateCategory::Vegetation => "Vegetation",
+        CandidateCategory::Sports => "Sports",
+        CandidateCategory::Other => "Other",
+        _ => "Other",
+    }
+}
