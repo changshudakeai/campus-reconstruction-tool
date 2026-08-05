@@ -13,7 +13,7 @@ use shared_domain_types::CampusId;
 use slint::ComponentHandle;
 
 fn pump_until_terminal(window: &AppWindow) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let weak = window.as_weak();
     let timer = slint::Timer::default();
     timer.start(

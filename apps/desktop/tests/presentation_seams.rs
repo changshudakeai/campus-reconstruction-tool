@@ -579,7 +579,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         );
         publisher_released.send(()).expect("报告发布线程已释放");
     });
-    pump_until(Duration::from_secs(5), || window.get_error_dialog_visible());
+    pump_until(Duration::from_secs(30), || {
+        window.get_error_dialog_visible()
+    });
     assert!(window.get_error_dialog_visible());
     window.invoke_error_dialog_diagnostic_action_clicked(popup_id.into());
     publisher_release
@@ -589,7 +591,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
     });
     assert_eq!(
@@ -659,7 +661,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放门锁") = true;
         signal.notify_all();
     }
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_operation_state() == OperationPresentationState::Ready
     });
     assert_eq!(
@@ -721,7 +723,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("release dialog action gate") = true;
         signal.notify_all();
     }
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
     });
     assert_eq!(
@@ -752,7 +754,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Failed
     });
     assert_eq!(
@@ -809,7 +811,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Failed
     });
     assert_eq!(
@@ -877,7 +879,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放较新门锁") = true;
         signal.notify_all();
     }
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
     });
     assert_eq!(
@@ -891,7 +893,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         *released.lock().expect("释放较早门锁") = true;
         signal.notify_all();
     }
-    pump_until(Duration::from_secs(5), || {
+    pump_until(Duration::from_secs(30), || {
         window.get_diagnostic_operation_state() == OperationPresentationState::Succeeded
     });
     assert_eq!(

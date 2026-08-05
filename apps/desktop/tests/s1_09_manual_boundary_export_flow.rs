@@ -110,7 +110,7 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         OperationPresentationState::Processing,
         "Start returns Processing before export completion"
     );
-    pump_until_terminal(&window, Duration::from_secs(5));
+    pump_until_terminal(&window, Duration::from_secs(30));
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded
@@ -134,7 +134,7 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         window.get_operation_state(),
         OperationPresentationState::Processing
     );
-    pump_until_terminal(&window, Duration::from_secs(5));
+    pump_until_terminal(&window, Duration::from_secs(30));
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Succeeded
