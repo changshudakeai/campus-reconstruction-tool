@@ -1,8 +1,8 @@
-//! S1 迁移期运行时：Slint 主窗口装配与正式入口组合根。
+//! S1 运行时：Slint 主窗口装配与正式入口组合根。
 //!
 //! 启动与设置流程已经由呈现入口一次取得完整结果（工单 03），S1 只呈现返回的
-//! 页面、状态、导航与通知。landing_decision 等旧判定助手只保留给行为基线
-//! 测试与迁移期占位路径，生产启动不再自行组合着陆条件。
+//! 页面、状态、导航与通知。landing_decision 等判定助手供行为基线测试与
+//! 组合根复用，生产启动不再自行组合着陆条件。
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -76,7 +76,7 @@ pub(crate) fn status_text(l10n: &Localization, decision: &LandingDecision) -> St
     }
 }
 
-/// 正式窗口装配的生命周期句柄；持有旧接线与八类呈现入口直到窗口退出。
+/// 正式窗口装配的生命周期句柄；持有注入器与全部呈现入口直到窗口退出。
 pub struct ApplicationRuntime {
     _injector: Rc<RefCell<ViewModelInjector>>,
     _presentation: Rc<RefCell<ProductionEntries>>,
@@ -239,7 +239,7 @@ impl ViewModelInjector {
     pub(crate) fn inject(&self, window: &AppWindow) {
         let l10n = &self.l10n;
 
-        // 屏 4：方案工作区占位文案（T19B-5B）
+        // 屏 4：方案工作区静态文案（动态状态由工作区入口渲染）
         window.set_workspace_placeholder_title(l10n.t("workspace.placeholder_title").into());
         window.set_workspace_placeholder_subtitle(l10n.t("workspace.placeholder_subtitle").into());
         window.set_workspace_step_pending_notice(l10n.t("workspace.step_pending_notice").into());
@@ -253,7 +253,7 @@ impl ViewModelInjector {
         window.set_workspace_stepper_review_label(l10n.t("review.workbench_title").into());
         window.set_workspace_stepper_export_label(l10n.t("export.confirm_title").into());
 
-        // 屏 4：步骤条教程气泡（F2 钩子，ADR-0028）——初始隐藏，进屏 4 时索泡
+        // 屏 4：步骤条教程气泡（F2，ADR-0028）——初始隐藏，进屏 4 时由入口索泡
         window.set_workspace_tutorial_visible(false);
         window.set_workspace_tutorial_text(SharedString::new());
         window.set_workspace_tutorial_dismiss_label(l10n.t("tutorial.dismiss_button").into());
@@ -282,7 +282,7 @@ impl ViewModelInjector {
         window.set_input_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
         window.set_input_dialog_label(l10n.t("dialog.name_label").into());
 
-        // ── T19B-9: 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────
+        // ── 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────────────
         window.set_toolbar_title(l10n.t("app.welcome_title").into());
 
         // 公告栏页（Screen 5）文案
@@ -305,14 +305,13 @@ impl ViewModelInjector {
         presentation: &Rc<RefCell<ProductionEntries>>,
         window: &AppWindow,
     ) {
-        // ── 方案列表遗留：教程气泡（F2，S1-04 后仅剩此绑定）──
+        // ── 方案列表教程气泡（F2）──
         Self::bind_plan_list(injector, window);
         // ── 通用确认窗：确认/取消统一交给呈现入口消费 ─────
         Self::bind_confirm_dialog(presentation, window);
     }
 
-    /// 方案列表教程气泡绑定（S1-04 后仅保留：卡片单击打开工作区已迁到
-    /// ProductionEntries::bind_actions）。
+    /// 方案列表教程气泡绑定（卡片单击打开工作区在 ProductionEntries::bind_actions）。
     fn bind_plan_list(injector: &Rc<RefCell<Self>>, window: &AppWindow) {
         // 教程气泡“知道了”（F2 规矩①）
         let weak = window.as_weak();
@@ -772,7 +771,7 @@ mod theme_tests {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn assembly_calls_only_startup_and_retains_the_coverage_port() {
+    fn assembly_calls_only_startup_and_workspace_routes_steps() {
         crate::production::reset_entry_calls();
         let directory = tempfile::tempdir().expect("建立临时目录");
         let databases = ShellDatabases::open(directory.path().join("assembly.db"))
@@ -781,7 +780,7 @@ mod tests {
         let window = AppWindow::new().expect("建立正式窗口");
         let center = Arc::new(NotificationCenter::new(PresenterRegistry::new()));
 
-        let runtime = assemble_application(&window, injector, center);
+        let _runtime = assemble_application(&window, injector, center);
         assert_eq!(
             crate::production::entry_calls(),
             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -814,15 +813,6 @@ mod tests {
             crate::production::entry_calls(),
             [1, 0, 0, 1, 1, 0, 1, 0, 0, 4],
             "点击朝向步骤只能经过工作区入口"
-        );
-
-        runtime
-            ._presentation
-            .borrow_mut()
-            .show_coverage_for_test(&window);
-        assert_eq!(
-            crate::production::entry_calls(),
-            [1, 0, 0, 1, 1, 1, 1, 0, 0, 4]
         );
     }
 

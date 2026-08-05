@@ -236,11 +236,11 @@ fn public_ui_seam_matches_startup_settings_and_m1_export() {
 
 #[test]
 fn export_s1_seam_submits_one_complete_f9_intent() {
-    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let source = read_workspace_file("apps/desktop/src/production/export.rs");
     let seam = source
         .split("impl ExportProductionAdapter")
         .nth(1)
-        .and_then(|tail| tail.split("struct NotificationLabels").next())
+        .and_then(|tail| tail.split("fn export_diagnostic_detail").next())
         .expect("导出适配器必须存在");
 
     assert!(seam.contains("ExportPresentationRequest::Start"));
@@ -329,7 +329,7 @@ fn export_failure_facts_have_a_localized_background_branch_and_diagnostic_seam()
         "????????????????????"
     );
 
-    let source = read_workspace_file("apps/desktop/src/production/mod.rs");
+    let source = read_workspace_file("apps/desktop/src/production/export.rs");
     let failure = source
         .split("fn failure_presentation")
         .nth(1)

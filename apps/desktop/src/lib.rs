@@ -12,13 +12,13 @@ mod runtime;
 
 pub use presentation::{
     BoundaryViewState, CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,
-    CollectionPresentationEntry, CollectionRequest, ConfirmationPresentation, CoveragePageState,
-    CoveragePresentationEntry, ExportPageState, ExportPresentationEntry, ExportPresentationRequest,
-    InvalidProgress, NavigationDecision, NotificationFact, NotificationPageState,
-    NotificationPresentationEntry, OpaqueNotificationAction, OperationState, OrientationViewState,
-    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry,
-    ReviewRequest, Screen, SettingsPageState, SettingsPresentationEntry, SettingsRequest,
-    StartupPageState, StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPageState,
+    CollectionPresentationEntry, CollectionRequest, ConfirmationPresentation, ExportPageState,
+    ExportPresentationEntry, ExportPresentationRequest, InvalidProgress, NavigationDecision,
+    NotificationFact, NotificationPageState, NotificationPresentationEntry,
+    OpaqueNotificationAction, OperationState, OrientationViewState, Presentation,
+    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, ReviewRequest, Screen,
+    SettingsPageState, SettingsPresentationEntry, SettingsRequest, StartupPageState,
+    StartupPresentationEntry, StartupRequest, ToolbarPageState, TrashPageState,
     TrashPresentationEntry, TrashRequest, WorkspacePageState, WorkspacePresentationEntry,
     WorkspaceRequest,
 };

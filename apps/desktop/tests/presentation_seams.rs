@@ -6,13 +6,13 @@ use std::time::{Duration, Instant};
 use desktop_shell::{
     assemble_application, AppWindow, BoundaryViewState, CampusData, CampusPlanPageState,
     CampusPlanPresentationEntry, CollectionPageState, CollectionPresentationEntry,
-    ConfirmationPresentation, CoveragePageState, CoveragePresentationEntry, ExportPageState,
-    ExportPresentationEntry, NavigationDecision, NoticeData, NotificationFact,
-    NotificationPageState, NotificationPresentationEntry, OpaqueNotificationAction,
-    OperationPresentationState, OrientationViewState, PlanCardData, Presentation,
-    PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry, ReviewRequest, Screen,
-    SettingsPageState, SettingsPresentationEntry, ShellDatabases, StartupPageState,
-    StartupPresentationEntry, ToolbarPageState, ViewModelInjector, WorkspacePageState,
+    ConfirmationPresentation, ExportPageState, ExportPresentationEntry, NavigationDecision,
+    NoticeData, NotificationFact, NotificationPageState, NotificationPresentationEntry,
+    OpaqueNotificationAction, OperationPresentationState, OrientationViewState, PlanCardData,
+    Presentation, PresentationAdapter, Progress, ReviewPageState, ReviewPresentationEntry,
+    ReviewRequest, Screen, SettingsPageState, SettingsPresentationEntry, ShellDatabases,
+    StartupPageState, StartupPresentationEntry, ToolbarPageState, ViewModelInjector,
+    WorkspacePageState,
 };
 use global_settings::FirstRunSetup;
 use notification_center::NotificationActionOutcome;
@@ -341,16 +341,6 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         OperationPresentationState::NeedsConfirmation
     );
     assert!(window.get_confirm_dialog_visible());
-
-    let mut coverage_entry = CoveragePresentationEntry::new(TestAdapter::returning(
-        Presentation::ready(CoveragePageState {
-            workspace: workspace("覆盖率"),
-        }),
-    ));
-    coverage_entry.show(&window, &center, ());
-    assert!(!window.get_confirm_dialog_visible());
-    assert!(window.get_confirm_dialog_title().is_empty());
-    assert_eq!(window.get_operation_progress(), 0);
 
     let mut export_entry = ExportPresentationEntry::new(TestAdapter::returning(
         Presentation::ready(ExportPageState {
