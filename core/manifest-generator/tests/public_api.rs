@@ -4,7 +4,9 @@
 //!
 //! 简单方式：只检查所有公开类型都可实例化并 Display/Debug.
 
-use manifest_generator::{GeneratorError, MaterialValidator};
+use manifest_generator::{
+    CandidateFacts, CategoryCount, ExportKind, GeneratorError, MaterialValidator,
+};
 
 #[test]
 fn public_api_types_exist() {
@@ -27,6 +29,14 @@ fn public_api_types_exist() {
 
     // Generator types
     let _ = manifest_generator::ManifestGenerator::new();
+    // Enhanced facts: 类别计数与导出类型如实进入 manifest（ADR-0043）
+    let facts = CandidateFacts {
+        keep_by_category: vec![CategoryCount::new("Building", 2)],
+        ..CandidateFacts::default()
+    };
+    assert_eq!(facts.keep_by_category[0].count, 2);
+    assert_eq!(ExportKind::Enhanced.identifier(), "enhanced");
+    assert_eq!(ExportKind::Base, ExportKind::default());
     let plan_info = manifest_generator::PlanInfo::new(
         "test",
         shared_domain_types::PlanId::generate(),

@@ -5,9 +5,10 @@
 //! 简单方式：检查所有公开类型可实例化、关键行为可调用。
 
 use foundation_mode::{
-    check_orientation_change_impact, format_impact_details, should_show_confirmation_dialog,
-    validate_polygon_closure, Boundary, BoundaryDrawer, BoundaryState, BoundaryUiEvent,
-    BoundaryValidationError, CoordinateConverter, EventResult, MercatorCoord, Orientation,
+    boundary_footprint_with_orientation, check_orientation_change_impact, format_impact_details,
+    should_show_confirmation_dialog, validate_polygon_closure, Boundary, BoundaryDrawer,
+    BoundaryProjection, BoundaryProjector, BoundaryState, BoundaryUiEvent, BoundaryValidationError,
+    CandidateBlockBounds, CoordinateConverter, EventResult, MercatorCoord, Orientation,
     OrientationCalculator, OrientationLine, PlaneMileUnit, Point2D, Vertex,
 };
 use shared_domain_types::CandidateCategory;
@@ -38,6 +39,36 @@ fn public_api_types_exist() {
             .degree(),
         270.0
     );
+
+    // BoundaryProjector：边界投影上下文 + 候选块坐标外接范围（M4 增强导出）
+    let boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.0, 39.0],
+            [116.001, 39.0],
+            [116.001, 39.001],
+            [116.0, 39.001],
+            [116.0, 39.0]
+        ]]),
+    };
+    let projector =
+        BoundaryProjector::for_boundary_with_orientation(&boundary, Orientation::new(0.0).unwrap())
+            .expect("投影上下文");
+    let projection: BoundaryProjection = projector.bounds();
+    assert!(projection.width_blocks > 0);
+    assert_eq!(
+        projector.footprint(),
+        boundary_footprint_with_orientation(&boundary, Orientation::new(0.0).unwrap()).unwrap()
+    );
+    let candidate: CandidateBlockBounds = projector
+        .candidate_bounds(&serde_json::json!([
+            [116.0002, 39.0002],
+            [116.0006, 39.0002],
+            [116.0006, 39.0006],
+            [116.0002, 39.0002]
+        ]))
+        .expect("候选外接范围");
+    assert!(candidate.width_blocks > 0);
 
     // BoundaryDrawer：事件驱动的绘制状态机
     let mut drawer = BoundaryDrawer::new();

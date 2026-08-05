@@ -211,8 +211,11 @@ impl ViewModelInjector {
     ) -> Result<Self> {
         let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
-        let export_flow = Arc::new(BoundaryExportFlow::new(file_system));
         let projects = ProjectManager::new(db.projects);
+        let export_flow = Arc::new(BoundaryExportFlow::new_with_candidate_store(
+            file_system,
+            projects.shared_database(),
+        ));
         let (collection_ipc, collection_source) = collection_production_source();
         let collection_flow = Arc::new(CollectionFlow::new(
             projects.shared_database(),

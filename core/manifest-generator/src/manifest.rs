@@ -6,6 +6,27 @@ use shared_domain_types::CandidateCategory;
 /// Manifest 版本号（用于未来格式变更）
 const MANIFEST_VERSION: &str = "1.0.0";
 
+/// 一次导出的类型；manifest 如实区分基础导出与增强导出（ADR-0041/0043）。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportKind {
+    /// 边界覆盖范围内的最小平整场地；不包含候选内容。
+    #[default]
+    Base,
+    /// 基础场地 + 已封账保留候选生成的初始校园内容。
+    Enhanced,
+}
+
+impl ExportKind {
+    /// 稳定的机器标识（manifest JSON 值）。
+    pub fn identifier(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Enhanced => "enhanced",
+        }
+    }
+}
+
 /// 类别状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CategoryStatus {
@@ -37,8 +58,27 @@ pub struct ManifestOrientation {
     pub source: ManifestOrientationSource,
 }
 
+/// 单个类别的保留候选计数（manifest 记录包含类别与数量）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryCount {
+    /// 类别英文标识（Building/Road/Water/Vegetation/Sports/Other）。
+    pub category: String,
+    /// 该类别本次实际保留的候选数量。
+    pub count: usize,
+}
+
+impl CategoryCount {
+    pub fn new(category: impl Into<String>, count: usize) -> Self {
+        Self {
+            category: category.into(),
+            count,
+        }
+    }
+}
+
 /// 候选链事实：不因缺少采集/评审而伪造记录。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CandidateFacts {
     /// B2/B14 候选投影数量。
@@ -50,6 +90,9 @@ pub struct CandidateFacts {
     /// 本次实际保留候选数量。
     #[serde(default)]
     pub retained_candidate_count: usize,
+    /// 保留候选按类别计数（仅列出保留数 > 0 的类别）。
+    #[serde(default)]
+    pub keep_by_category: Vec<CategoryCount>,
 }
 
 impl CategoryStatus {
@@ -91,6 +134,9 @@ pub struct FoundationManifest {
     /// 候选采集与评审事实。
     #[serde(default)]
     pub candidate_facts: CandidateFacts,
+    /// 本次导出的类型（基础/增强）。
+    #[serde(default)]
+    pub export_kind: ExportKind,
 }
 
 impl FoundationManifest {
@@ -147,6 +193,7 @@ impl FoundationManifest {
             categories,
             orientation: None,
             candidate_facts: CandidateFacts::default(),
+            export_kind: ExportKind::Base,
         }
     }
 
@@ -193,6 +240,7 @@ mod tests {
         assert_eq!(manifest.campus_name, "测试校区");
         assert_eq!(manifest.minecraft_version, "1.20.4");
         assert_eq!(manifest.categories.len(), 6); // 所有六类别
+        assert_eq!(manifest.export_kind, ExportKind::Base);
 
         // 检查包含/缺失状态
         let included_count = manifest.included().len();
@@ -239,5 +287,60 @@ mod tests {
         // 验证 includes/excludes 方法
         assert_eq!(manifest.included().len(), parsed.included().len());
         assert_eq!(manifest.excluded().len(), parsed.excluded().len());
+        assert_eq!(manifest.export_kind, parsed.export_kind);
+    }
+
+    #[test]
+    fn test_enhanced_facts_and_export_kind_roundtrip() {
+        let facts = CandidateFacts {
+            candidate_projection_count: 7,
+            review_decision_count: 7,
+            retained_candidate_count: 3,
+            keep_by_category: vec![
+                CategoryCount::new("Building", 2),
+                CategoryCount::new("Road", 1),
+            ],
+        };
+
+        let mut manifest = FoundationManifest::new(
+            "manifest-id-3",
+            "测试校区",
+            "plan-id-3",
+            "测试方案",
+            "26.1.2",
+            &[CandidateCategory::Building],
+            "2026-08-05T00:00:00+00:00",
+        );
+        manifest.candidate_facts = facts;
+        manifest.export_kind = ExportKind::Enhanced;
+
+        let json = manifest.to_json_pretty().unwrap();
+        assert!(json.contains("\"exportKind\": \"enhanced\""));
+        let parsed = FoundationManifest::from_json(&json).unwrap();
+        assert_eq!(parsed.export_kind, ExportKind::Enhanced);
+        assert_eq!(parsed.candidate_facts.keep_by_category.len(), 2);
+        assert_eq!(
+            parsed.candidate_facts.keep_by_category[0].category,
+            "Building"
+        );
+        assert_eq!(parsed.candidate_facts.keep_by_category[1].count, 1);
+        assert_eq!(ExportKind::Enhanced.identifier(), "enhanced");
+    }
+
+    #[test]
+    fn test_legacy_manifest_defaults_to_base_without_fake_facts() {
+        let legacy = r#"{
+            "version": "1.0.0",
+            "id": "legacy-id",
+            "campusName": "校区",
+            "planId": "plan",
+            "planName": "方案",
+            "minecraftVersion": "26.1.2",
+            "exportedAt": "2026-01-01T00:00:00+00:00",
+            "categories": []
+        }"#;
+        let parsed = FoundationManifest::from_json(legacy).unwrap();
+        assert_eq!(parsed.export_kind, ExportKind::Base);
+        assert_eq!(parsed.candidate_facts, CandidateFacts::default());
     }
 }

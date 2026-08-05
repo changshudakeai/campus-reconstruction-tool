@@ -8,10 +8,11 @@
 
 ## Structures
 
-pub struct FoundationManifest { pub version: String, pub id: String, pub campus_name: String, pub plan_id: String, pub plan_name: String, pub minecraft_version: String, pub exported_at: String, pub categories: Vec<CategoryStatus>, pub orientation: Option<ManifestOrientation>, pub candidate_facts: CandidateFacts }
+pub struct FoundationManifest { pub version: String, pub id: String, pub campus_name: String, pub plan_id: String, pub plan_name: String, pub minecraft_version: String, pub exported_at: String, pub categories: Vec<CategoryStatus>, pub orientation: Option<ManifestOrientation>, pub candidate_facts: CandidateFacts, pub export_kind: ExportKind }
 pub struct CategoryStatus { pub name: String, pub display_name: String, pub included: bool }
+pub struct CategoryCount { pub category: String, pub count: usize }
 pub struct ManifestOrientation { pub degree: f32, pub source: ManifestOrientationSource }
-pub struct CandidateFacts { pub candidate_projection_count: usize, pub review_decision_count: usize, pub retained_candidate_count: usize }
+pub struct CandidateFacts { pub candidate_projection_count: usize, pub review_decision_count: usize, pub retained_candidate_count: usize, pub keep_by_category: Vec<CategoryCount> }
 pub struct PlanInfo { pub campus_name: String, pub plan_id: shared_domain_types::PlanId, pub plan_name: String, pub minecraft_version: String }
 pub struct BuildingBlocks { pub foundation: String, pub wall: String, pub window: String, pub floor: String, pub roof: String, pub entrance: String, pub accent: String }
 pub struct MaterialTable { pub minecraft_version: MinecraftVersion, pub building_presets: BuildingPresets }
@@ -21,6 +22,7 @@ pub struct ValidationError { pub invalid_blocks: Vec<String>, pub version: Strin
 ## Enums #[non_exhaustive]
 
 pub enum MinecraftVersion { V26_1_2, V1_20_4, V1_20_2, V1_21 }
+pub enum ExportKind { Base, Enhanced }
 pub enum ManifestOrientationSource { MapNorth, Custom }
 pub enum GeneratorError { Serialization(serde_json::Error), Io(std::io::Error, std::path::PathBuf) }
 
@@ -42,6 +44,22 @@ impl PartialEq for FoundationManifest
 impl CategoryStatus {
     pub fn new(name: impl Into<String>, display_name: impl Into<String>, included: bool) -> Self
 }
+
+impl CategoryCount {
+    pub fn new(category: impl Into<String>, count: usize) -> Self
+}
+
+impl ExportKind {
+    pub fn identifier(self) -> &'static str
+}
+
+impl Default for ExportKind
+impl std::fmt::Debug for ExportKind
+impl Clone Copy for ExportKind
+impl PartialEq for ExportKind
+impl Eq for ExportKind
+impl serde::Serialize for ExportKind
+impl<'de> serde::Deserialize<'de> for ExportKind
 
 impl std::fmt::Debug for CategoryStatus
 impl serde::Serialize for CategoryStatus

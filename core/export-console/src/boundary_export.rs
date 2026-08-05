@@ -13,7 +13,7 @@ use std::sync::{mpsc, Arc};
 
 use chrono::Utc;
 use foundation_mode::boundary_footprint_with_orientation;
-use generation_engine::GenerationEngine;
+use generation_engine::{BlockModel, GenerationEngine};
 use manifest_generator::{
     CandidateFacts, FoundationManifest, ManifestGenerator, ManifestOrientation,
     ManifestOrientationSource, MaterialTable, MinecraftVersion, PlanInfo,
@@ -174,17 +174,17 @@ pub struct BoundaryExportResult {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ExportVersionContract {
-    version: &'static str,
-    material_version: MinecraftVersion,
-    schematic_profile: SchematicProfile,
+pub(crate) struct ExportVersionContract {
+    pub(crate) version: &'static str,
+    pub(crate) material_version: MinecraftVersion,
+    pub(crate) schematic_profile: SchematicProfile,
 }
 
-fn version_contract(
-    request: &BoundaryExportRequest,
+pub(crate) fn version_contract(
+    minecraft_version: &str,
     material_table: &MaterialTable,
 ) -> Result<ExportVersionContract> {
-    let requested = request.plan.minecraft_version.as_str();
+    let requested = minecraft_version;
     let contract = match requested {
         "26.1.2" => ExportVersionContract {
             version: "26.1.2",
@@ -236,33 +236,15 @@ impl BoundaryExportUseCase {
     ) -> Result<BoundaryExportResult> {
         let staged_schematic = staged_path(&request.schematic_path, "schem")?;
         let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.export_inner(request, progress, &staged_schematic, &staged_manifest)
-        }))
-        .unwrap_or(Err(Error::BackgroundTask));
-        let result = if result.is_err() {
-            match cleanup_staging(
-                self.file_system.as_ref(),
-                [&staged_schematic, &staged_manifest],
-            ) {
-                Ok(()) => result,
-                Err(recovery) => Err(Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
-                    primary: result
-                        .as_ref()
-                        .err()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "导出失败".to_owned()),
-                    recovery,
-                    paths: vec![staged_schematic.clone(), staged_manifest.clone()],
-                })),
-            }
-        } else {
-            result
-        };
-        if result.is_err() {
-            progress.fail();
-        }
-        result
+        guarded_export(
+            self.file_system.as_ref(),
+            progress,
+            &staged_schematic,
+            &staged_manifest,
+            |staged_schematic, staged_manifest| {
+                self.export_inner(request, progress, staged_schematic, staged_manifest)
+            },
+        )
     }
 
     fn export_inner(
@@ -279,7 +261,10 @@ impl BoundaryExportUseCase {
         if !request.boundary_confirmed {
             return Err(Error::Boundary(BoundaryError::NotConfirmed));
         }
-        let contract = version_contract(request, &self.material_table)?;
+        let contract = version_contract(
+            request.plan.minecraft_version.as_str(),
+            &self.material_table,
+        )?;
         self.material_table
             .validate_configured_blocks()
             .map_err(|error| {
@@ -288,7 +273,11 @@ impl BoundaryExportUseCase {
                     detail: error.to_string(),
                 })
             })?;
-        validate_targets(request, self.file_system.as_ref())?;
+        validate_targets(
+            &request.schematic_path,
+            &request.manifest_path,
+            self.file_system.as_ref(),
+        )?;
 
         // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
         let (orientation, degree, source) = match request.orientation {
@@ -334,56 +323,119 @@ impl BoundaryExportUseCase {
             .map_err(|error| Error::ManifestWrite(error.to_string()))?;
         progress.report_percent(55);
 
-        let result = (|| {
-            // B17 先写入 staging；只有 B4 与最终双文件发布都成功才返回成功。
-            let manifest_parent = request
-                .manifest_path
-                .parent()
-                .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
-            let manifest_filename = staged_manifest
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| invalid_target("manifest 临时文件名无效"))?;
-            ManifestGenerator::new()
-                .write_to_file_with(
-                    &manifest,
-                    manifest_parent,
-                    manifest_filename,
-                    |path, bytes| self.file_system.write(path, bytes),
-                )
-                .map_err(|error| Error::ManifestWrite(error.to_string()))?;
-            progress.report_percent(65);
-
-            // B4：复用 Sponge 编码器，经 F9 的受控文件端口写 staging。
-            pipeline::export_schematic_staged_with_file_system(
-                &model,
-                staged_schematic,
-                &actual_plan.plan_name,
-                contract.schematic_profile,
-                self.file_system.as_ref(),
-                progress,
-            )?;
-            progress.report_percent(90);
-
-            let cleanup_warning = publish_pair(
-                self.file_system.as_ref(),
-                staged_schematic,
-                &request.schematic_path,
-                staged_manifest,
-                &request.manifest_path,
-            )?;
-            progress.finish();
-            Ok(BoundaryExportResult {
-                schematic_path: request.schematic_path.clone(),
-                manifest_path: request.manifest_path.clone(),
-                manifest: manifest.clone(),
-                cleanup_warning,
-                schematic_dimensions: [footprint.width_blocks, 1, footprint.length_blocks],
-            })
-        })();
-
-        result
+        write_and_publish(
+            self.file_system.as_ref(),
+            &request.schematic_path,
+            &request.manifest_path,
+            &manifest,
+            &model,
+            contract,
+            progress,
+            staged_schematic,
+            staged_manifest,
+            [footprint.width_blocks, 1, footprint.length_blocks],
+        )
     }
+}
+
+/// 后台导出守卫：panic 兜底 + staging 清理 + 失败进度标记（M1 语义）。
+pub(crate) fn guarded_export<F>(
+    file_system: &dyn ExportFileSystem,
+    progress: &ProgressTracker,
+    staged_schematic: &Path,
+    staged_manifest: &Path,
+    inner: F,
+) -> Result<BoundaryExportResult>
+where
+    F: FnOnce(&Path, &Path) -> Result<BoundaryExportResult>,
+{
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inner(staged_schematic, staged_manifest)
+    }))
+    .unwrap_or(Err(Error::BackgroundTask));
+    let result = if result.is_err() {
+        match cleanup_staging(file_system, [staged_schematic, staged_manifest]) {
+            Ok(()) => result,
+            Err(recovery) => Err(Error::ArtifactRecovery(ArtifactRecoveryError::Failed {
+                primary: result
+                    .as_ref()
+                    .err()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "导出失败".to_owned()),
+                recovery,
+                paths: vec![staged_schematic.to_owned(), staged_manifest.to_owned()],
+            })),
+        }
+    } else {
+        result
+    };
+    if result.is_err() {
+        progress.fail();
+    }
+    result
+}
+
+/// 双文件落盘尾段（B17 staging → B4 staging → 发布），边界直出与增强导出共用。
+#[allow(
+    clippy::too_many_arguments,
+    reason = "双文件落盘尾段的受控输入在稳定端口显式展开，与 M1 请求同一纪律"
+)]
+pub(crate) fn write_and_publish(
+    file_system: &dyn ExportFileSystem,
+    schematic_path: &Path,
+    manifest_path: &Path,
+    manifest: &FoundationManifest,
+    model: &BlockModel,
+    contract: ExportVersionContract,
+    progress: &ProgressTracker,
+    staged_schematic: &Path,
+    staged_manifest: &Path,
+    schematic_dimensions: [usize; 3],
+) -> Result<BoundaryExportResult> {
+    // B17 先写入 staging；只有 B4 与最终双文件发布都成功才返回成功。
+    let manifest_parent = manifest_path
+        .parent()
+        .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
+    let manifest_filename = staged_manifest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid_target("manifest 临时文件名无效"))?;
+    ManifestGenerator::new()
+        .write_to_file_with(
+            manifest,
+            manifest_parent,
+            manifest_filename,
+            |path, bytes| file_system.write(path, bytes),
+        )
+        .map_err(|error| Error::ManifestWrite(error.to_string()))?;
+    progress.report_percent(65);
+
+    // B4：复用 Sponge 编码器，经 F9 的受控文件端口写 staging。
+    pipeline::export_schematic_staged_with_file_system(
+        model,
+        staged_schematic,
+        &manifest.plan_name,
+        contract.schematic_profile,
+        file_system,
+        progress,
+    )?;
+    progress.report_percent(90);
+
+    let cleanup_warning = publish_pair(
+        file_system,
+        staged_schematic,
+        schematic_path,
+        staged_manifest,
+        manifest_path,
+    )?;
+    progress.finish();
+    Ok(BoundaryExportResult {
+        schematic_path: schematic_path.to_owned(),
+        manifest_path: manifest_path.to_owned(),
+        manifest: manifest.clone(),
+        cleanup_warning,
+        schematic_dimensions,
+    })
 }
 
 /// 后台边界导出操作；UI 只读取真实 F9 进度并轮询终态。
@@ -395,6 +447,20 @@ pub struct BoundaryExportOperation {
 }
 
 impl BoundaryExportOperation {
+    pub(crate) fn new(
+        progress: ProgressTracker,
+        result: mpsc::Receiver<Result<BoundaryExportResult>>,
+        lifecycle: Arc<AtomicU64>,
+        generation: u64,
+    ) -> Self {
+        Self {
+            progress,
+            result,
+            lifecycle,
+            generation,
+        }
+    }
+
     /// 当前真实阶段/百分比对应的呈现数据。
     pub fn progress_view(&self) -> ExportProgressView {
         ExportProgressView::from_tracker(&self.progress)
@@ -495,12 +561,9 @@ impl BoundaryExportPort {
             self.active.store(false, Ordering::SeqCst);
             return Err(Error::BackgroundTask);
         }
-        Ok(BoundaryExportOperation {
-            progress,
-            result: receiver,
-            lifecycle,
-            generation,
-        })
+        Ok(BoundaryExportOperation::new(
+            progress, receiver, lifecycle, generation,
+        ))
     }
 
     /// Expire an operation result when its presentation context is left.
@@ -509,7 +572,7 @@ impl BoundaryExportPort {
     }
 }
 
-struct ActiveTaskGuard(Arc<AtomicBool>);
+pub(crate) struct ActiveTaskGuard(pub(crate) Arc<AtomicBool>);
 
 impl Drop for ActiveTaskGuard {
     fn drop(&mut self) {
@@ -517,26 +580,24 @@ impl Drop for ActiveTaskGuard {
     }
 }
 
-fn validate_targets(
-    request: &BoundaryExportRequest,
+pub(crate) fn validate_targets(
+    schematic_path: &Path,
+    manifest_path: &Path,
     file_system: &dyn ExportFileSystem,
 ) -> Result<()> {
-    if request.schematic_path.as_os_str().is_empty() || request.manifest_path.as_os_str().is_empty()
-    {
+    if schematic_path.as_os_str().is_empty() || manifest_path.as_os_str().is_empty() {
         return Err(invalid_target("导出目标路径为空"));
     }
-    if request.schematic_path == request.manifest_path {
+    if schematic_path == manifest_path {
         return Err(invalid_target(
             "Sponge 文件与 manifest 不能使用同一目标路径",
         ));
     }
-    let schematic_parent = request
-        .schematic_path
+    let schematic_parent = schematic_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| invalid_target(".schem 没有父目录"))?;
-    let manifest_parent = request
-        .manifest_path
+    let manifest_parent = manifest_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
@@ -571,7 +632,7 @@ fn invalid_target(detail: impl Into<String>) -> Error {
     })
 }
 
-fn staged_path(final_path: &Path, kind: &str) -> Result<PathBuf> {
+pub(crate) fn staged_path(final_path: &Path, kind: &str) -> Result<PathBuf> {
     let parent = final_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
