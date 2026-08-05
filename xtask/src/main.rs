@@ -1,7 +1,7 @@
 //! xtask —— S2 构建与自动化（ADR-0017），三层锁执法的 CI 层入口。
 //!
 //! 子命令：
-//! - `tidy`：规模红线（1000 行）/ 模块文档 / 半成品禁令 / crate 文件数上限；
+//! - `tidy`：规模红线（1000 行）/ 模块文档 / 半成品禁令；
 //! - `arch`：架构测试（依赖 DAG 断言 + public-api 快照存在性）；
 //! - `ci`：tidy + arch 一次跑完（CI 的 xtask job 用）；
 //! - `timings`：编译时间预算（单编译单元 >2 分钟告警）；
@@ -40,7 +40,7 @@ pub(crate) fn workspace_metadata(root: &Path) -> anyhow::Result<cargo_metadata::
 const USAGE: &str = "\
 用法: cargo xtask <子命令>
 
-  tidy          规模红线 / 模块文档 / 半成品禁令 / crate 文件数上限
+  tidy          规模红线 / 模块文档 / 半成品禁令
   arch          架构测试（ADR-0017 依赖 DAG + public-api 快照存在性）
   ci            tidy + arch（CI 聚合入口）
   timings       编译时间预算（单编译单元 >2 分钟发 CI 告警）
