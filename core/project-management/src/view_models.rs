@@ -10,6 +10,7 @@ use data_persistence::{
     TRASH_RETENTION_DAYS,
 };
 use shared_domain_types::{CampusId, PlanId};
+use std::sync::{Arc, Mutex};
 
 use crate::entities::{
     CampusView, PlanCardView, PlanContextView, PlanProgress, RestoredPlan, TrashItemView,
@@ -24,9 +25,9 @@ pub const DUPLICATE_SUFFIX_KEY: &str = "plan.duplicate_suffix";
 /// 含 `{n}` 占位符；由 UI 层解析后传入 restore_plan，本 crate 不硬编码中文）
 pub const RESTORE_NAME_TEMPLATE_KEY: &str = "plan.restore_name_template";
 
-/// 方案管理 ViewModel（持有 B2 数据库句柄）
+/// 方案管理 ViewModel（持有共享 B2 数据库句柄）
 pub struct ProjectManager {
-    db: Database,
+    storage: Arc<Mutex<Database>>,
 }
 
 impl std::fmt::Debug for ProjectManager {
@@ -38,19 +39,33 @@ impl std::fmt::Debug for ProjectManager {
 impl ProjectManager {
     /// 用已打开的 B2 数据库句柄创建
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self {
+            storage: Arc::new(Mutex::new(db)),
+        }
     }
 
-    /// 借出内部句柄（供上层做 F3 范围之外的操作）
-    pub fn database_mut(&mut self) -> &mut Database {
-        &mut self.db
+    /// 借出内部句柄（锁内访问；同一时刻只能有一个调用者）。
+    pub fn database(&self) -> std::sync::MutexGuard<'_, Database> {
+        self.db()
+    }
+
+    /// 共享数据库句柄（A1 采集后台线程与 F 模块共用同一连接）。
+    pub fn shared_database(&self) -> Arc<Mutex<Database>> {
+        Arc::clone(&self.storage)
+    }
+
+    /// 内部锁访问器：F3 全部 CRUD 经此借出 B2 句柄。
+    fn db(&self) -> std::sync::MutexGuard<'_, Database> {
+        self.storage
+            .lock()
+            .expect("ProjectManager 数据库锁不可中毒")
     }
 
     // ── 校区与着陆（ADR-0006）─────────────────────────────
 
     /// 列出全部校区
     pub fn list_campuses(&self) -> Result<Vec<CampusView>> {
-        let campuses = self.db.list_campuses()?;
+        let campuses = self.db().list_campuses()?;
         Ok(campuses
             .into_iter()
             .map(|c| CampusView {
@@ -65,7 +80,7 @@ impl ProjectManager {
 
     /// 创建校区并返回视图
     pub fn create_campus(&mut self, name: &str) -> Result<CampusView> {
-        let campus = self.db.create_campus(name)?;
+        let campus = self.db().create_campus(name)?;
         Ok(CampusView {
             id: campus.id,
             name: campus.name,
@@ -78,10 +93,10 @@ impl ProjectManager {
     /// 老用户着陆：读"上次使用的校区"，校区已被删除则返回 None
     ///（调用方退回校区选择页，ADR-0006）
     pub fn landing_campus(&self) -> Result<Option<CampusView>> {
-        let Some(campus_id) = self.db.get_setting(AppSettingKey::LastUsedCampus)? else {
+        let Some(campus_id) = self.db().get_setting(AppSettingKey::LastUsedCampus)? else {
             return Ok(None);
         };
-        let Some(campus) = self.db.find_campus_by_id(&campus_id)? else {
+        let Some(campus) = self.db().find_campus_by_id(&campus_id)? else {
             return Ok(None);
         };
         Ok(Some(CampusView {
@@ -96,10 +111,10 @@ impl ProjectManager {
     /// 打开方案工作区所需的一次完整上下文：方案名、所属校区名与地图锚点
     /// （S1-05；方案不存在时返回 None，由功能入口如实呈现失败）。
     pub fn plan_context(&self, plan_id: &PlanId) -> Result<Option<PlanContextView>> {
-        let Some(plan) = self.db.find_plan_by_id(&plan_id.to_string())? else {
+        let Some(plan) = self.db().find_plan_by_id(&plan_id.to_string())? else {
             return Ok(None);
         };
-        let campus = self.db.find_campus_by_id(&plan.campus_id)?;
+        let campus = self.db().find_campus_by_id(&plan.campus_id)?;
         Ok(campus.map(|campus| PlanContextView {
             plan_id: plan.id,
             plan_name: plan.name,
@@ -112,7 +127,7 @@ impl ProjectManager {
 
     /// 记录"上次使用的校区"（切换校区/选定校区后调用）
     pub fn remember_campus(&mut self, campus_id: &CampusId) -> Result<()> {
-        self.db
+        self.db()
             .set_setting(AppSettingKey::LastUsedCampus, &campus_id.to_string())?;
         Ok(())
     }
@@ -168,7 +183,7 @@ impl ProjectManager {
 
     /// 列出校区的方案卡片（最近修改倒序，由 B2 SQL 保证）
     pub fn list_plan_cards(&self, campus_id: &CampusId) -> Result<Vec<PlanCardView>> {
-        let plans = self.db.list_plans(&campus_id.to_string())?;
+        let plans = self.db().list_plans(&campus_id.to_string())?;
         Ok(plans
             .into_iter()
             .map(|plan| PlanCardView {
@@ -188,13 +203,13 @@ impl ProjectManager {
 
     /// 轻创建（ADR-0010）：输入方案名即建立方案；同名冲突返回带类型错误
     pub fn create_plan(&mut self, campus_id: &CampusId, name: &str) -> Result<PlanId> {
-        let plan = self.db.create_plan(&campus_id.to_string(), name)?;
+        let plan = self.db().create_plan(&campus_id.to_string(), name)?;
         PlanId::parse(&plan.id).map_err(|e| Error::InvalidId(e.to_string()))
     }
 
     /// 改名（ADR-0018 卡片菜单）；同名冲突返回带类型错误
     pub fn rename_plan(&mut self, plan_id: &PlanId, new_name: &str) -> Result<()> {
-        self.db.rename_plan(&plan_id.to_string(), new_name)?;
+        self.db().rename_plan(&plan_id.to_string(), new_name)?;
         Ok(())
     }
 
@@ -205,7 +220,7 @@ impl ProjectManager {
     /// 工单（T14/F4）接入后在各自表上按 plan_id 拷贝。
     pub fn duplicate_plan(&mut self, plan_id: &PlanId, suffix: &str) -> Result<PlanId> {
         let source = self
-            .db
+            .db()
             .find_plan_by_id(&plan_id.to_string())?
             .ok_or_else(|| Error::PlanNotFound(plan_id.to_string()))?;
 
@@ -217,7 +232,7 @@ impl ProjectManager {
             } else {
                 format!("{} {} {}", source.name, suffix, attempt)
             };
-            match self.db.create_plan(&source.campus_id, &candidate) {
+            match self.db().create_plan(&source.campus_id, &candidate) {
                 Ok(plan) => {
                     return PlanId::parse(&plan.id).map_err(|e| Error::InvalidId(e.to_string()))
                 }
@@ -233,14 +248,14 @@ impl ProjectManager {
     /// 删除方案进校园级回收站（保留 30 天，ADR-0018）
     pub fn delete_plan(&mut self, campus_id: &CampusId, plan_id: &PlanId) -> Result<TrashItemView> {
         let item = self
-            .db
+            .db()
             .delete_plan_to_trash(&campus_id.to_string(), &plan_id.to_string())?;
         self.trash_view(&item)
     }
 
     /// 列出校区回收站中仍可恢复的方案条目（按删除时间倒序，最近删除排最前）
     pub fn list_trash(&self, campus_id: &CampusId) -> Result<Vec<TrashItemView>> {
-        let items = self.db.list_restorable_trash(&campus_id.to_string())?;
+        let items = self.db().list_restorable_trash(&campus_id.to_string())?;
         items
             .iter()
             .filter(|item| item.entity_type == "plan")
@@ -258,16 +273,16 @@ impl ProjectManager {
         restore_name_template: &str,
     ) -> Result<RestoredPlan> {
         let campus_key = campus_id.to_string();
-        let in_trash = self.db.list_restorable_trash(&campus_key)?;
+        let in_trash = self.db().list_restorable_trash(&campus_key)?;
         let target = in_trash
             .iter()
             .find(|item| item.id == trash_id)
             .ok_or_else(|| Error::TrashItemNotFound(trash_id.to_owned()))?;
         let plan = self
-            .db
+            .db()
             .find_plan_by_id(&target.plan_id)?
             .ok_or_else(|| Error::PlanNotFound(target.plan_id.clone()))?;
-        let live = self.db.list_plans(&campus_key)?;
+        let live = self.db().list_plans(&campus_key)?;
         let mut name = plan.name.clone();
         if live.iter().any(|existing| existing.name == plan.name) {
             let template = if restore_name_template.contains("{n}") {
@@ -276,9 +291,9 @@ impl ProjectManager {
                 format!("{restore_name_template} {{n}}")
             };
             name = restore_candidate_name(&plan.name, &live, &template);
-            self.db.rename_plan(&plan.id, &name)?;
+            self.db().rename_plan(&plan.id, &name)?;
         }
-        self.db.restore_from_trash(trash_id)?;
+        self.db().restore_from_trash(trash_id)?;
         let plan_id = PlanId::parse(&plan.id).map_err(|e| Error::InvalidId(e.to_string()))?;
         Ok(RestoredPlan { plan_id, name })
     }
@@ -286,26 +301,28 @@ impl ProjectManager {
     /// 确认后立即永久删除（调用方必须先弹确认窗——决策记忆：
     /// 回收站内立即永久删除需确认）
     pub fn purge_plan_confirmed(&mut self, trash_id: &str) -> Result<()> {
-        self.db.purge_plan_permanently(trash_id)?;
+        self.db().purge_plan_permanently(trash_id)?;
         Ok(())
     }
 
     /// 清空当前校区回收站（ADR-0018 §三：一次性永久删除全部方案，不影响
     /// 其他校区）。调用方必须先弹确认窗并说明清空后不可恢复。
     pub fn purge_all_trash_confirmed(&mut self, campus_id: &CampusId) -> Result<usize> {
-        Ok(self.db.purge_all_in_campus_trash(&campus_id.to_string())?)
+        Ok(self
+            .db()
+            .purge_all_in_campus_trash(&campus_id.to_string())?)
     }
 
     /// 到期清理框架：清掉超过 30 天保留期的条目，返回清理条数。
     /// 调用时机（启动时/定时）由应用壳决定。
     pub fn purge_expired_trash(&mut self) -> Result<usize> {
-        Ok(self.db.purge_expired_plans()?)
+        Ok(self.db().purge_expired_plans()?)
     }
 
     /// B2 回收站条目 → F3 视图（补方案名、校区名与剩余保留天数）
     fn trash_view(&self, item: &data_persistence::TrashItem) -> Result<TrashItemView> {
-        let plan = self.db.find_plan_by_id(&item.plan_id)?;
-        let campus = self.db.find_campus_by_id(&item.campus_id)?;
+        let plan = self.db().find_plan_by_id(&item.plan_id)?;
+        let campus = self.db().find_campus_by_id(&item.campus_id)?;
         Ok(TrashItemView {
             trash_id: item.id.clone(),
             plan_id: item.plan_id.clone(),

@@ -91,7 +91,7 @@ fn delete_plan_lands_in_trash_with_deleted_at() {
 
     // 它在 trash 表中存在且 deleted_at 不为空（用 B2 TrashApi 直接对账）
     let items = manager
-        .database_mut()
+        .database()
         .list_restorable_trash(&campus_id.to_string())
         .unwrap();
     assert_eq!(items.len(), 1);
