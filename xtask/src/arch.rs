@@ -2,11 +2,11 @@
 //!
 //! 用 `cargo metadata` 读出真实依赖图（workspace 成员间的 normal/build 边，
 //! dev-dependencies 不计），断言 ADR-0017 + ADR-0025 的依赖 DAG：
-//! 1. 功能模块（F*）横向零依赖；
+//! 1. 功能模块（F*）横向边必须命中显式白名单（当前白名单为空）；
 //! 2. 壳 `desktop-shell` 的成员依赖 ⊆ 白名单（F1-F9、B1-B7、B9-B11、B17；
 //!    绝对禁止 B12-B15 ETL/GIS 层）；
 //! 3. B1 `shared-domain-types` 内部依赖数为 0；
-//! 4. 基础模块不依赖功能层/壳（下不依上）；基础层横向零依赖，唯二例外：
+//! 4. 基础模块不依赖功能层/壳（下不依上）；基础层横向边必须命中白名单：
 //!    人人可依 B1；B13→B14→B15 单向链；
 //! 5. `xtask` 与业务 crate 互不依赖；未在 ADR-0017 目录立户的 crate 拒收；
 //! 6. 每个已立户的基础 crate 必须有 public-api 快照测试与入库快照
@@ -58,6 +58,9 @@ const SHELL_CRATE: &str = "desktop-shell";
 
 /// S2 工程工具（仅构建期，不与业务 crate 相互依赖）。
 const TOOLING_CRATE: &str = "xtask";
+
+/// 功能层允许的直接横向边。新增边必须先有决策记录，不能只改调用方 Cargo.toml。
+const FEATURE_ALLOWED_EDGES: &[(&str, &str)] = &[];
 
 /// 壳允许依赖的成员 crate 白名单（ADR-0017 + ADR-0025：F1-F9 + B1-B7 + B9-B11 + B17）。
 /// B1 shared-domain-types 是唯一的例外授权（T01 修正，见 ADR-0025）。
@@ -148,6 +151,7 @@ pub(crate) fn check_edges(members: &[String], edges: &[(String, String)]) -> Vec
             continue;
         }
 
+        // 断言 1：功能模块横向边必须显式登记。
         if is_application_flow(from) {
             if to == SHELL_CRATE {
                 violations.push(format!(
@@ -157,10 +161,9 @@ pub(crate) fn check_edges(members: &[String], edges: &[(String, String)]) -> Vec
             continue;
         }
 
-        // 断言 1：功能模块横向零依赖。
-        if is_feature(from) && is_feature(to) {
+        if is_feature(from) && is_feature(to) && !FEATURE_ALLOWED_EDGES.contains(&(from, to)) {
             violations.push(format!(
-                "禁止边 {from} → {to}：功能模块之间横向零依赖（ADR-0017），共享数据走 B1/B2"
+                "禁止边 {from} → {to}：功能模块横向边未命中白名单（ADR-0017）；优先使用应用流程或能力端口，确需直连时先记录决策并登记"
             ));
             continue;
         }
@@ -182,7 +185,7 @@ pub(crate) fn check_edges(members: &[String], edges: &[(String, String)]) -> Vec
             continue;
         }
 
-        // 断言 4：基础层不依上层；横向只许 B*→B1 与 B13→B14→B15。
+        // 断言 4：基础层不依上层；横向边必须命中白名单。
         if is_base(from) {
             if is_feature(to) || to == SHELL_CRATE {
                 violations.push(format!(
@@ -193,7 +196,7 @@ pub(crate) fn check_edges(members: &[String], edges: &[(String, String)]) -> Vec
                 && !BASE_ALLOWED_EDGES.contains(&(from, to))
             {
                 violations.push(format!(
-                    "禁止边 {from} → {to}：基础层横向零依赖（例外仅 B*→B1、B13→B14→B15）"
+                    "禁止边 {from} → {to}：基础层横向边未命中白名单（已登记 B*→B1、B13→B14→B15、B18→B17）"
                 ));
             }
         }
@@ -256,7 +259,7 @@ pub(crate) fn workspace_violations(root: &Path) -> anyhow::Result<Vec<String>> {
 pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
     let violations = workspace_violations(root)?;
     if violations.is_empty() {
-        println!("arch: 依赖图符合 ADR-0017（横向零依赖 / 壳白名单 / B1 零依赖 / 下不依上）");
+        println!("arch: 依赖图符合 ADR-0017（横向边白名单 / 壳白名单 / B1 零依赖 / 下不依上）");
         return Ok(());
     }
     for violation in &violations {
@@ -305,7 +308,7 @@ mod tests {
     fn feature_to_feature_edge_is_rejected() {
         let violations = check_edges(&[], &[edge("data-acquisition", "review-workbench")]);
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("横向零依赖"));
+        assert!(violations[0].contains("未命中白名单"));
     }
 
     #[test]
@@ -333,7 +336,7 @@ mod tests {
     fn base_lateral_edge_outside_exceptions_is_rejected() {
         let violations = check_edges(&[], &[edge("notification-center", "data-persistence")]);
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("基础层横向零依赖"));
+        assert!(violations[0].contains("未命中白名单"));
         // 例外：人人可依 B1；B13→B14→B15；B18→B17（ADR-0024）。
         assert!(check_edges(&[], &[edge("notification-center", "shared-domain-types")]).is_empty());
         assert!(check_edges(&[], &[edge("data-transformers", "geometry-validator")]).is_empty());

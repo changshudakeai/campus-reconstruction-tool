@@ -7,15 +7,15 @@
 
 ## 工单存放位置
 
-**工单、PRD、handoff 全部以本地 `.scratch/` 为准**（per-worktree 本地追踪器，gitignore，不入库）。
+当前排期以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一执行入口；局部工单仍可存放于本地 `.scratch/`（per-worktree 本地追踪器，gitignore，不入库）。
 GitHub Issues 不用于本项目的工单追踪；`gh` CLI 仅用于代码 PR 的创建与合并。
 
 ## 本地工单约定
 
 - `.scratch/v2-implementation/issues/TXX-*.md` — V2 实施工单（T01 起）
 - `.scratch/s1-thin-shell-repair/issues/NN-*.md` — S1 薄壳批次工单（01 起）
-- `.scratch/v2-implementation/issues-index.md` — 工单总索引（含补充批次）
-- `.scratch/handoff-*.md` — 交付与状态交接，开工前先读最近一份
+- `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` — 唯一执行顺序
+- `.scratch/v2-implementation/issues-index.md` — 历史状态账本，不用于判断下一步
 
 每张工单包含：**What to build**（负责人视角）、**Blocked by**、**Status**、验收标准。
 状态字段沿用五个 triage 词（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix），
@@ -23,10 +23,10 @@ GitHub Issues 不用于本项目的工单追踪；`gh` CLI 仅用于代码 PR �
 
 ## 新建或更新工单
 
-1. 先读最近 handoff 与 issues-index，避免重复
-2. 新建 `issues/TXX-*.md` 或更新既有工单状态
-3. 同步更新 `issues-index.md`
-4. 完成交付后补一份 handoff 记录
+1. 先读产品基线和主线计划，确认工作属于当前里程碑
+2. 只有主线计划明确需要局部工单时才新建或更新工单
+3. 工单不得改写产品行为或执行优先级
+4. 完成后直接更新主线计划的事实状态；不再要求新增 handoff
 
 ## 代码改动流程（仍走 PR）
 

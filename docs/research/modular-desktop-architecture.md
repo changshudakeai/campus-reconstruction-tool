@@ -1,5 +1,9 @@
 # 调研报告：Rust + Slint 桌面应用的模块化单体架构
 
+Status: historical-research
+
+> 本文保留早期方案比较，不是依赖白名单法源。“横向绝对零依赖”已改为默认禁止、显式白名单例外；当前规则见 ADR-0017/0039 和 `docs/developer-guide/enforcement.md`。
+
 > 调研日期：2026-07-25
 > 背景：MCRebuild V2 重写（Windows 单机桌面应用，Rust + Slint，模块化单体）。
 > v1.x 教训：少数巨型 crate（单文件最大 5900 行）导致任何修改触发 20-30 分钟全量重编译。

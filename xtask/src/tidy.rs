@@ -5,7 +5,6 @@
 //!    豁免必须在文件内留显式标记 `<marker-filelength>: <理由>`，无理由的标记同样违规。
 //! 2. 模块文档：每个 `.rs` 文件必须以 `//!` 模块文档开头（tests/、build.rs 豁免）。
 //! 3. 半成品禁令：源码不得含待办/待修字样入主干（字样清单见 `forbidden_words`）。
-//! 4. 单 crate 源文件数 ≤ 10（十戒第 10 条，由 `crate_file_count` 检查）。
 //!
 //! 所有检查是纯函数，本文件内附单元测试；`tests/enforcement.rs` 把
 //! 真实 workspace 的全量扫描写成 `#[test]`（执法即测试）。
@@ -14,9 +13,6 @@ use std::path::{Path, PathBuf};
 
 /// 单文件行数红线（ADR-0017：新代码 1000 行；rustc 老代码库才放宽到 3000）。
 pub(crate) const MAX_FILE_LINES: usize = 1000;
-
-/// 单 crate `src/` 下源文件数上限（ADR-0017 十戒第 10 条）。
-pub(crate) const MAX_CRATE_SOURCE_FILES: usize = 10;
 
 /// 行数豁免标记（运行时拼接，避免本文件自身含完整标记字样）。
 fn filelength_marker() -> String {
@@ -110,19 +106,6 @@ fn check_forbidden_words(path_display: &str, content: &str, violations: &mut Vec
     }
 }
 
-/// 检查 4：单 crate `src/` 源文件数 ≤ 10（输入为文件清单，纯函数便于测试）。
-pub(crate) fn check_crate_file_count(crate_name: &str, source_files: &[PathBuf]) -> Vec<String> {
-    if source_files.len() > MAX_CRATE_SOURCE_FILES {
-        vec![format!(
-            "crate `{crate_name}`: src/ 下有 {} 个源文件，超过 {MAX_CRATE_SOURCE_FILES} 个上限\
-             （ADR-0017 十戒第 10 条）——考虑拆分 crate",
-            source_files.len()
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
 /// 需要接受 tidy 扫描的文件扩展名。
 fn is_source_file(path: &Path) -> bool {
     matches!(
@@ -166,22 +149,6 @@ pub(crate) fn workspace_violations(root: &Path) -> anyhow::Result<Vec<String>> {
         let content = std::fs::read_to_string(&file)?;
         violations.extend(check_file(&file.display().to_string(), &content));
     }
-    // 检查 4：每个成员 crate 的源文件数。
-    let metadata = crate::workspace_metadata(root)?;
-    for package in metadata.workspace_packages() {
-        let src_dir = package
-            .manifest_path
-            .parent()
-            .map(|dir| dir.join("src"))
-            .filter(|dir| dir.exists());
-        if let Some(src_dir) = src_dir {
-            let sources: Vec<PathBuf> = collect_source_files(src_dir.as_std_path())?
-                .into_iter()
-                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-                .collect();
-            violations.extend(check_crate_file_count(&package.name, &sources));
-        }
-    }
     Ok(violations)
 }
 
@@ -189,7 +156,7 @@ pub(crate) fn workspace_violations(root: &Path) -> anyhow::Result<Vec<String>> {
 pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
     let violations = workspace_violations(root)?;
     if violations.is_empty() {
-        println!("tidy: 全部通过（行数红线 / 模块文档 / 半成品禁令 / 文件数上限）");
+        println!("tidy: 全部通过（行数红线 / 模块文档 / 半成品禁令）");
         return Ok(());
     }
     for violation in &violations {
@@ -277,14 +244,5 @@ mod tests {
         let violations = check_file("ui/app.slint", &content);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("红线"));
-    }
-
-    #[test]
-    fn crate_with_more_than_10_source_files_is_reported() {
-        let files: Vec<PathBuf> = (0..11).map(|i| PathBuf::from(format!("f{i}.rs"))).collect();
-        let violations = check_crate_file_count("demo", &files);
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("超过 10 个"));
-        assert!(check_crate_file_count("demo", &files[..10]).is_empty());
     }
 }

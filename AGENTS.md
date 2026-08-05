@@ -2,16 +2,18 @@
 
 ## 项目状态
 
-**实施期（ADR 驱动）**。产品与架构决策逐条记录于 `docs/adr/`（ADR-0001 起连续编号至 0040）。代码实施以工单为单位推进；模块目录建立并通过接口评审后，才加入 `Cargo.toml` 的 members 列表。
+**实施期（ADR 驱动）**。当前产品行为以 `docs/product-baseline.md` 为唯一基线，决策记录于 `docs/adr/`（ADR-0001 起连续编号至 0041），施工顺序以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一入口。
 
 ## 开工前必读（按此顺序）
 
-1. **`README.md`** — 项目概述 + 全部 ADR 索引
-2. **`CONTEXT.md`** — 领域术语表（47 个中英对照术语；引用术语以它为准）
-3. **`docs/agents/`** — issue tracker / triage labels / domain docs 规则
-4. **`docs/adr/`** — 与任务相关的 ADR 原文（出题与验收前必须重读）
-5. **`docs/module-decisions.md`** — 按模块归类的决策索引
-6. **`.scratch/`** — 最新 handoff 文档（开工前先读最近一份）
+1. **`README.md`** — 项目现状与入口导航
+2. **`docs/product-baseline.md`** — 当前产品行为；冲突时取代旧 PRD、工单和交接
+3. **`CONTEXT.md`** — 领域术语表（48 个中英对照术语；引用术语以它为准）
+4. **`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`** — 唯一施工顺序与下一步
+5. **与当前工作相关的最新有效 ADR** — 决策缘由和架构边界
+6. **`docs/agents/` 与 `docs/module-decisions.md`** — 执行规则和按模块索引
+
+标记为 historical / superseded / retired 的文档只用于追溯。Agent 不得以“最近一份 handoff”或旧 issues-index 重新决定执行顺序。
 
 - 决策总览与"尚未决定"清单：见 `README.md`
 - v1.x 源码已按 ADR-0003 完成迁入（导出引擎/Arnis 规则/地图逻辑），原目录已删除
@@ -20,7 +22,7 @@
 
 ### Issue tracker
 
-GitHub Issues（使用 `gh` CLI）。详见 `docs/agents/issue-tracker.md`。
+当前主线计划 + 本地 `.scratch/` 工单；GitHub 只用于 PR。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
