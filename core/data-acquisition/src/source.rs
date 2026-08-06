@@ -282,8 +282,23 @@ impl GaodeDataSource {
             let typecode = poi
                 .get("typecode")
                 .and_then(|v| v.as_str())
+                .or_else(|| poi.get("typeCode").and_then(|v| v.as_str()))
+                .or_else(|| poi.get("type_code").and_then(|v| v.as_str()))
                 .unwrap_or_default();
-            let tags = Self::typecode_to_tags(typecode);
+            // JS API v2.0 的 POI 常无 typecode，只有 `type` 分类文本（如
+            // "科教文化服务;学校;高等院校"）。缺失类型码时按文本兜底，
+            // 学校类映射回 1412 前缀，保证采集候选带真实类别标签而非静默置空。
+            let effective_typecode = if typecode.is_empty() {
+                let category = poi.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                if category.contains("学校") || category.contains("大学") {
+                    SCHOOL_TYPECODE_PREFIX
+                } else {
+                    typecode
+                }
+            } else {
+                typecode
+            };
+            let tags = Self::typecode_to_tags(effective_typecode);
             seen_ids.push(id.clone());
             let geometry = poi
                 .get("location")
@@ -379,6 +394,32 @@ mod tests {
     }
 
     #[test]
+    fn js_api_v2_type_text_falls_back_to_school_tag() {
+        // 真实 JS API v2.0 searchNearBy 的 POI 无 typecode，只有 `type` 分类文本；
+        // 学校类文本必须映射回 school 标签，坐标真实进入候选，不得静默丢弃。
+        let json = r#"{"status":"1","info":"OK","pois":[
+            {"id":"B01","name":"第一教学楼","address":"校内","location":{"lng":121.401,"lat":31.201},"type":"科教文化服务;学校;高等院校"},
+            {"id":"B02","name":"学生宿舍","address":"校内","location":[121.402,31.202],"type":"科教文化服务;学校;高等院校"},
+            {"id":"B03","name":"南校门","address":"校内","location":"121.403,31.203","type":"科教文化服务;交通设施;出入口"}
+        ]}"#;
+        let source = canned_source(json);
+        let entities = source.fetch_raw_entities(&boundary()).unwrap();
+        assert_eq!(entities.len(), 3, "全部对象进流水线，禁止静默丢弃");
+        let school = entities.iter().find(|e| e.entity_id == "B01").unwrap();
+        assert_eq!(school.tags.get("building").unwrap(), "school");
+        let gate = entities.iter().find(|e| e.entity_id == "B03").unwrap();
+        assert!(
+            gate.tags.is_empty(),
+            "非学校类文本不伪造 school 标签，交 B13 兜底"
+        );
+        let dorm = entities.iter().find(|e| e.entity_id == "B02").unwrap();
+        assert!(
+            matches!(dorm.source_geometry, Some(SourceGeometry::Point(_))),
+            "数组 location 必须解析为真实点几何"
+        );
+    }
+
+    #[test]
     fn source_payload_is_preserved_verbatim() {
         let source = canned_source(CAMPUS_POIS);
         let entities = source.fetch_raw_entities(&boundary()).unwrap();
@@ -441,5 +482,26 @@ mod tests {
         assert_eq!(geometry_of("B01"), SourceGeometry::Point((121.401, 31.201)));
         assert_eq!(geometry_of("B02"), SourceGeometry::Point((121.402, 31.202)));
         assert_eq!(geometry_of("B03"), SourceGeometry::Point((121.403, 31.203)));
+    }
+
+    #[test]
+    fn js_api_v2_type_code_field_name_is_accepted() {
+        // JS API v2.0 可能返回 typeCode（驼峰）或 type_code；与 REST 风格
+        // typecode 并存，归类不得静默退化为空标签。
+        let json = r#"{"status":"1","info":"OK","pois":[
+            {"id":"B01","name":"第一教学楼","address":"校内","location":"121.401,31.201","typeCode":"141201"},
+            {"id":"B02","name":"体育馆","address":"校内","location":"121.402,31.202","type_code":"080300"}
+        ]}"#;
+        let entities = canned_source(json).fetch_raw_entities(&boundary()).unwrap();
+        let tag_of = |id: &str| {
+            entities
+                .iter()
+                .find(|e| e.entity_id == id)
+                .expect("实体存在")
+                .tags
+                .clone()
+        };
+        assert_eq!(tag_of("B01").get("building").unwrap(), "school");
+        assert_eq!(tag_of("B02").get("leisure").unwrap(), "sports_centre");
     }
 }

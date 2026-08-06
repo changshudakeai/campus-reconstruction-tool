@@ -623,7 +623,7 @@ fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
 /// 高德 WebView 采集查询脚本（发布前人工验证的在线链路；M2 用测试桩）。
 fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
     format!(
-        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
+        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var normalized=pois.map(function(poi){{return {{id:poi.id,name:poi.name,address:poi.address,location:poi.location,typecode:poi.typeCode||poi.typecode||poi.type_code||'',type:poi.type||''}};}});var payload={{status:status==='complete'?'1':'0',info:status,pois:normalized}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
         lon = center.0,
         lat = center.1
     )

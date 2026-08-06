@@ -80,6 +80,7 @@ mod tests {
             longitude: 121.4,
             latitude: 31.2,
             typecode: "141202".to_owned(),
+            category: String::new(),
         };
         let record = CampusPoiRecord::from_poi(&poi);
         assert_eq!(record.coordinate_system, "GCJ-02");

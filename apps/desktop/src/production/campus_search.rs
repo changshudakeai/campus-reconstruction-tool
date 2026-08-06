@@ -38,7 +38,7 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
               -> std::result::Result<String, String> {
             let request_id = CAMPUS_SEARCH_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
             // 等待 WebView 就绪（UI 线程已在 present(SearchCampus) 里发起 show）。
-            let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
                 if std::time::Instant::now() >= ready_deadline {
                     return Err("校区搜索地图页加载超时".to_owned());
@@ -59,6 +59,38 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
                 let (_, tick_rx) = mpsc::channel::<()>();
                 let _ = tick_rx.recv_timeout(std::time::Duration::from_millis(100));
             }
+            // 页面脚本就绪握手：等 campus_search_ready 信封（页面加载完成再求值，
+            // 避免 evaluate_script 早于页面脚本导致搜索函数不存在）。
+            let handshake_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let remaining =
+                    handshake_deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err("校区搜索页面未就绪".to_owned());
+                }
+                let message = response_rx
+                    .lock()
+                    .expect("campus search response lock")
+                    .recv_timeout(remaining)
+                    .map_err(|_| "校区搜索页面未就绪".to_owned())?;
+                let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else {
+                    continue;
+                };
+                if envelope.get("type").and_then(serde_json::Value::as_str)
+                    == Some("campus_search_error")
+                {
+                    let detail = envelope
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("未知脚本错误");
+                    return Err(format!("校区搜索脚本错误：{detail}"));
+                }
+                if envelope.get("type").and_then(serde_json::Value::as_str)
+                    == Some("campus_search_ready")
+                {
+                    break;
+                }
+            }
             let script = campus_search_request_script(request_id, query);
             let _ = slint::invoke_from_event_loop(move || {
                 crate::map_webview::evaluate_script(&script);
@@ -78,6 +110,15 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
                 let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else {
                     continue;
                 };
+                if envelope.get("type").and_then(serde_json::Value::as_str)
+                    == Some("campus_search_error")
+                {
+                    let detail = envelope
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("未知脚本错误");
+                    return Err(format!("校区搜索脚本错误：{detail}"));
+                }
                 if envelope.get("type").and_then(serde_json::Value::as_str)
                     != Some("campus_search_response")
                 {

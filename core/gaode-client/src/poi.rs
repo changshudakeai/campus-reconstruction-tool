@@ -31,12 +31,18 @@ pub struct SchoolPoi {
     pub latitude: f64,
     /// 高德类型码（education 类目校验凭据）
     pub typecode: String,
+    /// 高德分类文本（JS API v2.0 的 `type` 字段，如 "科教文化服务;学校;高等院校"；
+    /// REST/旧版无该字段时为空）。与 `typecode` 互补：JS API v2.0 的 POI 常无
+    /// `typecode`，只有该文本分类，二者任一命中学校类目即保留。
+    pub category: String,
 }
 
 impl SchoolPoi {
-    /// 是否属于学校类地点（教育类目 1412 前缀）
+    /// 是否属于学校类地点（教育类目 1412 前缀；或 JS API v2.0 分类文本含"学校"）
     pub fn is_school(&self) -> bool {
         self.typecode.starts_with(SCHOOL_TYPECODE_PREFIX)
+            || (self.category.contains('学')
+                && (self.category.contains("学校") || self.category.contains("大学")))
     }
 }
 
@@ -57,6 +63,9 @@ struct RawPoi {
     location: serde_json::Value,
     #[serde(default)]
     typecode: String,
+    /// JS API v2.0 的分类文本字段名为 `type`（Rust 关键字，用 rename 绑定）
+    #[serde(default, rename = "type")]
+    category: String,
 }
 
 /// 高德地点搜索响应外层结构
@@ -100,6 +109,7 @@ pub fn parse_place_search_response(json: &str) -> Result<Vec<SchoolPoi>> {
             longitude,
             latitude,
             typecode: raw.typecode,
+            category: raw.category,
         };
         if !poi.is_school() {
             continue;
@@ -232,6 +242,28 @@ mod tests {
         assert_eq!((pois[0].longitude, pois[0].latitude), (121.406, 31.228));
         assert_eq!((pois[1].longitude, pois[1].latitude), (121.456, 31.033));
         assert_eq!((pois[2].longitude, pois[2].latitude), (121.4, 31.2));
+    }
+
+    #[test]
+    fn js_api_v2_type_text_classifies_school_without_typecode() {
+        // Real JS API v2.0 PlaceSearch POIs have no typecode/typeCode/type_code;
+        // only the `type` classification text (e.g. "科教文化服务;学校;高等院校").
+        // typecode-prefix-only filtering would drop every campus (T30 D-3 probe).
+        let json = response_with(
+            r#"{"id":"B00155R1D5","name":"上海交通大学(闵行本部校区)","address":"东川路800号","location":{"lng":121.436882,"lat":31.025626},"type":"科教文化服务;学校;高等院校"},
+               {"id":"B00155L3CA","name":"上海交通大学徐汇校区","address":"华山路1954号","location":{"lng":121.433095,"lat":31.199005},"type":"科教文化服务;学校;高等院校"},
+               {"id":"B09","name":"闵行路公交站","address":"闵行路","location":{"lng":121.45,"lat":31.02},"type":"科教文化服务;文化科技;通讯信号"}"#,
+        );
+        let pois = parse_place_search_response(&json).unwrap();
+        assert_eq!(
+            pois.len(),
+            2,
+            "type text with school keeps campus, traffic signal dropped"
+        );
+        assert_eq!(pois[0].poi_id, "B00155R1D5");
+        assert_eq!(pois[0].category, "科教文化服务;学校;高等院校");
+        assert!(pois[0].is_school());
+        assert!(pois[1].is_school());
     }
 
     #[test]
