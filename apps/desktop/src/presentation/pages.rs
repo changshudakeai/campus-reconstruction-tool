@@ -236,6 +236,14 @@ impl WindowPageState for CampusPlanPageState {
         )));
         window.set_campus_show_results(self.campus_show_results);
         window.set_plan_list_model(ModelRc::new(VecModel::from(self.plans.clone())));
+        window.set_plan_list_title(self.plan_list_title.clone().into());
+        window.set_plan_list_campus_name(self.campus_name.clone().into());
+        window.set_plan_list_create_button_text(self.create_plan_label.clone().into());
+        window.set_plan_list_back_button_text(self.back_to_campus_label.clone().into());
+        window.set_plan_list_empty_text(self.plan_empty_text.clone().into());
+        window.set_plan_list_rename_label(self.rename_label.clone().into());
+        window.set_plan_list_duplicate_label(self.duplicate_label.clone().into());
+        window.set_plan_list_delete_label(self.delete_label.clone().into());
         window.set_plan_list_tutorial_visible(self.tutorial_visible);
         window.set_plan_list_tutorial_text(self.tutorial_text.clone().into());
         window.set_plan_list_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());

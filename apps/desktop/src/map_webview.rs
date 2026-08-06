@@ -96,14 +96,16 @@ pub(crate) fn campus_search_ready() -> bool {
     })
 }
 
-/// 画布区域（boundary_edit.slint）：x:16 y:56, width:parent.width-32, height:340
-/// 逻辑像素 × scale factor = 物理像素
+/// 画布区域（boundary_edit.slint 内 x:16 y:56，工作区内容自 y:128 起）：
+/// 窗口相对坐标 x:32 y:184, width:parent.width-32, height:340
+/// 逻辑像素 × scale factor = 物理像素（T30 D-5 根因修复：此前漏掉工作区
+/// 内容偏移，WebView 上移盖住步骤条并横向越界）。
 fn compute_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
     let scale = f64::from(scale);
     wry::Rect {
         position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(
-            (16.0 * scale) as i32,
-            (56.0 * scale) as i32,
+            (32.0 * scale) as i32,
+            (184.0 * scale) as i32,
         )),
         size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(
             ((f64::from(window_width_logical) - 32.0).max(300.0) * scale) as u32,
@@ -399,7 +401,7 @@ mod tests {
         let wry::dpi::Size::Physical(sz) = size else {
             panic!("size 必须是物理像素");
         };
-        assert_eq!((pos.x, pos.y), (16, 56));
+        assert_eq!((pos.x, pos.y), (32, 184));
         assert_eq!((sz.width, sz.height), (800 - 32, 340));
     }
 
@@ -414,7 +416,7 @@ mod tests {
         let wry::dpi::Size::Physical(sz) = size else {
             panic!("size 必须是物理像素");
         };
-        assert_eq!((pos.x, pos.y), (32, 112));
+        assert_eq!((pos.x, pos.y), (64, 368));
         assert_eq!((sz.width, sz.height), ((800 - 32) * 2, 680));
     }
 

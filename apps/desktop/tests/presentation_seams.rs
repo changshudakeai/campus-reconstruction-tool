@@ -269,6 +269,11 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     assert_eq!(window.get_campus_select_model().row_count(), 1);
     assert_eq!(window.get_plan_list_model().row_count(), 1);
     assert!(window.get_plan_list_tutorial_visible());
+    assert_eq!(window.get_plan_list_title().as_str(), "方案标题");
+    assert_eq!(window.get_plan_list_campus_name().as_str(), "校园一");
+    assert_eq!(window.get_plan_list_create_button_text().as_str(), "新方案");
+    assert_eq!(window.get_plan_list_back_button_text().as_str(), "返回校区");
+    assert_eq!(window.get_plan_list_empty_text().as_str(), "方案空");
     campus_entry.replace_adapter(TestAdapter::returning(Presentation::ready(
         empty_campus_page,
     )));
