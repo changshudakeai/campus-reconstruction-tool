@@ -117,7 +117,8 @@ impl BoundaryExportRequest {
     /// 创建一次边界直出请求。
     #[allow(
         clippy::too_many_arguments,
-        reason = "the F9 request keeps all export inputs explicit at the stable capability port"
+        reason = "the F9 request keeps all export inputs explicit at the stable capability port \
+                  (ADR-0042); expiry: v2.1.0 (2026-12-31), narrow when request inputs are grouped"
     )]
     pub fn new(
         campus_name: impl Into<String>,
@@ -378,7 +379,8 @@ where
 /// 双文件落盘尾段（B17 staging → B4 staging → 发布），边界直出与增强导出共用。
 #[allow(
     clippy::too_many_arguments,
-    reason = "双文件落盘尾段的受控输入在稳定端口显式展开，与 M1 请求同一纪律"
+    reason = "双文件落盘尾段的受控输入在稳定端口显式展开（ADR-0042/0043）；\
+              失效里程碑：v2.1.0（2026-12-31），届时按发布对分组为小型结构后收窄"
 )]
 pub(crate) fn write_and_publish(
     file_system: &dyn ExportFileSystem,

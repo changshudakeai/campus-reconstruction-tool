@@ -1,0 +1,433 @@
+pub mod project_management
+#[non_exhaustive] pub enum project_management::Error
+pub project_management::Error::DuplicateNameExhausted(alloc::string::String)
+pub project_management::Error::InvalidId(alloc::string::String)
+pub project_management::Error::Persistence(data_persistence::error::Error)
+pub project_management::Error::PlanNotFound(alloc::string::String)
+pub project_management::Error::RestoreNameConflict(alloc::string::String)
+pub project_management::Error::TrashItemNotFound(alloc::string::String)
+impl project_management::Error
+pub fn project_management::Error::is_duplicate_name(&self) -> bool
+impl core::convert::From<data_persistence::error::Error> for project_management::Error
+pub fn project_management::Error::from(source: data_persistence::error::Error) -> Self
+impl core::error::Error for project_management::Error
+pub fn project_management::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for project_management::Error
+pub fn project_management::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for project_management::Error
+pub fn project_management::Error::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for project_management::Error
+impl core::marker::Send for project_management::Error
+impl core::marker::Sync for project_management::Error
+impl core::marker::Unpin for project_management::Error
+impl !core::panic::unwind_safe::RefUnwindSafe for project_management::Error
+impl !core::panic::unwind_safe::UnwindSafe for project_management::Error
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::Error where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::Error where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::Error where U: core::convert::From<T>
+pub fn project_management::Error::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::Error where U: core::convert::Into<T>
+pub type project_management::Error::Error = core::convert::Infallible
+pub fn project_management::Error::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::Error where U: core::convert::TryFrom<T>
+pub type project_management::Error::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::Error::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for project_management::Error where T: core::fmt::Display + ?core::marker::Sized
+pub fn project_management::Error::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for project_management::Error where T: 'static + ?core::marker::Sized
+pub fn project_management::Error::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::Error where T: ?core::marker::Sized
+pub fn project_management::Error::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::Error where T: ?core::marker::Sized
+pub fn project_management::Error::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for project_management::Error
+pub fn project_management::Error::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::Error
+pub type project_management::Error::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::Error where T: ?core::marker::Sized
+pub enum project_management::PlanProgress
+pub project_management::PlanProgress::BoundaryNotSet
+pub project_management::PlanProgress::InProgress
+pub project_management::PlanProgress::InProgress::completed_keys: alloc::vec::Vec<alloc::string::String>
+pub project_management::PlanProgress::InProgress::next_key: alloc::string::String
+impl project_management::PlanProgress
+pub fn project_management::PlanProgress::text_key(&self) -> &'static str
+impl core::clone::Clone for project_management::PlanProgress
+pub fn project_management::PlanProgress::clone(&self) -> project_management::PlanProgress
+impl core::cmp::Eq for project_management::PlanProgress
+impl core::cmp::PartialEq for project_management::PlanProgress
+pub fn project_management::PlanProgress::eq(&self, other: &project_management::PlanProgress) -> bool
+impl core::fmt::Debug for project_management::PlanProgress
+pub fn project_management::PlanProgress::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::PlanProgress
+impl core::marker::Freeze for project_management::PlanProgress
+impl core::marker::Send for project_management::PlanProgress
+impl core::marker::Sync for project_management::PlanProgress
+impl core::marker::Unpin for project_management::PlanProgress
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::PlanProgress
+impl core::panic::unwind_safe::UnwindSafe for project_management::PlanProgress
+impl<Q, K> hashbrown::Equivalent<K> for project_management::PlanProgress where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn project_management::PlanProgress::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::PlanProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::PlanProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::PlanProgress where U: core::convert::From<T>
+pub fn project_management::PlanProgress::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::PlanProgress where U: core::convert::Into<T>
+pub type project_management::PlanProgress::Error = core::convert::Infallible
+pub fn project_management::PlanProgress::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::PlanProgress where U: core::convert::TryFrom<T>
+pub type project_management::PlanProgress::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::PlanProgress::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::PlanProgress where T: core::clone::Clone
+pub type project_management::PlanProgress::Owned = T
+pub fn project_management::PlanProgress::clone_into(&self, target: &mut T)
+pub fn project_management::PlanProgress::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::PlanProgress where T: 'static + ?core::marker::Sized
+pub fn project_management::PlanProgress::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::PlanProgress where T: ?core::marker::Sized
+pub fn project_management::PlanProgress::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::PlanProgress where T: ?core::marker::Sized
+pub fn project_management::PlanProgress::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::PlanProgress where T: core::clone::Clone
+pub unsafe fn project_management::PlanProgress::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::PlanProgress
+pub fn project_management::PlanProgress::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::PlanProgress
+pub type project_management::PlanProgress::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::PlanProgress where T: ?core::marker::Sized
+pub struct project_management::CampusPlanSnapshot
+pub project_management::CampusPlanSnapshot::campuses: alloc::vec::Vec<project_management::CampusView>
+pub project_management::CampusPlanSnapshot::landing_campus: core::option::Option<project_management::CampusView>
+pub project_management::CampusPlanSnapshot::plans: alloc::vec::Vec<project_management::PlanCardView>
+impl core::clone::Clone for project_management::CampusPlanSnapshot
+pub fn project_management::CampusPlanSnapshot::clone(&self) -> project_management::CampusPlanSnapshot
+impl core::cmp::PartialEq for project_management::CampusPlanSnapshot
+pub fn project_management::CampusPlanSnapshot::eq(&self, other: &project_management::CampusPlanSnapshot) -> bool
+impl core::fmt::Debug for project_management::CampusPlanSnapshot
+pub fn project_management::CampusPlanSnapshot::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::CampusPlanSnapshot
+impl core::marker::Freeze for project_management::CampusPlanSnapshot
+impl core::marker::Send for project_management::CampusPlanSnapshot
+impl core::marker::Sync for project_management::CampusPlanSnapshot
+impl core::marker::Unpin for project_management::CampusPlanSnapshot
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::CampusPlanSnapshot
+impl core::panic::unwind_safe::UnwindSafe for project_management::CampusPlanSnapshot
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::CampusPlanSnapshot where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::CampusPlanSnapshot where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::CampusPlanSnapshot where U: core::convert::From<T>
+pub fn project_management::CampusPlanSnapshot::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::CampusPlanSnapshot where U: core::convert::Into<T>
+pub type project_management::CampusPlanSnapshot::Error = core::convert::Infallible
+pub fn project_management::CampusPlanSnapshot::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::CampusPlanSnapshot where U: core::convert::TryFrom<T>
+pub type project_management::CampusPlanSnapshot::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::CampusPlanSnapshot::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::CampusPlanSnapshot where T: core::clone::Clone
+pub type project_management::CampusPlanSnapshot::Owned = T
+pub fn project_management::CampusPlanSnapshot::clone_into(&self, target: &mut T)
+pub fn project_management::CampusPlanSnapshot::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::CampusPlanSnapshot where T: 'static + ?core::marker::Sized
+pub fn project_management::CampusPlanSnapshot::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::CampusPlanSnapshot where T: ?core::marker::Sized
+pub fn project_management::CampusPlanSnapshot::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::CampusPlanSnapshot where T: ?core::marker::Sized
+pub fn project_management::CampusPlanSnapshot::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::CampusPlanSnapshot where T: core::clone::Clone
+pub unsafe fn project_management::CampusPlanSnapshot::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::CampusPlanSnapshot
+pub fn project_management::CampusPlanSnapshot::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::CampusPlanSnapshot
+pub type project_management::CampusPlanSnapshot::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::CampusPlanSnapshot where T: ?core::marker::Sized
+pub struct project_management::CampusView
+pub project_management::CampusView::address: alloc::string::String
+pub project_management::CampusView::anchor_lat: f64
+pub project_management::CampusView::anchor_lng: f64
+pub project_management::CampusView::id: alloc::string::String
+pub project_management::CampusView::name: alloc::string::String
+impl core::clone::Clone for project_management::CampusView
+pub fn project_management::CampusView::clone(&self) -> project_management::CampusView
+impl core::cmp::PartialEq for project_management::CampusView
+pub fn project_management::CampusView::eq(&self, other: &project_management::CampusView) -> bool
+impl core::fmt::Debug for project_management::CampusView
+pub fn project_management::CampusView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::CampusView
+impl core::marker::Freeze for project_management::CampusView
+impl core::marker::Send for project_management::CampusView
+impl core::marker::Sync for project_management::CampusView
+impl core::marker::Unpin for project_management::CampusView
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::CampusView
+impl core::panic::unwind_safe::UnwindSafe for project_management::CampusView
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::CampusView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::CampusView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::CampusView where U: core::convert::From<T>
+pub fn project_management::CampusView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::CampusView where U: core::convert::Into<T>
+pub type project_management::CampusView::Error = core::convert::Infallible
+pub fn project_management::CampusView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::CampusView where U: core::convert::TryFrom<T>
+pub type project_management::CampusView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::CampusView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::CampusView where T: core::clone::Clone
+pub type project_management::CampusView::Owned = T
+pub fn project_management::CampusView::clone_into(&self, target: &mut T)
+pub fn project_management::CampusView::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::CampusView where T: 'static + ?core::marker::Sized
+pub fn project_management::CampusView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::CampusView where T: ?core::marker::Sized
+pub fn project_management::CampusView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::CampusView where T: ?core::marker::Sized
+pub fn project_management::CampusView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::CampusView where T: core::clone::Clone
+pub unsafe fn project_management::CampusView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::CampusView
+pub fn project_management::CampusView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::CampusView
+pub type project_management::CampusView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::CampusView where T: ?core::marker::Sized
+pub struct project_management::PlanCardView
+pub project_management::PlanCardView::last_modified_at: alloc::string::String
+pub project_management::PlanCardView::name: alloc::string::String
+pub project_management::PlanCardView::plan_id: alloc::string::String
+pub project_management::PlanCardView::progress: project_management::PlanProgress
+impl core::clone::Clone for project_management::PlanCardView
+pub fn project_management::PlanCardView::clone(&self) -> project_management::PlanCardView
+impl core::cmp::Eq for project_management::PlanCardView
+impl core::cmp::PartialEq for project_management::PlanCardView
+pub fn project_management::PlanCardView::eq(&self, other: &project_management::PlanCardView) -> bool
+impl core::fmt::Debug for project_management::PlanCardView
+pub fn project_management::PlanCardView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::PlanCardView
+impl core::marker::Freeze for project_management::PlanCardView
+impl core::marker::Send for project_management::PlanCardView
+impl core::marker::Sync for project_management::PlanCardView
+impl core::marker::Unpin for project_management::PlanCardView
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::PlanCardView
+impl core::panic::unwind_safe::UnwindSafe for project_management::PlanCardView
+impl<Q, K> hashbrown::Equivalent<K> for project_management::PlanCardView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn project_management::PlanCardView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::PlanCardView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::PlanCardView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::PlanCardView where U: core::convert::From<T>
+pub fn project_management::PlanCardView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::PlanCardView where U: core::convert::Into<T>
+pub type project_management::PlanCardView::Error = core::convert::Infallible
+pub fn project_management::PlanCardView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::PlanCardView where U: core::convert::TryFrom<T>
+pub type project_management::PlanCardView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::PlanCardView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::PlanCardView where T: core::clone::Clone
+pub type project_management::PlanCardView::Owned = T
+pub fn project_management::PlanCardView::clone_into(&self, target: &mut T)
+pub fn project_management::PlanCardView::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::PlanCardView where T: 'static + ?core::marker::Sized
+pub fn project_management::PlanCardView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::PlanCardView where T: ?core::marker::Sized
+pub fn project_management::PlanCardView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::PlanCardView where T: ?core::marker::Sized
+pub fn project_management::PlanCardView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::PlanCardView where T: core::clone::Clone
+pub unsafe fn project_management::PlanCardView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::PlanCardView
+pub fn project_management::PlanCardView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::PlanCardView
+pub type project_management::PlanCardView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::PlanCardView where T: ?core::marker::Sized
+pub struct project_management::PlanContextView
+pub project_management::PlanContextView::anchor_lat: f64
+pub project_management::PlanContextView::anchor_lng: f64
+pub project_management::PlanContextView::campus_id: alloc::string::String
+pub project_management::PlanContextView::campus_name: alloc::string::String
+pub project_management::PlanContextView::plan_id: alloc::string::String
+pub project_management::PlanContextView::plan_name: alloc::string::String
+impl core::clone::Clone for project_management::PlanContextView
+pub fn project_management::PlanContextView::clone(&self) -> project_management::PlanContextView
+impl core::cmp::PartialEq for project_management::PlanContextView
+pub fn project_management::PlanContextView::eq(&self, other: &project_management::PlanContextView) -> bool
+impl core::fmt::Debug for project_management::PlanContextView
+pub fn project_management::PlanContextView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::PlanContextView
+impl core::marker::Freeze for project_management::PlanContextView
+impl core::marker::Send for project_management::PlanContextView
+impl core::marker::Sync for project_management::PlanContextView
+impl core::marker::Unpin for project_management::PlanContextView
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::PlanContextView
+impl core::panic::unwind_safe::UnwindSafe for project_management::PlanContextView
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::PlanContextView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::PlanContextView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::PlanContextView where U: core::convert::From<T>
+pub fn project_management::PlanContextView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::PlanContextView where U: core::convert::Into<T>
+pub type project_management::PlanContextView::Error = core::convert::Infallible
+pub fn project_management::PlanContextView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::PlanContextView where U: core::convert::TryFrom<T>
+pub type project_management::PlanContextView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::PlanContextView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::PlanContextView where T: core::clone::Clone
+pub type project_management::PlanContextView::Owned = T
+pub fn project_management::PlanContextView::clone_into(&self, target: &mut T)
+pub fn project_management::PlanContextView::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::PlanContextView where T: 'static + ?core::marker::Sized
+pub fn project_management::PlanContextView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::PlanContextView where T: ?core::marker::Sized
+pub fn project_management::PlanContextView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::PlanContextView where T: ?core::marker::Sized
+pub fn project_management::PlanContextView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::PlanContextView where T: core::clone::Clone
+pub unsafe fn project_management::PlanContextView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::PlanContextView
+pub fn project_management::PlanContextView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::PlanContextView
+pub type project_management::PlanContextView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::PlanContextView where T: ?core::marker::Sized
+pub struct project_management::ProjectManager
+impl project_management::ProjectManager
+pub fn project_management::ProjectManager::campus_plan_snapshot(&self) -> project_management::Result<project_management::CampusPlanSnapshot>
+pub fn project_management::ProjectManager::create_campus(&mut self, name: &str) -> project_management::Result<project_management::CampusView>
+pub fn project_management::ProjectManager::create_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, name: &str) -> project_management::Result<shared_domain_types::id::PlanId>
+pub fn project_management::ProjectManager::database(&self) -> std::sync::poison::mutex::MutexGuard<'_, data_persistence::database::Database>
+pub fn project_management::ProjectManager::delete_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, plan_id: &shared_domain_types::id::PlanId) -> project_management::Result<project_management::TrashItemView>
+pub fn project_management::ProjectManager::duplicate_plan(&mut self, plan_id: &shared_domain_types::id::PlanId, suffix: &str) -> project_management::Result<shared_domain_types::id::PlanId>
+pub fn project_management::ProjectManager::landing_campus(&self) -> project_management::Result<core::option::Option<project_management::CampusView>>
+pub fn project_management::ProjectManager::list_campuses(&self) -> project_management::Result<alloc::vec::Vec<project_management::CampusView>>
+pub fn project_management::ProjectManager::list_plan_cards(&self, campus_id: &shared_domain_types::id::CampusId) -> project_management::Result<alloc::vec::Vec<project_management::PlanCardView>>
+pub fn project_management::ProjectManager::list_trash(&self, campus_id: &shared_domain_types::id::CampusId) -> project_management::Result<alloc::vec::Vec<project_management::TrashItemView>>
+pub fn project_management::ProjectManager::new(db: data_persistence::database::Database) -> Self
+pub fn project_management::ProjectManager::plan_context(&self, plan_id: &shared_domain_types::id::PlanId) -> project_management::Result<core::option::Option<project_management::PlanContextView>>
+pub fn project_management::ProjectManager::purge_all_trash_confirmed(&mut self, campus_id: &shared_domain_types::id::CampusId) -> project_management::Result<usize>
+pub fn project_management::ProjectManager::purge_expired_trash(&mut self) -> project_management::Result<usize>
+pub fn project_management::ProjectManager::purge_plan_confirmed(&mut self, trash_id: &str) -> project_management::Result<()>
+pub fn project_management::ProjectManager::remember_campus(&mut self, campus_id: &shared_domain_types::id::CampusId) -> project_management::Result<()>
+pub fn project_management::ProjectManager::rename_plan(&mut self, plan_id: &shared_domain_types::id::PlanId, new_name: &str) -> project_management::Result<()>
+pub fn project_management::ProjectManager::restore_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, trash_id: &str, restore_name_template: &str) -> project_management::Result<project_management::RestoredPlan>
+pub fn project_management::ProjectManager::search_campuses(&self, query: &str) -> project_management::Result<alloc::vec::Vec<project_management::CampusView>>
+pub fn project_management::ProjectManager::shared_database(&self) -> alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>
+pub fn project_management::ProjectManager::suggest_plan_name(&self, campus_id: &shared_domain_types::id::CampusId, base_name: &str) -> project_management::Result<alloc::string::String>
+impl core::fmt::Debug for project_management::ProjectManager
+pub fn project_management::ProjectManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for project_management::ProjectManager
+impl core::marker::Send for project_management::ProjectManager
+impl core::marker::Sync for project_management::ProjectManager
+impl core::marker::Unpin for project_management::ProjectManager
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::ProjectManager
+impl core::panic::unwind_safe::UnwindSafe for project_management::ProjectManager
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::ProjectManager where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::ProjectManager where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::ProjectManager where U: core::convert::From<T>
+pub fn project_management::ProjectManager::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::ProjectManager where U: core::convert::Into<T>
+pub type project_management::ProjectManager::Error = core::convert::Infallible
+pub fn project_management::ProjectManager::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::ProjectManager where U: core::convert::TryFrom<T>
+pub type project_management::ProjectManager::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::ProjectManager::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for project_management::ProjectManager where T: 'static + ?core::marker::Sized
+pub fn project_management::ProjectManager::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::ProjectManager where T: ?core::marker::Sized
+pub fn project_management::ProjectManager::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::ProjectManager where T: ?core::marker::Sized
+pub fn project_management::ProjectManager::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for project_management::ProjectManager
+pub fn project_management::ProjectManager::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::ProjectManager
+pub type project_management::ProjectManager::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::ProjectManager where T: ?core::marker::Sized
+pub struct project_management::RestoredPlan
+pub project_management::RestoredPlan::name: alloc::string::String
+pub project_management::RestoredPlan::plan_id: shared_domain_types::id::PlanId
+impl core::clone::Clone for project_management::RestoredPlan
+pub fn project_management::RestoredPlan::clone(&self) -> project_management::RestoredPlan
+impl core::cmp::Eq for project_management::RestoredPlan
+impl core::cmp::PartialEq for project_management::RestoredPlan
+pub fn project_management::RestoredPlan::eq(&self, other: &project_management::RestoredPlan) -> bool
+impl core::fmt::Debug for project_management::RestoredPlan
+pub fn project_management::RestoredPlan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::RestoredPlan
+impl core::marker::Freeze for project_management::RestoredPlan
+impl core::marker::Send for project_management::RestoredPlan
+impl core::marker::Sync for project_management::RestoredPlan
+impl core::marker::Unpin for project_management::RestoredPlan
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::RestoredPlan
+impl core::panic::unwind_safe::UnwindSafe for project_management::RestoredPlan
+impl<Q, K> hashbrown::Equivalent<K> for project_management::RestoredPlan where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn project_management::RestoredPlan::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::RestoredPlan where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::RestoredPlan where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::RestoredPlan where U: core::convert::From<T>
+pub fn project_management::RestoredPlan::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::RestoredPlan where U: core::convert::Into<T>
+pub type project_management::RestoredPlan::Error = core::convert::Infallible
+pub fn project_management::RestoredPlan::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::RestoredPlan where U: core::convert::TryFrom<T>
+pub type project_management::RestoredPlan::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::RestoredPlan::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::RestoredPlan where T: core::clone::Clone
+pub type project_management::RestoredPlan::Owned = T
+pub fn project_management::RestoredPlan::clone_into(&self, target: &mut T)
+pub fn project_management::RestoredPlan::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::RestoredPlan where T: 'static + ?core::marker::Sized
+pub fn project_management::RestoredPlan::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::RestoredPlan where T: ?core::marker::Sized
+pub fn project_management::RestoredPlan::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::RestoredPlan where T: ?core::marker::Sized
+pub fn project_management::RestoredPlan::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::RestoredPlan where T: core::clone::Clone
+pub unsafe fn project_management::RestoredPlan::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::RestoredPlan
+pub fn project_management::RestoredPlan::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::RestoredPlan
+pub type project_management::RestoredPlan::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::RestoredPlan where T: ?core::marker::Sized
+pub struct project_management::TrashItemView
+pub project_management::TrashItemView::campus_name: alloc::string::String
+pub project_management::TrashItemView::deleted_at: alloc::string::String
+pub project_management::TrashItemView::expires_in_days: i64
+pub project_management::TrashItemView::name: alloc::string::String
+pub project_management::TrashItemView::plan_id: alloc::string::String
+pub project_management::TrashItemView::trash_id: alloc::string::String
+impl core::clone::Clone for project_management::TrashItemView
+pub fn project_management::TrashItemView::clone(&self) -> project_management::TrashItemView
+impl core::cmp::Eq for project_management::TrashItemView
+impl core::cmp::PartialEq for project_management::TrashItemView
+pub fn project_management::TrashItemView::eq(&self, other: &project_management::TrashItemView) -> bool
+impl core::fmt::Debug for project_management::TrashItemView
+pub fn project_management::TrashItemView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::TrashItemView
+impl core::marker::Freeze for project_management::TrashItemView
+impl core::marker::Send for project_management::TrashItemView
+impl core::marker::Sync for project_management::TrashItemView
+impl core::marker::Unpin for project_management::TrashItemView
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::TrashItemView
+impl core::panic::unwind_safe::UnwindSafe for project_management::TrashItemView
+impl<Q, K> hashbrown::Equivalent<K> for project_management::TrashItemView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn project_management::TrashItemView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::TrashItemView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::TrashItemView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::TrashItemView where U: core::convert::From<T>
+pub fn project_management::TrashItemView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::TrashItemView where U: core::convert::Into<T>
+pub type project_management::TrashItemView::Error = core::convert::Infallible
+pub fn project_management::TrashItemView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::TrashItemView where U: core::convert::TryFrom<T>
+pub type project_management::TrashItemView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::TrashItemView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::TrashItemView where T: core::clone::Clone
+pub type project_management::TrashItemView::Owned = T
+pub fn project_management::TrashItemView::clone_into(&self, target: &mut T)
+pub fn project_management::TrashItemView::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::TrashItemView where T: 'static + ?core::marker::Sized
+pub fn project_management::TrashItemView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::TrashItemView where T: ?core::marker::Sized
+pub fn project_management::TrashItemView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::TrashItemView where T: ?core::marker::Sized
+pub fn project_management::TrashItemView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::TrashItemView where T: core::clone::Clone
+pub unsafe fn project_management::TrashItemView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::TrashItemView
+pub fn project_management::TrashItemView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::TrashItemView
+pub type project_management::TrashItemView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::TrashItemView where T: ?core::marker::Sized
+pub const project_management::DUPLICATE_SUFFIX_KEY: &str
+pub const project_management::RESTORE_NAME_TEMPLATE_KEY: &str
+pub type project_management::Result<T> = core::result::Result<T, project_management::Error>

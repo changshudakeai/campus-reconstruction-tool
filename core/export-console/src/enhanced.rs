@@ -294,7 +294,8 @@ impl EnhancedExportRequest {
     /// 创建一次增强导出请求。
     #[allow(
         clippy::too_many_arguments,
-        reason = "增强导出输入在稳定能力端口显式展开，与 M1 请求同一纪律"
+        reason = "增强导出输入在稳定能力端口显式展开（ADR-0043），与 M1 请求同一纪律；\
+                  失效里程碑：v2.1.0（2026-12-31），届时如引入按语义分组的请求输入则收窄"
     )]
     pub fn new(
         campus_name: impl Into<String>,

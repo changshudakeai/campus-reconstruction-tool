@@ -87,7 +87,8 @@ pub struct CandidateProjection {
 impl CandidateProjection {
     #[allow(
         clippy::too_many_arguments,
-        reason = "ADR-0040 候选投影是跨模块的完整来源与资格事实"
+        reason = "ADR-0040 候选投影是跨模块的完整来源与资格事实，构造参数显式展开可读性最高；\
+                  失效里程碑：v2.1.0（2026-12-31），届时如引入按语义分组的构造输入则收窄"
     )]
     pub fn new(
         candidate_id: impl Into<String>,

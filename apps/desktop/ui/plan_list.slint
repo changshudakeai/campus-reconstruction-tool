@@ -32,7 +32,7 @@ export component PlanList inherits Rectangle {
     in property <string> rename-label;
     in property <string> duplicate-label;
     in property <string> delete-label;
-    // 教程气泡（F2 钩子，坐标占位，定稿归 T19B-8）
+    // 教程气泡（F2：跟练引导气泡，ADR-0020/0028）
     in property <bool> tutorial-bubble-visible;
     in property <string> tutorial-bubble-text;
     in property <string> tutorial-dismiss-label;
@@ -208,7 +208,7 @@ export component PlanList inherits Rectangle {
         }
     }
 
-    // 教程气泡浮层（F2 钩子，坐标占位，定稿归 T19B-8）
+    // 教程气泡浮层（F2：跟练引导气泡，ADR-0020/0028）
     if root.tutorial-bubble-visible: Rectangle {
         x: 16px;
         y: 80px;
