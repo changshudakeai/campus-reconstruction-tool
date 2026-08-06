@@ -45,10 +45,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "候选投影与完整采集批次（ADR-0040）",
         sql: include_str!("../migrations/005_add_candidate_projections.sql"),
     },
+    Migration {
+        version: 6,
+        description: "校区高德地点标识列：poi_id（ADR-0008，重复点选只切换）",
+        sql: include_str!("../migrations/006_add_campus_poi_id.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 5;
+pub const LATEST_SCHEMA_VERSION: u32 = 6;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

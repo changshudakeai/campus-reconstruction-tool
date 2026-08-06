@@ -21,6 +21,8 @@ pub struct CampusEntity {
     pub id: String,
     /// 校区名称
     pub name: String,
+    /// 高德地点标识（ADR-0008 校区身份凭据；无来源历史数据为空串）
+    pub poi_id: String,
     /// 校区地址（ADR-0006：最近使用记录卡片展示；无地址时为空串）
     pub address: String,
     /// 锚点经度（GCJ-02 坐标系，T05 新增）
@@ -115,6 +117,9 @@ pub trait CampusCrudApi {
     /// 按 ID 查校区（不存在返回 None）
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>>;
 
+    /// T30：按高德地点标识查校区（ADR-0008 重复点选只切换、不重复建）
+    fn find_campus_by_poi_id(&self, poi_id: &str) -> Result<Option<CampusEntity>>;
+
     /// T05：更新校区的锚点坐标
     fn update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64)
         -> Result<()>;
@@ -180,17 +185,18 @@ fn plan_name_taken(
 impl CampusCrudApi for Connection {
     fn list_campuses(&self) -> Result<Vec<CampusEntity>> {
         let mut stmt = self.prepare(
-            "SELECT id, name, address, anchor_lng, anchor_lat, created_at, updated_at FROM campuses ORDER BY updated_at DESC",
+            "SELECT id, name, poi_id, address, anchor_lng, anchor_lat, created_at, updated_at FROM campuses ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(CampusEntity {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                address: row.get(2)?,
-                anchor_lng: row.get(3)?,
-                anchor_lat: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                poi_id: row.get(2)?,
+                address: row.get(3)?,
+                anchor_lng: row.get(4)?,
+                anchor_lat: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })?;
         let mut result = Vec::new();
@@ -209,23 +215,31 @@ impl CampusCrudApi for Connection {
     fn create_campus_with_anchor(
         &mut self,
         name: &str,
-        _poi_id: &str,
+        poi_id: &str,
         address: &str,
         anchor_lng: f64,
         anchor_lat: f64,
     ) -> Result<CampusEntity> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_text();
-        // 注意：T05 中 poi_id 列尚未加入 campuses 表，此处预留字段位置
-        // 当前实现仅存储锚点，poi_id 存储在 campus_poi_records 或其他扩展表（待 TXX）
         self.execute(
-            "INSERT INTO campuses (id, name, address, anchor_lng, anchor_lat, created_at, updated_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, name, address, anchor_lng, anchor_lat, now.clone(), now.clone()],
+            "INSERT INTO campuses (id, name, poi_id, address, anchor_lng, anchor_lat, created_at, updated_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                name,
+                poi_id,
+                address,
+                anchor_lng,
+                anchor_lat,
+                now.clone(),
+                now.clone()
+            ],
         )?;
         Ok(CampusEntity {
             id,
             name: name.to_owned(),
+            poi_id: poi_id.to_owned(),
             address: address.to_owned(),
             anchor_lng,
             anchor_lat,
@@ -237,17 +251,43 @@ impl CampusCrudApi for Connection {
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>> {
         let entity = self
             .query_row(
-                "SELECT id, name, address, anchor_lng, anchor_lat, created_at, updated_at FROM campuses WHERE id = ?1",
+                "SELECT id, name, poi_id, address, anchor_lng, anchor_lat, created_at, updated_at FROM campuses WHERE id = ?1",
                 [campus_id],
                 |row| {
                     Ok(CampusEntity {
                         id: row.get(0)?,
                         name: row.get(1)?,
-                        address: row.get(2)?,
-                        anchor_lng: row.get(3)?,
-                        anchor_lat: row.get(4)?,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
+                        poi_id: row.get(2)?,
+                        address: row.get(3)?,
+                        anchor_lng: row.get(4)?,
+                        anchor_lat: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(entity)
+    }
+
+    fn find_campus_by_poi_id(&self, poi_id: &str) -> Result<Option<CampusEntity>> {
+        if poi_id.is_empty() {
+            return Ok(None);
+        }
+        let entity = self
+            .query_row(
+                "SELECT id, name, poi_id, address, anchor_lng, anchor_lat, created_at, updated_at FROM campuses WHERE poi_id = ?1",
+                [poi_id],
+                |row| {
+                    Ok(CampusEntity {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        poi_id: row.get(2)?,
+                        address: row.get(3)?,
+                        anchor_lng: row.get(4)?,
+                        anchor_lat: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
                     })
                 },
             )
@@ -416,6 +456,10 @@ impl CampusCrudApi for crate::Database {
 
     fn find_campus_by_id(&self, campus_id: &str) -> Result<Option<CampusEntity>> {
         self.conn.find_campus_by_id(campus_id)
+    }
+
+    fn find_campus_by_poi_id(&self, poi_id: &str) -> Result<Option<CampusEntity>> {
+        self.conn.find_campus_by_poi_id(poi_id)
     }
 
     fn update_campus_anchor(

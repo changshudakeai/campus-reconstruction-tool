@@ -6,7 +6,7 @@
 use localization::Language;
 use localization::Localization;
 
-use data_persistence::Database;
+use data_persistence::{CampusCrudApi, Database};
 use project_management::{
     CampusPlanSnapshot, CampusView, Error, PlanCardView, PlanContextView, PlanProgress,
     ProjectManager, RestoredPlan, TrashItemView, DUPLICATE_SUFFIX_KEY, RESTORE_NAME_TEMPLATE_KEY,
@@ -42,12 +42,20 @@ fn public_api_types_exist() {
     let mut manager = ProjectManager::new(db);
     assert!(format!("{manager:?}").contains("ProjectManager"));
 
-    // 校区 CRUD + 搜索（S1-04：名称包含匹配）
-    let campus: CampusView = manager.create_campus("测试大学").unwrap();
+    // 校区建立经 B2 原语（T30：F3 不再提供 create_campus 业务入口）
+    let campus: CampusView = manager
+        .database()
+        .create_campus("测试大学")
+        .map(|campus| CampusView {
+            id: campus.id,
+            name: campus.name,
+            address: campus.address,
+            anchor_lng: campus.anchor_lng,
+            anchor_lat: campus.anchor_lat,
+        })
+        .unwrap();
     assert_eq!(campus.name, "测试大学");
     assert_eq!(manager.list_campuses().unwrap().len(), 1);
-    assert_eq!(manager.search_campuses("测试").unwrap().len(), 1);
-    assert!(manager.search_campuses("   ").unwrap().is_empty());
 
     // 着陆流程（ADR-0006）：记住/读取上次使用的校区
     let campus_id = CampusId::parse(&campus.id).unwrap();
@@ -117,7 +125,7 @@ fn public_api_types_exist() {
     assert!(!restored.name.is_empty());
 
     // 清空回收站（确认后调用）：一次性清当前校区，不影响其他校区
-    let other = manager.create_campus("另一所大学").unwrap();
+    let other = manager.database().create_campus("另一所大学").unwrap();
     let other_id = CampusId::parse(&other.id).unwrap();
     let other_plan = manager.create_plan(&other_id, "他人方案").unwrap();
     let trash3 = manager.delete_plan(&campus_id, &plan_id).unwrap();

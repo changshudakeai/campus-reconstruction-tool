@@ -78,18 +78,6 @@ impl ProjectManager {
             .collect())
     }
 
-    /// 创建校区并返回视图
-    pub fn create_campus(&mut self, name: &str) -> Result<CampusView> {
-        let campus = self.db().create_campus(name)?;
-        Ok(CampusView {
-            id: campus.id,
-            name: campus.name,
-            address: campus.address,
-            anchor_lng: campus.anchor_lng,
-            anchor_lat: campus.anchor_lat,
-        })
-    }
-
     /// 老用户着陆：读"上次使用的校区"，校区已被删除则返回 None
     ///（调用方退回校区选择页，ADR-0006）
     pub fn landing_campus(&self) -> Result<Option<CampusView>> {
@@ -130,20 +118,6 @@ impl ProjectManager {
         self.db()
             .set_setting(AppSettingKey::LastUsedCampus, &campus_id.to_string())?;
         Ok(())
-    }
-
-    /// 校区搜索（S1-04）：只搜索已保存校区，按名称包含匹配（大小写不敏感）。
-    /// 搜索只在用户点击"搜索"或按回车时触发；空关键词返回空列表。
-    pub fn search_campuses(&self, query: &str) -> Result<Vec<CampusView>> {
-        let query = query.trim().to_lowercase();
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        Ok(self
-            .list_campuses()?
-            .into_iter()
-            .filter(|campus| campus.name.to_lowercase().contains(&query))
-            .collect())
     }
 
     /// 为"新建方案"输入窗建议一个不冲突的默认名（"新方案 1""新方案 2"……）。
