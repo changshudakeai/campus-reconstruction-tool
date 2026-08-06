@@ -6,6 +6,7 @@
 //! 确认边界 → 添加区域 → 确认区域 → 提交边界），捕获页面 postMessage 的原始
 //! 载荷，再经 parse_ipc_message → 工作区 seam → export-flow 完成导出。
 
+use data_persistence::CampusCrudApi;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -234,6 +235,7 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
         .expect("set export directory");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("seam campus")
         .expect("create campus");
     let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

@@ -1,5 +1,6 @@
 //! M1 regression: reopening a plan must select its latest F9-owned boundary.
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,7 @@ fn switching_and_reopening_a_plan_exports_its_latest_confirmed_boundary() {
         .expect("set export directory");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("plan switch campus")
         .expect("create campus");
     let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

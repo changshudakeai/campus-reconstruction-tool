@@ -1,5 +1,6 @@
 //! M1 regression: a confirmed MultiPolygon must reach F9 without reconstruction.
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -76,6 +77,7 @@ fn desktop_multipolygon_confirmation_reaches_f9_and_publishes_pair() {
         .expect("set export directory");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("multipolygon campus")
         .expect("create campus");
     let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

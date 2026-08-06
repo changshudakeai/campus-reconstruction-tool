@@ -16,6 +16,7 @@ use crate::presentation::{
     CampusPlanPageState, ConfirmationPresentation, InputDialogPresentation, NavigationDecision,
     NotificationFact, Presentation, PresentationAdapter, Screen, TrashPageState, TrashRequest,
 };
+use crate::production::campus_search::CampusSearchController;
 use crate::production::startup_settings::campus_plan_page;
 use crate::production::workspace_boundary::WorkspaceProductionContext;
 use crate::production::{PendingConfirmation, PendingInput, ProductionEntries};
@@ -30,15 +31,19 @@ use crate::production::record_entry_call;
 pub(crate) enum CampusPlanRequest {
     /// 读取并显示校区选择页（搜索框 + 最近使用记录）。
     CampusSelect,
-    /// 用户点击"搜索"或按回车后执行校区搜索（输入期间不自动搜索）。
+    /// 用户点击"搜索"或按回车后执行高德在线校区搜索（输入期间不自动搜索）。
     SearchCampus { query: String },
+    /// S1 内部轮询后台校区搜索的真实终态（D-3，镜像采集轮询模式）。
+    PollSearch,
     /// 选择校区（搜索结果或最近记录行）：记住校区并进入其方案列表；
     /// 已在最近记录中时返回"该校区已添加，已为你切换"通知事实。
     SelectCampus { campus_id: String },
+    /// 搜索候选详情确认窗点了"确认"（T05 显式确认；ADR-0008 建/选校区）。
+    ConfirmSelectCampus { poi_id: String },
+    /// 搜索候选详情确认窗点了"取消"（返回候选列表重选）。
+    CancelSelectCampus,
     /// 最近记录右侧小叉：立即移除快捷记录，不弹确认窗。
     RemoveRecentCampus { campus_id: String },
-    /// 新建演示校区并进入其方案列表。
-    CreateDemoCampus,
     /// 请求新建方案（返回输入窗，预填建议名）。
     RequestCreatePlan,
     /// 用户确认输入窗后创建方案。
@@ -59,6 +64,8 @@ pub(crate) enum CampusPlanRequest {
 pub(crate) struct CampusPlanProductionAdapter {
     pub(crate) injector: Rc<RefCell<ViewModelInjector>>,
     pub(crate) workspace: WorkspaceProductionContext,
+    /// 校区在线搜索控制（D-3：B3 状态机 + 可注入传输）
+    pub(crate) search: CampusSearchController,
 }
 
 impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanProductionAdapter {
@@ -70,17 +77,23 @@ impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanP
                 present_campus_select(&self.injector, &self.workspace)
             }
 
-            CampusPlanRequest::SearchCampus { query } => {
-                present_campus_search(&self.injector, &self.workspace, &query)
-            }
+            CampusPlanRequest::SearchCampus { query } => self.present_search(&query),
+            CampusPlanRequest::PollSearch => self.present_poll_search(),
             CampusPlanRequest::SelectCampus { campus_id } => {
-                present_select_campus(&self.injector, &self.workspace, &campus_id)
+                // 最近记录行携带校区 UUID；搜索候选行携带高德 POI 标识。
+                // 按 ID 形态区分两种"点选"（D-3，重复点选只切换不重复建）。
+                if CampusId::parse(&campus_id).is_ok() {
+                    present_select_campus(&self.injector, &self.workspace, &campus_id)
+                } else {
+                    self.present_select_search_candidate(&campus_id)
+                }
             }
+            CampusPlanRequest::ConfirmSelectCampus { poi_id } => {
+                self.present_confirm_select_campus(&poi_id)
+            }
+            CampusPlanRequest::CancelSelectCampus => self.present_cancel_select_campus(),
             CampusPlanRequest::RemoveRecentCampus { campus_id } => {
                 present_remove_recent_campus(&self.injector, &self.workspace, &campus_id)
-            }
-            CampusPlanRequest::CreateDemoCampus => {
-                present_create_demo_campus(&self.injector, &self.workspace)
             }
             CampusPlanRequest::RequestCreatePlan => {
                 present_request_create_plan(&self.injector, &self.workspace)
@@ -118,40 +131,6 @@ fn present_campus_select(
             .with_navigation(NavigationDecision::Show(Screen::CampusSelect)),
         Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &error.to_string())),
-    }
-}
-
-fn present_campus_search(
-    injector: &Rc<RefCell<ViewModelInjector>>,
-    workspace: &WorkspaceProductionContext,
-    query: &str,
-) -> Presentation<CampusPlanPageState> {
-    let injector = injector.borrow();
-    let l10n = injector.l10n();
-    let mut page = match campus_select_page(&injector, workspace) {
-        Ok(page) => page,
-        Err(error) => {
-            return Presentation::failed(campus_page_fallback(&injector, workspace))
-                .with_notification(campus_error_fact(l10n, &error.to_string()))
-        }
-    };
-    page.campus_search_query = query.to_owned();
-    match injector.projects().search_campuses(query) {
-        Ok(results) => {
-            page.campus_search_results = results
-                .into_iter()
-                .map(|campus| CampusData {
-                    id: campus.id.into(),
-                    name: campus.name.into(),
-                    address: campus.address.into(),
-                })
-                .collect();
-            page.campus_show_results = true;
-            Presentation::ready(page)
-        }
-        Err(error) => {
-            Presentation::failed(page).with_notification(plan_error_fact(l10n, &error.to_string()))
-        }
     }
 }
 
@@ -240,39 +219,6 @@ fn present_remove_recent_campus(
             .with_notification(campus_error_fact(l10n, &message)),
         (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &error.to_string())),
-    }
-}
-
-fn present_create_demo_campus(
-    injector: &Rc<RefCell<ViewModelInjector>>,
-    workspace: &WorkspaceProductionContext,
-) -> Presentation<CampusPlanPageState> {
-    let entered = {
-        let mut injector = injector.borrow_mut();
-        let name = injector.l10n().t("campus.demo_name");
-        let created = injector.projects_mut().create_campus(&name);
-        let campus_id = created.and_then(|campus| {
-            CampusId::parse(&campus.id)
-                .map_err(|error| project_management::Error::InvalidId(error.to_string()))
-        });
-        match campus_id {
-            Ok(id) => injector
-                .settings_mut()
-                .remember_campus(&id)
-                .map_err(|error| error.to_string()),
-            Err(error) => Err(error.to_string()),
-        }
-    };
-    let injector = injector.borrow();
-    let l10n = injector.l10n();
-    let page = plan_list_page(&injector, workspace);
-    match (entered, page) {
-        (Ok(()), Ok(page)) => Presentation::succeeded(page)
-            .with_navigation(NavigationDecision::Show(Screen::PlanList)),
-        (Err(message), _) => Presentation::failed(campus_page_fallback(&injector, workspace))
-            .with_notification(plan_error_fact(l10n, &message)),
-        (_, Err(error)) => Presentation::failed(campus_page_fallback(&injector, workspace))
-            .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
@@ -691,7 +637,7 @@ fn present_trash_confirm_clear(
 }
 
 /// 校区选择页完整状态（最近使用记录 + 搜索输入）。
-fn campus_select_page(
+pub(crate) fn campus_select_page(
     injector: &ViewModelInjector,
     workspace: &WorkspaceProductionContext,
 ) -> Result<CampusPlanPageState, TrashPageError> {
@@ -716,7 +662,7 @@ fn campus_select_page(
 }
 
 /// 当前校区方案列表页完整状态。
-fn plan_list_page(
+pub(crate) fn plan_list_page(
     injector: &ViewModelInjector,
     workspace: &WorkspaceProductionContext,
 ) -> Result<CampusPlanPageState, TrashPageError> {
@@ -761,7 +707,7 @@ fn trash_page(injector: &ViewModelInjector) -> Result<TrashPageState, TrashPageE
 }
 
 /// 校区页数据不可读时的失败页（不显示内存默认数据）。
-fn campus_page_fallback(
+pub(crate) fn campus_page_fallback(
     injector: &ViewModelInjector,
     workspace: &WorkspaceProductionContext,
 ) -> CampusPlanPageState {
@@ -812,7 +758,7 @@ fn plan_error_body(l10n: &Localization, error: &project_management::Error) -> St
 
 /// 回收站页构造错误。
 #[derive(Debug)]
-enum TrashPageError {
+pub(crate) enum TrashPageError {
     /// 当前没有可用校区。
     NoCampus,
     /// F3 数据读取失败。
@@ -831,7 +777,11 @@ impl std::fmt::Display for TrashPageError {
     }
 }
 
-fn campus_info_fact(l10n: &Localization, title_key: &str, body_key: &str) -> NotificationFact {
+pub(crate) fn campus_info_fact(
+    l10n: &Localization,
+    title_key: &str,
+    body_key: &str,
+) -> NotificationFact {
     NotificationFact::new(Notification::info(
         l10n.t("domain.campus"),
         l10n.t(title_key),
@@ -839,7 +789,7 @@ fn campus_info_fact(l10n: &Localization, title_key: &str, body_key: &str) -> Not
     ))
 }
 
-fn campus_error_fact(l10n: &Localization, body: &str) -> NotificationFact {
+pub(crate) fn campus_error_fact(l10n: &Localization, body: &str) -> NotificationFact {
     NotificationFact::new(Notification::error(
         l10n.t("domain.campus"),
         l10n.t("dialog.error_title"),
@@ -847,7 +797,7 @@ fn campus_error_fact(l10n: &Localization, body: &str) -> NotificationFact {
     ))
 }
 
-fn plan_error_fact(l10n: &Localization, body: &str) -> NotificationFact {
+pub(crate) fn plan_error_fact(l10n: &Localization, body: &str) -> NotificationFact {
     NotificationFact::new(Notification::error(
         l10n.t("domain.plan"),
         l10n.t("dialog.error_title"),
@@ -868,25 +818,49 @@ fn trash_info_fact(l10n: &Localization, title_key: &str, body_key: &str) -> Noti
 // ────────────────────────────────────────────────────────────────────────────
 
 impl ProductionEntries {
-    pub(crate) fn request_campus_search(&mut self, window: &AppWindow) {
+    pub(crate) fn request_campus_search(&mut self, window: &AppWindow) -> bool {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
         let query = window.get_campus_search_text().to_string();
-        self.campus_plan.show(
+        let presentation = self.campus_plan.show(
             window,
             &self.center,
             CampusPlanRequest::SearchCampus { query },
         );
+        if matches!(
+            presentation.operation(),
+            crate::presentation::OperationState::NeedsConfirmation
+        ) {
+            // 搜索失败弹窗"重试/取消"（ADR-0008 第 9 条）
+            self.pending_confirmation = Some(PendingConfirmation::RetryCampusSearch {
+                query: window.get_campus_search_text().to_string(),
+            });
+        }
+        let processing = matches!(
+            presentation.operation(),
+            crate::presentation::OperationState::Processing { .. }
+        );
+        processing
     }
 
     pub(crate) fn select_campus(&mut self, window: &AppWindow, campus_id: String) {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
-        self.campus_plan.show(
+        let presentation = self.campus_plan.show(
             window,
             &self.center,
-            CampusPlanRequest::SelectCampus { campus_id },
+            CampusPlanRequest::SelectCampus {
+                campus_id: campus_id.clone(),
+            },
         );
+        if matches!(
+            presentation.operation(),
+            crate::presentation::OperationState::NeedsConfirmation
+        ) {
+            // 搜索候选详情确认窗（T05 显式确认；确认后经 F1 建/选校区）
+            self.pending_confirmation =
+                Some(PendingConfirmation::ConfirmCampusSelection { poi_id: campus_id });
+        }
     }
 
     pub(crate) fn remove_recent_campus(&mut self, window: &AppWindow, campus_id: String) {
@@ -896,13 +870,6 @@ impl ProductionEntries {
             &self.center,
             CampusPlanRequest::RemoveRecentCampus { campus_id },
         );
-    }
-
-    pub(crate) fn create_demo_campus(&mut self, window: &AppWindow) {
-        self.supersede_diagnostic(window);
-        crate::map_webview::hide();
-        self.campus_plan
-            .show(window, &self.center, CampusPlanRequest::CreateDemoCampus);
     }
 
     pub(crate) fn request_create_plan(&mut self, window: &AppWindow) {

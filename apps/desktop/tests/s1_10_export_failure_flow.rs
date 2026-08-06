@@ -1,5 +1,6 @@
 //! M1 desktop failure acceptance: every F9 failure remains visible and leaves no fake pair.
 
+use data_persistence::CampusCrudApi;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,6 +206,7 @@ impl TestApp {
             .expect("set export directory");
         let campus = injector
             .projects_mut()
+            .database()
             .create_campus("M1 failure campus")
             .expect("create campus");
         let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

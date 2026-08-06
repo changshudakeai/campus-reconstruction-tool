@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use data_persistence::{
-    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
-    ReviewDecisionsApi,
+    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
+    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
+    RawObservationsApi, ReviewDecisionsApi,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -113,6 +113,7 @@ fn review_batch_confirm_seal_and_reopen_restore_terminal_states() {
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

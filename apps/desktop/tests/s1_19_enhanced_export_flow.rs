@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use data_persistence::{
-    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
-    ReviewDecision, ReviewDecisionsApi,
+    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
+    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
+    RawObservationsApi, ReviewDecision, ReviewDecisionsApi,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ApplicationRuntime, OperationPresentationState,
@@ -186,6 +186,7 @@ impl TestApp {
             .expect("设置导出目录");
         let campus = injector
             .projects_mut()
+            .database()
             .create_campus("M4 校区")
             .expect("创建校区");
         let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

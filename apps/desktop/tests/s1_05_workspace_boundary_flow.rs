@@ -3,6 +3,7 @@
 //! 断言只观察用户可看到的页面、状态、通知与导航结果；边界闭合、有效性、
 //! 重置与保存由工作区功能入口完成（B5），地图通道只转交原始动作（B3 IPC）。
 
+use data_persistence::CampusCrudApi;
 use desktop_shell::{
     assemble_application, AppWindow, OperationPresentationState, ShellDatabases, ShellPresenter,
     ViewModelInjector,
@@ -38,6 +39,7 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

@@ -1,5 +1,6 @@
 //! M1 regression: manual boundary confirmation must feed F9 with the latest boundary.
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -78,6 +79,7 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
         .expect("set export directory");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("manual regression campus")
         .expect("create campus");
     let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

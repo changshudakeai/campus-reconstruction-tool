@@ -285,17 +285,16 @@ export component AppWindow inherits Window {
 
     in property <string> campus-select-title;
     in property <string> campus-select-empty-list-text;
-    in property <string> campus-select-new-demo-campus-button-text;
     in property <string> campus-select-settings-button-text;
     in property <[CampusData]> campus-select-model;
     in-out property <string> campus-search-text;
     in property <string> campus-search-placeholder;
     in property <string> campus-search-button-text;
     in property <string> campus-recent-title;
+    in property <string> campus-search-status;
     in property <[CampusData]> campus-search-results-model;
     in property <bool> campus-show-results;
 
-    callback campus-select-new-demo-campus-clicked();
     callback campus-select-settings-clicked();
     callback campus-select-campus-clicked(campus-id: string);
     callback campus-search-requested();
@@ -516,17 +515,16 @@ export component AppWindow inherits Window {
     if root.active-screen == 1: CampusSelect {
         title <=> root.campus-select-title;
         empty-list-text <=> root.campus-select-empty-list-text;
-        new-demo-campus-button-text <=> root.campus-select-new-demo-campus-button-text;
         settings-button-text <=> root.campus-select-settings-button-text;
         campus-model <=> root.campus-select-model;
         search-text <=> root.campus-search-text;
         search-placeholder: root.campus-search-placeholder;
         search-button-text: root.campus-search-button-text;
         recent-title: root.campus-recent-title;
+        search-status: root.campus-search-status;
         result-model <=> root.campus-search-results-model;
         show-results: root.campus-show-results;
 
-        new-demo-campus-clicked => { root.campus-select-new-demo-campus-clicked() }
         settings-clicked => { root.campus-select-settings-clicked() }
         campus-clicked(id) => { root.campus-select-campus-clicked(id) }
         search-requested => { root.campus-search-requested() }

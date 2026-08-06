@@ -2,6 +2,7 @@
 //! identically (ADR-0042 §6), and cancelling the leave dialog must keep the
 //! workspace, the unsaved boundary draft, and the in-flight operation.
 
+use data_persistence::CampusCrudApi;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -122,6 +123,7 @@ impl TestApp {
             .expect("set export directory");
         let campus = injector
             .projects_mut()
+            .database()
             .create_campus("leave confirm campus")
             .expect("create campus");
         let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

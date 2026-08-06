@@ -24,6 +24,7 @@ use crate::presentation::{
     WorkspaceRequest,
 };
 mod campus_plan_trash;
+pub(crate) mod campus_search;
 mod collection;
 mod export;
 mod notification;
@@ -33,6 +34,7 @@ mod workspace_adapter;
 mod workspace_boundary;
 
 use campus_plan_trash::{CampusPlanProductionAdapter, CampusPlanRequest, TrashProductionAdapter};
+use campus_search::CampusSearchController;
 use collection::CollectionProductionAdapter;
 use export::ExportProductionAdapter;
 use notification::NotificationRequest;
@@ -101,6 +103,14 @@ enum PendingConfirmation {
     OrientationRecalc,
     /// 批量剔除 >=5 项的二次确认（M3：确认后 F5 执行批量剔除）
     ReviewBatchReject,
+    /// 校区搜索候选详情确认窗（D-3：确认后经 F1 建/选校区）
+    ConfirmCampusSelection {
+        poi_id: String,
+    },
+    /// 校区搜索失败弹窗点"重试"（D-3：按原关键词重新搜索）
+    RetryCampusSearch {
+        query: String,
+    },
 }
 
 /// 等待用户确认输入窗后由方案入口执行的操作。
@@ -128,6 +138,8 @@ pub(crate) struct ProductionEntries {
     export_poll_timer: slint::Timer,
     collection_poll_timer: slint::Timer,
     collection_ipc: std::sync::mpsc::Sender<String>,
+    campus_search_ipc: std::sync::mpsc::Sender<String>,
+    campus_search_poll_timer: slint::Timer,
 }
 
 impl ProductionEntries {
@@ -159,6 +171,13 @@ impl ProductionEntries {
             let injector_ref = injector.borrow();
             injector_ref.collection_ipc_sender()
         };
+        let (campus_search_ipc, campus_search_transport) = {
+            let injector_ref = injector.borrow();
+            (
+                injector_ref.campus_search_ipc_sender(),
+                injector_ref.campus_search_transport(),
+            )
+        };
         let workspace = WorkspaceProductionContext::new(
             Rc::clone(&injector),
             window,
@@ -176,6 +195,7 @@ impl ProductionEntries {
             campus_plan: CampusPlanPresentationEntry::new(CampusPlanProductionAdapter {
                 injector: Rc::clone(&injector),
                 workspace: workspace.clone(),
+                search: CampusSearchController::new(campus_search_transport),
             }),
             collection: CollectionPresentationEntry::new(CollectionProductionAdapter {
                 context: workspace.clone(),
@@ -206,6 +226,8 @@ impl ProductionEntries {
             export_poll_timer: slint::Timer::default(),
             collection_poll_timer: slint::Timer::default(),
             collection_ipc,
+            campus_search_ipc,
+            campus_search_poll_timer: slint::Timer::default(),
         }
     }
 
@@ -284,7 +306,8 @@ impl ProductionEntries {
             .show(window, &self.center, SettingsRequest::ClearKeys);
     }
 
-    /// 用户确认后执行对应的待确认操作；返回是否消费了本次确认。
+    /// 用户确认后执行对应的待确认操作；返回是否进入"校区搜索处理中"
+    /// （调用方据此拉起搜索轮询定时器；其余确认操作返回 false）。
     pub(crate) fn confirm_pending_action(&mut self, window: &AppWindow) -> bool {
         let Some(pending) = self.pending_confirmation.take() else {
             return false;
@@ -335,8 +358,20 @@ impl ProductionEntries {
                 self.review
                     .show(window, &self.center, ReviewRequest::ConfirmPending);
             }
+            PendingConfirmation::ConfirmCampusSelection { poi_id } => {
+                self.campus_plan.show(
+                    window,
+                    &self.center,
+                    CampusPlanRequest::ConfirmSelectCampus { poi_id },
+                );
+            }
+            PendingConfirmation::RetryCampusSearch { query } => {
+                window.set_campus_search_text(query.into());
+                return self.request_campus_search(window);
+            }
         }
-        true
+        // 其余确认操作不进入校区搜索轮询
+        false
     }
 
     pub(crate) fn cancel_pending_action(&mut self, window: &AppWindow) {
@@ -344,6 +379,19 @@ impl ProductionEntries {
         if matches!(pending, Some(PendingConfirmation::ReviewBatchReject)) {
             self.review
                 .show(window, &self.center, ReviewRequest::CancelPending);
+            return;
+        }
+        if matches!(
+            pending,
+            Some(PendingConfirmation::ConfirmCampusSelection { .. })
+        ) {
+            self.campus_plan
+                .show(window, &self.center, CampusPlanRequest::CancelSelectCampus);
+            return;
+        }
+        if matches!(pending, Some(PendingConfirmation::RetryCampusSearch { .. })) {
+            // 取消：停留校区选择页，不创建校区、不能绕过搜索（ADR-0008 第 9 条）
+            self.show_campus_select(window);
             return;
         }
         self.workspace
@@ -548,6 +596,34 @@ impl ProductionEntries {
         );
     }
 
+    /// D-3：校区搜索后台轮询（20ms 采样，终态即停；失败终态同样停表，
+    /// 由确认弹窗"重试/取消"接管）。
+    pub(crate) fn start_campus_search_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().campus_search_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let center = entries.borrow().center.clone();
+                let presentation = entries.borrow_mut().campus_plan.show(
+                    &window,
+                    &center,
+                    CampusPlanRequest::PollSearch,
+                );
+                if !matches!(presentation.operation(), OperationState::Processing { .. }) {
+                    entries.borrow_mut().campus_search_poll_timer.stop();
+                }
+            },
+        );
+    }
+
     pub(crate) fn show_notifications(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.notification
@@ -670,10 +746,12 @@ impl ProductionEntries {
     }
 
     /// 地图 WebView 转交的原始 IPC 消息：原样转交候选数据源桥的响应通道
-    /// （信封匹配在数据源适配器内，S1 不读取采集内容），同时交给工作区
-    /// 功能入口解析边界/朝向消息。
+    /// （信封匹配在数据源适配器内，S1 不读取采集内容），同时转交校区搜索
+    /// 响应通道（D-3：信封匹配在校区搜索传输内），并交给工作区功能入口
+    /// 解析边界/朝向消息。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
         let _ = self.collection_ipc.send(message.to_owned());
+        let _ = self.campus_search_ipc.send(message.to_owned());
         let presentation = self.workspace.show(
             window,
             &self.center,
@@ -860,7 +938,10 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_campus_search_requested(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().request_campus_search(&window);
+                let processing = shared.borrow_mut().request_campus_search(&window);
+                if processing {
+                    ProductionEntries::start_campus_search_polling(&shared, &window);
+                }
             }
         });
 
@@ -881,14 +962,6 @@ impl ProductionEntries {
                 shared
                     .borrow_mut()
                     .remove_recent_campus(&window, campus_id.to_string());
-            }
-        });
-
-        let weak = window.as_weak();
-        let shared = Rc::clone(entries);
-        window.on_campus_select_new_demo_campus_clicked(move || {
-            if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().create_demo_campus(&window);
             }
         });
 

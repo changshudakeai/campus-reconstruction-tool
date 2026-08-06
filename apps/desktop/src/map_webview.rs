@@ -40,6 +40,8 @@ struct WebViewState {
     /// 上次使用的密钥（recreate 时复用）
     last_api_key: String,
     last_security_key: String,
+    /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
+    campus_search_mode: bool,
     /// resize 跟随轮询定时器（hide 时 drop 即停）
     resize_timer: Option<slint::Timer>,
     /// 上次同步的（窗口逻辑宽度, 缩放因子）——变化才 set_bounds
@@ -55,6 +57,7 @@ thread_local! {
             status_handler: None,
             last_api_key: String::new(),
             last_security_key: String::new(),
+            campus_search_mode: false,
             resize_timer: None,
             last_size_scale: (0, 0.0),
         })
@@ -85,6 +88,14 @@ pub(crate) fn is_visible() -> bool {
     STATE.with(|s| s.borrow().webview.is_some())
 }
 
+/// 校区搜索 WebView 是否已就绪（存在且处于校区搜索页模式）。
+pub(crate) fn campus_search_ready() -> bool {
+    STATE.with(|s| {
+        let state = s.borrow();
+        state.webview.is_some() && state.campus_search_mode
+    })
+}
+
 /// 画布区域（boundary_edit.slint）：x:16 y:56, width:parent.width-32, height:340
 /// 逻辑像素 × scale factor = 物理像素
 fn compute_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
@@ -97,6 +108,22 @@ fn compute_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
         size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(
             ((f64::from(window_width_logical) - 32.0).max(300.0) * scale) as u32,
             (340.0 * scale) as u32,
+        )),
+    }
+}
+
+/// 校区选择页搜索地图区域：x:16 y:110, width:parent.width-32（兜底 300）, height:300。
+/// 与边界地图页同规格：逻辑像素 × scale factor = 物理像素。
+fn compute_campus_search_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
+    let scale = f64::from(scale);
+    wry::Rect {
+        position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(
+            (16.0 * scale) as i32,
+            (110.0 * scale) as i32,
+        )),
+        size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(
+            ((f64::from(window_width_logical) - 32.0).max(300.0) * scale) as u32,
+            (300.0 * scale) as u32,
         )),
     }
 }
@@ -147,6 +174,7 @@ pub(crate) fn show(
         let mut state = s.borrow_mut();
         state.last_api_key = api_key.clone();
         state.last_security_key = security_key.clone();
+        state.campus_search_mode = false;
     });
 
     let weak_for_timer = window_weak.clone();
@@ -194,6 +222,69 @@ pub(crate) fn show(
         }
         // 创建成功或失败都如实回报：故障只暂停地图相关操作
         notify_status(map_created);
+    });
+}
+
+/// 显示（或重建）校区搜索地图 WebView（D-3）。
+///
+/// 加载 B3 `build_map_page_html`（高德 PlaceSearch 在线搜索页）；结果经
+/// `window.ipc` 回传，由响应通道转交 B3 解析。幂等：已存在时不重复创建。
+/// 不触发工作区地图状态回调（该回调属于边界地图页语义）。
+pub(crate) fn show_campus_search(
+    window_weak: Weak<crate::AppWindow>,
+    api_key: String,
+    security_key: String,
+) {
+    if is_visible() {
+        return;
+    }
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        state.last_api_key = api_key.clone();
+        state.last_security_key = security_key.clone();
+        state.campus_search_mode = true;
+    });
+
+    let weak_for_timer = window_weak.clone();
+    let _ = slint::spawn_local(async move {
+        let Some(app_window) = window_weak.upgrade() else {
+            return;
+        };
+        let Ok(winit_win) = app_window.window().winit_window().await else {
+            return;
+        };
+
+        // HTML 由 B3 生成（密钥注入校验在 B3 内）
+        let config = gaode_client::MapPageConfig::new(&api_key, &security_key);
+        let Ok(html) = gaode_client::build_map_page_html(&config) else {
+            return;
+        };
+
+        let scale = app_window.window().scale_factor();
+        let width = app_window.window().size().width;
+        let bounds = compute_campus_search_bounds(width, scale);
+
+        let result = wry::WebViewBuilder::new()
+            .with_html(html)
+            .with_bounds(bounds)
+            .with_ipc_handler(|request: wry::http::Request<String>| {
+                let body = request.body().to_string();
+                STATE.with(|s| {
+                    if let Some(handler) = s.borrow().ipc_handler.clone() {
+                        handler(&body);
+                    }
+                });
+            })
+            .build_as_child(&*winit_win);
+
+        if let Ok(webview) = result {
+            STATE.with(|s| {
+                let mut state = s.borrow_mut();
+                state.webview = Some(webview);
+                state.last_size_scale = (width, scale);
+            });
+            start_resize_timer(weak_for_timer);
+        }
     });
 }
 
@@ -268,6 +359,7 @@ pub(crate) fn hide() {
         state.webview = None;
         state.resize_timer = None; // drop 即停止轮询
         state.last_size_scale = (0, 0.0);
+        state.campus_search_mode = false;
     });
 }
 
@@ -335,5 +427,35 @@ mod tests {
             panic!("size 必须是物理像素");
         };
         assert_eq!(sz.width, 300);
+    }
+
+    #[test]
+    fn campus_search_bounds_follow_search_strip() {
+        let bounds = compute_campus_search_bounds(800, 1.0);
+        let wry::Rect { position, size } = bounds;
+        let wry::dpi::Position::Physical(pos) = position else {
+            panic!("position 必须是物理像素");
+        };
+        let wry::dpi::Size::Physical(sz) = size else {
+            panic!("size 必须是物理像素");
+        };
+        assert_eq!((pos.x, pos.y), (16, 110));
+        assert_eq!((sz.width, sz.height), (800 - 32, 300));
+    }
+
+    #[test]
+    fn campus_search_ready_follows_mode_and_visibility() {
+        hide();
+        assert!(!campus_search_ready(), "无 WebView 时不算就绪");
+        // 模式标记只由 show_campus_search 置位（创建 WebView 需要真实窗口，
+        // 单元测试只验证纯函数边界与 hide 复位行为）。
+        STATE.with(|s| {
+            let mut state = s.borrow_mut();
+            state.campus_search_mode = true;
+            state.webview = None;
+        });
+        assert!(!campus_search_ready(), "有模式标记但无 WebView 仍不算就绪");
+        hide();
+        assert!(!campus_search_ready());
     }
 }

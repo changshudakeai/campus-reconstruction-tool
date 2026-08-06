@@ -8,6 +8,7 @@
 //! Slint 每进程只能初始化一次平台，故整个文件只有一个 `#[test]` 串行
 //! 跑完两个场景（与 presentation_seams/ui_bindings 同一约定）。
 
+use data_persistence::CampusCrudApi;
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
 };
@@ -42,6 +43,7 @@ fn setup(db_path: &Path) -> (AppWindow, Arc<NotificationCenter>, CampusId, Strin
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("契约校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");
