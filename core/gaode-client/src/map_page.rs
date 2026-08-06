@@ -5,11 +5,12 @@
 //! 地图容器最小高度 **300px**（决策记忆：适用于所有嵌入式地图场景）。
 //!
 //! 本模块只生成静态 HTML 文本；由壳层 WebView 加载渲染。
-//! - 校区搜索页：JS 侧通过 `window.mcrebuildBridge.postMessage(json)` 把地点搜索结果回传宿主，
-//!   宿主再交 [`crate::parse_place_search_response`] 解析。
+//! - 校区搜索页：JS 侧通过 `window.ipc.postMessage(json)`（wry 标准桥）把地点
+//!   搜索结果回传宿主，宿主再交 [`crate::parse_place_search_response`] 解析。
 //! - 取点页：点击地图 → `window.ipc.postMessage(lng + "," + lat)`；错误检测脚本上报异常。
 //!
 //! T21/T23: 升级为 JS API 2.0 + securityJsCode（高德 2.0 强制要求）；新增取点页协议。
+//! D-3: 搜索脚本携带请求序号回传信封（防止旧响应串台），location 三格式归一。
 //!
 //! ## 桥协议
 //!
@@ -97,25 +98,57 @@ pub fn build_map_page_html(config: &MapPageConfig) -> Result<String> {
 <script src="{cdn_url}"></script>
 <script>
   var map = new AMap.Map("map-container", {{ zoom: 15 }});
-  // 学校名称关键词搜索：结果 JSON 经桥接回传宿主，由 Rust 侧筛选学校类目
-  function searchCampus(keyword) {{
-    var placeSearch = new AMap.PlaceSearch({{ city: "全国" }});
-    placeSearch.search(keyword, function (status, result) {{
-      var payload = {{ status: status === "complete" ? "1" : "0", info: status, pois: [] }};
-      if (status === "complete" && result.poiList) {{
-        payload.pois = result.poiList.pois.map(function (poi) {{
-          return {{
-            id: poi.id,
-            name: poi.name,
-            address: poi.address,
-            location: poi.location ? poi.location.lng + "," + poi.location.lat : "",
-            typecode: poi.type_code || poi.typecode || ""
-          }};
-        }});
-      }}
-      window.mcrebuildBridge.postMessage(JSON.stringify(payload));
-    }});
+  // 错误检测：JS 异常经桥回传宿主，失败路径可见（D-3 排障）
+  window.onerror = function(msg, url, line) {{
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{ type: 'campus_search_error', message: msg + ' (line ' + line + ')' }}));
+    }}
+    return false;
+  }};
+  // location 三种格式归一为 "经度,纬度" 文本：REST 字符串 / JS API v2.0
+  // 对象（lng/lat 两字段）/ 数组 [lng,lat]（D-1 同源兼容）。
+  function locToText(loc) {{
+    if (typeof loc === 'string') return loc;
+    if (Array.isArray(loc)) return loc.join(',');
+    if (loc && typeof loc === 'object' &&
+        typeof loc.lng === 'number' && typeof loc.lat === 'number') {{
+      return loc.lng + ',' + loc.lat;
+    }}
+    return '';
   }}
+  // 学校名称关键词搜索：结果 JSON 经桥接回传宿主，由 Rust 侧筛选学校类目
+  function searchCampus(requestId, keyword) {{
+    try {{
+      // JS API v2.0 插件必须经 AMap.plugin 就绪后再构造（采集脚本同款用法）
+      AMap.plugin('AMap.PlaceSearch', function() {{
+        var placeSearch = new AMap.PlaceSearch({{ city: "全国" }});
+        placeSearch.search(keyword, function (status, result) {{
+          var payload = {{ status: status === "complete" ? "1" : "0", info: status, pois: [] }};
+          if (status === "complete" && result.poiList) {{
+            payload.pois = result.poiList.pois.map(function (poi) {{
+              return {{
+                id: poi.id,
+                name: poi.name,
+                address: poi.address,
+                location: locToText(poi.location),
+                typecode: poi.typeCode || poi.typecode || poi.type_code || "",
+                type: poi.type || ""
+              }};
+            }});
+          }}
+          window.ipc.postMessage(JSON.stringify({{
+            type: 'campus_search_response',
+            request_id: requestId,
+            payload: JSON.stringify(payload)
+          }}));
+        }});
+      }});
+    }} catch (error) {{
+      window.ipc.postMessage(JSON.stringify({{ type: 'campus_search_error', message: String(error) }}));
+    }}
+  }}
+  // 页面脚本就绪后回传握手，宿主等 ready 再求值搜索（避免加载竞态）
+  window.ipc.postMessage(JSON.stringify({{ type: 'campus_search_ready' }}));
   // 选定校区后地图定位到坐标锚点（此后画边界直接从锚点开始，ADR-0008）
   function centerOn(longitude, latitude) {{
     map.setCenter([longitude, latitude]);
@@ -268,6 +301,46 @@ mod tests {
 
         // Verify exact content
         assert!(html.contains("window._AMapSecurityConfig = { securityJsCode: \"xyz789GHI012\" }"));
+    }
+
+    #[test]
+    fn search_campus_posts_envelope_with_request_id_via_wry_bridge() {
+        let config = MapPageConfig::new("abc123DEF456", "xyz789GHI012");
+        let html = build_map_page_html(&config).unwrap();
+
+        // D-3：搜索经 wry 标准桥回传带请求序号的信封，宿主按序号配对，
+        // 旧响应不得串台；不得再依赖未注入的 mcrebuildBridge。
+        assert!(html.contains("function searchCampus(requestId, keyword)"));
+        assert!(html.contains("campus_search_response"));
+        assert!(html.contains("request_id: requestId"));
+        assert!(html.contains("window.ipc.postMessage"));
+        assert!(!html.contains("mcrebuildBridge"));
+    }
+
+    #[test]
+    fn search_page_handshakes_ready_and_reports_errors() {
+        let config = MapPageConfig::new("abc123DEF456", "xyz789GHI012");
+        let html = build_map_page_html(&config).unwrap();
+
+        // 页面就绪握手：宿主等 campus_search_ready 再求值，避免加载竞态
+        assert!(html.contains("campus_search_ready"));
+        // 错误回传：异常经桥上报，失败路径可见
+        assert!(html.contains("window.onerror"));
+        assert!(html.contains("campus_search_error"));
+        // v2.0 插件就绪用法：AMap.plugin 后才构造 PlaceSearch
+        assert!(html.contains("AMap.plugin('AMap.PlaceSearch'"));
+    }
+
+    #[test]
+    fn search_page_normalizes_all_location_formats() {
+        let config = MapPageConfig::new("abc123DEF456", "xyz789GHI012");
+        let html = build_map_page_html(&config).unwrap();
+
+        // D-1/D-3：location 对象/数组/文本统一归一为 "经度,纬度"。
+        assert!(html.contains("function locToText(loc)"));
+        assert!(html.contains("Array.isArray(loc)"));
+        assert!(html.contains("loc.lng + ',' + loc.lat"));
+        assert!(html.contains("location: locToText(poi.location)"));
     }
 
     #[test]

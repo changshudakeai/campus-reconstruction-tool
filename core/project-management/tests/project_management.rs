@@ -4,15 +4,17 @@
 //! - 删除方案 → 回收站中存在且 deleted_at 不为空（ADR-0018）
 //! - 卡片三件套与最近修改倒序、复制加"副本"后缀、恢复冲突
 
-use data_persistence::{Database, TrashApi};
+use data_persistence::{CampusCrudApi, Database, TrashApi};
 use project_management::{PlanProgress, ProjectManager};
 use shared_domain_types::CampusId;
 
 /// 建一个带校区的 manager，返回 (manager, campus_id)
 fn manager_with_campus() -> (ProjectManager, CampusId) {
     let db = Database::open_in_memory().expect("内存库可打开");
-    let mut manager = ProjectManager::new(db);
-    let campus = manager.create_campus("测试大学").unwrap();
+    let manager = ProjectManager::new(db);
+    // T30：F3 不再提供 create_campus 业务入口（校区只经高德 POI 建立），
+    // 测试夹具直接使用 B2 存储原语。
+    let campus = manager.database().create_campus("测试大学").unwrap();
     let campus_id = CampusId::parse(&campus.id).unwrap();
     (manager, campus_id)
 }
@@ -27,7 +29,7 @@ fn create_plan_rejects_duplicate_name_in_same_campus() {
     assert!(err.is_duplicate_name(), "同名冲突必须被拦截：{err}");
 
     // 跨校区可重名（ADR-0010 后果条）
-    let other = manager.create_campus("另一所大学").unwrap();
+    let other = manager.database().create_campus("另一所大学").unwrap();
     let other_id = CampusId::parse(&other.id).unwrap();
     assert!(manager.create_plan(&other_id, "方案 1").is_ok());
 }
@@ -156,21 +158,6 @@ fn purge_confirmed_removes_from_trash_for_good() {
 }
 
 #[test]
-fn search_campuses_matches_name_case_insensitively() {
-    let (mut manager, _) = manager_with_campus();
-    manager.create_campus("华东师范大学(普陀校区)").unwrap();
-    let results = manager.search_campuses("华东师范").unwrap();
-    assert!(
-        results.iter().any(|c| c.name.contains("华东师范大学")),
-        "按连续名称片段搜索"
-    );
-    assert!(manager.search_campuses("不存在的学校").unwrap().is_empty());
-    assert!(
-        manager.search_campuses("   ").unwrap().is_empty(),
-        "空关键词不搜索"
-    );
-}
-#[test]
 fn suggest_plan_name_skips_existing_names() {
     let (mut manager, campus_id) = manager_with_campus();
     manager.create_plan(&campus_id, "新方案 1").unwrap();
@@ -199,7 +186,7 @@ fn trash_list_views_carry_name_campus_and_remaining_days() {
 #[test]
 fn purge_all_trash_confirmed_clears_only_current_campus() {
     let (mut manager, campus_id) = manager_with_campus();
-    let other = manager.create_campus("另一所大学").unwrap();
+    let other = manager.database().create_campus("另一所大学").unwrap();
     let other_id = CampusId::parse(&other.id).unwrap();
     let p1 = manager.create_plan(&campus_id, "方案 1").unwrap();
     let p2 = manager.create_plan(&campus_id, "方案 2").unwrap();

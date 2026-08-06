@@ -5,6 +5,7 @@
 //! 状态由功能入口完整返回；保存或计算失败时正式状态保持不变并显示明确
 //! 错误；地图故障只暂停地图相关操作，不丢失已保存边界与方案数据。
 
+use data_persistence::CampusCrudApi;
 use desktop_shell::{
     assemble_application, AppWindow, OperationPresentationState, ShellDatabases, ShellPresenter,
     ViewModelInjector,
@@ -40,6 +41,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

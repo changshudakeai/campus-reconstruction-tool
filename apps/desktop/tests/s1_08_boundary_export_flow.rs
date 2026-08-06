@@ -1,5 +1,6 @@
 //! M1 S1 接缝验收：边界确认后一次开始意图直达 F9 完整导出入口。
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -63,6 +64,7 @@ fn confirmed_boundary_unlocks_direct_export_without_orientation_or_collection() 
         .expect("设置临时导出目录");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("M1 校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

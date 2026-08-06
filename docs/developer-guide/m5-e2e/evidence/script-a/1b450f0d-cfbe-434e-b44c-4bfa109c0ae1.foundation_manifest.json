@@ -1,0 +1,52 @@
+{
+  "version": "1.0.0",
+  "id": "0bfaaa9e-dc06-418d-bc82-d9430dc731ac",
+  "campusName": "上海交通大学(闵行本部校区)",
+  "planId": "1b450f0d-cfbe-434e-b44c-4bfa109c0ae1",
+  "planName": "M5剧本A验收方案新方案1",
+  "minecraftVersion": "26.1.2",
+  "exportedAt": "2026-08-06T13:38:17.596498200+00:00",
+  "categories": [
+    {
+      "name": "建筑",
+      "display_name": "建筑",
+      "included": false
+    },
+    {
+      "name": "道路",
+      "display_name": "道路",
+      "included": false
+    },
+    {
+      "name": "水域",
+      "display_name": "水域",
+      "included": false
+    },
+    {
+      "name": "植被",
+      "display_name": "植被",
+      "included": false
+    },
+    {
+      "name": "体育",
+      "display_name": "体育",
+      "included": false
+    },
+    {
+      "name": "其他",
+      "display_name": "其他",
+      "included": false
+    }
+  ],
+  "orientation": {
+    "degree": 0.0,
+    "source": "map_north"
+  },
+  "candidateFacts": {
+    "candidateProjectionCount": 0,
+    "reviewDecisionCount": 0,
+    "retainedCandidateCount": 0,
+    "keepByCategory": []
+  },
+  "exportKind": "base"
+}

@@ -133,6 +133,9 @@ struct ResourceBundle {
     /// 校区搜索与最近使用记录（ADR-0006，S1-04 启用既有 campus 段）
     #[serde(default)]
     pub campus: HashMap<String, String>,
+    /// 跨类别共用状态文案（如采集页"等待中"，80d2aa4 补键未注册类别，D-2 修复）
+    #[serde(default)]
+    pub common: HashMap<String, String>,
 }
 
 impl ResourceBundle {
@@ -160,6 +163,7 @@ impl ResourceBundle {
             ("boundary", self.boundary),
             ("orientation", self.orientation),
             ("map", self.map),
+            ("common", self.common),
         ];
         for (prefix, table) in categories {
             for (key, value) in table {
@@ -370,5 +374,16 @@ mod tests {
         // 测试占位符插值
         let args = serde_json::json!({ "state": "保留" });
         assert_eq!(l10n.t_with_args("domain.review.state", args), "保留状态");
+    }
+
+    #[test]
+    fn common_category_is_registered_into_flatten() {
+        // D-2：zh-CN.json 的 common.pending 必须展平可查，渲染不得出现字面量键
+        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+        assert_eq!(l10n.t("common.pending"), "等待中");
+        assert!(
+            !l10n.t("common.pending").starts_with("common."),
+            "键未注册时 l10n 会原样返回键名"
+        );
     }
 }

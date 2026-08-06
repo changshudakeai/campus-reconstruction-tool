@@ -1,5 +1,6 @@
 //! S1 工单 02 正式验收：完整状态、生产装配与 B7 故障操作路径。
 
+use data_persistence::CampusCrudApi;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -231,7 +232,6 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         toolbar: toolbar("校区"),
         campus_select_title: "校区标题".into(),
         campus_empty_text: "校区空".into(),
-        new_demo_campus_label: "新校区".into(),
         campus_settings_label: "校区设置".into(),
         campuses,
         campus_search_query: "".into(),
@@ -239,6 +239,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         campus_search_button_label: "搜索".into(),
         campus_recent_title: "最近使用的校区".into(),
         campus_search_results: Vec::new(),
+        campus_search_status: String::new(),
         campus_show_results: false,
         plan_list_title: "方案标题".into(),
         campus_name: "校园一".into(),
@@ -268,6 +269,11 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     assert_eq!(window.get_campus_select_model().row_count(), 1);
     assert_eq!(window.get_plan_list_model().row_count(), 1);
     assert!(window.get_plan_list_tutorial_visible());
+    assert_eq!(window.get_plan_list_title().as_str(), "方案标题");
+    assert_eq!(window.get_plan_list_campus_name().as_str(), "校园一");
+    assert_eq!(window.get_plan_list_create_button_text().as_str(), "新方案");
+    assert_eq!(window.get_plan_list_back_button_text().as_str(), "返回校区");
+    assert_eq!(window.get_plan_list_empty_text().as_str(), "方案空");
     campus_entry.replace_adapter(TestAdapter::returning(Presentation::ready(
         empty_campus_page,
     )));
@@ -424,6 +430,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
         .expect("完成首次设置");
     let campus = production_injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("正式校区标识");

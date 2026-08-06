@@ -26,6 +26,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::presenter::report_callback_error;
 use crate::presenter::ShellPresenter;
 
+use crate::production::campus_search::CampusSearchTransport;
 use crate::production::ProductionEntries;
 use crate::AppWindow;
 
@@ -197,6 +198,10 @@ pub struct ViewModelInjector {
     collection_flow: Arc<CollectionFlow>,
     /// 生产候选数据源 WebView 桥的响应通道（S1 只做传输转发，不解析内容）。
     collection_ipc: mpsc::Sender<String>,
+    /// 校区在线搜索 WebView 桥的响应通道（D-3，S1 只做传输转发）。
+    campus_search_ipc: mpsc::Sender<String>,
+    /// 校区在线搜索传输（生产走 WebView，测试注入罐头）。
+    campus_search_transport: Arc<CampusSearchTransport>,
 }
 
 impl ViewModelInjector {
@@ -208,6 +213,39 @@ impl ViewModelInjector {
     pub fn new_with_export_file_system(
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
+    ) -> Result<Self> {
+        let (campus_search_ipc, campus_search_transport) =
+            crate::production::campus_search::campus_search_production_transport();
+        Self::new_with_campus_search_transport_and_ipc(
+            db,
+            file_system,
+            campus_search_ipc,
+            campus_search_transport,
+        )
+    }
+
+    /// 测试/替代校区搜索传输注入点（罐头响应不经 WebView；响应通道照常存在，
+    /// 保证 IPC 转发链路在生产与测试形态一致）。
+    pub fn new_with_campus_search_transport(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+        transport: CampusSearchTransport,
+    ) -> Result<Self> {
+        let (campus_search_ipc, _) =
+            crate::production::campus_search::campus_search_production_transport();
+        Self::new_with_campus_search_transport_and_ipc(
+            db,
+            file_system,
+            campus_search_ipc,
+            transport,
+        )
+    }
+
+    fn new_with_campus_search_transport_and_ipc(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+        campus_search_ipc: mpsc::Sender<String>,
+        campus_search_transport: CampusSearchTransport,
     ) -> Result<Self> {
         let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
@@ -231,6 +269,8 @@ impl ViewModelInjector {
             export_flow,
             collection_flow,
             collection_ipc,
+            campus_search_ipc,
+            campus_search_transport: Arc::new(campus_search_transport),
         })
     }
 
@@ -345,9 +385,16 @@ impl ViewModelInjector {
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
-            presentation_confirmed
+            let needs_campus_search_polling = presentation_confirmed
                 .borrow_mut()
                 .confirm_pending_action(&window);
+            if needs_campus_search_polling {
+                // 校区搜索失败弹窗点"重试"：确认后重新搜索并拉起轮询
+                crate::production::ProductionEntries::start_campus_search_polling(
+                    &presentation_confirmed,
+                    &window,
+                );
+            }
         });
 
         let weak = window.as_weak();
@@ -405,6 +452,16 @@ impl ViewModelInjector {
     /// 生产候选数据源 WebView 桥的响应通道（壳把原始 IPC 原样转交）。
     pub(crate) fn collection_ipc_sender(&self) -> mpsc::Sender<String> {
         self.collection_ipc.clone()
+    }
+
+    /// 校区在线搜索 WebView 桥的响应通道（壳把原始 IPC 原样转交）。
+    pub(crate) fn campus_search_ipc_sender(&self) -> mpsc::Sender<String> {
+        self.campus_search_ipc.clone()
+    }
+
+    /// 校区在线搜索传输（生产走 WebView，测试注入罐头）。
+    pub(crate) fn campus_search_transport(&self) -> Arc<CampusSearchTransport> {
+        Arc::clone(&self.campus_search_transport)
     }
 
     /// F2 新手教程
@@ -566,7 +623,7 @@ fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
 /// 高德 WebView 采集查询脚本（发布前人工验证的在线链路；M2 用测试桩）。
 fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
     format!(
-        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var payload={{status:status==='complete'?'1':'0',info:status,pois:pois}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
+        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var normalized=pois.map(function(poi){{return {{id:poi.id,name:poi.name,address:poi.address,location:poi.location,typecode:poi.typeCode||poi.typecode||poi.type_code||'',type:poi.type||''}};}});var payload={{status:status==='complete'?'1':'0',info:status,pois:normalized}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
         lon = center.0,
         lat = center.1
     )
@@ -846,6 +903,7 @@ mod tests {
     }
     // ── 注入器（S1-05 并入运行时组合根）测试 ──────────────────────────
 
+    use data_persistence::CampusCrudApi;
     use onboarding_tutorial::TutorialStatus;
     use shared_domain_types::CampusId;
 
@@ -866,10 +924,12 @@ mod tests {
         assert!(injector.settings().is_first_run().expect("读首次运行标记"));
         // F2：引导尚未开始
         assert_eq!(injector.tutorial().status(), TutorialStatus::NotStarted);
-        // F3：可建校区与方案
+        // 校区只经高德 POI 建立（T30 删除 create_campus 业务入口）；夹具
+        // 直接用 projects 连接上的 B2 原语（内存库两连接相互独立）。
         let campus = injector
             .projects_mut()
-            .create_campus("演示大学")
+            .database()
+            .create_campus("夹具大学")
             .expect("建校区");
         let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");
         let plan_id = injector

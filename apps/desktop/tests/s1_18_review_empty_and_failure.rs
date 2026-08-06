@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use data_persistence::{
-    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
+    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
+    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
+    RawObservationsApi,
 };
 use desktop_shell::{
     assemble_application, AppWindow, OperationPresentationState, ShellDatabases, ShellPresenter,
@@ -103,6 +104,7 @@ fn build_injector(directory: &tempfile::TempDir, name: &str) -> (ViewModelInject
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

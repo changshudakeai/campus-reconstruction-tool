@@ -257,6 +257,7 @@ pub data_persistence::CampusEntity::anchor_lng: f64
 pub data_persistence::CampusEntity::created_at: alloc::string::String
 pub data_persistence::CampusEntity::id: alloc::string::String
 pub data_persistence::CampusEntity::name: alloc::string::String
+pub data_persistence::CampusEntity::poi_id: alloc::string::String
 pub data_persistence::CampusEntity::updated_at: alloc::string::String
 impl core::clone::Clone for data_persistence::CampusEntity
 pub fn data_persistence::CampusEntity::clone(&self) -> data_persistence::CampusEntity
@@ -572,6 +573,7 @@ impl data_persistence::CampusCrudApi for data_persistence::Database
 pub fn data_persistence::Database::create_campus(&mut self, name: &str) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::Database::create_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::Database::find_campus_by_id(&self, campus_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
+pub fn data_persistence::Database::find_campus_by_poi_id(&self, poi_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
 pub fn data_persistence::Database::list_campuses(&self) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CampusEntity>>
 pub fn data_persistence::Database::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 impl data_persistence::CandidateProjectionsApi for data_persistence::Database
@@ -856,18 +858,21 @@ pub trait data_persistence::CampusCrudApi
 pub fn data_persistence::CampusCrudApi::create_campus(&mut self, name: &str) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::CampusCrudApi::create_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::CampusCrudApi::find_campus_by_id(&self, campus_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
+pub fn data_persistence::CampusCrudApi::find_campus_by_poi_id(&self, poi_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
 pub fn data_persistence::CampusCrudApi::list_campuses(&self) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CampusEntity>>
 pub fn data_persistence::CampusCrudApi::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 impl data_persistence::CampusCrudApi for data_persistence::Database
 pub fn data_persistence::Database::create_campus(&mut self, name: &str) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::Database::create_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn data_persistence::Database::find_campus_by_id(&self, campus_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
+pub fn data_persistence::Database::find_campus_by_poi_id(&self, poi_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
 pub fn data_persistence::Database::list_campuses(&self) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CampusEntity>>
 pub fn data_persistence::Database::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 impl data_persistence::CampusCrudApi for rusqlite::Connection
 pub fn rusqlite::Connection::create_campus(&mut self, name: &str) -> data_persistence::Result<data_persistence::CampusEntity>
-pub fn rusqlite::Connection::create_campus_with_anchor(&mut self, name: &str, _poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<data_persistence::CampusEntity>
+pub fn rusqlite::Connection::create_campus_with_anchor(&mut self, name: &str, poi_id: &str, address: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<data_persistence::CampusEntity>
 pub fn rusqlite::Connection::find_campus_by_id(&self, campus_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
+pub fn rusqlite::Connection::find_campus_by_poi_id(&self, poi_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CampusEntity>>
 pub fn rusqlite::Connection::list_campuses(&self) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CampusEntity>>
 pub fn rusqlite::Connection::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 pub trait data_persistence::CandidateProjectionsApi

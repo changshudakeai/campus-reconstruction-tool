@@ -13,6 +13,15 @@ use shared_domain_types::CampusId;
 use crate::error::{Error, Result};
 use crate::landing::{LandingCampus, RecentCampus};
 
+/// ADR-0008 第 5-7 条：一次点选完成"添加或找到校区 + 选定当前校区"的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedCampus {
+    /// 本次选定的校区 ID
+    pub campus_id: CampusId,
+    /// 该高德地点此前已添加过校区（本次为切换而非新建，用于"已为你切换"提示）
+    pub already_added: bool,
+}
+
 /// 高德地图 API key 格式校验（仅字母数字）
 pub(crate) fn validate_gaode_key(key: &str) -> Result<()> {
     if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -388,6 +397,38 @@ impl SettingsManager {
         Ok(campus_id)
     }
 
+    /// T30/ADR-0008 第 5-7 条：按高德地点标识选校区——已添加则直接切换
+    /// （不重复建校区），未添加则建立校区并切换；两种路径都立即成为当前校区。
+    pub fn select_campus_by_poi_id(
+        &mut self,
+        name: &str,
+        poi_id: &str,
+        address: &str,
+        anchor_lng: f64,
+        anchor_lat: f64,
+    ) -> Result<SelectedCampus> {
+        if let Some(existing) = self.db.find_campus_by_poi_id(poi_id)? {
+            let campus_id =
+                CampusId::parse(&existing.id).map_err(|e| Error::InvalidCampusId(e.to_string()))?;
+            self.remember_campus(&campus_id)?;
+            // 与新建路径保持一致：选定校区后首次运行即完成（老用户无副作用）
+            if self.is_first_run()? {
+                self.db
+                    .set_setting(AppSettingKey::FirstRunCompleted, "true")?;
+            }
+            return Ok(SelectedCampus {
+                campus_id,
+                already_added: true,
+            });
+        }
+        let campus_id =
+            self.select_campus_with_anchor(name, poi_id, address, anchor_lng, anchor_lat)?;
+        Ok(SelectedCampus {
+            campus_id,
+            already_added: false,
+        })
+    }
+
     /// T05：仅更新已有校区的锚点坐标
     pub fn update_campus_anchor(
         &self,
@@ -630,6 +671,40 @@ mod tests {
 
         // 验证首次运行完成标志已设置
         assert!(!manager.is_first_run().unwrap());
+    }
+
+    #[test]
+    fn select_campus_by_poi_id_switches_existing_without_duplicate() {
+        let mut manager = manager();
+
+        let first = manager
+            .select_campus_by_poi_id("上海交通大学", "POI-A1", "闵行区东川路800号", 121.44, 31.03)
+            .expect("新建并选定");
+        assert!(!first.already_added);
+
+        // 重复点选同一真实学校：只切换、不重复建（ADR-0008 第 6 条）
+        let again = manager
+            .select_campus_by_poi_id("上海交通大学", "POI-A1", "闵行区东川路800号", 121.44, 31.03)
+            .expect("切换既有校区");
+        assert!(again.already_added);
+        assert_eq!(again.campus_id, first.campus_id, "必须返回原校区，不新建");
+        assert_eq!(
+            manager.db.list_campuses().unwrap().len(),
+            1,
+            "不得重复建校区"
+        );
+
+        // 新地点 → 新建校区并切换
+        let second = manager
+            .select_campus_by_poi_id("复旦大学", "POI-B2", "杨浦区邯郸路220号", 121.505, 31.296)
+            .expect("新建第二校区");
+        assert!(!second.already_added);
+        assert_eq!(manager.db.list_campuses().unwrap().len(), 2);
+        assert_eq!(
+            manager.landing_campus().unwrap().unwrap().name,
+            "复旦大学",
+            "最近选定的校区成为当前校区"
+        );
     }
 
     #[test]

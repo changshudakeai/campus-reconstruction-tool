@@ -58,7 +58,7 @@
   未启用 visible 兑底模式**
 - 单击即开（ADR-0027 第 6 轮）：`plan_list.slint` 卡片新增 TouchArea
   热区 + `card-clicked` 回调 → 跳屏 4；`campus_select.slint` 校区行
-  补接单击（老用户进已有校区的入口，此前只有新建演示校区一条路）
+  补接单击（老用户进已有校区的入口，此前只有演示校区一条路）
 - 工具栏可见性改为 .slint 侧按 `active-screen` 派生（屏 2/4/5/6 显示，
   0/1/3 隐藏）——Slint Rust API 无属性变化监听回调，且覆盖 .slint
   内部返回跳转（设置页返回按钮）

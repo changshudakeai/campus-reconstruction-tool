@@ -283,7 +283,6 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub struct project_management::ProjectManager
 impl project_management::ProjectManager
 pub fn project_management::ProjectManager::campus_plan_snapshot(&self) -> project_management::Result<project_management::CampusPlanSnapshot>
-pub fn project_management::ProjectManager::create_campus(&mut self, name: &str) -> project_management::Result<project_management::CampusView>
 pub fn project_management::ProjectManager::create_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, name: &str) -> project_management::Result<shared_domain_types::id::PlanId>
 pub fn project_management::ProjectManager::database(&self) -> std::sync::poison::mutex::MutexGuard<'_, data_persistence::database::Database>
 pub fn project_management::ProjectManager::delete_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, plan_id: &shared_domain_types::id::PlanId) -> project_management::Result<project_management::TrashItemView>
@@ -300,7 +299,6 @@ pub fn project_management::ProjectManager::purge_plan_confirmed(&mut self, trash
 pub fn project_management::ProjectManager::remember_campus(&mut self, campus_id: &shared_domain_types::id::CampusId) -> project_management::Result<()>
 pub fn project_management::ProjectManager::rename_plan(&mut self, plan_id: &shared_domain_types::id::PlanId, new_name: &str) -> project_management::Result<()>
 pub fn project_management::ProjectManager::restore_plan(&mut self, campus_id: &shared_domain_types::id::CampusId, trash_id: &str, restore_name_template: &str) -> project_management::Result<project_management::RestoredPlan>
-pub fn project_management::ProjectManager::search_campuses(&self, query: &str) -> project_management::Result<alloc::vec::Vec<project_management::CampusView>>
 pub fn project_management::ProjectManager::shared_database(&self) -> alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>
 pub fn project_management::ProjectManager::suggest_plan_name(&self, campus_id: &shared_domain_types::id::CampusId, base_name: &str) -> project_management::Result<alloc::string::String>
 impl core::fmt::Debug for project_management::ProjectManager

@@ -285,17 +285,16 @@ export component AppWindow inherits Window {
 
     in property <string> campus-select-title;
     in property <string> campus-select-empty-list-text;
-    in property <string> campus-select-new-demo-campus-button-text;
     in property <string> campus-select-settings-button-text;
     in property <[CampusData]> campus-select-model;
     in-out property <string> campus-search-text;
     in property <string> campus-search-placeholder;
     in property <string> campus-search-button-text;
     in property <string> campus-recent-title;
+    in property <string> campus-search-status;
     in property <[CampusData]> campus-search-results-model;
     in property <bool> campus-show-results;
 
-    callback campus-select-new-demo-campus-clicked();
     callback campus-select-settings-clicked();
     callback campus-select-campus-clicked(campus-id: string);
     callback campus-search-requested();
@@ -516,17 +515,16 @@ export component AppWindow inherits Window {
     if root.active-screen == 1: CampusSelect {
         title <=> root.campus-select-title;
         empty-list-text <=> root.campus-select-empty-list-text;
-        new-demo-campus-button-text <=> root.campus-select-new-demo-campus-button-text;
         settings-button-text <=> root.campus-select-settings-button-text;
         campus-model <=> root.campus-select-model;
         search-text <=> root.campus-search-text;
         search-placeholder: root.campus-search-placeholder;
         search-button-text: root.campus-search-button-text;
         recent-title: root.campus-recent-title;
+        search-status: root.campus-search-status;
         result-model <=> root.campus-search-results-model;
         show-results: root.campus-show-results;
 
-        new-demo-campus-clicked => { root.campus-select-new-demo-campus-clicked() }
         settings-clicked => { root.campus-select-settings-clicked() }
         campus-clicked(id) => { root.campus-select-campus-clicked(id) }
         search-requested => { root.campus-search-requested() }
@@ -858,7 +856,7 @@ export component AppWindow inherits Window {
         // 顶部步骤条
         Stepper {
             x: 16px;
-            y: 8px;
+            y: 64px;
             active-step: root.workspace-active-step;
             step-locked: root.workspace-step-locked;
             step-completed: root.workspace-step-completed;
@@ -877,7 +875,7 @@ export component AppWindow inherits Window {
             // 步骤①：圈边界编辑器 (Phase 2 Step A)
             if root.workspace-active-step == 0: BoundaryEditor {
                 x: 16px;
-                y: 72px;
+                y: 128px;
                 boundary-points: root.workspace-boundary-points;
                 boundary-path-commands: root.workspace-boundary-path-commands;
                 boundary-title: root.workspace-boundary-title;
@@ -907,7 +905,7 @@ export component AppWindow inherits Window {
                         // 步骤②：定朝向交互页 (Phase 2 Step B)
                         if root.workspace-active-step == 1: OrientationView {
                 x: 16px;
-                y: 72px;
+                y: 128px;
                 workspace-orientation-mode: root.workspace-orientation-mode;
                 workspace-orientation-angle: root.workspace-orientation-angle;
                 orientation-is-determined: root.workspace-orientation-is-determined;
@@ -942,7 +940,7 @@ export component AppWindow inherits Window {
             }
                 
             if root.workspace-active-step == 2: CollectionView {
-                x: 16px; y: 72px;
+                x: 16px; y: 128px;
                 source-label: root.collection-source-label;
                 collect-label: root.collection-collect-label;
                 progress-label: root.collection-progress-label;
@@ -959,7 +957,7 @@ export component AppWindow inherits Window {
             // 步骤④+: 占位 (Phase 2 Step C 后续实现)
             if root.workspace-active-step == 3: ReviewView {
                 x: 16px;
-                y: 72px;
+                y: 128px;
                 title: root.review-title;
                 empty-text: root.review-empty-text;
                 candidate-count: root.review-candidate-count;

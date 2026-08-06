@@ -4,6 +4,7 @@
 //! （plans 表无边界字段）。本测试证明：应用重启后已确认边界不会静默恢复，
 //! 也不会伪造边界——导出入口明确拒绝（error.export_boundary_failed）。
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -80,6 +81,7 @@ fn confirmed_boundary_is_session_only_and_restart_refuses_without_it() {
             .expect("set export directory");
         let campus = injector
             .projects_mut()
+            .database()
             .create_campus("session semantics campus")
             .expect("create campus");
         let campus_id = CampusId::parse(&campus.id).expect("parse campus id");

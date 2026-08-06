@@ -3,6 +3,7 @@
 //! F4 → B2 → B14 → F7 已在 A1 collection-flow 入口后执行（后台 worker）；
 //! S1 只呈现 A1 返回的页面状态、进度与通知，不再包含 F4/F7 编排。
 
+use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,6 +63,7 @@ fn collection_page_forwards_start_intent_and_presents_a1_outcome() {
         .expect("完成首次设置");
     let campus = injector
         .projects_mut()
+        .database()
         .create_campus("验收校区")
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");

@@ -443,7 +443,6 @@ pub(crate) fn campus_plan_page(
         toolbar: super::toolbar(l10n, toolbar_visible),
         campus_select_title: l10n.t("app.campus_select_title"),
         campus_empty_text: l10n.t("app.campus_select_no_campus"),
-        new_demo_campus_label: l10n.t("app.new_demo_button"),
         campus_settings_label: l10n.t("app.settings_button"),
         campuses,
         campus_search_query: String::new(),
@@ -451,6 +450,7 @@ pub(crate) fn campus_plan_page(
         campus_search_button_label: l10n.t("campus.search_button"),
         campus_recent_title: l10n.t("campus.recent_section"),
         campus_search_results: Vec::new(),
+        campus_search_status: String::new(),
         campus_show_results: false,
         plan_list_title: l10n.t("plan.list_header"),
         campus_name: snapshot

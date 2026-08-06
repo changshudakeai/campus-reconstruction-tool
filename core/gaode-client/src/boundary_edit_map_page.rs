@@ -278,7 +278,9 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   #status-panel.success {{ border-left: 4px solid #2ecc71; }}
   #map-toolbar {{
     position: absolute; bottom: 10px; right: 10px; z-index: 1000;
-    display: flex; gap: 8px;
+    /* D-5：小窗口下工具栏可换行、不超出 WebView 右缘，按钮始终可点 */
+    display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+    max-width: calc(100% - 20px); box-sizing: border-box;
   }}
   button.control-btn {{
     padding: 6px 12px; font-size: 12px;
@@ -388,52 +390,68 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   }}
 
   // ========== T24: Overpass 查询 ==========
+  // D-4：主/备用端点都带客户端超时（AbortController），挂起时快速回退人工圈画，
+  // 不再等数分钟。
+  var OSM_FETCH_TIMEOUT_MS = 12000;
+
+  function fetchWithTimeout(url, ms) {{
+    var controller = new AbortController();
+    var timer = setTimeout(function () {{ controller.abort(); }}, ms);
+    return fetch(url, {{ signal: controller.signal }}).finally(function () {{
+      clearTimeout(timer);
+    }});
+  }}
+
   function fetchOverpassBoundary() {{
     setStatus('正在从 OSM 查询边界...', '');
 
     var radius = 1000;  // 半径 1000 米
     var query = buildOverpassQuery(anchorPoint.lng, anchorPoint.lat, radius);
 
-    fetch('https://overpass-api.de/api/interpreter?' + encodeURIComponent(query))
+    fetchWithTimeout('https://overpass-api.de/api/interpreter?' + encodeURIComponent(query), OSM_FETCH_TIMEOUT_MS)
       .then(function(response) {{
         if (!response.ok) throw new Error('OSM HTTP error: ' + response.status);
         return response.json();
       }})
       .then(function(data) {{
-        var elements = data.elements.filter(function(e) {{
-          return (e.type === 'way' || e.type === 'relation') &&
-                 e.tags &&
-                  (e.tags.amenity === 'university' ||
-                   e.tags.amenity === 'college' ||
-                   e.tags.amenity === 'school');
-        }});
-
-        if (elements.length === 0) {{
-          setStatus('OSM 无此校区边界数据 → 已切换至人工圈画', 'error');
-          enableManualMode();
-          return;
-        }}
-
-        // Normalize & send to Rust for sorting
-        var normalized = normalizeElements(elements);
-        setStatus('正在按规则自动选取最匹配边界...', '');
-        window.ipc.postMessage(JSON.stringify({{ type: 'osm_elements', elements: normalized }}));
+        handleOverpassData(data);
       }})
       .catch(function(err) {{
-        setStatus('查询失败，备用端点：' + err.message,
- 'error');
-        // Fallback to kumi.systems
-        var query2 = buildOverpassQuery(anchorPoint.lng, anchorPoint.lat, radius);
-        return fetch('https://overpass.kumi.systems/api/interpreter?' + encodeURIComponent(query2))
+        setStatus('查询失败，备用端点：' + err.message, 'error');
+        return fetchWithTimeout('https://overpass.kumi.systems/api/interpreter?' + encodeURIComponent(query), OSM_FETCH_TIMEOUT_MS)
           .then(function(response) {{
             if (!response.ok) throw new Error('备用端点失败：' + response.status);
             return response.json();
+          }})
+          .then(function(data) {{
+            handleOverpassData(data);
           }});
       }})
       .catch(function(err) {{
         setStatus('查询失败 (' + err.message + ') → 已切换至人工圈画', 'error');
         setTimeout(enableManualMode, 1500);
       }});
+  }}
+
+  function handleOverpassData(data) {{
+    var elements = data.elements.filter(function(e) {{
+      return (e.type === 'way' || e.type === 'relation') &&
+             e.tags &&
+              (e.tags.amenity === 'university' ||
+               e.tags.amenity === 'college' ||
+               e.tags.amenity === 'school');
+    }});
+
+    if (elements.length === 0) {{
+      setStatus('OSM 无此校区边界数据 → 已切换至人工圈画', 'error');
+      enableManualMode();
+      return;
+    }}
+
+    // Normalize & send to Rust for sorting
+    var normalized = normalizeElements(elements);
+    setStatus('正在按规则自动选取最匹配边界...', '');
+    window.ipc.postMessage(JSON.stringify({{ type: 'osm_elements', elements: normalized }}));
   }}
 
   function buildOverpassQuery(lng, lat, radius) {{
@@ -752,6 +770,29 @@ mod tests {
         assert!(html.contains("fetchOverpassBoundary"));
         assert!(html.contains("overpass-api.de"));
         assert!(html.contains("amenity\"~\"university|college|school\""));
+    }
+
+    #[test]
+    fn overpass_fetches_have_client_side_timeout() {
+        // D-4：主端点与备用端点都必须带 AbortController 客户端超时，
+        // 挂起时快速回退人工圈画（不再等约 6 分钟）。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("AbortController"));
+        assert!(html.contains("OSM_FETCH_TIMEOUT_MS"));
+        assert!(html.contains("controller.abort()"));
+        assert!(html.contains("fetchWithTimeout"));
+        assert!(html.contains("overpass.kumi.systems"));
+    }
+
+    #[test]
+    fn toolbar_wraps_inside_small_windows() {
+        // D-5：工具栏按钮在小窗口下换行排列，不超出 WebView 右缘，始终可点。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("flex-wrap: wrap"));
+        assert!(html.contains("max-width: calc(100% - 20px)"));
+        assert!(html.contains("justify-content: flex-end"));
     }
 
     #[test]

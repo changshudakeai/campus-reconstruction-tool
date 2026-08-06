@@ -188,7 +188,6 @@ pub struct CampusPlanPageState {
     pub toolbar: ToolbarPageState,
     pub campus_select_title: String,
     pub campus_empty_text: String,
-    pub new_demo_campus_label: String,
     pub campus_settings_label: String,
     pub campuses: Vec<CampusData>,
     /// 校区搜索框当前文本（S1 未提交页面临时状态）
@@ -201,6 +200,8 @@ pub struct CampusPlanPageState {
     pub campus_recent_title: String,
     /// 搜索结果（只在用户点击搜索/回车后填充）
     pub campus_search_results: Vec<CampusData>,
+    /// 搜索结果区状态文案（如"正在搜索学校…"；空串 = 无状态）
+    pub campus_search_status: String,
     /// 是否正在展示搜索结果（否则展示最近使用记录）
     pub campus_show_results: bool,
     pub plan_list_title: String,
@@ -223,20 +224,26 @@ impl WindowPageState for CampusPlanPageState {
         self.toolbar.render(window);
         window.set_campus_select_title(self.campus_select_title.clone().into());
         window.set_campus_select_empty_list_text(self.campus_empty_text.clone().into());
-        window.set_campus_select_new_demo_campus_button_text(
-            self.new_demo_campus_label.clone().into(),
-        );
         window.set_campus_select_settings_button_text(self.campus_settings_label.clone().into());
         window.set_campus_select_model(ModelRc::new(VecModel::from(self.campuses.clone())));
         window.set_campus_search_text(self.campus_search_query.clone().into());
         window.set_campus_search_placeholder(self.campus_search_placeholder.clone().into());
         window.set_campus_search_button_text(self.campus_search_button_label.clone().into());
         window.set_campus_recent_title(self.campus_recent_title.clone().into());
+        window.set_campus_search_status(self.campus_search_status.clone().into());
         window.set_campus_search_results_model(ModelRc::new(VecModel::from(
             self.campus_search_results.clone(),
         )));
         window.set_campus_show_results(self.campus_show_results);
         window.set_plan_list_model(ModelRc::new(VecModel::from(self.plans.clone())));
+        window.set_plan_list_title(self.plan_list_title.clone().into());
+        window.set_plan_list_campus_name(self.campus_name.clone().into());
+        window.set_plan_list_create_button_text(self.create_plan_label.clone().into());
+        window.set_plan_list_back_button_text(self.back_to_campus_label.clone().into());
+        window.set_plan_list_empty_text(self.plan_empty_text.clone().into());
+        window.set_plan_list_rename_label(self.rename_label.clone().into());
+        window.set_plan_list_duplicate_label(self.duplicate_label.clone().into());
+        window.set_plan_list_delete_label(self.delete_label.clone().into());
         window.set_plan_list_tutorial_visible(self.tutorial_visible);
         window.set_plan_list_tutorial_text(self.tutorial_text.clone().into());
         window.set_plan_list_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());

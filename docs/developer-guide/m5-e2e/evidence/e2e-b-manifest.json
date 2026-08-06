@@ -1,0 +1,52 @@
+﻿{
+  "version": "1.0.0",
+  "id": "7b87a645-d500-4f5b-878c-13057a15d993",
+  "campusName": "演示大学",
+  "planId": "e0b804d6-ddf4-4e9f-a27e-de88b5873b9d",
+  "planName": "M5剧本B验收方案a新方案 1",
+  "minecraftVersion": "26.1.2",
+  "exportedAt": "2026-08-06T10:05:35.693949100+00:00",
+  "categories": [
+    {
+      "name": "建筑",
+      "display_name": "建筑",
+      "included": false
+    },
+    {
+      "name": "道路",
+      "display_name": "道路",
+      "included": false
+    },
+    {
+      "name": "水域",
+      "display_name": "水域",
+      "included": false
+    },
+    {
+      "name": "植被",
+      "display_name": "植被",
+      "included": false
+    },
+    {
+      "name": "体育",
+      "display_name": "体育",
+      "included": false
+    },
+    {
+      "name": "其他",
+      "display_name": "其他",
+      "included": false
+    }
+  ],
+  "orientation": {
+    "degree": 0.0,
+    "source": "map_north"
+  },
+  "candidateFacts": {
+    "candidateProjectionCount": 0,
+    "reviewDecisionCount": 0,
+    "retainedCandidateCount": 0,
+    "keepByCategory": []
+  },
+  "exportKind": "base"
+}

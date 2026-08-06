@@ -174,6 +174,7 @@ mod tests {
                 longitude: 121.406,
                 latitude: 31.228,
                 typecode: "141201".to_owned(),
+                category: String::new(),
             },
             SchoolPoi {
                 poi_id: "B02".to_owned(),
@@ -182,6 +183,7 @@ mod tests {
                 longitude: 121.456,
                 latitude: 31.033,
                 typecode: "141201".to_owned(),
+                category: String::new(),
             },
         ]
     }
