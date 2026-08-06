@@ -46,8 +46,8 @@ pub use map_page::{
     MAP_MIN_HEIGHT_PX,
 };
 pub use poi::{
-    parse_ipc_message, parse_place_search_response, IpcMessage, OsmElement, OsmMember, SchoolPoi,
-    SCHOOL_TYPECODE_PREFIX,
+    parse_ipc_message, parse_location_value, parse_place_search_response, IpcMessage, OsmElement,
+    OsmMember, SchoolPoi, SCHOOL_TYPECODE_PREFIX,
 };
 pub use record::CampusPoiRecord;
 pub use search_flow::{CampusSearchFlow, ConfirmedCampus, SearchFlowState};

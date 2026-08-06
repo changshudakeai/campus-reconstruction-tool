@@ -40,7 +40,11 @@ impl SchoolPoi {
     }
 }
 
-/// 高德地点搜索响应中的一条原始 POI（JS 桥回传的 REST 风格 JSON）
+/// 高德地点搜索响应中的一条原始 POI（JS 桥回传的 JSON）
+///
+/// D-1：`location` 兼容三种来源格式——REST 风格文本 `"经度,纬度"`、
+/// JS API v2.0 对象 `{"lng":..,"lat":..}` 与数组 `[lng, lat]`。
+/// 坐标解析失败按"脏数据跳过"处理，不得因格式差异让整包反序列化失败。
 #[derive(Debug, Deserialize)]
 struct RawPoi {
     #[serde(default)]
@@ -49,9 +53,8 @@ struct RawPoi {
     name: String,
     #[serde(default)]
     address: serde_json::Value,
-    /// "经度,纬度" 文本（高德 location 字段格式）
     #[serde(default)]
-    location: String,
+    location: serde_json::Value,
     #[serde(default)]
     typecode: String,
 }
@@ -87,7 +90,7 @@ pub fn parse_place_search_response(json: &str) -> Result<Vec<SchoolPoi>> {
     let mut seen_name_address = Vec::new();
     let mut candidates = Vec::new();
     for raw in response.pois {
-        let Some((longitude, latitude)) = parse_location(&raw.location) else {
+        let Some((longitude, latitude)) = parse_location_value(&raw.location) else {
             continue;
         };
         let poi = SchoolPoi {
@@ -113,11 +116,40 @@ pub fn parse_place_search_response(json: &str) -> Result<Vec<SchoolPoi>> {
     Ok(candidates)
 }
 
+/// 解析高德 POI 坐标（三种格式：文本 / 对象 / 数组），非法格式返回 None。
+///
+/// - 文本：`"经度,纬度"`（REST 风格）；
+/// - 对象：`{"lng":..,"lat":..}`（JS API v2.0 序列化形式）；
+/// - 数组：`[经度, 纬度]`（JS API v2.0 `LngLat.toJSON()` 形式）。
+///
+/// 坐标必须有限且在合法范围内（高德为 GCJ-02，数值范围同 WGS-84）。
+pub fn parse_location_value(location: &serde_json::Value) -> Option<(f64, f64)> {
+    match location {
+        serde_json::Value::String(text) => parse_location_text(text),
+        serde_json::Value::Array(pair) => {
+            let longitude = pair.first()?.as_f64()?;
+            let latitude = pair.get(1)?.as_f64()?;
+            validate_location(longitude, latitude)
+        }
+        serde_json::Value::Object(map) => {
+            let longitude = map.get("lng").and_then(serde_json::Value::as_f64)?;
+            let latitude = map.get("lat").and_then(serde_json::Value::as_f64)?;
+            validate_location(longitude, latitude)
+        }
+        _ => None,
+    }
+}
+
 /// 解析高德 "经度,纬度" 文本，非法格式返回 None
-fn parse_location(location: &str) -> Option<(f64, f64)> {
+fn parse_location_text(location: &str) -> Option<(f64, f64)> {
     let (lng_text, lat_text) = location.split_once(',')?;
     let longitude: f64 = lng_text.trim().parse().ok()?;
     let latitude: f64 = lat_text.trim().parse().ok()?;
+    validate_location(longitude, latitude)
+}
+
+/// 合法经纬度范围粗校验（高德为 GCJ-02，数值范围同 WGS-84）
+fn validate_location(longitude: f64, latitude: f64) -> Option<(f64, f64)> {
     // 合法经纬度范围粗校验（高德为 GCJ-02，数值范围同 WGS-84）
     if !(-180.0..=180.0).contains(&longitude) || !(-90.0..=90.0).contains(&latitude) {
         return None;
@@ -183,6 +215,35 @@ mod tests {
         );
         let pois = parse_place_search_response(&json).unwrap();
         assert!(pois.is_empty(), "空坐标与越界坐标都不进候选列表");
+    }
+
+    #[test]
+    fn js_api_v2_object_and_array_locations_are_accepted() {
+        // D-1：真实 JS API v2.0 响应中 POI location 可能序列化为
+        // 对象 {"lng":..,"lat":..} 或数组 [lng, lat]，必须与 REST 风格
+        // "经度,纬度" 文本并存，坐标真实进入候选，不得静默丢弃。
+        let json = response_with(
+            r#"{"id":"B01","name":"华东师范大学(普陀校区)","address":"中山北路3663号","location":{"lng":121.406,"lat":31.228},"typecode":"141201"},
+               {"id":"B02","name":"华东师范大学(闵行校区)","address":"东川路500号","location":[121.456,31.033],"typecode":"141201"},
+               {"id":"B03","name":"第三中学","address":"学院路1号","location":"121.4,31.2","typecode":"141202"}"#,
+        );
+        let pois = parse_place_search_response(&json).unwrap();
+        assert_eq!(pois.len(), 3, "三种 location 格式都必须解析，不得静默丢弃");
+        assert_eq!((pois[0].longitude, pois[0].latitude), (121.406, 31.228));
+        assert_eq!((pois[1].longitude, pois[1].latitude), (121.456, 31.033));
+        assert_eq!((pois[2].longitude, pois[2].latitude), (121.4, 31.2));
+    }
+
+    #[test]
+    fn invalid_object_and_array_locations_are_skipped() {
+        // 对象/数组格式同样执行范围校验与缺失校验，坏数据不进候选。
+        let json = response_with(
+            r#"{"id":"B01","name":"某小学","address":"路1号","location":{"lng":200.0,"lat":31.2},"typecode":"141203"},
+               {"id":"B02","name":"某中学","address":"路2号","location":[121.4],"typecode":"141202"},
+               {"id":"B03","name":"某大学","address":"路3号","location":{},"typecode":"141201"}"#,
+        );
+        let pois = parse_place_search_response(&json).unwrap();
+        assert!(pois.is_empty(), "越界/缺维/空对象坐标都不进候选列表");
     }
 
     #[test]

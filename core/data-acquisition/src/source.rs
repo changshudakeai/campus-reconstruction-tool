@@ -10,7 +10,7 @@
 //! 数据源方言转换，归类仍完全由 B13 引擎裁决（ADR-0011）。
 
 use data_transformers::TagMap;
-use gaode_client::{parse_place_search_response, SCHOOL_TYPECODE_PREFIX};
+use gaode_client::{parse_location_value, parse_place_search_response, SCHOOL_TYPECODE_PREFIX};
 use shared_domain_types::Boundary;
 
 use crate::error::{AcquisitionError, Result};
@@ -287,8 +287,7 @@ impl GaodeDataSource {
             seen_ids.push(id.clone());
             let geometry = poi
                 .get("location")
-                .and_then(serde_json::Value::as_str)
-                .and_then(parse_gaode_location)
+                .and_then(parse_location_value)
                 .map(SourceGeometry::Point);
             entities.push(RawEntity::with_geometry(
                 id, name, tags, poi, geometry, "point",
@@ -296,14 +295,6 @@ impl GaodeDataSource {
         }
         Ok(entities)
     }
-}
-
-fn parse_gaode_location(text: &str) -> Option<(f64, f64)> {
-    let (longitude, latitude) = text.split_once(',')?;
-    Some((
-        longitude.trim().parse().ok()?,
-        latitude.trim().parse().ok()?,
-    ))
 }
 
 fn source_geometry_json(geometry: &SourceGeometry) -> serde_json::Value {
@@ -424,5 +415,31 @@ mod tests {
             err,
             AcquisitionError::SourceUnreachable { source_tag, .. } if source_tag == "gaode"
         ));
+    }
+
+    #[test]
+    fn js_api_v2_object_and_array_locations_become_point_geometry() {
+        // D-1：真实 JS API v2.0 响应的 location 为对象/数组时，坐标必须真实
+        // 进入候选（Point 几何），不得静默丢弃。
+        let json = r#"{"status":"1","info":"OK","pois":[
+            {"id":"B01","name":"第一教学楼","address":"校内","location":{"lng":121.401,"lat":31.201},"typecode":"141201"},
+            {"id":"B02","name":"体育馆","address":"校内","location":[121.402,31.202],"typecode":"080300"},
+            {"id":"B03","name":"南校门","address":"校内","location":"121.403,31.203","typecode":"991400"}
+        ]}"#;
+        let entities = canned_source(json).fetch_raw_entities(&boundary()).unwrap();
+        assert_eq!(entities.len(), 3, "全部对象进流水线，禁止静默丢弃");
+
+        let geometry_of = |id: &str| {
+            entities
+                .iter()
+                .find(|e| e.entity_id == id)
+                .expect("实体存在")
+                .source_geometry
+                .clone()
+                .expect("来源几何必须存在")
+        };
+        assert_eq!(geometry_of("B01"), SourceGeometry::Point((121.401, 31.201)));
+        assert_eq!(geometry_of("B02"), SourceGeometry::Point((121.402, 31.202)));
+        assert_eq!(geometry_of("B03"), SourceGeometry::Point((121.403, 31.203)));
     }
 }
