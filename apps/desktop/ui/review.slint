@@ -1,6 +1,6 @@
 // F5 评审页（M3）：仅呈现 F5 WorkbenchView 返回的页面状态并转发用户操作。
 // 三态判定、批量确认、暂停/恢复、封账全部由 F5 评审工作台入口完成。
-import { Button, CheckBox } from "std-widgets.slint";
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 /// 评审页上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
@@ -41,6 +41,14 @@ export component ReviewView inherits Rectangle {
     in property <bool> sealed;
     in property <bool> summary-visible;
     in property <string> summary-text;
+
+    // T33 契约观测（仅布局观测，不参与评审/封账逻辑）：
+    // list-viewport-y：候选列表滚动容器当前滚动位置（滚轮/键盘滚动后为负，
+    // 分类切换复位到顶）；可点性由契约测试对“封账”按钮的真实点击断言。
+    // 注意：Slint 双向绑定会替换内部绑定，因此这里只声明 in-out 通道，
+    // 值经内容区内 ScrollView 的 `<=>` 链上联。
+    in-out property <length> list-viewport-y;
+
     callback category-clicked(index: int);
     callback card-state-clicked(candidate-id: string, state: string);
     callback card-selection-toggled(candidate-id: string);
@@ -56,6 +64,7 @@ export component ReviewView inherits Rectangle {
         x: 16px;
         y: 8px;
         width: parent.width - 32px;
+        height: parent.height - 16px;
         spacing: 12px;
 
         Text {
@@ -72,53 +81,88 @@ export component ReviewView inherits Rectangle {
         }
 
         if root.candidate-count > 0: VerticalLayout {
+            vertical-stretch: 1;
             spacing: 10px;
 
-            // 六类标签页（ADR-0016 固定顺序）。
+            // 六类标签页（ADR-0016 固定顺序）；切换分类时滚动位置复位到顶，
+            // 保证新分类从第一张候选卡开始浏览。
             HorizontalLayout {
                 spacing: 6px;
                 for label[i] in root.category-labels:
                     Button {
                         text: label + " (" + root.category-counts[i] + ")";
                         primary: root.active-category == i;
-                        clicked => { root.category-clicked(i); }
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(i); }
                     }
             }
 
             // 候选卡片：复选 + 三态判定（点错可直接改另一态）。
-            for card in root.cards:
-                HorizontalLayout {
-                    spacing: 8px;
-                    CheckBox {
-                        checked: card.selected;
-                        enabled: !root.sealed;
-                        toggled => { root.card-selection-toggled(card.candidate-id); }
+            // T33：卡片放入可滚动容器（滚轮由 ScrollView 原生处理）；键盘经
+            // FocusScope 转发为滚动（点击列表区域后 Up/Down/PageUp/PageDown/Home/End）。
+            review-focus := FocusScope {
+                focus-on-click: true;
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        review-cards-scroll.viewport-y = Math.min(0px, review-cards-scroll.viewport-y + 36px);
+                        return accept;
+                    } else if (event.text == Key.DownArrow) {
+                        review-cards-scroll.viewport-y = Math.max(review-cards-scroll.visible-height - review-cards-scroll.viewport-height, review-cards-scroll.viewport-y - 36px);
+                        return accept;
+                    } else if (event.text == Key.PageUp) {
+                        review-cards-scroll.viewport-y = Math.min(0px, review-cards-scroll.viewport-y + review-cards-scroll.visible-height);
+                        return accept;
+                    } else if (event.text == Key.PageDown) {
+                        review-cards-scroll.viewport-y = Math.max(review-cards-scroll.visible-height - review-cards-scroll.viewport-height, review-cards-scroll.viewport-y - review-cards-scroll.visible-height);
+                        return accept;
+                    } else if (event.text == Key.Home) {
+                        review-cards-scroll.viewport-y = 0px;
+                        return accept;
+                    } else if (event.text == Key.End) {
+                        review-cards-scroll.viewport-y = review-cards-scroll.visible-height - review-cards-scroll.viewport-height;
+                        return accept;
                     }
-                    Text {
-                        text: card.title;
-                        color: Theme.text-primary;
-                        horizontal-stretch: 1;
-                    }
-                    Text {
-                        text: card.state-label;
-                        color: Theme.text-secondary;
-                    }
-                    Button {
-                        text: root.card-pending-label;
-                        enabled: !root.sealed;
-                        clicked => { root.card-state-clicked(card.candidate-id, "pending"); }
-                    }
-                    Button {
-                        text: root.card-keep-label;
-                        enabled: !root.sealed;
-                        clicked => { root.card-state-clicked(card.candidate-id, "keep"); }
-                    }
-                    Button {
-                        text: root.card-reject-label;
-                        enabled: !root.sealed;
-                        clicked => { root.card-state-clicked(card.candidate-id, "remove"); }
+                    reject
+                }
+                review-cards-scroll := ScrollView {
+                    viewport-y <=> root.list-viewport-y;
+                    VerticalLayout {
+                        spacing: 10px;
+                        for card in root.cards:
+                            HorizontalLayout {
+                                spacing: 8px;
+                                CheckBox {
+                                    checked: card.selected;
+                                    enabled: !root.sealed;
+                                    toggled => { root.card-selection-toggled(card.candidate-id); }
+                                }
+                                Text {
+                                    text: card.title;
+                                    color: Theme.text-primary;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: card.state-label;
+                                    color: Theme.text-secondary;
+                                }
+                                Button {
+                                    text: root.card-pending-label;
+                                    enabled: !root.sealed;
+                                    clicked => { root.card-state-clicked(card.candidate-id, "pending"); }
+                                }
+                                Button {
+                                    text: root.card-keep-label;
+                                    enabled: !root.sealed;
+                                    clicked => { root.card-state-clicked(card.candidate-id, "keep"); }
+                                }
+                                Button {
+                                    text: root.card-reject-label;
+                                    enabled: !root.sealed;
+                                    clicked => { root.card-state-clicked(card.candidate-id, "remove"); }
+                                }
+                            }
                     }
                 }
+            }
 
             Text {
                 text: root.selected-count-label;

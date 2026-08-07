@@ -2,6 +2,68 @@
 
 验收日期：2026-08-06　验收人（产品负责人）：____________（待负责人签名）
 
+---
+
+## T33 修复记录（2026-08-07，实施窗口 fix/t33-review-list-scroll）
+
+工单：`.scratch/v2-implementation/issues/T33-review-list-scroll-fix.md`
+（缺陷 T32-D2：评审候选列表无滚动容器，大量候选下“封账完成评审”操作栏
+渲染在视口外不可达）。
+
+### 根因
+
+`apps/desktop/ui/review.slint` 的评审候选卡片 `for` 循环直接排在页面
+`VerticalLayout` 中、无滚动容器；候选多时（走查 1026）内容整体向下溢出，
+底部操作栏（逐项判定/批量确认/封账）被推出视口，滚轮/键盘均不可达。
+
+### 修复（仅 UI 布局，不动评审/封账逻辑与 F5 入口）
+
+- 候选卡片移入 `ScrollView`（fluent，滚动条 as-needed），页面高度约束为
+  `parent.height - 128px`，操作栏固定于页面可视底部。
+- 键盘滚动：`FocusScope`（点击列表区域获得焦点）转发 Up/Down/PageUp/
+  PageDown/Home/End 到滚动容器；滚轮由 ScrollView 原生处理。
+- 分类标签点击复位滚动到顶；空态（无候选）布局与文案不变。
+- 契约观测 `review-list-viewport-y`（in-out 双向链上联滚动位置，仅布局观测）。
+
+### 自动化契约测试（先红后绿）
+
+新增 `apps/desktop/tests/s1_22_review_scroll_contract.rs`：真实构造 1026 个
+可评审候选（建筑 1000 + 道路 26，贴近 T32 走查）进入评审工作台，窗口按默认
+800×600 显示并完成真实布局后断言：
+
+1. 滚轮向下滚动有效（真实 `PointerScrolled` 事件后 `viewport-y < 0`）；
+2. 键盘滚动有效（点击列表获得焦点后 DownArrow 使 `viewport-y` 继续下降）；
+3. 分类切换后滚动状态合理（真实点击“建筑”标签复位到顶）；
+4. “封账完成评审”真实可点：对底部操作栏多点真实点击后 F5 封账落账
+   （1026 条决定一次性写回），呈现 sealed + 导出摘要。
+
+修复前红态：同一契约断言在无滚动容器布局下失败（`viewport-height=0 >
+visible-height=0`、滚轮/键盘 viewport-y 恒 0、封账按钮点击无效）。
+修复后绿态：`s1_22` 通过（27s）。
+
+### 验收点证据
+
+- 大量候选（1026）列表可滚动、操作栏可见可点：截图
+  `docs/developer-guide/m5-e2e/evidence/t33-review-scroll/
+  review-1026-scrollbar-actionbar.png`（1000×750 物理像素，右侧滚动条 +
+  底部暂停/恢复/封账按钮可见）+ `s1_22` 可点性断言（真实点击封账成功）。
+- 滚轮与键盘滚动均有效、分类切换后行为一致：`s1_22` 契约断言。
+- 回归全绿：`cargo test -p desktop-shell --test s1_16_review_flow --test
+  s1_17_review_batch_and_seal --test s1_18_review_empty_and_failure --test
+  s1_22_review_scroll_contract`（4 个测试文件全 ok）。
+- 全部门禁全绿（Windows，`SLINT_BACKEND=software`、`CARGO_BUILD_JOBS=2`）：
+  `cargo machete` ✓ / `cargo test --workspace`（110 个结果行全 ok）✓ /
+  `cargo fmt --all --check` ✓ / `cargo clippy --workspace --all-targets --
+  -D warnings` ✓ / `cargo deny check advisories bans licenses sources` ✓ /
+  `cargo xtask ci`（tidy + arch）✓ / `cargo xtask timings`（120s 预算内）✓。
+- 便携包已按修复后 HEAD 重建（`dist/MCRebuild-V2.0.0-dev-portable.zip`）。
+
+### 明确未做
+
+评审/封账业务逻辑、F5 核心、产品基线均未改动；未开 GitHub Issues。
+
+---
+
 ## 环境
 
 - 机器：本机（Windows 10+，PowerShell/Windows 桌面）　操作系统：Windows

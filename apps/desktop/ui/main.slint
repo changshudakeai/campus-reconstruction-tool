@@ -258,6 +258,9 @@ export component AppWindow inherits Window {
     in property <bool> review-sealed;
     in property <bool> review-summary-visible;
     in property <string> review-summary-text;
+    // T33 契约观测：评审候选列表滚动（大量候选下操作栏可达）。只读布局观测，
+    // 不参与评审/封账逻辑；由 ReviewView 内部几何经双向绑定上联。
+    in-out property <length> review-list-viewport-y;
     callback review-category-clicked(index: int);
     callback review-card-state-clicked(candidate-id: string, state: string);
     callback review-card-selection-toggled(candidate-id: string);
@@ -1031,6 +1034,7 @@ export component AppWindow inherits Window {
             if root.workspace-active-step == 3: ReviewView {
                 x: 16px;
                 y: 128px;
+                height: parent.height - 128px;
                 title: root.review-title;
                 empty-text: root.review-empty-text;
                 candidate-count: root.review-candidate-count;
@@ -1054,6 +1058,7 @@ export component AppWindow inherits Window {
                 sealed: root.review-sealed;
                 summary-visible: root.review-summary-visible;
                 summary-text: root.review-summary-text;
+                list-viewport-y <=> root.review-list-viewport-y;
                 category-clicked(index) => { root.review-category-clicked(index); }
                 card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
                 card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }
