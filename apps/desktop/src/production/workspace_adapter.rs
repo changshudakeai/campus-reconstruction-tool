@@ -798,17 +798,14 @@ impl WorkspaceProductionAdapter {
             } => {
                 let coords_json =
                     serde_json::to_string(&gcj02).unwrap_or_else(|_| "[]".to_string());
-                let name_json = serde_json::to_string(&name).unwrap_or_else(|_| "\"未知校区\"".to_string());
+                let name_json =
+                    serde_json::to_string(&name).unwrap_or_else(|_| "\"未知校区\"".to_string());
                 crate::map_webview::evaluate_script(&format!(
                     "drawBoundaryGcj({coords_json}, {name_json});"
                 ));
                 let body = l10n.t_with_array(
                     "boundary.osm_auto_selected_body",
-                    &[
-                        &name,
-                        &candidate_count.to_string(),
-                        &source.to_string(),
-                    ],
+                    &[&name, &candidate_count.to_string(), &source.to_string()],
                 );
                 presentation = presentation.with_notification(info_fact(
                     &l10n,

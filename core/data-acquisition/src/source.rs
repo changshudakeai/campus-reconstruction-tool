@@ -577,10 +577,16 @@ mod tests {
         let entities = overpass_source(OVERPASS_BUILDINGS)
             .fetch_raw_entities(&boundary())
             .unwrap();
-        let dining = entities.iter().find(|e| e.entity_id == "way/154427164").unwrap();
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
         assert_eq!(dining.name, "第一餐饮大楼", "OSM name 优先");
         assert_eq!(dining.tags.get("building").unwrap(), "yes");
-        let hospital = entities.iter().find(|e| e.entity_id == "way/160634093").unwrap();
+        let hospital = entities
+            .iter()
+            .find(|e| e.entity_id == "way/160634093")
+            .unwrap();
         assert_eq!(hospital.tags.get("building:levels").unwrap(), "6");
         assert!(
             matches!(hospital.source_geometry, Some(SourceGeometry::Polygon(ref p)) if p.len() == 4),
@@ -593,7 +599,10 @@ mod tests {
         let entities = overpass_source(OVERPASS_BUILDINGS)
             .fetch_raw_entities(&boundary())
             .unwrap();
-        let dining = entities.iter().find(|e| e.entity_id == "way/154427164").unwrap();
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
         let SourceGeometry::Polygon(points) = dining.source_geometry.as_ref().unwrap() else {
             panic!("面几何");
         };
@@ -641,12 +650,18 @@ mod tests {
         });
         let source = overpass_source(OVERPASS_BUILDINGS).with_name_enricher(Some(enricher));
         let entities = source.fetch_raw_entities(&boundary()).unwrap();
-        let hospital = entities.iter().find(|e| e.entity_id == "way/160634093").unwrap();
+        let hospital = entities
+            .iter()
+            .find(|e| e.entity_id == "way/160634093")
+            .unwrap();
         assert_eq!(hospital.name, "未命名建筑");
         // node 是点位：补名器不参与（语义：点位只作证据）
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         // 带 OSM name 的建筑不触发补名
-        let dining = entities.iter().find(|e| e.entity_id == "way/154427164").unwrap();
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
         assert_eq!(dining.name, "第一餐饮大楼");
     }
 

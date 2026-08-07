@@ -180,9 +180,8 @@ impl WindowPageState for SettingsPageState {
         window.set_gaode_security_key_placeholder(self.security_key_placeholder.clone().into());
         window.set_gaode_security_key(self.security_key.clone().into());
         window.set_gaode_web_service_key_label(self.web_service_key_label.clone().into());
-        window.set_gaode_web_service_key_placeholder(
-            self.web_service_key_placeholder.clone().into(),
-        );
+        window
+            .set_gaode_web_service_key_placeholder(self.web_service_key_placeholder.clone().into());
         window.set_gaode_web_service_key(self.web_service_key.clone().into());
         window.set_gaode_save_button_label(self.save_label.clone().into());
         window.set_gaode_test_button_label(self.test_label.clone().into());

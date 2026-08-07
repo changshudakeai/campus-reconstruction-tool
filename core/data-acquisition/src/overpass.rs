@@ -17,9 +17,7 @@
 
 use std::time::Duration;
 
-use gaode_client::{
-    convert_coords_wgs84_to_gcj02, BoundarySorter, OsmElement, OsmMember,
-};
+use gaode_client::{convert_coords_wgs84_to_gcj02, BoundarySorter, OsmElement, OsmMember};
 use shared_domain_types::Boundary;
 
 /// Overpass 公共端点（按 de → kumi → mail.ru 顺序回退；上海网络实测见调研 §4.1）
@@ -39,8 +37,7 @@ pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 25;
 pub const NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org/search";
 
 /// 所有 OSM 请求的 User-Agent（Nominatim 政策要求；Overpass 礼貌请求也带）
-pub const USER_AGENT: &str =
-    "MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)";
+pub const USER_AGENT: &str = "MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)";
 
 /// 可注入的 HTTP 传输（生产为 ureq；测试注入罐头）
 pub type HttpTransport =
@@ -199,7 +196,10 @@ impl CampusBoundaryFetcher {
     }
 
     pub fn with_clients(overpass: OverpassClient, nominatim: NominatimClient) -> Self {
-        Self { overpass, nominatim }
+        Self {
+            overpass,
+            nominatim,
+        }
     }
 
     /// 级联获取校区边界（锚点为 GCJ-02；OSM 元素 WGS-84 先转 GCJ-02 再排序）。
@@ -292,9 +292,7 @@ fn fallback_after_error(
     first_error: String,
 ) -> CampusBoundaryResult {
     let amenity = overpass.query_with_fallback(&university_query(bbox_around(
-        anchor_lon,
-        anchor_lat,
-        1500.0,
+        anchor_lon, anchor_lat, 1500.0,
     )));
     match amenity {
         Ok(body) => {
@@ -307,9 +305,7 @@ fn fallback_after_error(
                 };
             }
             let landuse = overpass.query_with_fallback(&landuse_education_query(bbox_around(
-                anchor_lon,
-                anchor_lat,
-                1500.0,
+                anchor_lon, anchor_lat, 1500.0,
             )));
             match landuse {
                 Ok(body) => {
@@ -407,7 +403,11 @@ fn parse_element(value: &serde_json::Value) -> Option<OsmElement> {
                     Some(OsmMember {
                         r#type: m.get("type")?.as_str()?.to_owned(),
                         reference: m.get("ref")?.as_i64()?,
-                        role: m.get("role").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
+                        role: m
+                            .get("role")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
                     })
                 })
                 .collect()
@@ -429,7 +429,9 @@ fn parse_element(value: &serde_json::Value) -> Option<OsmElement> {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
                     if role == "outer" || role.is_empty() {
-                        if let Some(part) = member.get("geometry").and_then(serde_json::Value::as_array) {
+                        if let Some(part) =
+                            member.get("geometry").and_then(serde_json::Value::as_array)
+                        {
                             points.extend(geometry_points(part));
                         }
                     }
@@ -451,12 +453,7 @@ fn parse_element(value: &serde_json::Value) -> Option<OsmElement> {
 fn geometry_points(points: &[serde_json::Value]) -> Vec<[f64; 2]> {
     points
         .iter()
-        .filter_map(|point| {
-            Some([
-                point.get("lon")?.as_f64()?,
-                point.get("lat")?.as_f64()?,
-            ])
-        })
+        .filter_map(|point| Some([point.get("lon")?.as_f64()?, point.get("lat")?.as_f64()?]))
         .collect()
 }
 
@@ -521,7 +518,12 @@ pub fn buildings_query(bbox: (f64, f64, f64, f64)) -> String {
 pub fn bbox_around(lon: f64, lat: f64, radius_m: f64) -> (f64, f64, f64, f64) {
     let lat_delta = radius_m / 111_320.0;
     let lon_delta = radius_m / (111_320.0 * lat.to_radians().cos().abs().max(0.01));
-    (lat - lat_delta, lon - lon_delta, lat + lat_delta, lon + lon_delta)
+    (
+        lat - lat_delta,
+        lon - lon_delta,
+        lat + lat_delta,
+        lon + lon_delta,
+    )
 }
 
 /// 方案边界（GCJ-02）→ 查询包围盒；`margin_deg` 为外扩余量。
@@ -646,10 +648,7 @@ pub fn parse_nominatim_results(json: &str) -> Vec<NominatimMatch> {
 
 fn is_campus_like(matched: &NominatimMatch) -> bool {
     matched.class == "amenity"
-        && matches!(
-            matched.kind.as_str(),
-            "university" | "college" | "school"
-        )
+        && matches!(matched.kind.as_str(), "university" | "college" | "school")
 }
 
 /// 百分号编码（覆盖 UTF-8 中文字节与 Overpass 语法字符）
@@ -739,14 +738,23 @@ mod tests {
     #[test]
     fn query_url_uses_data_parameter() {
         let query = university_query(bbox());
-        let url = format!("https://overpass-api.de/api/interpreter?data={}", encode_query(&query));
-        assert!(url.contains("?data=%5Bout%3Ajson%5D"), "data= 参数必须存在: {url}");
+        let url = format!(
+            "https://overpass-api.de/api/interpreter?data={}",
+            encode_query(&query)
+        );
+        assert!(
+            url.contains("?data=%5Bout%3Ajson%5D"),
+            "data= 参数必须存在: {url}"
+        );
         assert!(url.contains("%3A"), "查询体必须百分号编码");
     }
 
     #[test]
     fn encode_query_handles_utf8_and_syntax() {
-        assert_eq!(encode_query("上海交通大学"), "%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6");
+        assert_eq!(
+            encode_query("上海交通大学"),
+            "%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6"
+        );
         assert_eq!(encode_query("a b"), "a%20b");
         assert_eq!(encode_query("[out:json]"), "%5Bout%3Ajson%5D");
         assert_eq!(encode_query("abc-_.~"), "abc-_.~");
@@ -839,11 +847,17 @@ mod tests {
     fn campus_name_candidates_strips_parentheses() {
         assert_eq!(
             campus_name_candidates("上海交通大学(闵行本部校区)"),
-            vec!["上海交通大学(闵行本部校区)".to_owned(), "上海交通大学".to_owned()]
+            vec![
+                "上海交通大学(闵行本部校区)".to_owned(),
+                "上海交通大学".to_owned()
+            ]
         );
         assert_eq!(
             campus_name_candidates("上海交通大学（徐汇校区）"),
-            vec!["上海交通大学（徐汇校区）".to_owned(), "上海交通大学".to_owned()]
+            vec![
+                "上海交通大学（徐汇校区）".to_owned(),
+                "上海交通大学".to_owned()
+            ]
         );
         assert_eq!(
             campus_name_candidates("上海交通大学"),
@@ -895,7 +909,10 @@ mod tests {
         ]}]}"#;
         let best = select_best(json, 121.433, 31.029, "上海交通大学(闵行本部校区)").unwrap();
         assert_eq!(best.name, "上海交通大学（闵行校区）");
-        assert!(best.geometry.iter().any(|p| (p[0] - 121.433).abs() < 0.02), "几何必须已转 GCJ-02");
+        assert!(
+            best.geometry.iter().any(|p| (p[0] - 121.433).abs() < 0.02),
+            "几何必须已转 GCJ-02"
+        );
         assert_eq!(best.candidate_count, 1);
     }
 
@@ -914,11 +931,7 @@ mod tests {
         }));
         let fetcher = CampusBoundaryFetcher::with_clients(overpass, nominatim);
         match fetcher.fetch_campus("上海交通大学", 121.433, 31.029) {
-            CampusBoundaryResult::AutoSelected {
-                source,
-                gcj02,
-                ..
-            } => {
+            CampusBoundaryResult::AutoSelected { source, gcj02, .. } => {
                 assert_eq!(source, BoundarySourceKind::NominatimByElementId);
                 assert!(!gcj02.is_empty());
             }
@@ -935,9 +948,8 @@ mod tests {
                 Ok(r#"{"elements":[]}"#.to_owned())
             }
         }));
-        let nominatim = NominatimClient::with_transport(Box::new(|_: &str, _: Duration| {
-            Ok("[]".to_owned())
-        }));
+        let nominatim =
+            NominatimClient::with_transport(Box::new(|_: &str, _: Duration| Ok("[]".to_owned())));
         let fetcher = CampusBoundaryFetcher::with_clients(overpass, nominatim);
         match fetcher.fetch_campus("上海交通大学", 121.433, 31.029) {
             CampusBoundaryResult::AutoSelected {
@@ -957,9 +969,8 @@ mod tests {
         let overpass = OverpassClient::with_transport(Box::new(|_: &str, _: Duration| {
             Ok(r#"{"elements":[]}"#.to_owned())
         }));
-        let nominatim = NominatimClient::with_transport(Box::new(|_: &str, _: Duration| {
-            Ok("[]".to_owned())
-        }));
+        let nominatim =
+            NominatimClient::with_transport(Box::new(|_: &str, _: Duration| Ok("[]".to_owned())));
         let fetcher = CampusBoundaryFetcher::with_clients(overpass, nominatim);
         assert_eq!(
             fetcher.fetch_campus("示例大学", 121.4, 31.2),

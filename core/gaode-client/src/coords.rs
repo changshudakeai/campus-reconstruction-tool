@@ -19,8 +19,7 @@ fn out_of_china(lon: f64, lat: f64) -> bool {
 }
 
 fn transform_lat(x: f64, y: f64) -> f64 {
-    let mut ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y
-        + 0.2 * x.abs().sqrt();
+    let mut ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * x.abs().sqrt();
     ret += (20.0 * (6.0 * x * PI).sin() + 20.0 * (2.0 * x * PI).sin()) * 2.0 / 3.0;
     ret += (20.0 * (y * PI).sin() + 40.0 * (y / 3.0 * PI).sin()) * 2.0 / 3.0;
     ret += (160.0 * (y / 12.0 * PI).sin() + 320.0 * (y * PI / 30.0).sin()) * 2.0 / 3.0;
@@ -28,8 +27,7 @@ fn transform_lat(x: f64, y: f64) -> f64 {
 }
 
 fn transform_lon(x: f64, y: f64) -> f64 {
-    let mut ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y
-        + 0.1 * x.abs().sqrt();
+    let mut ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * x.abs().sqrt();
     ret += (20.0 * (6.0 * x * PI).sin() + 20.0 * (2.0 * x * PI).sin()) * 2.0 / 3.0;
     ret += (20.0 * (x * PI).sin() + 40.0 * (x / 3.0 * PI).sin()) * 2.0 / 3.0;
     ret += (150.0 * (x / 12.0 * PI).sin() + 300.0 * (x / 30.0 * PI).sin()) * 2.0 / 3.0;
@@ -47,7 +45,8 @@ pub fn wgs84_to_gcj02(lon: f64, lat: f64) -> (f64, f64) {
     let magic = (rad_lat).sin();
     let magic = 1.0 - KRASOVSKY_EE * magic * magic;
     let sqrt_magic = magic.sqrt();
-    let d_lat = (d_lat * 180.0) / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
+    let d_lat =
+        (d_lat * 180.0) / ((KRASOVSKY_A * (1.0 - KRASOVSKY_EE)) / (magic * sqrt_magic) * PI);
     let d_lon = (d_lon * 180.0) / (KRASOVSKY_A / sqrt_magic * rad_lat.cos() * PI);
     (lon + d_lon, lat + d_lat)
 }

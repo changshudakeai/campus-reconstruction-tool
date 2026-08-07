@@ -11,8 +11,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use localization::Localization;
 use gaode_client::IpcMessage;
+use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
 use slint::ComponentHandle;
 

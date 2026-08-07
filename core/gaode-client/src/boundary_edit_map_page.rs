@@ -654,10 +654,19 @@ mod tests {
             BoundaryEditPageConfig::new("abc123DEF456", "xyz789GHI012").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("map_ready"));
-        assert!(!html.contains("fetchOverpassBoundary"), "JS 不再直接 fetch Overpass");
+        assert!(
+            !html.contains("fetchOverpassBoundary"),
+            "JS 不再直接 fetch Overpass"
+        );
         assert!(!html.contains("overpass-api.de"), "端点只存在于 Rust 侧");
-        assert!(!html.contains("university|college|school"), "JS 不再出现 | 正则");
-        assert!(html.contains("© OpenStreetMap contributors"), "必须保留 OSM 署名");
+        assert!(
+            !html.contains("university|college|school"),
+            "JS 不再出现 | 正则"
+        );
+        assert!(
+            html.contains("© OpenStreetMap contributors"),
+            "必须保留 OSM 署名"
+        );
     }
 
     #[test]
@@ -690,7 +699,10 @@ mod tests {
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("drawBoundaryGcj"));
         assert!(!html.contains("convertAndDraw"));
-        assert!(!html.contains("AMap.convertFrom(["), "JS 不得再发起 convertFrom 调用");
+        assert!(
+            !html.contains("AMap.convertFrom(["),
+            "JS 不得再发起 convertFrom 调用"
+        );
     }
 
     #[test]

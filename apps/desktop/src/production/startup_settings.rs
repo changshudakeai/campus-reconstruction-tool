@@ -352,7 +352,10 @@ fn settings_page(l10n: &Localization, snapshot: &SettingsSnapshot) -> SettingsPa
         &snapshot.settings.minecraft_version,
         snapshot.gaode_api_key.as_deref().unwrap_or_default(),
         snapshot.gaode_security_key.as_deref().unwrap_or_default(),
-        snapshot.gaode_web_service_key.as_deref().unwrap_or_default(),
+        snapshot
+            .gaode_web_service_key
+            .as_deref()
+            .unwrap_or_default(),
         &snapshot.default_export_location,
     )
 }

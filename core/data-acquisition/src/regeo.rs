@@ -45,13 +45,8 @@ impl RegeoNamer {
     pub fn production(key_provider: KeyProvider) -> Self {
         Self::new(
             Box::new(|url: &str, timeout: Duration| {
-                let agent = ureq::AgentBuilder::new()
-                    .timeout(timeout)
-                    .build();
-                let response = agent
-                    .get(url)
-                    .call()
-                    .map_err(|error| error.to_string())?;
+                let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+                let response = agent.get(url).call().map_err(|error| error.to_string())?;
                 response.into_string().map_err(|error| error.to_string())
             }),
             key_provider,
@@ -67,9 +62,8 @@ impl RegeoNamer {
             return cached;
         }
         let key = (self.key_provider)()?;
-        let url = format!(
-            "{REGEO_ENDPOINT}?key={key}&location={lon},{lat}&radius=200&extensions=base"
-        );
+        let url =
+            format!("{REGEO_ENDPOINT}?key={key}&location={lon},{lat}&radius=200&extensions=base");
         let body = (self.transport)(&url, Duration::from_secs(10)).ok()?;
         let name = parse_regeo_name(&body);
         if let Ok(mut cache) = self.cache.lock() {
@@ -88,9 +82,9 @@ pub fn polygon_centroid(geometry: &SourceGeometry) -> Option<(f64, f64)> {
         return None;
     }
     let n = points.len() as f64;
-    let (sum_lon, sum_lat) = points
-        .iter()
-        .fold((0.0, 0.0), |(lon, lat), point| (lon + point.0, lat + point.1));
+    let (sum_lon, sum_lat) = points.iter().fold((0.0, 0.0), |(lon, lat), point| {
+        (lon + point.0, lat + point.1)
+    });
     Some((sum_lon / n, sum_lat / n))
 }
 
@@ -150,7 +144,10 @@ mod tests {
 
     #[test]
     fn parse_regeo_rejects_failed_status() {
-        assert_eq!(parse_regeo_name(r#"{"status":"0","info":"INVALID_USER_KEY"}"#), None);
+        assert_eq!(
+            parse_regeo_name(r#"{"status":"0","info":"INVALID_USER_KEY"}"#),
+            None
+        );
         assert_eq!(parse_regeo_name("not json"), None);
     }
 
@@ -170,7 +167,10 @@ mod tests {
         let calls_clone = calls.clone();
         let transport = Box::new(move |_: &str, _: Duration| {
             calls_clone.fetch_add(1, Ordering::SeqCst);
-            Ok(r#"{"status":"1","info":"OK","regeocode":{"pois":[{"name":"第一教学楼"}]}}"#.to_owned())
+            Ok(
+                r#"{"status":"1","info":"OK","regeocode":{"pois":[{"name":"第一教学楼"}]}}"#
+                    .to_owned(),
+            )
         });
         let namer = RegeoNamer::new(transport, Box::new(|| Some("web-key".to_owned())));
         let name = namer.name_for_geometry(&polygon()).unwrap();
@@ -198,6 +198,8 @@ mod tests {
     fn point_geometry_is_not_named_via_regeo() {
         let transport = Box::new(|_: &str, _: Duration| Ok("unused".to_owned()));
         let namer = RegeoNamer::new(transport, Box::new(|| Some("key".to_owned())));
-        assert!(namer.name_for_geometry(&SourceGeometry::Point((121.4, 31.2))).is_none());
+        assert!(namer
+            .name_for_geometry(&SourceGeometry::Point((121.4, 31.2)))
+            .is_none());
     }
 }

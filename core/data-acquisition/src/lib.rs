@@ -44,6 +44,6 @@ pub use progress::{
 pub use refresh::{DiffEntry, DiffKind, RefreshDiff};
 pub use regeo::{parse_regeo_name, polygon_centroid, RegeoNamer};
 pub use source::{
-    BridgeTransport, DataSource, GaodeDataSource, OverpassDataSource, OverpassTransport, RawEntity,
-    NameEnricher, SourceGeometry,
+    BridgeTransport, DataSource, GaodeDataSource, NameEnricher, OverpassDataSource,
+    OverpassTransport, RawEntity, SourceGeometry,
 };

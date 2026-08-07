@@ -54,11 +54,9 @@ fn collection_page_forwards_start_intent_and_presents_a1_outcome() {
     let database_path = directory.path().join("s1-07.db");
     // T31：候选采集源改为 OSM/Overpass（Rust 侧直连）；测试注入罐头空响应，
     // 不发起真实网络请求。
-    let canned_overpass: Arc<dyn DataSource + Send + Sync> = Arc::new(
-        OverpassDataSource::new(Box::new(|_boundary: &shared_domain_types::Boundary| {
-            Ok(r#"{"elements":[]}"#.to_owned())
-        })),
-    );
+    let canned_overpass: Arc<dyn DataSource + Send + Sync> = Arc::new(OverpassDataSource::new(
+        Box::new(|_boundary: &shared_domain_types::Boundary| Ok(r#"{"elements":[]}"#.to_owned())),
+    ));
     let mut injector = ViewModelInjector::new_with_collection_source(
         ShellDatabases::open(&database_path).expect("连接数据库"),
         Arc::new(StdExportFileSystem),

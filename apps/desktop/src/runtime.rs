@@ -11,10 +11,10 @@ use std::sync::{mpsc, Arc};
 use anyhow::Result;
 use collection_flow::CollectionFlow;
 use data_acquisition::overpass::{boundary_bbox, buildings_query, OverpassClient};
-use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport, RawEntity};
 use data_acquisition::RegeoNamer;
-use data_persistence::{AppSettingKey, AppSettingsApi};
+use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport, RawEntity};
 use data_persistence::Database;
+use data_persistence::{AppSettingKey, AppSettingsApi};
 use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
@@ -218,11 +218,7 @@ impl ViewModelInjector {
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
     ) -> Result<Self> {
-        Self::new_with_collection_source(
-            db,
-            file_system,
-            production_collection_source(),
-        )
+        Self::new_with_collection_source(db, file_system, production_collection_source())
     }
 
     /// T31：候选采集数据源注入点（生产 = OverpassDataSource 直连；
@@ -571,8 +567,8 @@ fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send
     let transport: OverpassTransport = Box::new(move |boundary: &Boundary| {
         // 边界为 GCJ-02；工单禁止 GCJ→WGS 反向，查询窗口用“边界包围盒 +
         // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
-        let bbox = boundary_bbox(boundary, 0.01)
-            .ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
+        let bbox =
+            boundary_bbox(boundary, 0.01).ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
         let query = buildings_query(bbox);
         OverpassClient::production()
             .query_with_fallback(&query)
@@ -594,9 +590,7 @@ fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send
         let geometry = entity.source_geometry.as_ref()?;
         namer.name_for_geometry(geometry)
     }));
-    Arc::new(
-        OverpassDataSource::new(transport).with_name_enricher(enricher),
-    )
+    Arc::new(OverpassDataSource::new(transport).with_name_enricher(enricher))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

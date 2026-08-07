@@ -478,7 +478,8 @@ impl SettingsManager {
     /// 保存高德 Web 服务 Key（经格式校验：仅字母数字）
     pub fn set_gaode_web_service_key(&mut self, key: &str) -> Result<()> {
         validate_gaode_key(key)?;
-        self.db.set_setting(AppSettingKey::GaodeWebServiceKey, key)?;
+        self.db
+            .set_setting(AppSettingKey::GaodeWebServiceKey, key)?;
         Ok(())
     }
 
