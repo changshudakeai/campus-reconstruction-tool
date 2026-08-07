@@ -1,0 +1,86 @@
+T32 ???????dist/t32-diag??? WebView2 ???
+======================================================================
+
+FullName                                                                            Length  
+--------                                                                            ------  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\campus-rebuild-dev.exe.WebView2         
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\resources                               
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\1000x666-boundary.png           310668  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\1000x666-manual-mode.png        334276  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\800x666-boundary.png            38125   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\800x666-boundary2.png           279958  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\800x666-manual-mode.png         284944  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\a2-boundary-confirmed.png       326158  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\a2-export-result.png            41609   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\a2-osm-boundary.png             317515  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\after-confirm.png               75693   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b3-collect-before-click.png     50339   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b3-collect-page-max.png         44016   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b3-collect-report-final.png     66568   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b3-collect-report.png           66568   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b4-review-page.png              114393  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b4-sealed-attempt.png           45703   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b4-sealed.png                   45703   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b5-export-page.png              44936   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\b5-export-result.png            50840   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\boundary.png                    22076   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\campus-rebuild-dev.exe          19479040
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\campus-rebuild.db               3354624 
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\card.png                        21869   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect-max-sys.png             33752   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect-max.png                 31900   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect-report.png              31784   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect-sys.png                 37197   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect.png                     31686   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect2.png                    31690   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect3.png                    31874   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\collect4.png                    31861   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\confirm-done.png                75693   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\confirm-ok.png                  70018   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\confirm.png                     41038   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\cur-sys.png                     33752   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\diag-mid.png                    22831   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\diag-top.png                    142048  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\diag.png                        24298   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\diag2.png                       24298   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\diag3.png                       75685   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export-done.png                 34342   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export-page.png                 32999   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export-sys.png                  194697  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export.png                      65566   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export2-done.png                34198   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export2.png                     65724   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\export3.png                     65688   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\logical1000x666-boundary.png    412889  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\logical1000x666-manual-mode.png 417671  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\logical800x666-boundary.png     318128  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\logical800x666-manual-mode.png  341840  
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\now.png                         21870   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\osm-boundary.png                29736   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\planlist.png                    22926   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\search.png                      42909   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\settings-keys.png               37838   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\settings-std.png                37942   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\settings-sys.png                46176   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\settings.png                    712     
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\step5.png                       33230   
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\resources\themes                        
+D:\MCRebuild_Renovation\New-branch-v2\dist\t32-diag\resources\themes\light.json     327     
+
+
+
+
+???????
+
+FullName                                                                                         Length
+--------                                                                                         ------
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\1b450f0d-cfbe-434e-b44c-4bfa109c0ae1.foundation_manifest.json   1141
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\1b450f0d-cfbe-434e-b44c-4bfa109c0ae1.schem                       453
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\3a8baae2-8cf2-4e6a-b88c-3a2a49579eed.foundation_manifest.json   1180
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\3a8baae2-8cf2-4e6a-b88c-3a2a49579eed.schem                      5341
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\c2b29a9a-448a-4297-9638-cc75d4995cac.foundation_manifest.json   1252
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\c2b29a9a-448a-4297-9638-cc75d4995cac.schem                    109263
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\e0b804d6-ddf4-4e9f-a27e-de88b5873b9d.foundation_manifest.json   1117
+C:\Users\chang\Documents\鏍″洯澶嶅埢宸ュ叿\瀵煎嚭\e0b804d6-ddf4-4e9f-a27e-de88b5873b9d.schem                       409
+
+
