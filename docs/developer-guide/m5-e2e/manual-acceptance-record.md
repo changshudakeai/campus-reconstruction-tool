@@ -172,7 +172,7 @@
 
 修复分支 `fix/t31-real-outline-boundary-sources`（基于 origin/main @ a929a5e，
 T30 合入后）。便携包重建：`dist/MCRebuild-V2.0.0-dev-portable.zip`（7.9 MB，
-构建时间 2026-08-07 09:30，HEAD 6fc12d8）。高德 Web 端(JS API) 密钥沿用设置页
+构建时间 2026-08-07 09:42，HEAD 7d0659e）。高德 Web 端(JS API) 密钥沿用设置页
 录入值（记录不写明文）。**增强导出与 regeo 补名的在线人工环节仍需负责人现场
 操作（见“未能验证项”）**。
 
@@ -237,6 +237,8 @@ boundary bbox(31.02,121.41,31.04,121.46) → union building=* → 590 元素
   regeo Web 服务 Key 只经设置页录入（新增 `GaodeWebServiceKey` 设置项，ADR-0004
   “开发人员使用”）。
 - 署名：边界地图页保留 `© OpenStreetMap contributors`（ODbL）。
+- 导出物署名：`foundation_manifest.json` 新增 `attribution` 字段
+  （“© OpenStreetMap contributors”，`manifest-generator/src/manifest.rs`）。
 
 ### 剧本 A/B 自动化等价证据与门禁（验收点 4/5/6）
 
