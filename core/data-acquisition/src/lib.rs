@@ -15,6 +15,9 @@
 //! - [progress](crate::progress)：`CollectionProgressView` 进度反馈 UI 占位
 //!   （纯数据视图 + B6 文本键，UI 层解析渲染）
 //! - [error](crate::error)：带类型错误
+//! - [overpass](crate::overpass)：OSM/Overpass/Nominatim Rust 侧直连
+//!   （T31：端点回退、union 查询、Nominatim 校名解析、校区边界自动获取级联）
+//! - [regeo](crate::regeo)：高德逆地理编码补名（T31：OSM name 优先后的第二级）
 //!
 //! ## 依赖边界（ADR-0017）
 //!
@@ -25,9 +28,11 @@
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
 pub mod error;
+pub mod overpass;
 pub mod pipeline;
 pub mod progress;
 pub mod refresh;
+pub mod regeo;
 pub mod source;
 
 // 重新导出公共类型，方便 crate 外使用
@@ -37,7 +42,8 @@ pub use progress::{
     category_text_key, text_keys, CategoryProgress, CollectionProgressView, ALL_CATEGORIES,
 };
 pub use refresh::{DiffEntry, DiffKind, RefreshDiff};
+pub use regeo::{parse_regeo_name, polygon_centroid, RegeoNamer};
 pub use source::{
     BridgeTransport, DataSource, GaodeDataSource, OverpassDataSource, OverpassTransport, RawEntity,
-    SourceGeometry,
+    NameEnricher, SourceGeometry,
 };

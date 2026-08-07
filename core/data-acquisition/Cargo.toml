@@ -31,6 +31,8 @@ gaode-client = { workspace = true }
 data-transformers = { workspace = true }
 # 原始对象 source_data JSON 的承载
 serde_json = { workspace = true }
+# T31: OSM/Overpass/Nominatim Rust 侧直连传输（端点回退 + 超时）
+ureq = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 

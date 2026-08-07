@@ -100,6 +100,8 @@ wry = "0.55"
 raw-window-handle = "0.6"
 # T21 FINAL: 用于 block_on(slhint_window.winit_window())
 futures-executor = "0.3"
+# T31: OSM/Overpass/Nominatim Rust 侧直连（绕开 WebView CORS；端点回退）
+ureq = "2.12"
 # 测试临时目录
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
