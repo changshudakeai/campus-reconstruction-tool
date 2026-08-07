@@ -71,6 +71,9 @@ pub enum AppSettingKey {
     GaodeApiKey,
     /// 高德地图安全密钥（T22，经 F1 存储于本机明文）
     GaodeSecurityKey,
+    /// 高德 Web 服务 Key（T31 regeo 补名用；ADR-0004 “开发人员使用”，
+    /// 只经设置页录入，与 JS API Key 相互独立）
+    GaodeWebServiceKey,
     /// 默认导出位置（ADR-0004：所有方案默认导出到该文件夹）
     DefaultExportLocation,
     /// 最近使用的校区 ID 列表（JSON 数组，最近进入排最前，ADR-0006）
@@ -90,6 +93,7 @@ impl AppSettingKey {
             AppSettingKey::OnboardingCompletedAt => "onboarding_completed_at",
             AppSettingKey::GaodeApiKey => "gaode_api_key",
             AppSettingKey::GaodeSecurityKey => "gaode_security_key",
+            AppSettingKey::GaodeWebServiceKey => "gaode_web_service_key",
             AppSettingKey::DefaultExportLocation => "default_export_location",
             AppSettingKey::RecentCampuses => "recent_campuses",
         }

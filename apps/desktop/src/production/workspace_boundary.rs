@@ -55,6 +55,9 @@ pub(crate) struct WorkspaceSessionState {
     /// 迁移期兼容：无已打开方案时按窗口当前呈现的已完成步数判定（旧行为基线）。
     pub(super) adopted_completed_steps: Option<u8>,
     pub(super) map_processing: bool,
+    /// T31：Rust 侧 OSM 边界自动获取后台结果通道（None = 无进行中的获取）
+    pub(super) pending_boundary_fetch:
+        Option<std::sync::mpsc::Receiver<data_acquisition::overpass::CampusBoundaryResult>>,
     pub(super) tutorial_visible: bool,
     pub(super) tutorial_text: String,
     pub(super) tutorial_dismiss_label: String,

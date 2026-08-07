@@ -300,6 +300,8 @@ pub enum IpcMessage {
     Coordinate { longitude: f64, latitude: f64 },
     /// 错误：结构化 JSON
     Error { message: String },
+    /// T31: 地图就绪 → Rust 侧发起 OSM 边界自动获取（绕开 WebView CORS）
+    MapReady,
     // T24: OSM 边界编辑相关
     /// OSM Overpass 返回的原始要素列表 (osm_elements)
     OsmElements { elements: Vec<OsmElement> },
@@ -401,6 +403,9 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                             message: payload.message,
                         });
                     }
+                }
+                "map_ready" => {
+                    return Ok(IpcMessage::MapReady);
                 }
                 "osm_elements" => {
                     #[derive(Deserialize)]
@@ -524,6 +529,13 @@ mod ipc_tests {
         let json = r#"{"type":"error","message":"SDK 加载超时"}"#;
         let result = parse_ipc_message(json).unwrap();
         assert!(matches!(result, IpcMessage::Error { message } if message == "SDK 加载超时"));
+    }
+
+    #[test]
+    fn map_ready_payload_triggers_rust_side_fetch() {
+        // T31：JS 只发就绪信号，Overpass 查询由 Rust 侧执行
+        let result = parse_ipc_message(r#"{"type":"map_ready"}"#).unwrap();
+        assert!(matches!(result, IpcMessage::MapReady));
     }
 
     #[test]

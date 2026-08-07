@@ -70,6 +70,9 @@ export component AppWindow inherits Window {
     in property <string> gaode-security-key-label;
     in property <string> gaode-security-key-placeholder;
     in-out property <string> gaode-security-key;
+    in property <string> gaode-web-service-key-label;
+    in property <string> gaode-web-service-key-placeholder;
+    in-out property <string> gaode-web-service-key;
     in property <string> gaode-save-button-label;
     in property <string> gaode-test-button-label;
     in property <string> gaode-status-message;
@@ -795,6 +798,25 @@ export component AppWindow inherits Window {
                     LineEdit {
                         text <=> root.gaode-security-key;
                         placeholder-text: root.gaode-security-key-placeholder;
+                        preferred-width: 240px;
+                    }
+                }
+
+                // 高德 Web 服务 Key（T31 regeo 补名；ADR-0004 开发人员使用，可留空）
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.gaode-web-service-key-label;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                        width: 100px;
+                    }
+
+                    LineEdit {
+                        text <=> root.gaode-web-service-key;
+                        placeholder-text: root.gaode-web-service-key-placeholder;
                         preferred-width: 240px;
                     }
                 }
