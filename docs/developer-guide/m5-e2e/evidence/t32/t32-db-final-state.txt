@@ -1,0 +1,21 @@
+T32 ?? DB ???campus-rebuild.db @ dist/t32-diag?2026-08-07?
+======================================================================
+
+[plans]
+  c2b29a9a-448a-4297-9638-cc75d4995cac | campus=7ef9ab8a-80c4-41dd-96fd-72ef5924086c | name=新方案 1 | created=2026-08-07T04:17:16.424Z
+  3a8baae2-8cf2-4e6a-b88c-3a2a49579eed | campus=7ef9ab8a-80c4-41dd-96fd-72ef5924086c | name=新方案 2T32?????? | created=2026-08-07T06:08:21.336Z
+
+[raw_observations] ?? = 1037??? OSM/Overpass??? c2b29a9a?
+
+[candidate_batches]
+  id=849ca746-dc31-46cd-b8d5-020dbe2a76aa plan=c2b29a9a-448a-4297-9638-cc75d4995cac status=published created=2026-08-07T05:22:13.599Z published=2026-08-07T05:22:13.627Z
+
+[current_candidate_batches]
+  plan=c2b29a9a-448a-4297-9638-cc75d4995cac batch=849ca746-dc31-46cd-b8d5-020dbe2a76aa
+
+[review_decisions ??]??? c2b29a9a?????????
+  plan=c2b29a9a-448a-4297-9638-cc75d4995cac category=Building state=keep count=5
+  plan=c2b29a9a-448a-4297-9638-cc75d4995cac category=Building state=pending count=745
+  plan=c2b29a9a-448a-4297-9638-cc75d4995cac category=Other state=pending count=276
+
+[app_settings] ?? key/?????? = 2???????????????

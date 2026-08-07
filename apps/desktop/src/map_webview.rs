@@ -100,6 +100,9 @@ pub(crate) fn campus_search_ready() -> bool {
 /// 窗口相对坐标 x:32 y:184, width:parent.width-32, height:340
 /// 逻辑像素 × scale factor = 物理像素（T30 D-5 根因修复：此前漏掉工作区
 /// 内容偏移，WebView 上移盖住步骤条并横向越界）。
+/// T32：调用方保证入参为逻辑窗口宽（slint `Window::size()` 返回物理宽，
+/// 已在调用处除以 scale 还原）；本函数逻辑宽 × scale = WebView 物理尺寸，
+/// 避免把物理宽当逻辑宽二次缩放导致 WebView 超出窗口右缘（T31-D6）。
 fn compute_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
     let scale = f64::from(scale);
     wry::Rect {
@@ -114,8 +117,17 @@ fn compute_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
     }
 }
 
+/// T32：slint `Window::size()` 返回物理像素（i-slint-core 1.17
+/// `Window::size() -> PhysicalSize`），WebView 布局需要逻辑宽。
+/// 物理宽 ÷ scale = 逻辑宽；scale 缺失/异常时按 1.0 兜底。
+fn logical_window_width(window: &slint::Window) -> u32 {
+    let scale = window.scale_factor().max(0.001);
+    let physical = f64::from(window.size().width);
+    ((physical / f64::from(scale)).round() as u32).max(1)
+}
+
 /// 校区选择页搜索地图区域：x:16 y:110, width:parent.width-32（兜底 300）, height:300。
-/// 与边界地图页同规格：逻辑像素 × scale factor = 物理像素。
+/// 与边界地图页同规格：调用方保证入参为逻辑窗口宽（T32 同一修正）。
 fn compute_campus_search_bounds(window_width_logical: u32, scale: f32) -> wry::Rect {
     let scale = f64::from(scale);
     wry::Rect {
@@ -140,7 +152,7 @@ fn start_resize_timer(window_weak: Weak<crate::AppWindow>) {
             let Some(app_window) = window_weak.upgrade() else {
                 return;
             };
-            let width = app_window.window().size().width;
+            let width = logical_window_width(app_window.window());
             let scale = app_window.window().scale_factor();
             STATE.with(|s| {
                 let mut state = s.borrow_mut();
@@ -196,7 +208,7 @@ pub(crate) fn show(
         };
 
         let scale = app_window.window().scale_factor();
-        let width = app_window.window().size().width;
+        let width = logical_window_width(app_window.window());
         let bounds = compute_bounds(width, scale);
 
         let result = wry::WebViewBuilder::new()
@@ -263,7 +275,7 @@ pub(crate) fn show_campus_search(
         };
 
         let scale = app_window.window().scale_factor();
-        let width = app_window.window().size().width;
+        let width = logical_window_width(app_window.window());
         let bounds = compute_campus_search_bounds(width, scale);
 
         let result = wry::WebViewBuilder::new()
@@ -320,7 +332,7 @@ pub(crate) fn show_with_config(
         };
 
         let scale = app_window.window().scale_factor();
-        let width = app_window.window().size().width;
+        let width = logical_window_width(app_window.window());
         let bounds = compute_bounds(width, scale);
 
         let result = wry::WebViewBuilder::new()
@@ -418,6 +430,39 @@ mod tests {
         };
         assert_eq!((pos.x, pos.y), (64, 368));
         assert_eq!((sz.width, sz.height), ((800 - 32) * 2, 680));
+    }
+
+    #[test]
+    fn bounds_stay_inside_window_at_125_percent_scale() {
+        // T32（T31-D6）：slint Window::size() 返回物理宽（1000 = 800 逻辑 ×
+        // 1.25），compute_bounds 收到逻辑宽 800 后，WebView 物理宽必须
+        // ≤ 窗口物理宽 1000，右缘不得越界。
+        let bounds = compute_bounds(800, 1.25);
+        let wry::Rect { position, size } = bounds;
+        let wry::dpi::Position::Physical(pos) = position else {
+            panic!("position 必须是物理像素");
+        };
+        let wry::dpi::Size::Physical(sz) = size else {
+            panic!("size 必须是物理像素");
+        };
+        // 位置 x=40（32×1.25）+ 宽 960 = 右缘 1000，恰好等于窗口物理宽。
+        assert_eq!(pos.x, 40);
+        assert_eq!(sz.width, (800 - 32) * 125 / 100);
+        assert!(
+            pos.x + sz.width as i32 <= 1000,
+            "WebView 右缘不得超出窗口物理宽 1000（实际 {}）",
+            pos.x + sz.width as i32
+        );
+    }
+
+    #[test]
+    fn logical_width_roundtrips_from_physical() {
+        // T32：物理宽 ÷ scale = 逻辑宽，供 compute_bounds 使用。
+        // 模拟 slint Window::size() 物理宽 1000、scale 1.25 → 逻辑 800。
+        let scale = 1.25_f32;
+        let physical = 1000_u32;
+        let logical = ((f64::from(physical) / f64::from(scale)).round() as u32).max(1);
+        assert_eq!(logical, 800);
     }
 
     #[test]

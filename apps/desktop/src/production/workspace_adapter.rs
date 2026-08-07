@@ -265,6 +265,11 @@ impl WorkspaceProductionAdapter {
             };
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
+        // T32：步骤 3/4/5（采集/评审/导出）无需地图交互，隐藏 WebView，
+        // 避免地图子窗口覆盖 Slint 操作区（导出按钮等）导致不可点。
+        if step >= 3 {
+            crate::map_webview::hide();
+        }
         self.context.session.borrow_mut().active_step = step;
         Presentation::ready(self.context.page())
             .with_navigation(NavigationDecision::Show(Screen::Workspace))

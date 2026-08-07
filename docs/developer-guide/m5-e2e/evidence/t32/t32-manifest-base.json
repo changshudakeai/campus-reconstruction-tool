@@ -1,0 +1,53 @@
+{
+  "version": "1.0.0",
+  "id": "1e6612d5-35bf-492d-a031-fd3367166d94",
+  "campusName": "上海交通大学(闵行本部校区)",
+  "planId": "3a8baae2-8cf2-4e6a-b88c-3a2a49579eed",
+  "planName": "新方案 2T32??????",
+  "minecraftVersion": "26.1.2",
+  "exportedAt": "2026-08-07T06:10:01.828343700+00:00",
+  "categories": [
+    {
+      "name": "建筑",
+      "display_name": "建筑",
+      "included": false
+    },
+    {
+      "name": "道路",
+      "display_name": "道路",
+      "included": false
+    },
+    {
+      "name": "水域",
+      "display_name": "水域",
+      "included": false
+    },
+    {
+      "name": "植被",
+      "display_name": "植被",
+      "included": false
+    },
+    {
+      "name": "体育",
+      "display_name": "体育",
+      "included": false
+    },
+    {
+      "name": "其他",
+      "display_name": "其他",
+      "included": false
+    }
+  ],
+  "orientation": {
+    "degree": 0.0,
+    "source": "map_north"
+  },
+  "candidateFacts": {
+    "candidateProjectionCount": 0,
+    "reviewDecisionCount": 0,
+    "retainedCandidateCount": 0,
+    "keepByCategory": []
+  },
+  "exportKind": "base",
+  "attribution": "© OpenStreetMap contributors"
+}

@@ -89,6 +89,104 @@
 
 ---
 
+
+## T32 走查记录（2026-08-07，实施窗口 fix/t32-boundary-page-overflow）
+
+实施窗口按工单 T32 修复边界地图页按钮横向溢出（T31-D6），并用修复版
+`campus-rebuild-dev.exe`（`dist/t32-diag/`，与重建后便携包同 HEAD）重跑剧本
+A/B。本段为实施窗口的验收证据；**负责人签名栏在段末**。
+
+### 缺陷事实与根因（实测数据）
+
+修复前（T31 走查实测）：窗口逻辑 800×666，“确认边界”UIA (860, 521)、“改人工
+圈画”(806, 529) 超出窗口逻辑宽 800 右缘，物理坐标同样越界，按钮不可见不可点。
+`compute_bounds` 期望视口 x:32、宽 window−32（右缘 800），按钮却在内容层更宽
+位置，属内容横向溢出。
+
+根因（T32 实测修复）：
+
+1. `apps/desktop/src/map_webview.rs`：slint `Window::size()` 返回**物理宽**，
+   原实现把物理宽当逻辑宽再乘 scale，导致 WebView 物理宽 = (1000−32)×1.25 =
+   1210，超出窗口物理宽 1000。新增 `logical_window_width()`（物理 ÷ scale），
+   4 处调用点统一改用逻辑宽，`compute_bounds` 物理尺寸不再越界。
+2. `core/gaode-client/src/boundary_edit_map_page.rs`：`html/body overflow-x:
+   hidden`；`#map-container` `max-width:100%` + `box-sizing`；AMap 初始化前把
+   容器宽度钳制到视口并 `map.resize()`；`resize` 监听同步容器；地图初始化延后
+   到 `window load`（避免 AMap 在未布局容器上创建过宽画布）。
+3. `apps/desktop/src/production/workspace_adapter.rs`：步骤 ≥3（采集/评审/导出）
+   时 `map_webview::hide()`，避免地图子窗口覆盖 Slint 操作区导致按钮不可点。
+
+### 按钮可见/可点断言（验收点 1）
+
+修复版实测（DPI 120 = 125%，UIA 物理像素；截图
+`evidence/t32/c01~c04-*.png`，断言原文 `evidence/t32/t32-button-rects.txt`）：
+
+| 窗口（逻辑） | WebView 容器 | 确认边界（confirm-edit-btn） | 改人工圈画 | 可点性 |
+|--------------|--------------|------------------------------|------------|--------|
+| 800×666（客户区 1000×833 物理） | (109,328)-(1069,753)，右缘=窗口右缘 | (849,702)-(940,741)，相对右缘 664.8 < 800 | (949,702)-(1057,741)，相对右缘 758.4 < 800 | 点击切换“人工圈画模式” ✓ |
+| 1000×666（客户区 1250×833 物理） | (89,308)-(1299,733)，右缘=窗口右缘 | (1079,682)-(1170,721)，相对右缘 864.8 < 1000 | (1179,682)-(1287,721)，相对右缘 958.4 < 1000 | 点击切换“人工圈画模式” ✓ |
+
+两张尺寸下页面均显示“来自 OSM: 上海交通大学（闵行校区）✓”、高德署名
+“© 2026 AutoNavi - GS(2025)5996号”与 OSM 署名“© OpenStreetMap contributors”，
+OSM 署名在 WebView 内可见。一次真实观察：1000 逻辑宽首次打开时 OSM 自动获取
+失败并正确回退“人工圈画模式”（非静默成功，符合剧本 A 验收点），重开方案后
+自动获取成功。
+
+### 剧本 A：基础导出（T32 修复后重跑）
+
+| 验收点 | 证据 | 结果 |
+|--------|------|------|
+| 校区→方案→OSM 边界自动获取 | 高德在线搜索“上海交通大学”点选“闵行本部校区”（POI B00155R1D5）→ 新建方案（`evidence/t32/10-campus-search.png`、`14-plan-list.png`、`17-plan-card.png`）；边界页自动获取“来自 OSM: 上海交通大学（闵行校区）✓”并自动绘制（`20-osm-boundary.png`） | ☑ |
+| 确认边界 | 修复后“确认边界”按钮在视口内可点，点击后步骤 1 显示 ✓ 与“边界已确认，可点'重置'重新绘制”（`21-boundary-confirmed.png`） | ☑ |
+| 基础导出 `.schem` + manifest | 新建方案（planId `3a8baae2-8cf2-4e6a-b88c-3a2a49579eed`）导出：`.schem` 5,341 B；manifest `exportKind="base"`、`orientation.source="map_north"`、`attribution="© OpenStreetMap contributors"`、`candidateFacts` 全 0（`evidence/t32/t32-manifest-base.json`、`30-export-page.png`、`31-export-done.png`） | ☑ |
+
+### 剧本 B：增强导出（T32 修复后走通）
+
+| 验收点 | 证据 | 结果 |
+|--------|------|------|
+| 采集：真实 OSM 建筑候选 | 步骤 3 点“采集”→ 真实 Overpass 拉取：**原始 1037 项（建筑 761 / 其他 276）**，**可评审 1026**、**已隔离 11**、**自动修复 1026**，来源标注 OSM（页面标题“OSM（OpenStreetMap）”；`evidence/t32/b00-collect-page.png`、`b01-collect-report.png`；DB 终态 `t32-db-final-state.txt`） | ☑ |
+| 评审保留/封账 | 建筑分类保留 5 项（way/283411238、way/545419223、way/288254676、实验C楼、way/283411263）→ 封账 → 摘要“保留 5 项，待定 1021 项，剔除 0 项 / 建筑 5”（`b02-review-page.png`、`b03-review-sealed.png`） | ☑ |
+| 增强导出 `.schem` + manifest | 导出页显示“增强导出：基础场地 + 保留候选 5 项（建筑 5）”（`b04-export-enhanced-page.png`）→ 导出完成（`b05-export-enhanced-done.png`）：`.schem` **109,263 B（尺寸 3461×14×1988，含候选内容，远大于基础 5,341 B）**；manifest `exportKind="enhanced"`、`orientation.source="map_north"`、`keepByCategory=[{"category":"Building","count":5}]` 与保留一致、`attribution="© OpenStreetMap contributors"`（`evidence/t32/t32-manifest-enhanced.json`） | ☑ |
+
+DB 评审终态（`dist/t32-diag/campus-rebuild.db`，封账后不可再改）：Building
+keep 5 / pending 745；Other pending 276；合计 1026 = 可评审数。密钥只经设置页
+录入，仓库内无任何含密钥文件（`git status/diff` 核验）。
+
+### 门禁与便携包
+
+- 全部门禁全绿（Windows，`SLINT_BACKEND=software`、`CARGO_BUILD_JOBS=2`）：
+  `cargo fmt --all --check`、`cargo machete`、`cargo clippy --workspace
+  --all-targets -- -D warnings`、`cargo test --workspace`（109 个 test result 全
+  ok）、`cargo deny check advisories/bans/licenses/sources`、`cargo xtask ci`
+  （tidy + arch）、`cargo xtask timings`。
+- 便携包重建：`scripts/build-release.ps1` → `dist/MCRebuild-V2.0.0-dev-portable.zip`
+  （7.91 MB，HEAD 即本分支提交）。
+
+### 新发现缺陷（如实记录，未擅自修复）
+
+- **T32-D2（评审页可操作性，P2，不属本工单范围）**：评审工作台候选列表无滚动
+  容器（`review.slint` 直接 `for card in root.cards` 纵向排布），1026 个候选时
+  “暂停/继续/封账完成评审”操作栏渲染在窗口视口之外且滚轮/键盘均无法到达；
+  本走查通过切换到空分类“道路 (0)”使操作栏回到视口内完成封账。小候选集不受
+  影响。建议后续工单给评审列表加滚动/分页，不在本工单修改。
+- 备注：剧本 B 增强导出期间未出现错误弹窗或伪成功产物；导出消息与落盘文件
+  一致。
+
+### 结论（T32 实施窗口）
+
+- ☑ 边界页按钮 800/1000 逻辑宽 × 125% 缩放下可见可点（截图 + 坐标/可点性断言）。
+- ☑ 剧本 A 走通：OSM 边界自动获取 → 确认 → 基础导出（`exportKind=base`、
+  `map_north`、`attribution`）。
+- ☑ 剧本 B 走通：真实 OSM 建筑候选（可评审 1026 > 0）→ 评审/封账 → 增强导出
+  （`exportKind=enhanced`、`keepByCategory=Building 5`、`.schem` 含候选内容）。
+- ☑ 全部门禁全绿；便携包已按 HEAD 重建。
+- 遗留：T32-D2 评审页滚动问题待负责人决策（另行工单）；负责人签名后 v2.0.0
+  进入正式版候选。
+
+负责人签名：____________
+
+---
+
 ## T30 修复后重跑记录（2026-08-06）
 
 修复分支 `fix/m5-acceptance-defects`（基于 origin/main @ 9540dba，PR #17 合并后）。
