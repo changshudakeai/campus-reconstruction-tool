@@ -137,6 +137,9 @@ pub struct FoundationManifest {
     /// 本次导出的类型（基础/增强）。
     #[serde(default)]
     pub export_kind: ExportKind,
+    /// OSM/Overture 数据署名（ODbL；T31 导出物合规）。
+    #[serde(default)]
+    pub attribution: String,
 }
 
 impl FoundationManifest {
@@ -184,6 +187,7 @@ impl FoundationManifest {
 
         Self {
             version: MANIFEST_VERSION.to_string(),
+            attribution: "© OpenStreetMap contributors".to_owned(),
             id: id.into(),
             campus_name: campus_name.into(),
             plan_id: plan_id.into(),
