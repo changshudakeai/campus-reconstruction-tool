@@ -6,13 +6,15 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use anyhow::Result;
 use collection_flow::CollectionFlow;
-use data_acquisition::GaodeDataSource;
+use data_acquisition::overpass::{boundary_bbox, buildings_query, OverpassClient};
+use data_acquisition::RegeoNamer;
+use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport, RawEntity};
 use data_persistence::Database;
+use data_persistence::{AppSettingKey, AppSettingsApi};
 use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
@@ -196,8 +198,6 @@ pub struct ViewModelInjector {
     export_flow: Arc<BoundaryExportFlow>,
     /// A1 候选采集完整用例（F4 → B2 → B14 → F7 在入口后协调，ADR-0039）。
     collection_flow: Arc<CollectionFlow>,
-    /// 生产候选数据源 WebView 桥的响应通道（S1 只做传输转发，不解析内容）。
-    collection_ipc: mpsc::Sender<String>,
     /// 校区在线搜索 WebView 桥的响应通道（D-3，S1 只做传输转发）。
     campus_search_ipc: mpsc::Sender<String>,
     /// 校区在线搜索传输（生产走 WebView，测试注入罐头）。
@@ -207,20 +207,35 @@ pub struct ViewModelInjector {
 impl ViewModelInjector {
     /// 构造并持有全部 F 模块实例（F1-F9，B8/F6/F8 未立户不在册）。
     pub fn new(db: ShellDatabases) -> Result<Self> {
-        Self::new_with_export_file_system(db, Arc::new(StdExportFileSystem))
+        Self::new_with_collection_source(
+            db,
+            Arc::new(StdExportFileSystem),
+            production_collection_source(),
+        )
     }
 
     pub fn new_with_export_file_system(
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
     ) -> Result<Self> {
+        Self::new_with_collection_source(db, file_system, production_collection_source())
+    }
+
+    /// T31：候选采集数据源注入点（生产 = OverpassDataSource 直连；
+    /// 测试注入罐头 Overpass 响应，离线可测）。
+    pub fn new_with_collection_source(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+        collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
+    ) -> Result<Self> {
         let (campus_search_ipc, campus_search_transport) =
             crate::production::campus_search::campus_search_production_transport();
-        Self::new_with_campus_search_transport_and_ipc(
+        Self::new_with_sources(
             db,
             file_system,
             campus_search_ipc,
             campus_search_transport,
+            collection_source,
         )
     }
 
@@ -233,19 +248,21 @@ impl ViewModelInjector {
     ) -> Result<Self> {
         let (campus_search_ipc, _) =
             crate::production::campus_search::campus_search_production_transport();
-        Self::new_with_campus_search_transport_and_ipc(
+        Self::new_with_sources(
             db,
             file_system,
             campus_search_ipc,
             transport,
+            production_collection_source(),
         )
     }
 
-    fn new_with_campus_search_transport_and_ipc(
+    fn new_with_sources(
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
         campus_search_ipc: mpsc::Sender<String>,
         campus_search_transport: CampusSearchTransport,
+        collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
     ) -> Result<Self> {
         let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
@@ -254,7 +271,6 @@ impl ViewModelInjector {
             file_system,
             projects.shared_database(),
         ));
-        let (collection_ipc, collection_source) = collection_production_source();
         let collection_flow = Arc::new(CollectionFlow::new(
             projects.shared_database(),
             collection_source,
@@ -268,7 +284,6 @@ impl ViewModelInjector {
             review: None,
             export_flow,
             collection_flow,
-            collection_ipc,
             campus_search_ipc,
             campus_search_transport: Arc::new(campus_search_transport),
         })
@@ -449,11 +464,6 @@ impl ViewModelInjector {
         self.collection_flow.clone()
     }
 
-    /// 生产候选数据源 WebView 桥的响应通道（壳把原始 IPC 原样转交）。
-    pub(crate) fn collection_ipc_sender(&self) -> mpsc::Sender<String> {
-        self.collection_ipc.clone()
-    }
-
     /// 校区在线搜索 WebView 桥的响应通道（壳把原始 IPC 原样转交）。
     pub(crate) fn campus_search_ipc_sender(&self) -> mpsc::Sender<String> {
         self.campus_search_ipc.clone()
@@ -544,89 +554,43 @@ impl ViewModelInjector {
     }
 }
 
-/// 采集查询请求序号（WebView 桥响应与请求配对，防旧响应串台）。
-static COLLECTION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
-
-/// 生产候选数据源：F4 `DataSource` 适配器（高德），经地图 WebView JS 桥拉取。
+/// 生产候选数据源：F4 `DataSource` 适配器（OSM/Overpass，T31）。
 ///
-/// 构造期接线（ADR-0037 壳接线澄清）：组合根创建数据源适配器并注入 A1；
-/// 脚本生成、请求配对与信封解析都在适配器内，S1 只把原始 IPC 消息转交
-/// 响应通道。真实高德在线链路仍留发布前验证；测试注入罐头响应。
-fn collection_production_source() -> (
-    mpsc::Sender<String>,
-    Arc<dyn data_acquisition::DataSource + Send + Sync>,
-) {
-    let (response_tx, response_rx) = mpsc::channel::<String>();
-    // Receiver 非 Sync：桥闭包要求 Send + Sync，用互斥包一层。
-    let response_rx = Arc::new(std::sync::Mutex::new(response_rx));
-    let source = GaodeDataSource::new(Box::new(move |boundary: &Boundary| {
-        let request_id = COLLECTION_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
-        let Some(center) = collection_centroid(&boundary.coordinates) else {
-            return Err("边界坐标无法计算查询中心".to_owned());
-        };
-        let script = collection_request_script(request_id, center);
-        // 脚本求值必须回到 UI 线程（map_webview 状态为线程局部）。
-        let _ = slint::invoke_from_event_loop(move || {
-            crate::map_webview::evaluate_script(&script);
-        });
-        // 等待匹配的采集响应（30 秒超时；测试直接注入罐头响应）。
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Err("采集响应超时".to_owned());
-            }
-            let message = response_rx
-                .lock()
-                .expect("collection response lock")
-                .recv_timeout(remaining)
-                .map_err(|_| "采集响应超时".to_owned())?;
-            let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else {
-                continue;
-            };
-            if envelope.get("type").and_then(serde_json::Value::as_str)
-                != Some("collection_response")
-            {
-                continue;
-            }
-            if envelope
-                .get("request_id")
-                .and_then(serde_json::Value::as_u64)
-                != Some(request_id)
-            {
-                continue;
-            }
-            return envelope
-                .get("payload")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| "采集响应缺少 payload".to_owned());
-        }
+/// - Overpass 传输走 **Rust 侧直连**（端点 de → kumi → mail.ru 回退、每端点
+///   12s 超时、失败返回结构化 `SourceUnreachable`），不再依赖 WebView fetch/CORS；
+/// - 候选建筑查询为 union 写法 `building=*`（面几何 + name/building:levels 标签）；
+/// - 命名两级：OSM `name` 优先；缺名关键建筑由 regeo 补名并缓存
+///   （Web 服务 Key 只经设置页录入，这里按数据库路径实时读取）。
+///
+/// 构造期接线（ADR-0037 壳接线澄清）：组合根创建数据源适配器并注入 A1。
+fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send + Sync> {
+    let transport: OverpassTransport = Box::new(move |boundary: &Boundary| {
+        // 边界为 GCJ-02；工单禁止 GCJ→WGS 反向，查询窗口用“边界包围盒 +
+        // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
+        let bbox =
+            boundary_bbox(boundary, 0.01).ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
+        let query = buildings_query(bbox);
+        OverpassClient::production()
+            .query_with_fallback(&query)
+            .map_err(|message| format!("Overpass 采集查询失败：{message}"))
+    });
+    // regeo Web 服务 Key 提供器：只经设置页录入（B2 app_settings），实时读取。
+    let key_provider: data_acquisition::regeo::KeyProvider = Box::new(move || {
+        Database::open(DEV_DB_FILE)
+            .ok()
+            .and_then(|db| {
+                AppSettingsApi::get_setting(&db, AppSettingKey::GaodeWebServiceKey)
+                    .ok()
+                    .flatten()
+            })
+            .filter(|key| !key.is_empty())
+    });
+    let namer = Arc::new(RegeoNamer::production(key_provider));
+    let enricher: Option<NameEnricher> = Some(Box::new(move |entity: &RawEntity| {
+        let geometry = entity.source_geometry.as_ref()?;
+        namer.name_for_geometry(geometry)
     }));
-    (response_tx, Arc::new(source))
-}
-
-/// 边界坐标 → 查询中心（真实边界数据的质心，非固定坐标兜底）。
-fn collection_centroid(coordinates: &serde_json::Value) -> Option<(f64, f64)> {
-    let points = coordinates.as_array()?.first()?.as_array()?;
-    let mut total = (0.0, 0.0);
-    let mut count = 0.0;
-    for point in points {
-        let pair = point.as_array()?;
-        total.0 += pair.first()?.as_f64()?;
-        total.1 += pair.get(1)?.as_f64()?;
-        count += 1.0;
-    }
-    (count > 0.0).then_some((total.0 / count, total.1 / count))
-}
-
-/// 高德 WebView 采集查询脚本（发布前人工验证的在线链路；M2 用测试桩）。
-fn collection_request_script(request_id: u64, center: (f64, f64)) -> String {
-    format!(
-        "(function(){{AMap.plugin('AMap.PlaceSearch',function(){{var search=new AMap.PlaceSearch({{pageSize:100}});search.searchNearBy('',[{lon},{lat}],3000,function(status,result){{var pois=(result&&result.poiList&&result.poiList.pois)||[];var normalized=pois.map(function(poi){{return {{id:poi.id,name:poi.name,address:poi.address,location:poi.location,typecode:poi.typeCode||poi.typecode||poi.type_code||'',type:poi.type||''}};}});var payload={{status:status==='complete'?'1':'0',info:status,pois:normalized}};window.ipc.postMessage(JSON.stringify({{type:'collection_response',request_id:{request_id},payload:JSON.stringify(payload)}}));}});}});}})();",
-        lon = center.0,
-        lat = center.1
-    )
+    Arc::new(OverpassDataSource::new(transport).with_name_enricher(enricher))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

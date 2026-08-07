@@ -1,6 +1,9 @@
-//! 屏 4 边界编辑地图页生成 (T24) + T25 朝向模式扩展
+//! 屏 4 边界编辑地图页生成 (T24) + T25 朝向模式扩展 + T31 Rust 侧直连
 //!
-//! OSM 自动获取优先 (ADR-0029): Overpass fetch → 多边形提取 → GCJ-02 转换 → 绘制
+//! OSM 自动获取优先 (ADR-0029): **T31 起 Overpass 查询、Nominatim 校名解析、
+//! WGS-84 → GCJ-02 转换与候选排序全部在 Rust 侧**（绕开 WebView CORS；
+//! 调研根因见 `docs/research/candidate-data-sources-and-naming.md` §4.2），
+//! JS 只发 `map_ready` 就绪信号并接收 `drawBoundaryGcj(GCJ-02 坐标)` 直接绘制。
 //! 人工调整：PolygonEditor 拖拽顶点 → IPC 回传更新坐标
 //! 人工圈画兜底：点击落点模式 (沿用 T23 协议)
 //! T25: 同一页面扩展朝向模式 —— 已确认边界半透明显示，点击两点画参考线。
@@ -199,7 +202,11 @@ const ORIENTATION_SCRIPT: &str = r#"
         }
       }, 500);
     } else {
-      setTimeout(fetchOverpassBoundary, 1000);
+      // T31：非朝向模式由主脚本 initWithAnchor 发送 map_ready，Rust 侧直连 OSM
+      setStatus('正在从 OSM 自动获取边界...', '');
+      if (window.ipc && window.ipc.postMessage) {
+        window.ipc.postMessage(JSON.stringify({ type: 'map_ready' }));
+      }
     }
   };
 })();
@@ -209,15 +216,15 @@ const ORIENTATION_SCRIPT: &str = r#"
 /// 生成边界编辑地图页 HTML
 ///
 /// **功能清单**:
-/// 1. Overpass fetch: 锚点为中心半径 1000m 查询 `amenity~university|college|school`
-/// 2. 多边形提取：way/relation 的 geometry 转坐标数组
-/// 3. GCJ-02 转换：AMap.convertFrom(WGS-84 → GCJ-02)
-/// 4. 自动绘制：converted boundary 作为初始多边形
-/// 5. 编辑支持：PolygonEditor 插件启用后，用户拖拽顶点
-/// 6. 人工圈画兜底：查询失败/无数据 → 提示 → 点击落点模式
-/// 7. T25: 朝向模式扩展
-/// 8. IPC 协议扩展:
-///    - `osm_elements`: 原始要素 JSON(经度，纬度数组×N)
+/// 1. 地图加载（高德 JS API；锚点 GCJ-02 直接作为中心）
+/// 2. `map_ready` IPC：Rust 侧发起 Nominatim → Overpass（端点回退）→
+///    WGS-84 → GCJ-02 → ADR-0029 排序（T31，不再依赖 WebView fetch/CORS）
+/// 3. 自动绘制：Rust 回传的 GCJ-02 坐标经 `drawBoundaryGcj` 直接上屏
+/// 4. 编辑支持：PolygonEditor 插件启用后，用户拖拽顶点
+/// 5. 人工圈画兜底：查询失败/无数据 → 提示 → 点击落点模式
+/// 6. T25: 朝向模式扩展
+/// 7. IPC 协议扩展:
+///    - `map_ready`: 地图就绪（T31 触发 Rust 侧 OSM 自动获取）
 ///    - `boundary_update`: 编辑后的多边形坐标 `{type:"boundary_update", coords:[lng,lat,...]}`
 ///    - `manual_point`: 人工圈画落点 `"lng,lat"`
 ///    - `manual_cancel`: 撤销最后一点 `{type:"manual_cancel"}`
@@ -229,7 +236,8 @@ const ORIENTATION_SCRIPT: &str = r#"
 /// **红线**:
 /// - 密钥只经 F1(通过 map_page.rs 现有校验);禁止硬编码真实 key
 /// - 禁止候选列表 UI(ADR-0029)
-/// - 未做 GCJ-02 转换的坐标禁止上屏 (必须调用 convertFrom)
+/// - 未做 GCJ-02 转换的坐标禁止上屏（T31：转换在 Rust 侧完成，JS 不再 convertFrom）
+/// - 署名：OSM 数据 ODbL，页面保留 `© OpenStreetMap contributors`
 pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<String> {
     // 双重校验：API key + 安全密钥均为纯字母数字
     if config.api_key.is_empty() || !config.api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -282,6 +290,11 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
     max-width: calc(100% - 20px); box-sizing: border-box;
   }}
+  #osm-attribution {{
+    position: absolute; bottom: 4px; left: 8px; z-index: 999;
+    font-size: 10px; color: #666;
+    background: rgba(255,255,255,0.72); padding: 2px 6px; border-radius: 3px;
+  }}
   button.control-btn {{
     padding: 6px 12px; font-size: 12px;
     background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;
@@ -330,6 +343,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 <div id="status-panel">正在初始化...</div>
 <div id="map-container"></div>
 <div id="map-toolbar"></div>
+<div id="osm-attribution">© OpenStreetMap contributors</div>
 <script src="{cdn_url}"></script>
 <script>
   var map;
@@ -339,8 +353,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   var manualPoints = [];   // 人工圈画的点序列
   var isEditMode = false;  // true = 编辑模式 (有 OSM 边界), false = 人工圈画模式
   var previewLine = null;  // Manual mode preview line
-  var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};  // 校区锚点 (WGS-84)
-  var osmBoundaryData = null;  // 从 Overpass 获取的原始数据
+  var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};  // 校区锚点 (GCJ-02，来自高德 POI)
 
   var statusPanel = document.getElementById('status-panel');
 
@@ -349,180 +362,51 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     statusPanel.className = type || '';
   }}
 
-  // 红线：未做 GCJ-02 转换的坐标禁止上屏——先转换锚点，再用 GCJ-02 中心创建地图
-  function initWithConvertedAnchor() {{
-    AMap.convertFrom([anchorPoint.lng, anchorPoint.lat], 'gps', function(status, result) {{
-      var gcjCenter;
-      if (status === 'complete' && result.info === 'ok') {{
-        gcjCenter = result.locations[0];
-      }} else {{
-        // Conversion fails offline: fallback to anchor anyway (map will be ~500m offset)
-        // No unconverted coordinate data is drawn; this is just view centering.
-        gcjCenter = {{ lng: anchorPoint.lng, lat: anchorPoint.lat }};
-      }}
-
-      try {{
-        map = new AMap.Map('map-container', {{
-          zoom: 16,
-          center: [gcjCenter.lng, gcjCenter.lat],
-          viewMode: '3D'
-        }});
-
-        // Display anchor (now with converted position)
-        new AMap.Marker({{
-          position: new AMap.LngLat(gcjCenter.lng, gcjCenter.lat),
-          label: {{ content: '📍 校区锚点', offset: new AMap.Pixel(0, -20) }}
-        }}).addTo(map);
-
-        // T25: 朝向模式入口由 ORIENTATION_SCRIPT 注入的 onMapReadyForMode 接管，
-        // 非朝向模式下直接走 OSM 边界查询，主脚本不出现朝向入口标识符。
-        if (typeof window.onMapReadyForMode === 'function') {{
-          window.onMapReadyForMode();
-        }} else {{
-          // Enter auto Overpass query after 1 second
-          setTimeout(fetchOverpassBoundary, 1000);
-        }}
-      }} catch (e) {{
-        setStatus('地图初始化失败：' + e.message, 'error');
-        enableManualMode();  // Fallback → manual drawing
-      }}
-    }});
-  }}
-
-  // ========== T24: Overpass 查询 ==========
-  // D-4：主/备用端点都带客户端超时（AbortController），挂起时快速回退人工圈画，
-  // 不再等数分钟。
-  var OSM_FETCH_TIMEOUT_MS = 12000;
-
-  function fetchWithTimeout(url, ms) {{
-    var controller = new AbortController();
-    var timer = setTimeout(function () {{ controller.abort(); }}, ms);
-    return fetch(url, {{ signal: controller.signal }}).finally(function () {{
-      clearTimeout(timer);
-    }});
-  }}
-
-  function fetchOverpassBoundary() {{
-    setStatus('正在从 OSM 查询边界...', '');
-
-    var radius = 1000;  // 半径 1000 米
-    var query = buildOverpassQuery(anchorPoint.lng, anchorPoint.lat, radius);
-
-    fetchWithTimeout('https://overpass-api.de/api/interpreter?' + encodeURIComponent(query), OSM_FETCH_TIMEOUT_MS)
-      .then(function(response) {{
-        if (!response.ok) throw new Error('OSM HTTP error: ' + response.status);
-        return response.json();
-      }})
-      .then(function(data) {{
-        handleOverpassData(data);
-      }})
-      .catch(function(err) {{
-        setStatus('查询失败，备用端点：' + err.message, 'error');
-        return fetchWithTimeout('https://overpass.kumi.systems/api/interpreter?' + encodeURIComponent(query), OSM_FETCH_TIMEOUT_MS)
-          .then(function(response) {{
-            if (!response.ok) throw new Error('备用端点失败：' + response.status);
-            return response.json();
-          }})
-          .then(function(data) {{
-            handleOverpassData(data);
-          }});
-      }})
-      .catch(function(err) {{
-        setStatus('查询失败 (' + err.message + ') → 已切换至人工圈画', 'error');
-        setTimeout(enableManualMode, 1500);
+  // T31：锚点来自高德 POI（GCJ-02），地图中心直接使用锚点，不再二次转换；
+  // OSM 边界坐标由 Rust 侧直连获取并转 GCJ-02 后经 drawBoundaryGcj 上屏。
+  function initWithAnchor() {{
+    try {{
+      map = new AMap.Map('map-container', {{
+        zoom: 16,
+        center: [anchorPoint.lng, anchorPoint.lat],
+        viewMode: '3D'
       }});
+
+      // 显示校区锚点（GCJ-02）
+      new AMap.Marker({{
+        position: new AMap.LngLat(anchorPoint.lng, anchorPoint.lat),
+        label: {{ content: '📍 校区锚点', offset: new AMap.Pixel(0, -20) }}
+      }}).addTo(map);
+
+      // T25: 朝向模式入口由 ORIENTATION_SCRIPT 注入的 onMapReadyForMode 接管，
+      // 非朝向模式下通知 Rust 侧发起 OSM 边界自动获取（T31：Rust 直连，
+      // 绕开 WebView CORS；JS 不再 fetch Overpass）。
+      if (typeof window.onMapReadyForMode === 'function') {{
+        window.onMapReadyForMode();
+      }} else {{
+        setStatus('正在从 OSM 自动获取边界...', '');
+        if (window.ipc && window.ipc.postMessage) {{
+          window.ipc.postMessage(JSON.stringify({{ type: 'map_ready' }}));
+        }}
+      }}
+    }} catch (e) {{
+      setStatus('地图初始化失败：' + e.message, 'error');
+      enableManualMode();  // Fallback → manual drawing
+    }}
   }}
 
-  function handleOverpassData(data) {{
-    var elements = data.elements.filter(function(e) {{
-      return (e.type === 'way' || e.type === 'relation') &&
-             e.tags &&
-              (e.tags.amenity === 'university' ||
-               e.tags.amenity === 'college' ||
-               e.tags.amenity === 'school');
-    }});
-
-    if (elements.length === 0) {{
-      setStatus('OSM 无此校区边界数据 → 已切换至人工圈画', 'error');
+  // ========== T31: GCJ-02 直接绘制 ==========
+  // Rust 侧完成 Nominatim 校名解析 → Overpass 端点回退查询 → WGS-84 批量转
+  // GCJ-02（开源转换，~1m 精度）→ ADR-0029 排序后，经 evaluate_script 调本
+  // 函数直接上屏（坐标已是 GCJ-02，不再调用 AMap.convertFrom）。
+  function drawBoundaryGcj(gcjCoords, sourceName) {{
+    if (!gcjCoords || gcjCoords.length < 3) {{
+      setStatus('OSM 边界坐标无效 → 人工圈画', 'error');
       enableManualMode();
       return;
     }}
-
-    // Normalize & send to Rust for sorting
-    var normalized = normalizeElements(elements);
-    setStatus('正在按规则自动选取最匹配边界...', '');
-    window.ipc.postMessage(JSON.stringify({{ type: 'osm_elements', elements: normalized }}));
-  }}
-
-  function buildOverpassQuery(lng, lat, radius) {{
-    var latDelta = radius / 111320.0;
-    var lngDelta = radius / (111320.0 * Math.abs(Math.cos(lat * Math.PI / 180)));
-    return '[out:json][timeout:45];' +
-      '(way["amenity"~"university|college|school"](' +
-        (lat - latDelta) + ',' + (lng - lngDelta) + ',' +
-        (lat + latDelta) + ',' + (lng + lngDelta) + ');' +
-       'relation["amenity"~"university|college|school"](' +
-        (lat - latDelta) + ',' + (lng - lngDelta) + ',' +
-        (lat + latDelta) + ',' + (lng + lngDelta) + '););out geom;';
-  }}
-
-  // Extract polygon from way or relation element (for overpass out geom)
-  function extractPolygon(element) {{
-    if (!element.geometry) return null;
-    if (element.type === 'way') {{
-      // [{{lat:,lon:}},...] → [[lon,lat],...]
-      return element.geometry.map(function(p) {{ return [p.lon, p.lat]; }});
-    }}
-    if (element.type === 'relation') {{
-      // Stitch outer members (concatenate their geometries)
-      var coords = [];
-      element.members.forEach(function(m) {{
-        if ((m.role === 'outer' || m.role === '') && m.geometry) {{
-          coords.push.apply(coords, m.geometry.map(function(p) {{ return [p.lon, p.lat]; }}));
-        }}
-      }});
-      return coords.length > 0 ? coords : null;
-    }}
-    return null;
-  }}
-
-  // Normalize OSM elements before sending to Rust
-  function normalizeElements(elements) {{
-    return elements.map(function(e) {{
-      var normalized = {{ type: e.type, id: e.id, tags: e.tags, members: [], geometry: extractPolygon(e) }};
-      if (!normalized.geometry) return null;
-      return normalized;
-    }}).filter(function(e) {{ return e !== null; }});
-  }}
-
-  // ========== T24: GCJ-02 坐标转换 ==========
-  // 由 Rust 排序选定后经 evaluate_script 调用 (Rust→JS 通道，
-  // 传入 WGS-84 原始坐标；本函数负责 convertFrom 转换后才上屏——
-  // 红线：未做 GCJ-02 转换的坐标禁止上屏)
-  function convertAndDraw(wgsCoords, sourceName) {{
-    setStatus('正在转换 WGS-84 到 GCJ-02 坐标系...', '');
-
-    // Convert WGS-84 to GCJ-02 in chunks of 40 pairs
-    function convertChunked(startIdx, acc) {{
-      if (startIdx >= wgsCoords.length) {{
-        // All done
-        drawBoundary(acc, sourceName, true);
-        setStatus('来自 OSM: ' + sourceName + ' ✓', 'success');
-        return;
-      }}
-      var endIdx = Math.min(startIdx + 40, wgsCoords.length);
-      var chunk = wgsCoords.slice(startIdx, endIdx);
-      AMap.convertFrom(chunk, 'gps', function(status, result) {{
-        if (status !== 'complete' || result.info !== 'ok') {{
-          setStatus('坐标转换失败 → 人工圈画', 'error');
-          enableManualMode();
-          return;
-        }}
-        convertChunked(endIdx, acc.concat(result.locations));
-      }});
-    }}
-
-    convertChunked(0, []);
+    drawBoundary(gcjCoords, sourceName, true);
+    setStatus('来自 OSM: ' + sourceName + ' ✓', 'success');
   }}
 
   function drawBoundary(coords, name, editable) {{
@@ -733,7 +617,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   if (typeof AMap === 'undefined') {{
     setStatus('高德 SDK 加载中...', '');
   }} else {{
-    initWithConvertedAnchor();  // Convert anchor first, then init map
+    initWithAnchor();  // T31: 锚点 GCJ-02 直接初始化（Rust 侧负责坐标转换）
   }}
 </script>
 {multi_area_script}
@@ -763,26 +647,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn html_contains_overpass_query_logic() {
+    fn html_triggers_rust_side_overpass_and_keeps_osm_attribution() {
+        // T31：Overpass 查询改 Rust 侧直连（绕开 WebView CORS），
+        // JS 只发 map_ready；页面保留 OSM 署名（ODbL）。
         let config =
             BoundaryEditPageConfig::new("abc123DEF456", "xyz789GHI012").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
-        assert!(html.contains("fetchOverpassBoundary"));
-        assert!(html.contains("overpass-api.de"));
-        assert!(html.contains("amenity\"~\"university|college|school\""));
+        assert!(html.contains("map_ready"));
+        assert!(
+            !html.contains("fetchOverpassBoundary"),
+            "JS 不再直接 fetch Overpass"
+        );
+        assert!(!html.contains("overpass-api.de"), "端点只存在于 Rust 侧");
+        assert!(
+            !html.contains("university|college|school"),
+            "JS 不再出现 | 正则"
+        );
+        assert!(
+            html.contains("© OpenStreetMap contributors"),
+            "必须保留 OSM 署名"
+        );
     }
 
     #[test]
-    fn overpass_fetches_have_client_side_timeout() {
-        // D-4：主端点与备用端点都必须带 AbortController 客户端超时，
-        // 挂起时快速回退人工圈画（不再等约 6 分钟）。
+    fn overpass_queries_are_rust_side_without_webview_fetch() {
+        // T31：查询与端点回退全部在 Rust 侧（data-acquisition::overpass），
+        // WebView 不再承担 fetch/超时/回退职责。
         let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
-        assert!(html.contains("AbortController"));
-        assert!(html.contains("OSM_FETCH_TIMEOUT_MS"));
-        assert!(html.contains("controller.abort()"));
-        assert!(html.contains("fetchWithTimeout"));
-        assert!(html.contains("overpass.kumi.systems"));
+        assert!(!html.contains("AbortController"));
+        assert!(!html.contains("fetchWithTimeout"));
+        assert!(!html.contains("OSM_FETCH_TIMEOUT_MS"));
+        assert!(!html.contains("overpass.kumi.systems"));
     }
 
     #[test]
@@ -796,11 +692,17 @@ mod tests {
     }
 
     #[test]
-    fn html_contains_gcj02_conversion() {
+    fn html_draws_preconverted_gcj02_without_js_conversion() {
+        // T31：WGS-84 → GCJ-02 转换在 Rust 侧完成，JS 直接绘制 GCJ-02 坐标，
+        // 不再依赖 AMap.convertFrom（40 点/片官方接口留在 WebView 已无必要）。
         let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
-        assert!(html.contains("AMap.convertFrom"));
-        assert!(html.contains("convertAndDraw"));
+        assert!(html.contains("drawBoundaryGcj"));
+        assert!(!html.contains("convertAndDraw"));
+        assert!(
+            !html.contains("AMap.convertFrom(["),
+            "JS 不得再发起 convertFrom 调用"
+        );
     }
 
     #[test]
@@ -836,10 +738,12 @@ mod tests {
     #[test]
     fn html_sorting_stays_out_of_js() {
         // 红线：排序逻辑必须在 Rust 且可单测，禁止只写进 JS——
-        // JS 只发 osm_elements 等 Rust 回复 convertAndDraw/enableManualMode
+        // T31 起查询/排序全部在 Rust 侧，JS 只接收 drawBoundaryGcj/enableManualMode
         let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
-        assert!(html.contains("osm_elements"));
+        assert!(!html.contains("osm_elements"), "JS 不再转发 OSM 原始要素");
+        assert!(!html.contains("findBestMatch"));
+        assert!(html.contains("drawBoundaryGcj"));
         assert!(!html.contains("findBestMatch"));
     }
 

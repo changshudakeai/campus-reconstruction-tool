@@ -67,7 +67,8 @@ impl CollectionProductionAdapter {
             .iter()
             .map(|key| l10n.t(key))
             .collect();
-        let source_label = l10n.t("collection.source_gaode");
+        // T31：候选采集源已切 OSM/Overpass（高德点位不再作为候选几何来源）
+        let source_label = l10n.t("collection.source_osm");
         let collect_label = l10n.t("collection.collect_button");
         let category_skip_label = l10n.t("collection.skippable");
         let report_entry_label = l10n.t("audit.report_entry");

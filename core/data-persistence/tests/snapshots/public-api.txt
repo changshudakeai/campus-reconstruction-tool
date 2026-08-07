@@ -5,6 +5,7 @@ pub data_persistence::AppSettingKey::DefaultExportLocation
 pub data_persistence::AppSettingKey::FirstRunCompleted
 pub data_persistence::AppSettingKey::GaodeApiKey
 pub data_persistence::AppSettingKey::GaodeSecurityKey
+pub data_persistence::AppSettingKey::GaodeWebServiceKey
 pub data_persistence::AppSettingKey::Language
 pub data_persistence::AppSettingKey::LastUsedCampus
 pub data_persistence::AppSettingKey::MinecraftVersion

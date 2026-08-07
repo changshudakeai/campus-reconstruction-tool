@@ -6,7 +6,9 @@
 //! `super::workspace_boundary`（会话状态 / 共享上下文 / 几何与通知辅助）。
 
 use std::collections::HashMap;
+use std::sync::mpsc;
 
+use data_acquisition::overpass::{CampusBoundaryFetcher, CampusBoundaryResult};
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryUiEvent,
     CoordinateConverter, EventResult, MercatorCoord, Orientation, OrientationCalculator, Vertex,
@@ -64,6 +66,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
             WorkspaceRequest::TutorialSkipAll => self.tutorial_skip_all(),
             WorkspaceRequest::MapStatus { available } => self.map_status(available),
             WorkspaceRequest::MapIpc { message } => self.map_ipc(&message),
+            WorkspaceRequest::PollBoundaryFetch => self.poll_boundary_fetch(),
         }
     }
 }
@@ -668,6 +671,7 @@ impl WorkspaceProductionAdapter {
             return Presentation::ready(self.context.page());
         };
         match parsed {
+            IpcMessage::MapReady => self.start_boundary_fetch(),
             IpcMessage::OsmElements { elements } => self.osm_elements(elements),
             IpcMessage::ConfirmBoundary { coords } => self.confirm_map_boundary(&coords),
             IpcMessage::ConfirmBoundaryGeometry {
@@ -692,6 +696,142 @@ impl WorkspaceProductionAdapter {
                 ))
             }
         }
+    }
+
+    /// T31：地图就绪 → 后台线程执行 OSM 边界自动获取（Nominatim → Overpass
+    /// 端点回退 → WGS→GCJ → ADR-0029 排序），不阻塞 UI 线程；结果经
+    /// [`WorkspaceRequest::PollBoundaryFetch`] 轮询取回。
+    fn start_boundary_fetch(&mut self) -> Presentation<WorkspacePageState> {
+        let Some((campus_name, anchor_lon, anchor_lat)) = ({
+            let session = self.context.session.borrow();
+            session
+                .active_context
+                .as_ref()
+                .map(|context| {
+                    (
+                        context.campus_name.clone(),
+                        context.anchor_lng,
+                        context.anchor_lat,
+                    )
+                })
+                .or_else(|| {
+                    self.context
+                        .injector
+                        .borrow()
+                        .projects()
+                        .landing_campus()
+                        .ok()
+                        .flatten()
+                        .map(|campus| (campus.name, campus.anchor_lng, campus.anchor_lat))
+                })
+        }) else {
+            // 没有真实校区上下文时不得用固定坐标参与 OSM 查询：直接人工圈画。
+            crate::map_webview::evaluate_script("enableManualMode();");
+            let l10n = self.l10n();
+            return Presentation::ready(self.context.page()).with_notification(info_fact(
+                &l10n,
+                "boundary.osm_not_found_title",
+                &l10n.t("boundary.osm_not_found_body"),
+            ));
+        };
+        {
+            let session = self.context.session.borrow();
+            if session.pending_boundary_fetch.is_some() {
+                // 已有进行中的获取：保持处理态，不重复发起。
+                return Presentation::processing(self.context.page(), Progress::ZERO);
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let fetcher = CampusBoundaryFetcher::production();
+            let outcome = fetcher.fetch_campus(&campus_name, anchor_lon, anchor_lat);
+            let _ = tx.send(outcome);
+        });
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.pending_boundary_fetch = Some(rx);
+            session.map_processing = true;
+        }
+        Presentation::processing(self.context.page(), Progress::ZERO)
+    }
+
+    /// 轮询后台边界获取结果：终态到达即应用（绘制/人工圈画兜底），未到保持处理态。
+    fn poll_boundary_fetch(&mut self) -> Presentation<WorkspacePageState> {
+        let outcome = {
+            let mut session = self.context.session.borrow_mut();
+            let Some(receiver) = session.pending_boundary_fetch.as_mut() else {
+                return Presentation::ready(self.context.page());
+            };
+            match receiver.try_recv() {
+                Ok(outcome) => {
+                    session.pending_boundary_fetch = None;
+                    session.map_processing = false;
+                    Some(outcome)
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    session.pending_boundary_fetch = None;
+                    session.map_processing = false;
+                    None
+                }
+            }
+        };
+        let Some(outcome) = outcome else {
+            return Presentation::processing(self.context.page(), Progress::ZERO);
+        };
+        self.apply_boundary_fetch_outcome(outcome)
+    }
+
+    /// 应用边界获取结果：自动绘制（来源标注）或人工圈画兜底（明确提示）。
+    fn apply_boundary_fetch_outcome(
+        &mut self,
+        outcome: CampusBoundaryResult,
+    ) -> Presentation<WorkspacePageState> {
+        let l10n = self.l10n();
+        let mut presentation = Presentation::ready(self.context.page());
+        match outcome {
+            CampusBoundaryResult::AutoSelected {
+                name,
+                gcj02,
+                source,
+                candidate_count,
+            } => {
+                let coords_json =
+                    serde_json::to_string(&gcj02).unwrap_or_else(|_| "[]".to_string());
+                let name_json =
+                    serde_json::to_string(&name).unwrap_or_else(|_| "\"未知校区\"".to_string());
+                crate::map_webview::evaluate_script(&format!(
+                    "drawBoundaryGcj({coords_json}, {name_json});"
+                ));
+                let body = l10n.t_with_array(
+                    "boundary.osm_auto_selected_body",
+                    &[&name, &candidate_count.to_string(), &source.to_string()],
+                );
+                presentation = presentation.with_notification(info_fact(
+                    &l10n,
+                    "boundary.osm_auto_selected_title",
+                    &body,
+                ));
+            }
+            CampusBoundaryResult::NotFound => {
+                crate::map_webview::evaluate_script("enableManualMode();");
+                presentation = presentation.with_notification(info_fact(
+                    &l10n,
+                    "boundary.osm_not_found_title",
+                    &l10n.t("boundary.osm_not_found_body"),
+                ));
+            }
+            CampusBoundaryResult::Unreachable { message } => {
+                log::warn!("OSM 边界自动获取失败（人工圈画兜底）: {message}");
+                crate::map_webview::evaluate_script("enableManualMode();");
+                presentation = presentation.with_notification(info_fact(
+                    &l10n,
+                    "boundary.osm_not_found_title",
+                    &l10n.t("boundary.osm_unreachable_body"),
+                ));
+            }
+        }
+        presentation
     }
 
     fn osm_elements(

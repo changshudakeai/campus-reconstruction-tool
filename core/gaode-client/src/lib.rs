@@ -29,6 +29,7 @@
 mod boundary_edit_map_page;
 mod boundary_edit_multipolygon_script;
 mod boundary_sorting;
+mod coords;
 mod error;
 mod map_page;
 mod poi;
@@ -40,6 +41,7 @@ pub use boundary_edit_map_page::{
     GAODE_CDN_URL_TEMPLATE as BOUNDARY_CDN_TEMPLATE,
 };
 pub use boundary_sorting::{BoundaryCandidateScore, BoundarySorter};
+pub use coords::{convert_coords_wgs84_to_gcj02, convert_pairs_wgs84_to_gcj02, wgs84_to_gcj02};
 pub use error::{Error, Result};
 pub use map_page::{
     build_map_page_html, build_pick_point_page_html, MapPageConfig, GAODE_CDN_URL_TEMPLATE,

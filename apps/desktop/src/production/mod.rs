@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gaode_client::IpcMessage;
 use localization::Localization;
 use notification_center::{Notification, NotificationActionOutcome, NotificationCenter};
 use slint::ComponentHandle;
@@ -137,7 +138,7 @@ pub(crate) struct ProductionEntries {
     pending_input: Option<PendingInput>,
     export_poll_timer: slint::Timer,
     collection_poll_timer: slint::Timer,
-    collection_ipc: std::sync::mpsc::Sender<String>,
+    boundary_fetch_poll_timer: slint::Timer,
     campus_search_ipc: std::sync::mpsc::Sender<String>,
     campus_search_poll_timer: slint::Timer,
 }
@@ -166,10 +167,6 @@ impl ProductionEntries {
         let collection_flow = {
             let injector_ref = injector.borrow();
             injector_ref.collection_flow()
-        };
-        let collection_ipc = {
-            let injector_ref = injector.borrow();
-            injector_ref.collection_ipc_sender()
         };
         let (campus_search_ipc, campus_search_transport) = {
             let injector_ref = injector.borrow();
@@ -225,7 +222,7 @@ impl ProductionEntries {
             pending_input: None,
             export_poll_timer: slint::Timer::default(),
             collection_poll_timer: slint::Timer::default(),
-            collection_ipc,
+            boundary_fetch_poll_timer: slint::Timer::default(),
             campus_search_ipc,
             campus_search_poll_timer: slint::Timer::default(),
         }
@@ -283,6 +280,7 @@ impl ProductionEntries {
             SettingsRequest::SaveKeys {
                 api_key: window.get_gaode_api_key().to_string(),
                 security_key: window.get_gaode_security_key().to_string(),
+                web_service_key: window.get_gaode_web_service_key().to_string(),
             },
         );
     }
@@ -344,6 +342,7 @@ impl ProductionEntries {
                 // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                 self.export_poll_timer.stop();
                 self.collection_poll_timer.stop();
+                self.boundary_fetch_poll_timer.stop();
                 self.export
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.collection
@@ -624,6 +623,33 @@ impl ProductionEntries {
         );
     }
 
+    /// T31：Rust 侧 OSM 边界自动获取后台轮询（20ms 采样，终态即停）。
+    fn start_boundary_fetch_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().boundary_fetch_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let center = entries.borrow().center.clone();
+                let presentation = entries.borrow_mut().workspace.show(
+                    &window,
+                    &center,
+                    WorkspaceRequest::PollBoundaryFetch,
+                );
+                if !matches!(presentation.operation(), OperationState::Processing { .. }) {
+                    entries.borrow_mut().boundary_fetch_poll_timer.stop();
+                }
+            },
+        );
+    }
+
     pub(crate) fn show_notifications(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.notification
@@ -750,7 +776,6 @@ impl ProductionEntries {
     /// 响应通道（D-3：信封匹配在校区搜索传输内），并交给工作区功能入口
     /// 解析边界/朝向消息。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
-        let _ = self.collection_ipc.send(message.to_owned());
         let _ = self.campus_search_ipc.send(message.to_owned());
         let presentation = self.workspace.show(
             window,
@@ -778,6 +803,7 @@ impl ProductionEntries {
             NavigationDecision::Show(screen) => {
                 self.export_poll_timer.stop();
                 self.collection_poll_timer.stop();
+                self.boundary_fetch_poll_timer.stop();
                 self.export
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.collection
@@ -1268,6 +1294,10 @@ impl ProductionEntries {
         window.on_workspace_map_ipc(move |message| {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_map_ipc(&window, &message);
+                // T31：地图就绪 → Rust 侧 OSM 边界自动获取（后台线程轮询取回）
+                if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(&message) {
+                    ProductionEntries::start_boundary_fetch_polling(&shared, &window);
+                }
             }
         });
 
@@ -1290,6 +1320,10 @@ impl ProductionEntries {
         crate::map_webview::register_ipc_handler(Rc::new(move |message: &str| {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_map_ipc(&window, message);
+                // T31：同上（wry IPC 直达路径同样触发后台获取轮询）
+                if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(message) {
+                    ProductionEntries::start_boundary_fetch_polling(&shared, &window);
+                }
             }
         }));
 

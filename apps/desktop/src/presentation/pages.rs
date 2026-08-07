@@ -106,6 +106,7 @@ pub enum SettingsRequest {
     SaveKeys {
         api_key: String,
         security_key: String,
+        web_service_key: String,
     },
     /// 测试高德连通性（使用页面当前输入）。
     TestConnection {
@@ -144,6 +145,9 @@ pub struct SettingsPageState {
     pub security_key_label: String,
     pub security_key_placeholder: String,
     pub security_key: String,
+    pub web_service_key_label: String,
+    pub web_service_key_placeholder: String,
+    pub web_service_key: String,
     pub save_label: String,
     pub test_label: String,
     pub clear_keys_label: String,
@@ -175,6 +179,10 @@ impl WindowPageState for SettingsPageState {
         window.set_gaode_security_key_label(self.security_key_label.clone().into());
         window.set_gaode_security_key_placeholder(self.security_key_placeholder.clone().into());
         window.set_gaode_security_key(self.security_key.clone().into());
+        window.set_gaode_web_service_key_label(self.web_service_key_label.clone().into());
+        window
+            .set_gaode_web_service_key_placeholder(self.web_service_key_placeholder.clone().into());
+        window.set_gaode_web_service_key(self.web_service_key.clone().into());
         window.set_gaode_save_button_label(self.save_label.clone().into());
         window.set_gaode_test_button_label(self.test_label.clone().into());
         window.set_gaode_clear_button_label(self.clear_keys_label.clone().into());
@@ -371,6 +379,9 @@ pub enum WorkspaceRequest {
     /// 地图 WebView 转交的原始 IPC 消息（由功能入口解析并应用业务规则）。
     #[doc(hidden)]
     MapIpc { message: String },
+    /// T31：轮询 Rust 侧 OSM 边界自动获取的后台结果（不阻塞 UI 线程）。
+    #[doc(hidden)]
+    PollBoundaryFetch,
     /// 朝向模式切换（两点/方位角；S1 未提交页面临时状态）。
     OrientationModeChanged { mode: String },
 }

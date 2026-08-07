@@ -225,8 +225,10 @@ impl PresentationAdapter<SettingsRequest, SettingsPageState> for SettingsProduct
             SettingsRequest::SaveKeys {
                 api_key,
                 security_key,
+                web_service_key,
             } => {
-                let result = save_gaode_keys(&mut injector, &api_key, &security_key);
+                let result =
+                    save_gaode_keys(&mut injector, &api_key, &security_key, &web_service_key);
                 let page = settings_snapshot_page(&injector, injector.l10n());
                 match result {
                     Ok(()) => Presentation::succeeded(page).with_notification(info_fact(
@@ -321,11 +323,18 @@ fn save_gaode_keys(
     injector: &mut ViewModelInjector,
     api_key: &str,
     security_key: &str,
+    web_service_key: &str,
 ) -> global_settings::Result<()> {
     injector.settings_mut().set_gaode_api_key(api_key)?;
     injector
         .settings_mut()
         .set_gaode_security_key(security_key)?;
+    // Web 服务 Key（T31 regeo）允许留空：ADR-0004 开发人员使用，非必填
+    if !web_service_key.is_empty() {
+        injector
+            .settings_mut()
+            .set_gaode_web_service_key(web_service_key)?;
+    }
     Ok(())
 }
 
@@ -343,13 +352,17 @@ fn settings_page(l10n: &Localization, snapshot: &SettingsSnapshot) -> SettingsPa
         &snapshot.settings.minecraft_version,
         snapshot.gaode_api_key.as_deref().unwrap_or_default(),
         snapshot.gaode_security_key.as_deref().unwrap_or_default(),
+        snapshot
+            .gaode_web_service_key
+            .as_deref()
+            .unwrap_or_default(),
         &snapshot.default_export_location,
     )
 }
 
 /// 设置数据无法读取时的明确失败页：不显示任何内存默认值。
 fn settings_failure_page(l10n: &Localization) -> SettingsPageState {
-    settings_page_values(l10n, "", "", "", "", "")
+    settings_page_values(l10n, "", "", "", "", "", "")
 }
 
 fn settings_page_values(
@@ -358,6 +371,7 @@ fn settings_page_values(
     minecraft_version: &str,
     api_key: &str,
     security_key: &str,
+    web_service_key: &str,
     export_location: &str,
 ) -> SettingsPageState {
     SettingsPageState {
@@ -388,6 +402,9 @@ fn settings_page_values(
         security_key_label: l10n.t("settings.gaode_security_key_label"),
         security_key_placeholder: l10n.t("settings.gaode_security_key_placeholder"),
         security_key: security_key.to_owned(),
+        web_service_key_label: l10n.t("settings.gaode_web_service_key_label"),
+        web_service_key_placeholder: l10n.t("settings.gaode_web_service_key_placeholder"),
+        web_service_key: web_service_key.to_owned(),
         save_label: l10n.t("settings.gaode_save_button"),
         test_label: l10n.t("settings.gaode_test_button"),
         clear_keys_label: l10n.t("settings.gaode_clear_button"),

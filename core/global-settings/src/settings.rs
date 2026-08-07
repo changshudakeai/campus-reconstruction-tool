@@ -122,6 +122,8 @@ pub struct SettingsSnapshot {
     pub settings: GlobalSettings,
     pub gaode_api_key: Option<String>,
     pub gaode_security_key: Option<String>,
+    /// 高德 Web 服务 Key（T31 regeo 补名；ADR-0004 开发人员使用，可留空）
+    pub gaode_web_service_key: Option<String>,
     /// 默认导出位置（未设置时为 ADR-0004 初始路径）
     pub default_export_location: String,
 }
@@ -205,6 +207,7 @@ impl SettingsManager {
             settings: self.settings()?,
             gaode_api_key: self.gaode_api_key()?,
             gaode_security_key: self.gaode_security_key()?,
+            gaode_web_service_key: self.gaode_web_service_key()?,
             default_export_location: self.default_export_location()?,
         })
     }
@@ -464,10 +467,27 @@ impl SettingsManager {
             .filter(|value| !value.is_empty()))
     }
 
+    /// 读取高德 Web 服务 Key（T31 regeo 补名；ADR-0004 开发人员使用，可留空）
+    pub fn gaode_web_service_key(&self) -> Result<Option<String>> {
+        Ok(self
+            .db
+            .get_setting(AppSettingKey::GaodeWebServiceKey)?
+            .filter(|value| !value.is_empty()))
+    }
+
+    /// 保存高德 Web 服务 Key（经格式校验：仅字母数字）
+    pub fn set_gaode_web_service_key(&mut self, key: &str) -> Result<()> {
+        validate_gaode_key(key)?;
+        self.db
+            .set_setting(AppSettingKey::GaodeWebServiceKey, key)?;
+        Ok(())
+    }
+
     /// 清除全部高德密钥（ADR-0004：一次清除已保存值与输入内容）
     pub fn clear_gaode_keys(&mut self) -> Result<()> {
         self.db.set_setting(AppSettingKey::GaodeApiKey, "")?;
         self.db.set_setting(AppSettingKey::GaodeSecurityKey, "")?;
+        self.db.set_setting(AppSettingKey::GaodeWebServiceKey, "")?;
         Ok(())
     }
 

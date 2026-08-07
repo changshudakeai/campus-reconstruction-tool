@@ -7,9 +7,11 @@ use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use data_acquisition::{DataSource, OverpassDataSource};
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
 };
+use export_flow::StdExportFileSystem;
 use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
@@ -50,9 +52,17 @@ fn collection_page_forwards_start_intent_and_presents_a1_outcome() {
 
     let directory = tempfile::tempdir().expect("临时目录");
     let database_path = directory.path().join("s1-07.db");
-    let mut injector =
-        ViewModelInjector::new(ShellDatabases::open(&database_path).expect("连接数据库"))
-            .expect("创建注入器");
+    // T31：候选采集源改为 OSM/Overpass（Rust 侧直连）；测试注入罐头空响应，
+    // 不发起真实网络请求。
+    let canned_overpass: Arc<dyn DataSource + Send + Sync> = Arc::new(OverpassDataSource::new(
+        Box::new(|_boundary: &shared_domain_types::Boundary| Ok(r#"{"elements":[]}"#.to_owned())),
+    ));
+    let mut injector = ViewModelInjector::new_with_collection_source(
+        ShellDatabases::open(&database_path).expect("连接数据库"),
+        Arc::new(StdExportFileSystem),
+        canned_overpass,
+    )
+    .expect("创建注入器");
     injector
         .settings_mut()
         .complete_first_run(&FirstRunSetup {
@@ -114,12 +124,8 @@ fn collection_page_forwards_start_intent_and_presents_a1_outcome() {
         "耗时采集启动后先呈现处理中状态，不能冻结窗口"
     );
 
-    // 推送罐头响应：A1 后台链完成时把疑点弹窗作为通知事实交给 S1，
-    // S1 在 UI 线程发布 → 弹窗显示。
-    window.invoke_workspace_map_ipc(
-        r#"{"type":"collection_response","request_id":1,"payload":"{\"status\":\"1\",\"info\":\"OK\",\"pois\":[]}"}"#
-            .into(),
-    );
+    // T31：罐头 Overpass 响应由后台 worker 直接消费（不再经 WebView IPC），
+    // A1 后台链完成时把疑点弹窗作为通知事实交给 S1，S1 在 UI 线程发布 → 弹窗显示。
     pump_until(&window, Duration::from_secs(5), |window| {
         window.get_error_dialog_visible()
     });

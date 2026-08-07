@@ -10,7 +10,10 @@
 //! 数据源方言转换，归类仍完全由 B13 引擎裁决（ADR-0011）。
 
 use data_transformers::TagMap;
-use gaode_client::{parse_location_value, parse_place_search_response, SCHOOL_TYPECODE_PREFIX};
+use gaode_client::{
+    convert_pairs_wgs84_to_gcj02, parse_location_value, parse_place_search_response,
+    wgs84_to_gcj02, SCHOOL_TYPECODE_PREFIX,
+};
 use shared_domain_types::Boundary;
 
 use crate::error::{AcquisitionError, Result};
@@ -115,15 +118,28 @@ pub type BridgeTransport =
 /// 可注入的 Overpass `out geom` 传输；生产网络由外部适配器提供。
 pub type OverpassTransport = BridgeTransport;
 
+/// 命名补强器：OSM name 缺失时补名（T31 regeo 等）；返回 `None` 表示不补。
+pub type NameEnricher = Box<dyn Fn(&RawEntity) -> Option<String> + Send + Sync>;
+
 /// OSM/Overpass 来源适配器，保留 node/way 的原始几何，不拼接 relation。
 pub struct OverpassDataSource {
     transport: OverpassTransport,
+    name_enricher: Option<NameEnricher>,
 }
 
 impl OverpassDataSource {
     pub const SOURCE_TAG: &'static str = "overpass";
     pub fn new(transport: OverpassTransport) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            name_enricher: None,
+        }
+    }
+
+    /// 注入命名补强器（仅 OSM name 缺失时调用；点位不参与补名主体）
+    pub fn with_name_enricher(mut self, enricher: Option<NameEnricher>) -> Self {
+        self.name_enricher = enricher;
+        self
     }
 }
 
@@ -145,7 +161,42 @@ impl DataSource for OverpassDataSource {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        Ok(elements.into_iter().filter_map(overpass_entity).collect())
+        let mut entities: Vec<RawEntity> =
+            elements.into_iter().filter_map(overpass_entity).collect();
+        // 采集入口坐标转换：OSM 的 WGS-84 面数据转 GCJ-02（应用工作坐标系），
+        // 原始 WGS-84 载荷仍完整保留在 source_payload 备查（T31，不做反向转换）。
+        for entity in &mut entities {
+            if let Some(geometry) = entity.source_geometry.as_mut() {
+                convert_geometry_to_gcj02(geometry);
+            }
+            // 命名两级：OSM name 优先（RawEntity::name 已取 tags.name）；
+            // 缺名的关键建筑（教学楼/图书馆/宿舍等）由补强器（regeo）补名。
+            // 点位只作证据，不参与补名主体（ADR-0040：点位不得扩面/冒充建筑）。
+            if entity.name == entity.entity_id
+                && matches!(entity.source_geometry, Some(SourceGeometry::Polygon(_)))
+            {
+                if let Some(enricher) = &self.name_enricher {
+                    if let Some(name) = enricher(entity) {
+                        entity.name = name;
+                    }
+                }
+            }
+        }
+        Ok(entities)
+    }
+}
+
+/// WGS-84 → GCJ-02 几何就地转换（点/线/面统一）
+fn convert_geometry_to_gcj02(geometry: &mut SourceGeometry) {
+    match geometry {
+        SourceGeometry::Point((lon, lat)) => {
+            let (converted_lon, converted_lat) = wgs84_to_gcj02(*lon, *lat);
+            *lon = converted_lon;
+            *lat = converted_lat;
+        }
+        SourceGeometry::LineString(points) | SourceGeometry::Polygon(points) => {
+            convert_pairs_wgs84_to_gcj02(points);
+        }
     }
 }
 
@@ -503,5 +554,124 @@ mod tests {
         };
         assert_eq!(tag_of("B01").get("building").unwrap(), "school");
         assert_eq!(tag_of("B02").get("leisure").unwrap(), "sports_centre");
+    }
+
+    // ── T31：Overpass 数据源（生产采集源）───────────────────────────
+
+    fn overpass_source(json: &str) -> OverpassDataSource {
+        let payload = json.to_owned();
+        OverpassDataSource::new(Box::new(move |_| Ok(payload.clone())))
+    }
+
+    const OVERPASS_BUILDINGS: &str = r#"{"elements":[
+        {"type":"way","id":154427164,"tags":{"building":"yes","name":"第一餐饮大楼"},"geometry":[
+            {"lat":31.0295,"lon":121.4184},{"lat":31.03,"lon":121.42},{"lat":31.028,"lon":121.421},{"lat":31.0295,"lon":121.4184}]},
+        {"type":"way","id":160634093,"tags":{"building":"university","building:levels":"6"},"geometry":[
+            {"lat":31.03,"lon":121.43},{"lat":31.031,"lon":121.431},{"lat":31.03,"lon":121.432},{"lat":31.03,"lon":121.43}]},
+        {"type":"node","id":999,"tags":{"building":"yes"},"lat":31.03,"lon":121.42},
+        {"type":"relation","id":777,"tags":{"building":"yes"}}
+    ]}"#;
+
+    #[test]
+    fn overpass_building_ways_keep_name_levels_and_polygon_geometry() {
+        let entities = overpass_source(OVERPASS_BUILDINGS)
+            .fetch_raw_entities(&boundary())
+            .unwrap();
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
+        assert_eq!(dining.name, "第一餐饮大楼", "OSM name 优先");
+        assert_eq!(dining.tags.get("building").unwrap(), "yes");
+        let hospital = entities
+            .iter()
+            .find(|e| e.entity_id == "way/160634093")
+            .unwrap();
+        assert_eq!(hospital.tags.get("building:levels").unwrap(), "6");
+        assert!(
+            matches!(hospital.source_geometry, Some(SourceGeometry::Polygon(ref p)) if p.len() == 4),
+            "way 面几何必须保留"
+        );
+    }
+
+    #[test]
+    fn overpass_wgs84_geometry_is_converted_to_gcj02_but_payload_keeps_wgs84() {
+        let entities = overpass_source(OVERPASS_BUILDINGS)
+            .fetch_raw_entities(&boundary())
+            .unwrap();
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
+        let SourceGeometry::Polygon(points) = dining.source_geometry.as_ref().unwrap() else {
+            panic!("面几何");
+        };
+        // WGS-84 (121.4184, 31.0295) → GCJ-02 应发生偏移（>0.0005°，≈50m）
+        assert!(
+            (points[0].0 - 121.4184).abs() > 0.0005,
+            "几何必须已转 GCJ-02: {:?}",
+            points[0]
+        );
+        // 原始 WGS-84 载荷原样保全
+        assert_eq!(dining.source_payload["geometry"][0]["lon"], 121.4184);
+        assert_eq!(dining.source_payload["geometry"][0]["lat"], 31.0295);
+    }
+
+    #[test]
+    fn overpass_node_stays_a_point_never_expanded_to_polygon() {
+        // ADR-0040 红线：点位只作名称/位置/来源证据，禁止固定半径/包围盒/模板扩面。
+        let entities = overpass_source(OVERPASS_BUILDINGS)
+            .fetch_raw_entities(&boundary())
+            .unwrap();
+        let node = entities.iter().find(|e| e.entity_id == "node/999").unwrap();
+        assert!(
+            matches!(node.source_geometry, Some(SourceGeometry::Point(_))),
+            "node 必须保持 Point，不得扩面: {:?}",
+            node.source_geometry
+        );
+        assert!(
+            !matches!(node.source_geometry, Some(SourceGeometry::Polygon(_))),
+            "点位禁止扩成面"
+        );
+    }
+
+    #[test]
+    fn overpass_name_enricher_fills_missing_names_with_cache() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = calls.clone();
+        let enricher: NameEnricher = Box::new(move |entity: &RawEntity| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            match entity.source_geometry.as_ref() {
+                Some(SourceGeometry::Polygon(_)) => Some("未命名建筑".to_owned()),
+                _ => None,
+            }
+        });
+        let source = overpass_source(OVERPASS_BUILDINGS).with_name_enricher(Some(enricher));
+        let entities = source.fetch_raw_entities(&boundary()).unwrap();
+        let hospital = entities
+            .iter()
+            .find(|e| e.entity_id == "way/160634093")
+            .unwrap();
+        assert_eq!(hospital.name, "未命名建筑");
+        // node 是点位：补名器不参与（语义：点位只作证据）
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // 带 OSM name 的建筑不触发补名
+        let dining = entities
+            .iter()
+            .find(|e| e.entity_id == "way/154427164")
+            .unwrap();
+        assert_eq!(dining.name, "第一餐饮大楼");
+    }
+
+    #[test]
+    fn overpass_transport_failure_is_structured_unreachable() {
+        let source = OverpassDataSource::new(Box::new(|_| Err("端点全部不可达".to_owned())));
+        let error = source.fetch_raw_entities(&boundary()).unwrap_err();
+        assert!(matches!(
+            error,
+            AcquisitionError::SourceUnreachable { source_tag, .. } if source_tag == "overpass"
+        ));
     }
 }
