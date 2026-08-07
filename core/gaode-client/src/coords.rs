@@ -11,7 +11,7 @@ use std::f64::consts::PI;
 /// 克拉索夫斯基椭球长半轴（米）
 const KRASOVSKY_A: f64 = 6378245.0;
 /// 克拉索夫斯基椭球第一偏心率平方
-const KRASOVSKY_EE: f64 = 0.00669342162296594323;
+const KRASOVSKY_EE: f64 = 0.006693421622965943;
 
 /// 中国境外不做偏移（GCJ-02 只作用于中国境内）
 fn out_of_china(lon: f64, lat: f64) -> bool {

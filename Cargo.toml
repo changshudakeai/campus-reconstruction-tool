@@ -101,7 +101,11 @@ raw-window-handle = "0.6"
 # T21 FINAL: 用于 block_on(slhint_window.winit_window())
 futures-executor = "0.3"
 # T31: OSM/Overpass/Nominatim Rust 侧直连（绕开 WebView CORS；端点回退）
-ureq = "2.12"
+# 默认 rustls 会引入 webpki-roots（CDLA-Permissive-2.0 不在 deny 白名单）；
+# Windows 桌面改用系统 TLS（native-tls/schannel），避免新增许可豁免。
+ureq = { version = "2.12", default-features = false, features = ["native-tls", "gzip"] }
+# ureq 2.12 的 native-tls 仅为适配器，需显式传入 TlsConnector（仅 data-acquisition 使用）
+native-tls = "0.2"
 # 测试临时目录
 tempfile = "3"
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）

@@ -10,7 +10,7 @@
 //! - 未配置 Key / 调用失败时返回 `None`，名称保持“未命名建筑 #id”，不阻塞导出。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::source::SourceGeometry;
@@ -45,7 +45,11 @@ impl RegeoNamer {
     pub fn production(key_provider: KeyProvider) -> Self {
         Self::new(
             Box::new(|url: &str, timeout: Duration| {
-                let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+                let tls = native_tls::TlsConnector::new().map_err(|error| error.to_string())?;
+                let agent = ureq::AgentBuilder::new()
+                    .timeout(timeout)
+                    .tls_connector(Arc::new(tls))
+                    .build();
                 let response = agent.get(url).call().map_err(|error| error.to_string())?;
                 response.into_string().map_err(|error| error.to_string())
             }),

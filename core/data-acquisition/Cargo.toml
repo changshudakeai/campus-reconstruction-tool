@@ -33,6 +33,8 @@ data-transformers = { workspace = true }
 serde_json = { workspace = true }
 # T31: OSM/Overpass/Nominatim Rust 侧直连传输（端点回退 + 超时）
 ureq = { workspace = true }
+# ureq 2.12 native-tls 适配器需显式 TlsConnector（Windows schannel）
+native-tls = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
 
