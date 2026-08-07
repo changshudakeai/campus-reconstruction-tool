@@ -332,4 +332,59 @@ mod tests {
             other => panic!("真实链路未自动选中：{other:?}"),
         }
     }
+
+    /// 真实采集链路冒烟（不进 CI；T31 交接证据）：
+    /// OverpassDataSource（生产 transport：union building=* + 端点回退）
+    /// 对交大闵行边界实拉 → 面候选 > 0、OSM name 优先、WGS→GCJ 已转。
+    #[test]
+    #[ignore = "真实网络：仅用于 T31 实施窗口实测证据"]
+    fn live_building_collection_via_overpass_source() {
+        use crate::source::{DataSource, OverpassDataSource, SourceGeometry};
+        use shared_domain_types::Boundary;
+
+        let boundary = Boundary {
+            r#type: "Polygon".to_owned(),
+            coordinates: serde_json::json!([[
+                [121.42, 31.02],
+                [121.44, 31.02],
+                [121.44, 31.04],
+                [121.42, 31.04],
+                [121.42, 31.02]
+            ]]),
+        };
+        let transport = Box::new(move |b: &Boundary| {
+            let bbox = boundary_bbox(b, 0.01).ok_or_else(|| "无包围盒".to_owned())?;
+            OverpassClient::production()
+                .query_with_fallback(&buildings_query(bbox))
+                .map_err(|message| format!("采集查询失败：{message}"))
+        });
+        let source = OverpassDataSource::new(transport);
+        let entities = source
+            .fetch_raw_entities(&boundary)
+            .expect("真实采集必须成功");
+        let polygons = entities
+            .iter()
+            .filter(|e| matches!(e.source_geometry, Some(SourceGeometry::Polygon(_))))
+            .count();
+        let named = entities.iter().filter(|e| e.name != e.entity_id).count();
+        assert!(polygons > 0, "面候选必须 > 0，实际 {polygons}");
+        assert!(named > 0, "OSM name 必须存在，实际 {named}");
+        // WGS-84 → GCJ-02 已在入口完成：面首点应与原始 WGS 不同
+        let first_polygon = entities
+            .iter()
+            .find_map(|e| match &e.source_geometry {
+                Some(SourceGeometry::Polygon(points)) => Some(points.clone()),
+                _ => None,
+            })
+            .expect("存在面");
+        assert!(
+            (first_polygon[0].0 - 121.42).abs() > 0.0005,
+            "几何必须已转 GCJ-02: {:?}",
+            first_polygon[0]
+        );
+        assert!(
+            polygons >= named / 2,
+            "采集报告应同时具备面候选与名称：polygons={polygons} named={named}"
+        );
+    }
 }

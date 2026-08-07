@@ -165,3 +165,101 @@
 - 全部门禁全绿（见 PR 描述：workspace tests 536 通过 / fmt / clippy -D warnings /
   machete / deny / xtask ci / timings）。
 - 待负责人签名确认：____________
+
+---
+
+## T31 修复后重跑记录（2026-08-07）
+
+修复分支 `fix/t31-real-outline-boundary-sources`（基于 origin/main @ a929a5e，
+T30 合入后）。便携包重建：`dist/MCRebuild-V2.0.0-dev-portable.zip`（7.9 MB，
+构建时间 2026-08-07 09:30，HEAD 6fc12d8）。高德 Web 端(JS API) 密钥沿用设置页
+录入值（记录不写明文）。**增强导出与 regeo 补名的在线人工环节仍需负责人现场
+操作（见“未能验证项”）**。
+
+### 候选数据源口径（负责人 2026-08-07 明确）
+
+- 高德只当地图底图 / 校区身份 / 坐标转换 / 命名（regeo）；候选几何与边界一律
+  来自 OSM（实时 Overpass）；Overture 留作离线补充包（本工单不实现）。
+- 生产采集源已从 `GaodeDataSource`（高德 PlaceSearch POI 点位）撤下：
+  `apps/desktop/src/runtime.rs` 现注入 `OverpassDataSource`（union `building=*`、
+  de→kumi→mail.ru 回退、每端点 12s 超时、结构化 `SourceUnreachable`）；
+  WebView 采集脚本与 `collection_response` 通道已删除。
+
+### 三硬伤修复证据（修复前后实测，见 `docs/research/t31-overpass-hard-defects-evidence.md`）
+
+1. URL 缺 `data=`：修复前 `interpreter?<query>` 返回
+   `parse error: Unknown type "%"`（存档 `t31-overpass-evidence/before-missing-data-param.html`）；
+   修复后一律 `interpreter?data=<编码查询>`。
+2. `amenity~"university|college|school"` 的 `|` 正则：版本相关（调研当日 de 0.7.62.11
+   拒绝；复查时端点已接受编码形式）→ 一律 union 写法，三端点验证可用。
+3. WebView CORS：de/kumi 曾无 ACAO、端点策略会变 → 边界与候选查询全部 Rust 侧直连
+   （ureq + native-tls），JS 不再 fetch Overpass（`boundary_edit_map_page.rs` 无
+   `fetchOverpassBoundary`/`AbortController`/端点字符串）。
+
+### 真实校区边界自动获取（验收点 1）——实测通过
+
+真实链路冒烟（`data-acquisition` `#[ignore]` 测试，2026-08-07 上海网络）：
+
+```text
+fetch_campus("上海交通大学(闵行本部校区)", 121.433, 31.028)
+→ AutoSelected name=上海交通大学（闵行校区）
+  source=Overpass amenity=university|college|school
+  candidates=9 points=39（GCJ-02，闭环）
+```
+
+级联行为：高德校区名带“(闵行本部校区)”后缀 → Nominatim 精确/去括号均无
+`class=amenity` 命中 → 自动回退 Overpass `amenity=university` 锚点近域查询
+（ADR-0029 主路径）→ 按“锚点包含 → 名称匹配 → 距离最近”排序自动选中；
+`landuse=education` 与人工圈画为后续兜底。徐汇校区经 Nominatim 可解析到
+way/144183801（按 ID 拉取路径，实测 39 点闭合）。
+
+### 候选采集真实轮廓（验收点 3）——实测通过
+
+真实采集链路冒烟（`OverpassDataSource` + 生产 transport，2026-08-07）：
+
+```text
+boundary bbox(31.02,121.41,31.04,121.46) → union building=* → 590 元素
+→ 面候选 > 0、带 OSM name > 0、WGS-84→GCJ-02 已在入口转换（首点偏移 >50m 断言）
+```
+
+- 点位不扩面（ADR-0040 红线）：`source.rs`
+  `overpass_node_stays_a_point_never_expanded_to_polygon` 断言 node 保持
+  `Point`；regeo/补名器只作用于 Polygon。
+- 采集报告来源标签：`collection.source_osm`（“OSM（OpenStreetMap）”）。
+
+### 坐标转换与命名（验收点 7）——代码 + 单测
+
+- `gaode-client/src/coords.rs`：WGS-84→GCJ-02 开源批量转换（~1m 精度，不做反向）；
+  `OverpassDataSource` 采集入口就地转换并保留原始 WGS-84 载荷（`source_payload`
+  断言）。
+- 命名两级：OSM `name` 优先（`RawEntity::name`）；缺名关键建筑由
+  `data-acquisition::regeo::RegeoNamer` 补名 + 会话缓存（同坐标只调一次，测试断言）。
+  regeo Web 服务 Key 只经设置页录入（新增 `GaodeWebServiceKey` 设置项，ADR-0004
+  “开发人员使用”）。
+- 署名：边界地图页保留 `© OpenStreetMap contributors`（ODbL）。
+
+### 剧本 A/B 自动化等价证据与门禁（验收点 4/5/6）
+
+- 剧本 A 基础导出：`s1_08_boundary_export_flow` 真实写出 `.schem` +
+  `foundation_manifest.json`（`exportKind=base`、`orientation.source=map_north`）；
+  T30 已人工跑通。
+- 剧本 B 增强导出管线：`s1_19_enhanced_export_flow` /
+  `s1_20_enhanced_export_failure_flow`（Building 候选 → `exportKind=enhanced`、
+  `keepByCategory` 与保留一致、.schem 含候选高度/方块计数；失败路径不伪造）。
+  真实采集→评审→封账→增强导出的**在线人工环节**待负责人现场执行。
+- 全部门禁全绿（Windows，`SLINT_BACKEND=software`、`CARGO_BUILD_JOBS=2`）：
+  `cargo machete` ✓ / `cargo test --workspace` 573 通过 0 失败 ✓ /
+  `cargo fmt --all --check` ✓ / `cargo clippy --workspace --all-targets -- -D warnings` ✓ /
+  `cargo deny check advisories bans licenses sources` ✓ /
+  `cargo xtask ci` ✓ / `cargo xtask timings`（120s 预算内）✓。
+
+### 未能验证项（需负责人环境/密钥）
+
+1. 剧本 A/B 的完整 GUI 人工走查（便携包已按 HEAD 重建；校区搜索/边界确认/
+   采集/评审/封账/导出点击流需现场操作）。
+2. regeo 真实补名调用：需要负责人在设置页录入高德 **Web 服务 Key**
+   （与 JS API Key 不同）；未配置时缺名建筑保持“未命名建筑 #id”，不阻塞采集。
+3. 增强导出在真实 OSM 候选（Building 类别）下的 `.schem` 内容核对（自动化等价
+   `s1_19/20` 已覆盖管线；真实数据规模需现场确认）。
+
+负责人签名：____________
