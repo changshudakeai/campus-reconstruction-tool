@@ -219,10 +219,73 @@ visible-height=0`、滚轮/键盘 viewport-y 恒 0、封账按钮点击无效）
   兜底画布路径，矩形数值相同）。
 - 800×666 / 1000×666 两档真实截图（实施窗口为 800×600 @125%）。
 
+## T31 走查记录（2026-08-07，验收窗口）
+
+验收窗口按 `script-a-basic-export.md` / `script-b-enhanced-export.md`，用合并后
+便携包（`dist/MCRebuild-V2.0.0-dev-portable.zip`，解压后
+`campus-rebuild-dev.exe` 便携模式）执行真实 GUI 走查。本段为验收窗口独立
+记录；实现窗口 T31 修复记录见上文。
+
+### 环境与前置
+
+- 便携包：`dist/MCRebuild-V2.0.0-dev-portable.zip`（8,288,325 B，构建时间
+  2026-08-07 09:42，HEAD 7d0659e；252ff25 仅更新验收记录文档，不影响二进制）。
+- 解压目录：`dist/t31-walkthrough/`，DB 落在解压目录内
+  （`campus-rebuild.db`）。
+- 首次向导：语言 zh-CN、Minecraft 26.1.2、勾选“请确认…一致”（截图
+  `evidence/script-a/00-wizard-t31walk.png`）。
+- 设置页录入高德 Web 端(JS API) Key 与安全密钥：只经设置页输入，凭据沿用
+  已提供值（`evidence/script-a/05-settings-apikey-t31walk.png`、
+  `06-settings-seckey-t31walk.png`）；本记录不写明文。保存后 DB
+  `app_settings` 中 `gaode_api_key` / `gaode_security_key` 均为 32 位十六进制
+  且与已提供凭据一致（读取校验，未落盘明文）。
+
+### 剧本 A：基础导出（走查结果）
+
+| 验收点 | 证据 | 结果 |
+|--------|------|------|
+| 首次设置 → 校区 → 方案 | 首次向导完成；校区搜索输入“上海交通大学”→ 高德在线搜索返回真实校区列表（闵行本部校区/徐汇/长宁/闵行人文/七宝/医学院黄浦，`evidence/script-a/11-campus-search-results-t31walk.png`）；点选并确认“上海交通大学(闵行本部校区)”（POI B00155R1D5，东川路800号，锚点 121.436882/31.025626；`12-campus-selected-t31walk.png`、`13-campus-confirmed-t31walk.png`）→ 直接进入方案列表（`14-plan-list-t31walk.png`） | ☑ |
+| 新建方案 | 新建方案对话框输入“M5剧本A走查方案”→ 确认 → 方案卡片“新方案 1 M5剧本A走查方案 / 尚未确定范围”（`15-create-plan-t31walk.png`、`16-create-plan-dialog-t31walk.png`） | ☑ |
+| 边界步骤：OSM 自动获取（验收点） | 打开方案 → 边界地图 WebView 显示“来自 OSM: 上海交通大学（闵行校区）✓”，自动绘制边界；页面含高德瓦片署名（© 2026 AutoNavi - GS(2025)5996号）与 OSM 署名（© OpenStreetMap contributors）（`20-osm-boundary-t31walk.png`） | ☑（自动获取成功） |
+| 确认边界 | **未通过（缺陷 T31-D6）**：WebView 内“确认边界”按钮（UIA `confirm-edit-btn`，坐标 (860, 521)）位于 WebView 视口右缘之外约 60px（窗口逻辑 800×666），物理与逻辑坐标均超出窗口，按钮不可见不可点；“改人工圈画”按钮同理（(806, 529)）。自动获取成功但无法确认边界 → 后续导出步骤被阻塞。Slint 层“确认边界”按钮保持 disabled（边界未确认时设计如此） | ☒（缺陷 T31-D6） |
+| `.schem` + manifest（exportKind=base / map_north / attribution） | 因“确认边界”被 T31-D6 阻塞，本次 GUI 走查未产出导出物；导出链路本身由 `s1_08_boundary_export_flow` 集成测试覆盖（T30 已人工跑通：453 B .schem、`exportKind=base`、`orientation.source=map_north`） | ☒（被 T31-D6 阻塞） |
+
+### 剧本 B：增强导出（走查结果）
+
+剧本 B 依赖剧本 A 完成边界确认。因 T31-D6 阻塞，采集/评审/封账/增强导出
+步骤在本次 GUI 走查中不可达，未执行；不产生任何伪成功产物（界面停留在边界
+步骤，无导出物、无错误弹窗之外的异常状态）。
+
+| 验收点 | 结果 |
+|--------|------|
+| 采集报告计数与来源标注 | 未执行（被 T31-D6 阻塞） |
+| 评审保留/剔除/封账 | 未执行（同上） |
+| 增强导出 `.schem` + manifest（exportKind=enhanced / keepByCategory） | 未执行（同上） |
+
+### 缺陷清单（验收窗口发现，未修复）
+
+- **T31-D6（P1，阻塞剧本 A/B 完成）**：边界地图 WebView 内容横向溢出，
+  “确认边界”/“改人工圈画”按钮渲染在 WebView 视口右缘之外（UIA 坐标
+  (860, 521) / (806, 529)，窗口逻辑宽 800；物理像素同样超出窗口右缘），
+  按钮不可见、不可点击。OSM 自动获取边界成功（状态面板
+  “来自 OSM: 上海交通大学（闵行校区）✓”），但无法确认边界，剧本 A 的
+  导出与剧本 B 的全部后续步骤被阻塞。疑似与 T30 D-5（WebView 尺寸/布局）
+  同根因，建议实施窗口核对 `map_webview::compute_bounds` 与
+  `boundary_edit.slint` 画布几何（WebView 物理宽度 vs Slint 画布宽度、AMap
+  容器初始化宽度），修复后以 HEAD 重建便携包重跑剧本 A/B。
+
+### 结论（T31 走查窗口）
+
+- ☐ 剧本 A/B 通过，v2.0.0 进入正式版候选（待 T31-D6 修复后重跑）。
+- ☑ 真实 GUI 走查已完成：首次向导、设置密钥、高德在线校区搜索与点选、
+  方案创建、OSM 边界自动获取（来源标注、自动绘制）均真实走通；剧本 A 在
+  “确认边界”步骤被 T31-D6 阻塞，剧本 B 因此不可执行。
+- 密钥合规：只经设置页录入，未写入任何仓库文件/日志；DB 内为设置页保存值。
+- 待负责人确认 T31-D6 修复策略与重跑安排后，再行剧本 A/B 完成确认。
+
 负责人签名：____________
 
 ---
-
 
 ## T32 走查记录（2026-08-07，实施窗口 fix/t32-boundary-page-overflow）
 

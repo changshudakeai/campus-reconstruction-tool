@@ -1,0 +1,44 @@
+T31 走查证据摘要（2026-08-07，验收窗口）
+=============================================
+
+便携包：dist/MCRebuild-V2.0.0-dev-portable.zip
+  构建时间 2026-08-07 09:42，HEAD 7d0659e（252ff25 仅更新验收记录文档）
+  解压目录：dist/t31-walkthrough/（DB 落在解压目录内）
+
+走查 DB 终态（dist/t31-walkthrough/campus-rebuild.db）
+  campuses: 1 -> 上海交通大学(闵行本部校区) POI B00155R1D5，东川路800号，
+              锚点 121.436882/31.025626
+  plans: 1 -> 新方案 1 M5剧本A走查方案
+  app_settings: first_run_completed / gaode_api_key / gaode_security_key /
+               language / minecraft_version / last_used_campus /
+               onboarding_completed_at / onboarding_progress / recent_campuses
+  （密钥为设置页录入值，本记录不写明文）
+
+剧本 A 结果
+  首次向导（zh-CN / 26.1.2 / 已知悉）：00-wizard-t31walk.png
+  设置页密钥录入：04-settings-check-t31walk.png、
+    05-settings-apikey-t31walk.png、06-settings-seckey-t31walk.png
+  校区在线搜索（上海交通大学 -> 真实校区列表）：10/11-*-t31walk.png
+  确认闵行本部校区：12-campus-selected-t31walk.png、
+    13-campus-confirmed-t31walk.png
+  进入方案列表并新建方案：14-plan-list-t31walk.png、
+    15-create-plan-t31walk.png、16-create-plan-dialog-t31walk.png、
+    17-plan-card-t31walk.png
+  OSM 边界自动获取成功（来源标注 + 自动绘制 + OSM/高德署名）：
+    20-osm-boundary-t31walk.png
+  确认边界：被缺陷 T31-D6 阻塞（WebView 按钮在视口外，不可达），
+    21-boundary-confirmed-t31walk.png 为尝试点击时的状态截图
+
+剧本 B 结果
+  因 T31-D6 阻塞未执行（依赖剧本 A 边界确认）
+
+缺陷
+  T31-D6（P1）：边界地图 WebView 内容横向溢出，“确认边界”/“改人工圈画”
+  按钮 UIA 坐标 (860,521)/(806,529) 超出窗口逻辑宽 800，按钮不可见不可点；
+  自动获取边界成功但无法确认，阻塞剧本 A 导出与剧本 B 全部后续步骤。
+  疑似与 T30 D-5 同根因（WebView 尺寸/布局）。
+
+安全合规
+  密钥只经设置页录入；git 全量检查确认密钥值未出现在任何跟踪/未跟踪文件。
+
+签名栏：待负责人（T31-D6 修复重跑后确认）
