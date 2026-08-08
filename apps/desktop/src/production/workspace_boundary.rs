@@ -49,12 +49,17 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) orientation_points: Vec<(f64, f64)>,
     pub(super) orientation_angle: Option<f32>,
     pub(super) orientation_input_text: String,
-    pub(super) orientation_mode: String,
     pub(super) pending_orientation_angle: Option<f32>,
     pub(super) active_step: i32,
     /// 迁移期兼容：无已打开方案时按窗口当前呈现的已完成步数判定（旧行为基线）。
     pub(super) adopted_completed_steps: Option<u8>,
     pub(super) map_processing: bool,
+    /// T34: 地图 WebView 是否可用（不可用时边界步骤显示 Slint 兜底画布）
+    pub(super) map_available: bool,
+    /// T34: 左侧抽屉是否展开（做法 A：展开时地图右移让位）
+    pub(super) drawer_open: bool,
+    /// T34: 地图侧边界绘制状态（供抽屉 ① 显示点数/状态）
+    pub(super) map_draw: MapDrawState,
     /// T31：Rust 侧 OSM 边界自动获取后台结果通道（None = 无进行中的获取）
     pub(super) pending_boundary_fetch:
         Option<std::sync::mpsc::Receiver<data_acquisition::overpass::CampusBoundaryResult>>,
@@ -62,6 +67,24 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) tutorial_text: String,
     pub(super) tutorial_dismiss_label: String,
     pub(super) tutorial_skip_all_label: String,
+}
+
+/// T34: 地图侧边界绘制状态（纯呈现；几何真相仍在地图 JS/B5 侧）
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(super) struct MapDrawState {
+    pub(super) point_count: i32,
+    pub(super) status: MapDrawStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum MapDrawStatus {
+    /// 无地图侧绘制（使用 session.drawer 状态）
+    #[default]
+    Idle,
+    /// 人工圈画进行中
+    Drawing,
+    /// OSM 边界编辑中（已自动绘制）
+    Editing,
 }
 
 impl WorkspaceSessionState {
@@ -124,7 +147,6 @@ impl WorkspaceProductionContext {
             injector,
             window: window.as_weak(),
             session: Rc::new(RefCell::new(WorkspaceSessionState {
-                orientation_mode: "two-points".to_string(),
                 tutorial_dismiss_label,
                 ..Default::default()
             })),
@@ -169,6 +191,7 @@ impl WorkspaceProductionContext {
         } else {
             l10n.t_with_array("workspace.context_campus_plan", &[&campus_name, &plan_name])
         };
+        let boundary = self.boundary_view(l10n, &session);
         WorkspacePageState {
             toolbar: super::toolbar(l10n, true),
             campus_name,
@@ -197,7 +220,15 @@ impl WorkspaceProductionContext {
             collection_step_label: l10n.t("collection.collect_button"),
             review_step_label: l10n.t("review.workbench_title"),
             export_step_label: l10n.t("export.start_button"),
-            boundary: self.boundary_view(l10n, &session),
+            drawer_open: session.drawer_open,
+            map_available: session.map_available,
+            boundary_points_label: l10n
+                .t_with_array("boundary.point_count", &[&boundary.point_count.to_string()]),
+            orientation_current_angle_label: l10n.t("orientation.current_angle_label"),
+            orientation_confirm_two_points_label: l10n.t("orientation.confirm_two_points_button"),
+            drawer_expand_tooltip: l10n.t("workspace.drawer_expand_tooltip"),
+            drawer_collapse_tooltip: l10n.t("workspace.drawer_collapse_tooltip"),
+            boundary,
             orientation: self.orientation_view(l10n, &session),
             tutorial_visible: session.tutorial_visible,
             tutorial_text: session.tutorial_text.clone(),
@@ -249,13 +280,28 @@ impl WorkspaceProductionContext {
             })
             .collect();
         let path_commands = build_path_commands(vertices, is_closed);
-        let status = match session.drawer.state() {
-            BoundaryState::Idle => l10n.t("boundary.status_idle"),
-            BoundaryState::Drawing => {
-                l10n.t_with_array("boundary.status_drawing", &[&vertices.len().to_string()])
-            }
-            BoundaryState::Determined => l10n.t("boundary.status_determined"),
-            BoundaryState::Editing { .. } => l10n.t("boundary.status_editing"),
+        // T34：地图侧绘制（人工圈画/OSM 编辑）时以地图桥接上报的点数/状态为准，
+        // 否则回落到 Slint 兜底画布（session.drawer）状态。
+        let (point_count, status) = if session.map_draw.status != MapDrawStatus::Idle {
+            let count = session.map_draw.point_count.max(0);
+            let status = match session.map_draw.status {
+                MapDrawStatus::Drawing => {
+                    l10n.t_with_array("boundary.status_drawing", &[&count.to_string()])
+                }
+                MapDrawStatus::Editing => l10n.t("boundary.status_editing"),
+                MapDrawStatus::Idle => l10n.t("boundary.status_idle"),
+            };
+            (count, status)
+        } else {
+            let status = match session.drawer.state() {
+                BoundaryState::Idle => l10n.t("boundary.status_idle"),
+                BoundaryState::Drawing => {
+                    l10n.t_with_array("boundary.status_drawing", &[&vertices.len().to_string()])
+                }
+                BoundaryState::Determined => l10n.t("boundary.status_determined"),
+                BoundaryState::Editing { .. } => l10n.t("boundary.status_editing"),
+            };
+            (vertices.len() as i32, status)
         };
         BoundaryViewState {
             points,
@@ -268,7 +314,7 @@ impl WorkspaceProductionContext {
             status,
             map_placeholder: l10n.t("boundary.map_placeholder"),
             is_determined: is_closed,
-            point_count: vertices.len() as i32,
+            point_count,
         }
     }
 
@@ -329,7 +375,6 @@ impl WorkspaceProductionContext {
             points,
             path_commands: path,
             arrow_commands,
-            mode: session.orientation_mode.clone(),
             angle,
             is_determined,
             title: l10n.t("orientation.step_title"),
@@ -341,8 +386,6 @@ impl WorkspaceProductionContext {
             submit_label: l10n.t("orientation.submit_button"),
             reset_label: l10n.t("orientation.reset_button"),
             status,
-            mode_two_points_label: l10n.t("orientation.mode_two_points"),
-            mode_bearing_angle_label: l10n.t("orientation.mode_bearing_angle"),
         }
     }
 

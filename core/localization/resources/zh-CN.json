@@ -170,7 +170,8 @@
     "included_categories": "包含的类别",
     "missing_categories": "缺失的类别"
   },
-    "boundary": {
+  "boundary": {
+    "point_count": "当前点数：{0}",
     "step_title": "① 圈边界",
     "hint": "点击画布加点，绘制方案范围多边形",
     "undo_button": "撤销上一点",
@@ -195,6 +196,8 @@
     "unknown_campus": "未命名校区"
   },
   "orientation": {
+    "confirm_two_points_button": "确认两点朝向",
+    "current_angle_label": "当前角度",
     "step_title": "② 定朝向",
     "two_points_hint": "点击画布选择两点，连线方向即为朝向",
     "bearing_angle_hint": "输入方位角（0°=正北，顺时针增加）",
@@ -325,6 +328,8 @@
     "date_display": "{0}"
   },
   "workspace": {
+    "drawer_expand_tooltip": "展开操作抽屉",
+    "drawer_collapse_tooltip": "收起操作抽屉",
     "context_campus_plan": "{0} / {1}",
     "plan_not_found": "方案不存在或已删除，请返回方案列表重试",
     "leave_discard_title": "离开边界页",

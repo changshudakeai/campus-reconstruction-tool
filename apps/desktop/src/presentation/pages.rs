@@ -297,7 +297,6 @@ pub struct OrientationViewState {
     pub points: Vec<OrientationPointData>,
     pub path_commands: String,
     pub arrow_commands: String,
-    pub mode: String,
     pub angle: f32,
     pub is_determined: bool,
     pub title: String,
@@ -309,8 +308,6 @@ pub struct OrientationViewState {
     pub submit_label: String,
     pub reset_label: String,
     pub status: String,
-    pub mode_two_points_label: String,
-    pub mode_bearing_angle_label: String,
 }
 
 impl OrientationViewState {
@@ -318,7 +315,6 @@ impl OrientationViewState {
         window.set_workspace_orientation_points(ModelRc::new(VecModel::from(self.points.clone())));
         window.set_workspace_orientation_path_commands(self.path_commands.clone().into());
         window.set_workspace_orientation_arrow_commands(self.arrow_commands.clone().into());
-        window.set_workspace_orientation_mode(self.mode.clone().into());
         window.set_workspace_orientation_angle(self.angle);
         window.set_workspace_orientation_is_determined(self.is_determined);
         window.set_workspace_orientation_title(self.title.clone().into());
@@ -332,12 +328,6 @@ impl OrientationViewState {
         window.set_workspace_orientation_submit_label(self.submit_label.clone().into());
         window.set_workspace_orientation_reset_label(self.reset_label.clone().into());
         window.set_workspace_orientation_status(self.status.clone().into());
-        window.set_workspace_orientation_mode_two_points_label(
-            self.mode_two_points_label.clone().into(),
-        );
-        window.set_workspace_orientation_mode_bearing_angle_label(
-            self.mode_bearing_angle_label.clone().into(),
-        );
     }
 }
 
@@ -383,7 +373,8 @@ pub enum WorkspaceRequest {
     #[doc(hidden)]
     PollBoundaryFetch,
     /// 朝向模式切换（两点/方位角；S1 未提交页面临时状态）。
-    OrientationModeChanged { mode: String },
+    /// T34: 左侧抽屉开合（做法 A：展开时地图右移让位；S1 页面临时状态）
+    DrawerToggle,
 }
 
 /// S1 导出页面只提交“显示确认”或“一次开始导出”意图；完整业务链由 F9 接管。
@@ -441,6 +432,20 @@ pub struct WorkspacePageState {
     pub collection_step_label: String,
     pub review_step_label: String,
     pub export_step_label: String,
+    /// T34: 左侧抽屉是否展开（做法 A：展开时地图右移让位）
+    pub drawer_open: bool,
+    /// T34: 地图 WebView 是否可用（不可用时边界步骤显示 Slint 兜底画布）
+    pub map_available: bool,
+    /// T34: 抽屉① 当前点数文案（已格式化：当前点数：{n}）
+    pub boundary_points_label: String,
+    /// T34: 抽屉② 当前角度标签
+    pub orientation_current_angle_label: String,
+    /// T34: 抽屉② 确认两点朝向按钮文案
+    pub orientation_confirm_two_points_label: String,
+    /// T34: 抽屉开合箭头提示文案（展开）
+    pub drawer_expand_tooltip: String,
+    /// T34: 抽屉开合箭头提示文案（收起）
+    pub drawer_collapse_tooltip: String,
     pub boundary: BoundaryViewState,
     pub orientation: OrientationViewState,
     pub tutorial_visible: bool,
@@ -471,6 +476,17 @@ impl WorkspacePageState {
         window.set_workspace_stepper_review_label(self.review_step_label.clone().into());
         window.set_workspace_stepper_export_label(self.export_step_label.clone().into());
         window.set_workspace_export_start_label(self.export_step_label.clone().into());
+        window.set_workspace_drawer_open(self.drawer_open);
+        window.set_workspace_map_available(self.map_available);
+        window.set_workspace_boundary_points_label(self.boundary_points_label.clone().into());
+        window.set_workspace_orientation_current_angle_label(
+            self.orientation_current_angle_label.clone().into(),
+        );
+        window.set_workspace_orientation_confirm_two_points_label(
+            self.orientation_confirm_two_points_label.clone().into(),
+        );
+        window.set_workspace_drawer_expand_tooltip(self.drawer_expand_tooltip.clone().into());
+        window.set_workspace_drawer_collapse_tooltip(self.drawer_collapse_tooltip.clone().into());
         window.set_workspace_tutorial_visible(self.tutorial_visible);
         window.set_workspace_tutorial_text(self.tutorial_text.clone().into());
         window.set_workspace_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());

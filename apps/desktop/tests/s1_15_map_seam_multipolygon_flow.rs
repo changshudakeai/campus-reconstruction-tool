@@ -1,10 +1,14 @@
-//! M1 acceptance 4.1: the real map page (B3 HTML + JS) must produce complete
-//! MultiPolygon geometry through the real wry IPC seam into F9 export.
+//! M1 acceptance 4.1: the real map page (B3 HTML + JS) must produce boundary
+//! geometry through the real wry IPC seam into F9 export.
 //!
 //! 这不是“注入 IPC 夹具”：测试加载 `build_boundary_edit_page_html` 生成的真实
-//! 地图页，在真实 WebView 里执行页面自己的函数与按钮点击（handleMapClick →
-//! 确认边界 → 添加区域 → 确认区域 → 提交边界），捕获页面 postMessage 的原始
-//! 载荷，再经 parse_ipc_message → 工作区 seam → export-flow 完成导出。
+//! 地图页，在真实 WebView 里执行页面自己的函数与抽屉桥接命令（handleMapClick
+//! → submitBoundaryFromDrawer），捕获页面 postMessage 的原始载荷，再经
+//! parse_ipc_message → 工作区 seam → export-flow 完成导出。
+//!
+//! T34：HTML 工具栏（含多区域"添加区域/提交边界"按钮）已随工具栏整体删除，
+//! 真实页面现在只产生单环 Polygon 确认载荷；MultiPolygon geometry seam 由
+//! s1_12（IPC 注入）覆盖。
 
 use data_persistence::CampusCrudApi;
 use std::cell::RefCell;
@@ -35,10 +39,6 @@ enum DriverStep {
     EnableManual,
     RingOne,
     ConfirmOne,
-    AddArea,
-    RingTwo,
-    ConfirmTwo,
-    Submit,
     Done,
 }
 
@@ -54,11 +54,7 @@ impl Driver {
             DriverStep::WaitReady => DriverStep::EnableManual,
             DriverStep::EnableManual => DriverStep::RingOne,
             DriverStep::RingOne => DriverStep::ConfirmOne,
-            DriverStep::ConfirmOne => DriverStep::AddArea,
-            DriverStep::AddArea => DriverStep::RingTwo,
-            DriverStep::RingTwo => DriverStep::ConfirmTwo,
-            DriverStep::ConfirmTwo => DriverStep::Submit,
-            DriverStep::Submit => DriverStep::Done,
+            DriverStep::ConfirmOne => DriverStep::Done,
             DriverStep::Done => DriverStep::Done,
         };
         self.next_at = Instant::now() + Duration::from_millis(120);
@@ -119,38 +115,8 @@ impl Driver {
                     false
                 }
                 DriverStep::ConfirmOne => {
-                    let _ = webview
-                        .evaluate_script("document.getElementById('confirm-manual-btn').click();");
-                    self.advance();
-                    false
-                }
-                DriverStep::AddArea => {
-                    let _ =
-                        webview.evaluate_script("document.getElementById('add-area-btn').click();");
-                    self.advance();
-                    false
-                }
-                DriverStep::RingTwo => {
-                    let script = r#"
-                        handleMapClick({ lnglat: { lng: 116.4050, lat: 39.9050 } });
-                        handleMapClick({ lnglat: { lng: 116.4060, lat: 39.9050 } });
-                        handleMapClick({ lnglat: { lng: 116.4060, lat: 39.9060 } });
-                        handleMapClick({ lnglat: { lng: 116.4050, lat: 39.9060 } });
-                    "#;
-                    let _ = webview.evaluate_script(script);
-                    self.advance();
-                    false
-                }
-                DriverStep::ConfirmTwo => {
-                    let _ = webview
-                        .evaluate_script("document.getElementById('confirm-area-btn').click();");
-                    self.advance();
-                    false
-                }
-                DriverStep::Submit => {
-                    let _ = webview.evaluate_script(
-                        "document.getElementById('submit-boundary-btn').click();",
-                    );
+                    // T34：抽屉"确认边界"按钮经 JS 桥接命令提交当前绘制
+                    let _ = webview.evaluate_script("submitBoundaryFromDrawer();");
                     self.advance();
                     true
                 }
@@ -169,7 +135,7 @@ impl Driver {
         self.step == DriverStep::Done
             && captured
                 .iter()
-                .any(|message| message.contains("\"MultiPolygon\""))
+                .any(|message| message.contains("\"type\":\"confirm_boundary\""))
     }
 }
 
@@ -203,7 +169,7 @@ fn pump_until_terminal(window: &AppWindow) -> OperationPresentationState {
 }
 
 #[test]
-fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
+fn real_map_page_drawer_bridge_reaches_f9() {
     // 1. 真实 B3 地图页 HTML（与生产完全同一构建路径）。
     let config = BoundaryEditPageConfig::new("testapikey1234567890", "testsecuritykey1234567890")
         .with_anchor(116.4005, 39.9025);
@@ -286,7 +252,8 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
         }
     });
 
-    // 4. 驱动真实页面完成“多块区域 → 确认 → 提交”，直到收到 MultiPolygon 载荷。
+    // 4. 驱动真实页面完成“人工圈画 → 抽屉桥接确认 → 提交”，
+    //    直到收到 confirm_boundary 载荷。
     let driver = Rc::new(RefCell::new(Driver {
         step: DriverStep::WaitReady,
         next_at: Instant::now(),
@@ -339,61 +306,41 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
     slint::run_event_loop_until_quit().expect("run seam driver loop");
     assert!(
         Instant::now() < deadline,
-        "真实地图页未在期限内产出 MultiPolygon 载荷；驱动状态：{}",
+        "真实地图页未在期限内产出 confirm_boundary 载荷；驱动状态：{}",
         debug_state.borrow()
     );
 
-    // 5. 从真实页面捕获的原始载荷取最后一个 confirm_boundary（MultiPolygon）。
+    // 5. 从真实页面捕获的原始载荷取 confirm_boundary（单环 Polygon）。
     let captured = captured.lock().expect("capture lock");
-    let multipolygon_payload = captured
-        .iter()
-        .rev()
-        .find(|message| message.contains("\"MultiPolygon\""))
-        .cloned()
-        .expect("页面必须提交 MultiPolygon 载荷");
     let polygon_payload = captured
         .iter()
         .find(|message| {
-            message.contains("\"type\":\"confirm_boundary\"")
-                && message.contains("\"coords\"")
-                && !message.contains("\"geometry\"")
+            message.contains("\"type\":\"confirm_boundary\"") && message.contains("\"coords\"")
         })
         .cloned()
-        .expect("首区域必须按 Polygon 直交");
+        .expect("页面必须提交 confirm_boundary 载荷");
     drop(captured);
 
     // 6. 载荷必须经真实解析器原样进入工作区 seam 与 F9。
-    let parsed = parse_ipc_message(&multipolygon_payload).expect("parse real page payload");
+    let parsed = parse_ipc_message(&polygon_payload).expect("parse real page payload");
     match parsed {
-        gaode_client::IpcMessage::ConfirmBoundaryGeometry {
-            r#type,
-            coordinates,
-        } => {
-            assert_eq!(r#type, "MultiPolygon");
-            let polygons = coordinates.as_array().expect("MultiPolygon 坐标数组");
-            assert_eq!(polygons.len(), 2, "两个区域的外环都必须保留");
-            for polygon in polygons {
-                let ring = polygon
-                    .as_array()
-                    .and_then(|rings| rings.first())
-                    .expect("外环");
-                assert_eq!(ring.as_array().expect("环坐标").len(), 4);
-            }
+        gaode_client::IpcMessage::ConfirmBoundary { coords } => {
+            assert_eq!(coords.len(), 4, "四个真实点击点必须保留");
         }
-        other => panic!("真实页面载荷必须解析为 ConfirmBoundaryGeometry，得到 {other:?}"),
+        other => panic!("真实页面载荷必须解析为 ConfirmBoundary，得到 {other:?}"),
     }
 
-    window.invoke_workspace_map_ipc(multipolygon_payload.clone().into());
+    window.invoke_workspace_map_ipc(polygon_payload.clone().into());
     assert!(
         window.get_workspace_boundary_is_determined(),
-        "完整 MultiPolygon 必须进入边界确认"
+        "完整 Polygon 必须进入边界确认"
     );
     assert!(
         polygon_payload.contains("116.4") && polygon_payload.contains("39.9"),
-        "首区域 Polygon 载荷坐标必须来自真实页面：{polygon_payload}"
+        "Polygon 载荷坐标必须来自真实页面：{polygon_payload}"
     );
 
-    // 7. 直接导出：footprint 覆盖所有外环（单一区域不可能达到两个区域的外接尺寸）。
+    // 7. 直接导出：footprint 覆盖真实点击的外环。
     window.invoke_workspace_step_clicked(4);
     window.invoke_workspace_export_start_clicked();
     assert_eq!(
@@ -421,8 +368,8 @@ fn real_map_page_multipolygon_reaches_f9_with_all_outer_rings() {
         .map(|value| value.parse::<usize>().expect("尺寸必须是数字"))
         .collect();
     assert!(
-        values[0] > 300 && values[2] > 300,
-        "footprint 必须覆盖两个外环：{dimensions}"
+        values[0] > 50 && values[2] > 50,
+        "footprint 必须覆盖真实点击的外环：{dimensions}"
     );
 
     // WebView 是 winit 窗口的子窗口：先显式释放，避免窗口析构后 COM 崩溃。
