@@ -726,8 +726,26 @@ impl ProductionEntries {
             window,
             &self.center,
             WorkspaceRequest::OrientationSubmit {
-                mode: window.get_workspace_orientation_mode().to_string(),
+                // T34：抽屉 ② 的"确认朝向"按钮提交手动输入的角度（方位角模式）
+                mode: "bearing-angle".to_string(),
                 angle_text: window.get_workspace_orientation_input_text().to_string(),
+            },
+        );
+        if presentation.operation() == &OperationState::NeedsConfirmation {
+            // 覆盖既有朝向：确认后应用待定角度
+            self.pending_confirmation = Some(PendingConfirmation::OrientationRecalc);
+        }
+    }
+
+    /// T34：抽屉 ② 的"确认两点朝向"按钮——提交地图两点草稿（two-points 模式）。
+    pub(crate) fn handle_orientation_confirm_two_points(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        let presentation = self.workspace.show(
+            window,
+            &self.center,
+            WorkspaceRequest::OrientationSubmit {
+                mode: "two-points".to_string(),
+                angle_text: String::new(),
             },
         );
         if presentation.operation() == &OperationState::NeedsConfirmation {
@@ -742,14 +760,10 @@ impl ProductionEntries {
             .show(window, &self.center, WorkspaceRequest::OrientationReset);
     }
 
-    pub(crate) fn handle_orientation_mode_changed(&mut self, window: &AppWindow, mode: &str) {
-        self.workspace.show(
-            window,
-            &self.center,
-            WorkspaceRequest::OrientationModeChanged {
-                mode: mode.to_string(),
-            },
-        );
+    /// T34：左侧抽屉开合（做法 A：展开时地图右移让位）。
+    pub(crate) fn handle_workspace_drawer_toggle(&mut self, window: &AppWindow) {
+        self.workspace
+            .show(window, &self.center, WorkspaceRequest::DrawerToggle);
     }
 
     pub(crate) fn handle_workspace_tutorial_dismiss(&mut self, window: &AppWindow) {
@@ -1080,12 +1094,19 @@ impl ProductionEntries {
         window.on_input_dialog_confirmed(move || {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().confirm_pending_input(&window);
+                // T34：弹窗遮挡统一机制——输入窗关闭后按当前步骤模式恢复地图
+                crate::map_webview::restore_after_modal(window.as_weak());
             }
         });
 
+        let weak = window.as_weak();
         let shared = Rc::clone(entries);
         window.on_input_dialog_cancelled(move || {
-            shared.borrow_mut().cancel_pending_input();
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().cancel_pending_input();
+                // T34：弹窗遮挡统一机制——输入窗取消后按当前步骤模式恢复地图
+                crate::map_webview::restore_after_modal(window.as_weak());
+            }
         });
         // ── S1-05：工作区导航、边界与朝向门控（统一经工作区功能入口）────────
         let weak = window.as_weak();
@@ -1158,11 +1179,19 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
-        window.on_workspace_orientation_mode_changed(move |mode| {
+        window.on_workspace_orientation_confirm_two_points_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared
                     .borrow_mut()
-                    .handle_orientation_mode_changed(&window, &mode);
+                    .handle_orientation_confirm_two_points(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_drawer_toggle_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().handle_workspace_drawer_toggle(&window);
             }
         });
 

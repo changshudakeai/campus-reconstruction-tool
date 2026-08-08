@@ -1,0 +1,237 @@
+// T34: 左侧操作抽屉（做法 A：地图让位）。
+//
+// 薄壳原则 (ADR-0017): 零业务逻辑，只把抽屉按钮点击转发给工作区功能入口。
+// 颜色一律引用 Theme 角色名 (ADR-0023)，零硬编码颜色号。
+// 文案全部由 Rust 侧经 B6 l10n 注入 (ADR-0005)，.slint 零硬编码中文。
+//
+// 抽屉内容按步骤：
+//   ① 圈边界：当前点数 / 撤销 / 清空 / 确认边界
+//   ② 定朝向：自动角度 + 小罗盘预览 / 手动输角度 / 确认两点朝向 / 重置
+//   ③ 采集：来源 / 开始 / 进度 / 差异摘要 / 查看报告
+//   ⑤ 导出：开始导出 / 结果 / 错误状态
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { OrientationIndicator } from "orientation.slint";
+
+/// 左侧操作抽屉：按当前步骤显示对应操作。
+export component WorkspaceDrawer inherits Rectangle {
+    in property <int> active-step;
+
+    // ── ① 圈边界 ──────────────────────────────
+    in property <int> boundary-point-count;
+    in property <string> boundary-points-label;
+    in property <string> boundary-status;
+    in property <bool> boundary-is-determined;
+    in property <string> boundary-undo-label;
+    in property <string> boundary-reset-label;
+    in property <string> boundary-confirm-label;
+    callback boundary-undo-clicked();
+    callback boundary-reset-clicked();
+    callback boundary-confirm-clicked();
+
+    // ── ② 定朝向 ──────────────────────────────
+    in property <float> orientation-angle: -1.0;
+    in property <string> orientation-angle-display;
+    in property <string> orientation-current-angle-label;
+    in property <string> orientation-arrow-commands;
+    in property <bool> orientation-is-determined;
+    in property <string> orientation-status;
+    in-out property <string> orientation-input-text;
+    in property <string> orientation-angle-input-placeholder;
+    in property <string> orientation-submit-label;
+    in property <string> orientation-confirm-two-points-label;
+    in property <string> orientation-reset-label;
+    callback orientation-submit-clicked();
+    callback orientation-confirm-two-points-clicked();
+    callback orientation-reset-clicked();
+
+    // ── ③ 采集 ──────────────────────────────
+    in property <string> collection-source-label;
+    in property <string> collection-collect-label;
+    in property <string> collection-progress-label;
+    in property <[string]> collection-category-labels;
+    in property <[string]> collection-category-statuses;
+    in property <string> collection-category-skip-label;
+    in property <string> collection-diff-summary;
+    in property <string> collection-report-entry-label;
+    in property <string> collection-report-body;
+    callback collection-start-clicked();
+    callback collection-report-clicked();
+
+    // ── ⑤ 导出 ──────────────────────────────
+    in property <string> export-start-label;
+    in property <string> export-status-title;
+    in property <string> export-status-body;
+    in property <bool> export-can-start;
+    callback export-start-clicked();
+
+    background: Theme.surface;
+    border-color: Theme.separator;
+    border-width: 1px;
+    border-radius: 8px;
+    clip: true;
+
+    ScrollView {
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: parent.height - 24px;
+        VerticalLayout {
+            spacing: 10px;
+            alignment: start;
+
+            // ① 圈边界
+            if root.active-step == 0: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.boundary-points-label;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.boundary-status;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.boundary-undo-label;
+                    enabled: !root.boundary-is-determined && root.boundary-point-count > 0;
+                    clicked => { root.boundary-undo-clicked(); }
+                }
+                Button {
+                    text: root.boundary-reset-label;
+                    enabled: root.boundary-point-count > 0;
+                    clicked => { root.boundary-reset-clicked(); }
+                }
+                Button {
+                    text: root.boundary-confirm-label;
+                    primary: true;
+                    enabled: root.boundary-point-count >= 3 && !root.boundary-is-determined;
+                    clicked => { root.boundary-confirm-clicked(); }
+                }
+            }
+
+            // ② 定朝向
+            if root.active-step == 1: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.orientation-current-angle-label + " " + root.orientation-angle-display;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                OrientationIndicator {
+                    angle: root.orientation-angle;
+                    angle-display: root.orientation-angle-display;
+                    arrow-commands: root.orientation-arrow-commands;
+                    indicator-size: 72px;
+                }
+                Text {
+                    text: root.orientation-status;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                LineEdit {
+                    text <=> root.orientation-input-text;
+                    placeholder-text: root.orientation-angle-input-placeholder;
+                }
+                Button {
+                    text: root.orientation-submit-label;
+                    primary: true;
+                    enabled: root.orientation-input-text != "";
+                    clicked => { root.orientation-submit-clicked(); }
+                }
+                Button {
+                    text: root.orientation-confirm-two-points-label;
+                    enabled: root.orientation-angle >= 0.0;
+                    clicked => { root.orientation-confirm-two-points-clicked(); }
+                }
+                Button {
+                    text: root.orientation-reset-label;
+                    enabled: root.orientation-angle >= 0.0 || root.orientation-is-determined;
+                    clicked => { root.orientation-reset-clicked(); }
+                }
+            }
+
+            // ③ 采集
+            if root.active-step == 2: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.collection-source-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.collection-progress-label;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                for label[i] in root.collection-category-labels: HorizontalLayout {
+                    Text {
+                        text: label;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: root.collection-category-statuses[i] + " · " + root.collection-category-skip-label;
+                        color: Theme.text-secondary;
+                        horizontal-stretch: 1;
+                        horizontal-alignment: right;
+                    }
+                }
+                Text {
+                    text: root.collection-diff-summary;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.collection-collect-label;
+                    primary: true;
+                    clicked => { root.collection-start-clicked(); }
+                }
+                Button {
+                    text: root.collection-report-entry-label;
+                    clicked => { root.collection-report-clicked(); }
+                }
+                Text {
+                    text: root.collection-report-body;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // ⑤ 导出
+            if root.active-step == 4: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.export-status-title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.export-status-body;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.export-start-label;
+                    primary: true;
+                    enabled: root.export-can-start;
+                    clicked => { root.export-start-clicked(); }
+                }
+            }
+        }
+    }
+}

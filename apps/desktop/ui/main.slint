@@ -15,9 +15,9 @@ import { ConfirmDialog, InputDialog } from "dialogs.slint";
 import { NoticeBoard, NoticeData } from "notice_board.slint";
 import { Trash, TrashItemData } from "trash.slint";
 import { Stepper } from "stepper.slint";
-import { BoundaryEditor, BoundaryPointData } from "boundary_edit.slint";
-import { OrientationView, OrientationPointData } from "orientation.slint";
-import { CollectionView } from "collection.slint";
+import { BoundaryPointData } from "boundary_edit.slint";
+import { OrientationPointData } from "orientation.slint";
+import { WorkspaceDrawer } from "workspace_drawer.slint";
 import { ReviewView, ReviewCandidateData } from "review.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
@@ -146,6 +146,22 @@ export component AppWindow inherits Window {
     in property <string> workspace-stepper-review-label;
     in property <string> workspace-stepper-export-label;
     in property <string> workspace-export-start-label;
+    // T34: 左侧抽屉（做法 A：展开时地图右移让位；收起时恢复原宽）
+    in-out property <bool> workspace-drawer-open: false;
+    in property <length> workspace-drawer-width: 300px;
+    // T34: 地图 WebView 是否可用（不可用时边界步骤显示 Slint 兜底画布）
+    in property <bool> workspace-map-available: true;
+    // T34: 地图槽位由 Slint 布局计算并上报（逻辑像素）——不再硬编码坐标；
+    // map_webview 轮询这些属性经 set_bounds 跟随（含抽屉开合让位）。
+    in property <length> workspace-map-slot-x: 20px + (root.workspace-drawer-open ? root.workspace-drawer-width + 12px : 0px);
+    in property <length> workspace-map-slot-y: 128px;
+    in property <length> workspace-map-slot-width: max(0px, root.width - root.workspace-map-slot-x - 16px);
+    in property <length> workspace-map-slot-height: max(0px, root.height - root.workspace-map-slot-y - 16px);
+    in property <string> workspace-boundary-points-label;
+    in property <string> workspace-orientation-current-angle-label;
+    in property <string> workspace-orientation-confirm-two-points-label;
+    in property <string> workspace-drawer-expand-tooltip;
+    in property <string> workspace-drawer-collapse-tooltip;
     // ADR-0027：五个步骤顶部始终同时显示校区名与方案名（合成文案由 Rust 侧注入）
     in property <string> workspace-campus-name;
     in property <string> workspace-plan-name;
@@ -165,6 +181,8 @@ export component AppWindow inherits Window {
     callback workspace-map-status-changed(available: bool);
     // 地图 WebView 转交的原始 IPC 消息（由工作区功能入口解析）
     callback workspace-map-ipc(message: string);
+    // T34: 左侧抽屉开合（左缘箭头）
+    callback workspace-drawer-toggle-clicked();
         
     // ── 屏 4 步骤①：圈边界编辑器属性（T19B-5B Phase 2 Step A）────────
     in property <[BoundaryPointData]> workspace-boundary-points;
@@ -197,17 +215,11 @@ export component AppWindow inherits Window {
     in property <string> workspace-orientation-bearing-angle-hint;
     in property <string> workspace-orientation-angle-input-placeholder;
         in property <string> workspace-orientation-angle-display;
-        in-out property <string> workspace-orientation-input-text;
+    in-out property <string> workspace-orientation-input-text;
     in property <string> workspace-orientation-submit-label;
     in property <string> workspace-orientation-reset-label;
     in property <string> workspace-orientation-status;
-    // P1-4: 模式切换按钮文案
-    in property <string> workspace-orientation-mode-two-points-label;
-    in property <string> workspace-orientation-mode-bearing-angle-label;
-    // P1-4: 模式变更回调（从 OrientationView → main）
-    callback workspace-orientation-mode-changed(mode: string);
-    callback workspace-orientation-canvas-clicked(x: float, y: float);
-    // P2-7: 删除死回调
+    callback workspace-orientation-confirm-two-points-clicked();
     callback workspace-orientation-submit-clicked();
     callback workspace-orientation-reset-clicked();
 
@@ -894,86 +906,125 @@ export component AppWindow inherits Window {
             }
         }
     
-            // 步骤①：圈边界编辑器 (Phase 2 Step A)
-            if root.workspace-active-step == 0: BoundaryEditor {
-                x: 16px;
-                y: 128px;
-                boundary-points: root.workspace-boundary-points;
-                boundary-path-commands: root.workspace-boundary-path-commands;
-                boundary-title: root.workspace-boundary-title;
-                boundary-hint: root.workspace-boundary-hint;
-                boundary-undo-label: root.workspace-boundary-undo-label;
-                boundary-confirm-label: root.workspace-boundary-confirm-label;
-                boundary-reset-label: root.workspace-boundary-reset-label;
-                boundary-status: root.workspace-boundary-status;
-                boundary-map-placeholder: root.workspace-boundary-map-placeholder;
-                boundary-is-determined: root.workspace-boundary-is-determined;
-                boundary-point-count: root.workspace-boundary-point-count;
-                    
-                boundary-canvas-clicked(x, y) => {
-                    root.workspace-boundary-canvas-clicked(x, y);
+            // T34: 步骤①②③⑤ = 地图主画面 + 左侧可收拉抽屉（做法 A：地图让位）；
+            // 步骤④评审保持现状整页（ReviewView）。
+            if root.workspace-active-step != 3: Rectangle {
+                // 左缘收拉箭头（常驻；点击开合抽屉）
+                Rectangle {
+                    x: 0px;
+                    y: root.workspace-map-slot-y;
+                    width: 20px;
+                    height: root.workspace-map-slot-height;
+                    background: Theme.surface;
+                    Text {
+                        text: root.workspace-drawer-open ? "◂" : "▸";
+                        font-size: 16px;
+                        color: Theme.text-primary;
+                        width: parent.width;
+                        height: parent.height;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        clicked => { root.workspace-drawer-toggle-clicked(); }
+                    }
                 }
-                boundary-undo-clicked => {
-                    root.workspace-boundary-undo-clicked();
+
+                // 左侧抽屉（展开时显示；内容按步骤）
+                if root.workspace-drawer-open: WorkspaceDrawer {
+                    x: 20px;
+                    y: root.workspace-map-slot-y;
+                    width: root.workspace-drawer-width;
+                    height: root.workspace-map-slot-height;
+                    active-step: root.workspace-active-step;
+                    boundary-point-count: root.workspace-boundary-point-count;
+                    boundary-points-label: root.workspace-boundary-points-label;
+                    boundary-status: root.workspace-boundary-status;
+                    boundary-is-determined: root.workspace-boundary-is-determined;
+                    boundary-undo-label: root.workspace-boundary-undo-label;
+                    boundary-reset-label: root.workspace-boundary-reset-label;
+                    boundary-confirm-label: root.workspace-boundary-confirm-label;
+                    boundary-undo-clicked => { root.workspace-boundary-undo-clicked(); }
+                    boundary-reset-clicked => { root.workspace-boundary-reset-clicked(); }
+                    boundary-confirm-clicked => { root.workspace-boundary-confirm-clicked(); }
+                    orientation-angle: root.workspace-orientation-angle;
+                    orientation-angle-display: root.workspace-orientation-angle-display;
+                    orientation-current-angle-label: root.workspace-orientation-current-angle-label;
+                    orientation-arrow-commands: root.workspace-orientation-arrow-commands;
+                    orientation-is-determined: root.workspace-orientation-is-determined;
+                    orientation-status: root.workspace-orientation-status;
+                    orientation-input-text <=> root.workspace-orientation-input-text;
+                    orientation-angle-input-placeholder: root.workspace-orientation-angle-input-placeholder;
+                    orientation-submit-label: root.workspace-orientation-submit-label;
+                    orientation-confirm-two-points-label: root.workspace-orientation-confirm-two-points-label;
+                    orientation-reset-label: root.workspace-orientation-reset-label;
+                    orientation-submit-clicked => { root.workspace-orientation-submit-clicked(); }
+                    orientation-confirm-two-points-clicked => { root.workspace-orientation-confirm-two-points-clicked(); }
+                    orientation-reset-clicked => { root.workspace-orientation-reset-clicked(); }
+                    collection-source-label: root.collection-source-label;
+                    collection-collect-label: root.collection-collect-label;
+                    collection-progress-label: root.collection-progress-label;
+                    collection-category-labels: root.collection-category-labels;
+                    collection-category-statuses: root.collection-category-statuses;
+                    collection-category-skip-label: root.collection-category-skip-label;
+                    collection-diff-summary: root.collection-diff-summary;
+                    collection-report-entry-label: root.collection-report-entry-label;
+                    collection-report-body: root.collection-report-body;
+                    collection-start-clicked => { root.collection-start-clicked(); }
+                    collection-report-clicked => { root.collection-report-clicked(); }
+                    export-start-label: root.workspace-export-start-label;
+                    export-status-title: root.workspace-placeholder-title;
+                    export-status-body: root.workspace-placeholder-subtitle;
+                    export-can-start: root.workspace-boundary-is-determined;
+                    export-start-clicked => { root.workspace-export-start-clicked(); }
                 }
-                boundary-confirm-clicked => {
-                    root.workspace-boundary-confirm-clicked();
+
+                // 地图槽位兜底画布（仅边界步骤且地图不可用时显示；
+                // 地图可用时由 WebView 占据同一槽位）
+                if root.workspace-active-step == 0 && !root.workspace-map-available: Rectangle {
+                    x: root.workspace-map-slot-x;
+                    y: root.workspace-map-slot-y;
+                    width: root.workspace-map-slot-width;
+                    height: root.workspace-map-slot-height;
+                    background: Theme.surface;
+                    border-color: Theme.separator;
+                    border-width: 1px;
+                    border-radius: 4px;
+                    clip: true;
+                    Path {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        stroke: Theme.separator;
+                        stroke-width: 2px;
+                        fill: transparent;
+                        commands: root.workspace-boundary-path-commands;
+                    }
+                    for point[i] in root.workspace-boundary-points: Rectangle {
+                        x: point.x * 1px;
+                        y: point.y * 1px;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: {
+                            if i == 0 && root.workspace-boundary-point-count > 0 {
+                                Theme.error
+                            } else {
+                                Theme.text-primary
+                            }
+                        };
+                        border-color: Theme.surface;
+                        border-width: 1px;
+                    }
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+                        clicked => {
+                            root.workspace-boundary-canvas-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
+                        }
+                    }
                 }
-                boundary-reset-clicked => {
-                    root.workspace-boundary-reset-clicked();
-                }
-            }
-                
-                        // 步骤②：定朝向交互页 (Phase 2 Step B)
-                        if root.workspace-active-step == 1: OrientationView {
-                x: 16px;
-                y: 128px;
-                workspace-orientation-mode: root.workspace-orientation-mode;
-                workspace-orientation-angle: root.workspace-orientation-angle;
-                orientation-is-determined: root.workspace-orientation-is-determined;
-                workspace-orientation-points: root.workspace-orientation-points;
-                workspace-orientation-path-commands: root.workspace-orientation-path-commands;
-                workspace-orientation-arrow-commands: root.workspace-orientation-arrow-commands;
-                orientation-title: root.workspace-orientation-title;
-                orientation-two-points-hint: root.workspace-orientation-two-points-hint;
-                orientation-bearing-angle-hint: root.workspace-orientation-bearing-angle-hint;
-                orientation-angle-input-placeholder: root.workspace-orientation-angle-input-placeholder;
-                                orientation-angle-display: root.workspace-orientation-angle-display;
-                                orientation-input-text <=> root.workspace-orientation-input-text;
-                orientation-submit-button: root.workspace-orientation-submit-label;
-                orientation-reset-button: root.workspace-orientation-reset-label;
-                orientation-status: root.workspace-orientation-status;
-                // P1-4: 模式切换按钮文案
-                orientation-mode-two-points-label: root.workspace-orientation-mode-two-points-label;
-                orientation-mode-bearing-angle-label: root.workspace-orientation-mode-bearing-angle-label;
-                    
-                orientation-canvas-clicked(x, y) => {
-                    root.workspace-orientation-canvas-clicked(x, y);
-                }
-                orientation-submit-clicked => {
-                    root.workspace-orientation-submit-clicked();
-                }
-                orientation-reset-clicked => {
-                    root.workspace-orientation-reset-clicked();
-                }
-                mode-changed(mode) => {
-                    root.workspace-orientation-mode = mode;
-                }
-            }
-                
-            if root.workspace-active-step == 2: CollectionView {
-                x: 16px; y: 128px;
-                source-label: root.collection-source-label;
-                collect-label: root.collection-collect-label;
-                progress-label: root.collection-progress-label;
-                category-labels: root.collection-category-labels;
-                category-statuses: root.collection-category-statuses;
-                category-skip-label: root.collection-category-skip-label;
-                diff-summary: root.collection-diff-summary;
-                report-entry-label: root.collection-report-entry-label;
-                report-body: root.collection-report-body;
-                start-clicked => { root.collection-start-clicked(); }
-                report-clicked => { root.collection-report-clicked(); }
             }
 
             // 步骤④+: 占位 (Phase 2 Step C 后续实现)
@@ -1012,85 +1063,6 @@ export component AppWindow inherits Window {
                 pause-clicked => { root.review-pause-clicked(); }
                 resume-clicked => { root.review-resume-clicked(); }
                 seal-clicked => { root.review-seal-clicked(); }
-            }
-
-            if root.workspace-active-step == 4: Rectangle {
-                x: 16px;
-                y: 120px;
-                width: parent.width - 32px;
-                preferred-height: 340px;
-                background: Theme.surface;
-                border-color: Theme.separator;
-                border-width: 1px;
-                border-radius: 4px;
-                clip: true;
-                    
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 16px;
-                    padding: 32px;
-                        
-                    Text {
-                        text: root.workspace-active-step == 2 ? root.workspace-stepper-collection-label :
-                              root.workspace-active-step == 3 ? root.workspace-stepper-review-label :
-                              root.workspace-placeholder-title;
-                        font-size: 18px;
-                        color: Theme.text-primary;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
-
-                    Text {
-                        text: root.workspace-active-step == 4 ? root.workspace-placeholder-subtitle :
-                              root.workspace-step-pending-notice;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        horizontal-alignment: center;
-                    }
-
-                    if root.workspace-active-step == 4: Button {
-                        text: root.workspace-export-start-label;
-                        primary: true;
-                        enabled: root.workspace-boundary-is-determined;
-                        clicked => { root.workspace-export-start-clicked(); }
-                    }
-                }
-            }
-                
-            // 状态文字
-            Text {
-                text: root.workspace-boundary-status;
-                font-size: 13px;
-                color: Theme.text-tertiary;
-                x: 16px;
-                y: 470px;
-            }
-                
-            // 按钮区域 (仅步骤①显示)
-            if root.workspace-active-step == 0: HorizontalLayout {
-                x: 16px;
-                y: 500px;
-                spacing: 16px;
-                alignment: start;
-                    
-                Button {
-                    text: root.workspace-boundary-undo-label;
-                    enabled: !root.workspace-boundary-is-determined && root.workspace-boundary-point-count > 0;
-                    clicked => { root.workspace-boundary-undo-clicked(); }
-                }
-                    
-                Button {
-                    text: root.workspace-boundary-reset-label;
-                    enabled: root.workspace-boundary-point-count > 0;
-                    clicked => { root.workspace-boundary-reset-clicked(); }
-                }
-                    
-                Button {
-                    text: root.workspace-boundary-confirm-label;
-                    primary: true;
-                    enabled: root.workspace-boundary-point-count >= 3 && !root.workspace-boundary-is-determined;
-                    clicked => { root.workspace-boundary-confirm-clicked(); }
-                }
             }
 
         // 步骤条教程气泡 (F2 钩子，ADR-0028)——只在首次进入时显示

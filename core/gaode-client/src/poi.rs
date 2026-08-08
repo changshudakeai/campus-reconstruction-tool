@@ -307,8 +307,8 @@ pub enum IpcMessage {
     OsmElements { elements: Vec<OsmElement> },
     /// 编辑后的多边形坐标 (boundary_update: GCJ-02 坐标数组)
     BoundaryUpdate { coords: Vec<[f64; 2]> },
-    /// 人工圈画落点 (manual_point: WGS-84 单个点)
-    ManualPoint { lon: f64, lat: f64 },
+    /// 人工圈画落点 (manual_point: WGS-84 单个点；total 供抽屉 ① 显示点数)
+    ManualPoint { lon: f64, lat: f64, total: u32 },
     /// 撤销上一个点 (manual_cancel)
     ManualCancel,
     /// 清空重画 (manual_clear)
@@ -461,10 +461,16 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                     struct ManualPointPayload {
                         #[serde(default)]
                         point: Option<[f64; 2]>,
+                        #[serde(default)]
+                        total: Option<u32>,
                     }
                     if let Ok(payload) = serde_json::from_str::<ManualPointPayload>(msg) {
                         if let Some([lon, lat]) = payload.point {
-                            return Ok(IpcMessage::ManualPoint { lon, lat });
+                            return Ok(IpcMessage::ManualPoint {
+                                lon,
+                                lat,
+                                total: payload.total.unwrap_or(0),
+                            });
                         }
                     }
                 }
@@ -631,12 +637,28 @@ mod ipc_tests {
     fn manual_point_parsed_correctly() {
         let json = r#"{
             "type": "manual_point",
+            "point": [116.456, 39.876],
+            "total": 3
+        }"#;
+        let result = parse_ipc_message(json).unwrap();
+        if let IpcMessage::ManualPoint { lon, lat, total } = result {
+            assert_eq!(lon, 116.456);
+            assert_eq!(lat, 39.876);
+            assert_eq!(total, 3);
+        } else {
+            panic!("Expected ManualPoint variant");
+        }
+    }
+
+    #[test]
+    fn manual_point_without_total_defaults_to_zero() {
+        let json = r#"{
+            "type": "manual_point",
             "point": [116.456, 39.876]
         }"#;
         let result = parse_ipc_message(json).unwrap();
-        if let IpcMessage::ManualPoint { lon, lat } = result {
-            assert_eq!(lon, 116.456);
-            assert_eq!(lat, 39.876);
+        if let IpcMessage::ManualPoint { total, .. } = result {
+            assert_eq!(total, 0);
         } else {
             panic!("Expected ManualPoint variant");
         }

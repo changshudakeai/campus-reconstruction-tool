@@ -213,7 +213,7 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
     // ── 7. 朝向门控：方位角提交后步骤③可进入 ──
     window.invoke_workspace_step_clicked(1);
     window.invoke_workspace_map_status_changed(false);
-    window.set_workspace_orientation_mode("bearing-angle".into());
+    // T34：模式切换已删除；抽屉"确认朝向"按钮即手动角度提交
     window.set_workspace_orientation_input_text("90".into());
     window.invoke_workspace_orientation_submit_clicked();
     assert!(window.get_workspace_orientation_is_determined());

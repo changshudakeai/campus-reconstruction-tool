@@ -1,20 +1,21 @@
-// T19B-5B Phase 2 Step B — 定朝向交互页 (ADR-0027 第②步)
+// 定朝向：小罗盘预览组件（T34 迁入左侧抽屉 ②）。
 //
 // 薄壳原则 (ADR-0017): 零业务逻辑，角度计算全在 B5 OrientationCalculator。
 // 颜色一律引用 Theme 角色名 (ADR-0023)，零硬编码颜色号。
 // 文案全部由 Rust 侧经 B6 l10n 注入 (ADR-0005)，.slint 零硬编码中文。
+// T34: 原 OrientationView（两点/角度模式切换、页内画布/罗盘/输入框）已删除，
+// 朝向交互改为"地图点两点 + 左侧抽屉"；本文件仅保留抽屉复用的罗盘预览。
 
-import { Button, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
-/// 朝向点击点显示数据 (像素坐标)
+/// 朝向点击点显示数据 (像素坐标；供 S1 状态回填与契约测试)
 export struct OrientationPointData {
     x: float,
     y: float,
 }
 
-/// 方向指示器组件：罗盘外圈 + 角度数值显示
-component OrientationIndicator inherits Rectangle {
+/// 方向指示器组件：罗盘外圈 + 角度数值显示（抽屉 ② 小罗盘预览）
+export component OrientationIndicator inherits Rectangle {
     in property <float> angle: 0.0;
     in property <string> angle-display;
     in property <length> indicator-size: 100px;
@@ -76,193 +77,9 @@ component OrientationIndicator inherits Rectangle {
         text: root.angle-display;
         font-size: 18px;
         font-weight: 700;
-                color: Theme.error;
+        color: Theme.error;
         horizontal-alignment: center;
         x: root.indicator-size / 2 - self.width / 2;
         y: root.indicator-size / 2 - self.height / 2;
-    }
-}
-
-/// 定朝向组件：两点定朝向 / 方位角输入两种模式切换
-export component OrientationView inherits Rectangle {
-    in property <string> orientation-title;
-    in property <string> orientation-two-points-hint;
-    in property <string> orientation-bearing-angle-hint;
-    in property <string> orientation-angle-input-placeholder;
-    in property <string> orientation-submit-button;
-    in property <string> orientation-reset-button;
-    in property <string> orientation-status;
-    in property <string> orientation-angle-display;
-    in-out property <string> orientation-input-text;
-    // P1-4: 模式切换按钮文案
-    in property <string> orientation-mode-two-points-label;
-    in property <string> orientation-mode-bearing-angle-label;
-
-    // P1-4: 朝向模式（in-out 供 Shell 切换）
-    in-out property <string> workspace-orientation-mode: "two-points";
-    in property <float> workspace-orientation-angle: -1.0;
-    in property <bool> orientation-is-determined;
-    in property <[OrientationPointData]> workspace-orientation-points;
-    in property <string> workspace-orientation-path-commands;
-    // P1-5: 方向箭头 Path commands
-    in property <string> workspace-orientation-arrow-commands;
-
-    callback orientation-canvas-clicked(x: float, y: float);
-    callback orientation-submit-clicked();
-    callback orientation-reset-clicked();
-    // P1-4: 模式切换回调
-    callback mode-changed(mode: string);
-
-    background: Theme.surface;
-
-    // 标题
-    Text {
-        text: root.orientation-title;
-        font-size: 16px;
-        font-weight: 700;
-        color: Theme.text-primary;
-        x: 16px;
-        y: 8px;
-    }
-
-    // P1-4: 模式切换控件（两个按钮）
-    HorizontalLayout {
-        x: 16px;
-        y: 32px;
-        width: parent.width - 32px;
-        spacing: 8px;
-
-        Button {
-            text: root.orientation-mode-two-points-label;
-            checked: root.workspace-orientation-mode == "two-points";
-            clicked => {
-                root.workspace-orientation-mode = "two-points";
-                root.mode-changed("two-points");
-            }
-        }
-
-        Button {
-            text: root.orientation-mode-bearing-angle-label;
-            checked: root.workspace-orientation-mode == "bearing-angle";
-            clicked => {
-                root.workspace-orientation-mode = "bearing-angle";
-                root.mode-changed("bearing-angle");
-            }
-        }
-    }
-
-    // 提示文字
-    Text {
-        text: root.workspace-orientation-mode == "two-points"
-            ? root.orientation-two-points-hint
-            : root.orientation-bearing-angle-hint;
-        font-size: 12px;
-        color: Theme.text-secondary;
-        x: 16px;
-        y: 64px;
-    }
-
-    // 主画布区域 (绝对定位布局，延续 boundary_edit 风格)
-    Rectangle {
-        x: 16px;
-        y: 56px;
-        width: parent.width - 32px;
-        height: 340px;
-        background: Theme.surface;
-        border-color: Theme.separator;
-        border-width: 1px;
-        border-radius: 4px;
-        clip: true;
-
-        // 两点模式：连线 (用 Path，复用 Step A 方案)
-        Path {
-            visible: root.workspace-orientation-mode == "two-points"
-                && root.workspace-orientation-points.length >= 2;
-            x: 0px;
-            y: 0px;
-            width: parent.width;
-            height: parent.height;
-            stroke: Theme.separator;
-            stroke-width: 2px;
-            fill: transparent;
-            commands: root.workspace-orientation-path-commands;
-        }
-
-        // 两点模式：顶点圆点
-        Rectangle {
-            visible: root.workspace-orientation-mode == "two-points";
-            for point[i] in root.workspace-orientation-points: Rectangle {
-                x: point.x * 1px;
-                y: point.y * 1px;
-                width: 12px;
-                height: 12px;
-                border-radius: 6px;
-                                background: i == 0 ? Theme.error : Theme.text-primary;
-                border-color: Theme.surface;
-                border-width: 2px;
-            }
-        }
-
-        // 角度输入模式：OrientationIndicator 组件
-        OrientationIndicator {
-            visible: root.workspace-orientation-mode == "bearing-angle";
-            angle: root.workspace-orientation-angle;
-            angle-display: root.orientation-angle-display;
-            arrow-commands: root.workspace-orientation-arrow-commands;
-            x: parent.width / 2 - self.width / 2;
-            y: 80px;
-        }
-
-        // 角度输入模式：LineEdit 框
-        LineEdit {
-            visible: root.workspace-orientation-mode == "bearing-angle";
-            x: parent.width / 2 - self.width / 2;
-            y: 240px;
-            width: 200px;
-            placeholder-text: root.orientation-angle-input-placeholder;
-            text <=> root.orientation-input-text;
-            enabled: !root.orientation-is-determined;
-        }
-
-        // 触摸区域 (捕获点击，仅两点模式)
-        TouchArea {
-            visible: root.workspace-orientation-mode == "two-points";
-            width: parent.width;
-            height: parent.height;
-            clicked => {
-                root.orientation-canvas-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
-            }
-        }
-    }
-
-    // 状态文字
-    Text {
-        text: root.orientation-status;
-        font-size: 13px;
-        color: Theme.text-tertiary;
-        x: 16px;
-        y: 408px;
-    }
-
-    // 按钮区域 (绝对定位)
-    Button {
-        text: root.orientation-reset-button;
-        x: 16px;
-        y: 440px;
-        enabled: root.workspace-orientation-angle >= 0.0
-            || root.workspace-orientation-points.length > 0;
-        clicked => { root.orientation-reset-clicked(); }
-    }
-
-    Button {
-        text: root.orientation-submit-button;
-        primary: true;
-        x: parent.width - self.width - 16px;
-        y: 440px;
-        enabled: root.workspace-orientation-mode == "two-points"
-            ? root.workspace-orientation-points.length >= 2
-            : (root.workspace-orientation-angle >= 0.0
-                && root.workspace-orientation-angle < 360.0);
-        clicked => { root.orientation-submit-clicked(); }
     }
 }

@@ -13,7 +13,7 @@ use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryUiEvent,
     CoordinateConverter, EventResult, MercatorCoord, Orientation, OrientationCalculator, Vertex,
 };
-use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, BoundarySorter, IpcMessage};
+use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, IpcMessage};
 use localization::Localization;
 use onboarding_tutorial::TutorialStep;
 use shared_domain_types::PlanId;
@@ -29,7 +29,7 @@ use super::record_entry_call;
 use super::workspace_boundary::{
     calculate_orientation_angle, centroid, error_fact, first_outer_ring, info_fact,
     orientation_recalc_body, plane_vertices_to_gcj02, polygon_coordinates, validation_detail,
-    WorkspaceProductionContext,
+    MapDrawState, MapDrawStatus, WorkspaceProductionContext,
 };
 
 /// 工作区生产适配器：一次请求一次完整呈现（导航决定、边界动作、离开判定）。
@@ -53,10 +53,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
                 self.orientation_submit(&mode, &angle_text)
             }
             WorkspaceRequest::OrientationReset => self.orientation_reset(),
-            WorkspaceRequest::OrientationModeChanged { mode } => {
-                self.context.session.borrow_mut().orientation_mode = mode;
-                Presentation::ready(self.context.page())
-            }
+            WorkspaceRequest::DrawerToggle => self.drawer_toggle(),
             WorkspaceRequest::ConfirmOrientation => self.confirm_orientation(),
             WorkspaceRequest::CancelConfirmation => {
                 self.context.session.borrow_mut().pending_orientation_angle = None;
@@ -146,9 +143,14 @@ impl WorkspaceProductionAdapter {
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         };
         let page = self.context.page();
-        let presentation = if keys.0.is_empty() || crate::map_webview::is_visible() {
+        // T34：打开方案必须落在边界页——若残留其他页 WebView（如朝向页），
+        // 先重建为边界页，避免"恢复错页"。
+        let map_is_boundary =
+            crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
+        let presentation = if keys.0.is_empty() || map_is_boundary {
             Presentation::ready(page)
         } else {
+            crate::map_webview::hide();
             crate::map_webview::show(
                 self.context.window.clone(),
                 keys.0,
@@ -156,6 +158,7 @@ impl WorkspaceProductionAdapter {
                 anchor.0,
                 anchor.1,
             );
+            self.context.session.borrow_mut().map_available = true;
             self.context.mark_map_loading();
             Presentation::processing(self.context.page(), Progress::ZERO)
         };
@@ -218,9 +221,13 @@ impl WorkspaceProductionAdapter {
                 );
             }
             self.context.session.borrow_mut().active_step = 0;
-            let presentation = if crate::map_webview::is_visible() {
+            // T34：进入边界步骤必须落在边界页（朝向页 WebView 不能留在本步骤）
+            let map_is_boundary =
+                crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
+            let presentation = if map_is_boundary {
                 Presentation::ready(self.context.page())
             } else {
+                crate::map_webview::hide();
                 crate::map_webview::show(
                     self.context.window.clone(),
                     keys.0,
@@ -228,6 +235,7 @@ impl WorkspaceProductionAdapter {
                     anchor.0,
                     anchor.1,
                 );
+                self.context.session.borrow_mut().map_available = true;
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
             };
@@ -260,14 +268,15 @@ impl WorkspaceProductionAdapter {
                     .with_orientation_mode(true)
                     .with_existing_boundary(existing_boundary);
                 crate::map_webview::show_with_config(self.context.window.clone(), config);
+                self.context.session.borrow_mut().map_available = true;
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
             };
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
-        // T32：步骤 3/4/5（采集/评审/导出）无需地图交互，隐藏 WebView，
-        // 避免地图子窗口覆盖 Slint 操作区（导出按钮等）导致不可点。
-        if step >= 3 {
+        // T34：仅步骤④评审页隐藏地图（整页评审不并入抽屉）；步骤③采集与
+        // 步骤⑤导出的操作已迁入左侧抽屉，地图继续作为主画面让位显示。
+        if step == 3 {
             crate::map_webview::hide();
         }
         self.context.session.borrow_mut().active_step = step;
@@ -318,6 +327,12 @@ impl WorkspaceProductionAdapter {
     }
 
     fn boundary_undo(&mut self) -> Presentation<WorkspacePageState> {
+        // T34：地图可用时撤销走抽屉按钮 → JS 桥接命令（地图退化为纯画布 +
+        // 消息桥）；地图不可用时回落到 Slint 兜底画布状态机。
+        if crate::map_webview::is_visible() {
+            crate::map_webview::evaluate_script("undoManualPointFromDrawer();");
+            return Presentation::ready(self.context.page());
+        }
         let rejected = {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::Cancel) {
@@ -334,6 +349,12 @@ impl WorkspaceProductionAdapter {
     }
 
     fn boundary_confirm(&mut self) -> Presentation<WorkspacePageState> {
+        // T34：地图可用时确认走抽屉按钮 → JS 桥接命令（JS 读取当前多边形/
+        // 人工点序列后经 confirm_boundary IPC 回传，由 B5 校验并落库）。
+        if crate::map_webview::is_visible() {
+            crate::map_webview::evaluate_script("submitBoundaryFromDrawer();");
+            return Presentation::ready(self.context.page());
+        }
         let invalid = {
             let session = self.context.session.borrow();
             let vertices = session.drawer.vertices().to_vec();
@@ -388,7 +409,13 @@ impl WorkspaceProductionAdapter {
     fn boundary_reset(&mut self) -> Presentation<WorkspacePageState> {
         {
             let mut session = self.context.session.borrow_mut();
+            // T34：地图可用时清空 JS 侧绘制（多边形/编辑器/人工点），
+            // 并同时复位本地兜底画布与地图侧呈现状态。
+            if crate::map_webview::is_visible() {
+                crate::map_webview::evaluate_script("clearManualDrawingFromDrawer();");
+            }
             session.drawer.reset();
+            session.map_draw = MapDrawState::default();
         }
         self.context.export_flow.reset_boundary();
         self.context.collection_flow.reset_boundary();
@@ -603,7 +630,21 @@ impl WorkspaceProductionAdapter {
                 state.orientation_angle = None;
             }
         }
+        // T34：地图可用时同步清空 JS 侧朝向两点草稿（纯画布 + 消息桥）
+        if crate::map_webview::is_visible() {
+            crate::map_webview::evaluate_script("clearOrientationFromDrawer();");
+        }
         self.context.export_flow.set_orientation(None);
+        Presentation::ready(self.context.page())
+    }
+
+    /// T34：左侧抽屉开合（做法 A：展开时地图右移让位，收起时恢复原宽）。
+    /// 纯页面临时状态，由工作区入口持有，S1 只呈现。
+    fn drawer_toggle(&mut self) -> Presentation<WorkspacePageState> {
+        {
+            let mut session = self.context.session.borrow_mut();
+            session.drawer_open = !session.drawer_open;
+        }
         Presentation::ready(self.context.page())
     }
 
@@ -658,6 +699,7 @@ impl WorkspaceProductionAdapter {
         {
             let mut session = self.context.session.borrow_mut();
             session.map_processing = false;
+            session.map_available = available;
         }
         let mut presentation = Presentation::ready(self.context.page());
         if !available {
@@ -677,18 +719,49 @@ impl WorkspaceProductionAdapter {
         };
         match parsed {
             IpcMessage::MapReady => self.start_boundary_fetch(),
-            IpcMessage::OsmElements { elements } => self.osm_elements(elements),
+            // T24 旧路径已由 T31 Rust 侧 Overpass 取代：HTML 不再发送
+            // osm_elements，保留解析兼容但不再走 convertAndDraw 死接线。
+            IpcMessage::OsmElements { .. } => Presentation::ready(self.context.page()),
             IpcMessage::ConfirmBoundary { coords } => self.confirm_map_boundary(&coords),
             IpcMessage::ConfirmBoundaryGeometry {
                 r#type,
                 coordinates,
             } => self.confirm_map_geometry(&r#type, coordinates),
-            IpcMessage::BoundaryUpdate { .. }
-            | IpcMessage::BoundaryGeometryUpdate { .. }
-            | IpcMessage::ManualPoint { .. }
-            | IpcMessage::ManualCancel
-            | IpcMessage::ManualClear
-            | IpcMessage::Coordinate { .. } => Presentation::ready(self.context.page()),
+            // T34：编辑/圈画 IPC 同步抽屉 ① 的点数与状态（纯呈现，几何真相
+            // 仍在地图 JS/B5 侧）。
+            IpcMessage::BoundaryUpdate { coords } => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.point_count = coords.len() as i32;
+                    session.map_draw.status = MapDrawStatus::Editing;
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::BoundaryGeometryUpdate { .. } => Presentation::ready(self.context.page()),
+            IpcMessage::ManualPoint { total, .. } => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.point_count = total as i32;
+                    session.map_draw.status = MapDrawStatus::Drawing;
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::ManualCancel => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.point_count = (session.map_draw.point_count - 1).max(0);
+                    session.map_draw.status = MapDrawStatus::Drawing;
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::ManualClear => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw = MapDrawState::default();
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::Coordinate { .. } => Presentation::ready(self.context.page()),
             IpcMessage::OrientationPoints { points } => self.orientation_points(points),
             IpcMessage::ConfirmOrientation { points } => self.confirm_orientation_points(points),
             IpcMessage::OrientationClear => self.orientation_clear(),
@@ -808,6 +881,12 @@ impl WorkspaceProductionAdapter {
                 crate::map_webview::evaluate_script(&format!(
                     "drawBoundaryGcj({coords_json}, {name_json});"
                 ));
+                // T34：抽屉 ① 点数/状态跟随 OSM 自动绘制（编辑模式）
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.point_count = gcj02.len() as i32;
+                    session.map_draw.status = MapDrawStatus::Editing;
+                }
                 let body = l10n.t_with_array(
                     "boundary.osm_auto_selected_body",
                     &[&name, &candidate_count.to_string(), &source.to_string()],
@@ -833,100 +912,6 @@ impl WorkspaceProductionAdapter {
                     &l10n,
                     "boundary.osm_not_found_title",
                     &l10n.t("boundary.osm_unreachable_body"),
-                ));
-            }
-        }
-        presentation
-    }
-
-    fn osm_elements(
-        &mut self,
-        elements: Vec<gaode_client::OsmElement>,
-    ) -> Presentation<WorkspacePageState> {
-        let Some((anchor_lon, anchor_lat, campus_name)) = ({
-            let session = self.context.session.borrow();
-            session
-                .active_context
-                .as_ref()
-                .map(|context| {
-                    (
-                        context.anchor_lng,
-                        context.anchor_lat,
-                        Some(context.campus_name.clone()),
-                    )
-                })
-                .or_else(|| {
-                    self.context
-                        .injector
-                        .borrow()
-                        .projects()
-                        .landing_campus()
-                        .ok()
-                        .flatten()
-                        .map(|campus| (campus.anchor_lng, campus.anchor_lat, Some(campus.name)))
-                })
-        }) else {
-            // 没有真实校区锚点时不得用固定坐标参与 OSM 排序：直接进入人工圈画。
-            crate::map_webview::evaluate_script("enableManualMode();");
-            let l10n = self.l10n();
-            return Presentation::ready(self.context.page()).with_notification(info_fact(
-                &l10n,
-                "boundary.osm_not_found_title",
-                &l10n.t("boundary.osm_not_found_body"),
-            ));
-        };
-        let sorted = BoundarySorter::sort_candidates(
-            elements,
-            anchor_lon,
-            anchor_lat,
-            campus_name.as_deref(),
-        );
-        let l10n = self.l10n();
-        let mut presentation = Presentation::ready(self.context.page());
-        match sorted.into_iter().next() {
-            Some(best) => {
-                let name = best
-                    .element
-                    .tags
-                    .get("name")
-                    .cloned()
-                    .unwrap_or_else(|| l10n.t("boundary.unknown_campus"));
-                match best.element.geometry {
-                    Some(coords) => {
-                        let count = coords.len();
-                        let coords_json =
-                            serde_json::to_string(&coords).unwrap_or_else(|_| "[]".to_string());
-                        let name_json = serde_json::to_string(&name)
-                            .unwrap_or_else(|_| "\"未知校区\"".to_string());
-                        crate::map_webview::evaluate_script(&format!(
-                            "convertAndDraw({coords_json}, {name_json});"
-                        ));
-                        let body = l10n.t_with_array(
-                            "boundary.osm_auto_selected_body",
-                            &[&name, &count.to_string()],
-                        );
-                        presentation = presentation.with_notification(info_fact(
-                            &l10n,
-                            "boundary.osm_auto_selected_title",
-                            &body,
-                        ));
-                    }
-                    None => {
-                        crate::map_webview::evaluate_script("enableManualMode();");
-                        presentation = presentation.with_notification(info_fact(
-                            &l10n,
-                            "boundary.osm_no_geometry_title",
-                            &l10n.t("boundary.osm_no_geometry_body"),
-                        ));
-                    }
-                }
-            }
-            None => {
-                crate::map_webview::evaluate_script("enableManualMode();");
-                presentation = presentation.with_notification(info_fact(
-                    &l10n,
-                    "boundary.osm_not_found_title",
-                    &l10n.t("boundary.osm_not_found_body"),
                 ));
             }
         }
@@ -980,6 +965,8 @@ impl WorkspaceProductionAdapter {
         {
             let mut session = self.context.session.borrow_mut();
             session.drawer.load_determined(vertices);
+            // T34：确认后由 session.drawer（已确定态）接管点数/状态显示
+            session.map_draw = MapDrawState::default();
         }
         self.context
             .collection_flow

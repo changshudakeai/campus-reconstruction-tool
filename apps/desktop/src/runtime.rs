@@ -400,6 +400,8 @@ impl ViewModelInjector {
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
+            // T34：弹窗遮挡统一机制——确认弹窗关闭后按当前步骤模式恢复地图
+            crate::map_webview::restore_after_modal(window.as_weak());
             let needs_campus_search_polling = presentation_confirmed
                 .borrow_mut()
                 .confirm_pending_action(&window);
@@ -417,6 +419,8 @@ impl ViewModelInjector {
         window.on_confirm_dialog_cancelled(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
+            // T34：弹窗遮挡统一机制——确认弹窗取消后按当前步骤模式恢复地图
+            crate::map_webview::restore_after_modal(window.as_weak());
             presentation_cancel
                 .borrow_mut()
                 .cancel_pending_action(&window);
