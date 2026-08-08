@@ -145,6 +145,15 @@ pub fn detect_self_intersection(vertices: &[Vertex]) -> Option<(usize, usize)> {
             if i == 0 && j == n - 1 {
                 continue;
             }
+            // 共享端点不算自相交：环可能在中途回到首点闭合后仍带尾点
+            // （如 OSM 几何的闭合节点不在末尾），此时尾边与首边在重复
+            // 顶点处相接，索引不相邻但共享端点——同样不是自相交。
+            let si = &segments[i];
+            let sj = &segments[j];
+            if si.start == sj.start || si.start == sj.end || si.end == sj.start || si.end == sj.end
+            {
+                continue;
+            }
             if segments[i].intersects(&segments[j]) {
                 return Some((i, j));
             }
@@ -307,6 +316,52 @@ mod tests {
         ];
 
         assert!(detect_self_intersection(&vertices).is_none());
+    }
+
+    #[test]
+    fn ring_closing_midway_with_tail_is_not_self_intersecting() {
+        // T33 回归：真实 OSM 校区边界（如华东师大普陀校区）的闭合节点
+        // 不在末尾——环在中途回到首点（v4 == v0）后仍带 2 个尾点。
+        // 尾边（v3→v0、v6→v0）与首边（v0→v1）在 v0 处共享端点，
+        // 索引不相邻但共享端点，不得判为自相交。
+        let vertices = vec![
+            Vertex::new(0.0, 0.0),   // v0
+            Vertex::new(20.0, 0.0),  // v1
+            Vertex::new(20.0, 20.0), // v2
+            Vertex::new(0.0, 20.0),  // v3
+            Vertex::new(0.0, 0.0),   // v4 == v0（中途闭合）
+            Vertex::new(-1.0, -1.0), // v5 尾点（环外）
+            Vertex::new(-2.0, 0.0),  // v6 尾点（环外）
+        ];
+
+        let result = validate_polygon_closure(&vertices);
+
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, BoundaryValidationError::SelfIntersecting { .. })),
+            "中途闭合环的共享端点不得被误判为自相交：{result:?}"
+        );
+        assert!(result.area.unwrap() > 100.0);
+    }
+
+    #[test]
+    fn genuine_bowtie_is_still_self_intersecting() {
+        // 真正的自相交（两条边在中点处交叉、不共享端点）仍必须被检出。
+        let vertices = vec![
+            Vertex::new(0.0, 0.0),
+            Vertex::new(10.0, 10.0),
+            Vertex::new(10.0, 0.0),
+            Vertex::new(0.0, 10.0),
+        ];
+
+        let result = validate_polygon_closure(&vertices);
+
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| { matches!(e, BoundaryValidationError::SelfIntersecting { .. }) }));
     }
 
     #[test]

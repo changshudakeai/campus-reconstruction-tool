@@ -387,4 +387,38 @@ mod tests {
             "采集报告应同时具备面候选与名称：polygons={polygons} named={named}"
         );
     }
+
+    #[test]
+    fn normalize_closed_ring_trims_tail_after_midway_closure() {
+        // T33 回归：OSM 环在中途闭合（v4 == v0）后仍带尾点 →
+        // 归一化为干净单环，避免确认校验把共享端点误判为自相交。
+        let ring = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [0.0, 0.0],
+            [5.0, 12.0],
+            [4.0, 12.5],
+        ];
+        assert_eq!(
+            normalize_closed_ring(ring),
+            vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+        );
+    }
+
+    #[test]
+    fn normalize_closed_ring_keeps_clean_ring_and_drops_trailing_closure_duplicate() {
+        let clean = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        assert_eq!(normalize_closed_ring(clean.clone()), clean);
+
+        let closed = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [0.0, 0.0],
+        ];
+        assert_eq!(normalize_closed_ring(closed), clean);
+    }
 }

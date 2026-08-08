@@ -340,6 +340,26 @@ struct SelectedBoundary {
     candidate_count: usize,
 }
 
+/// 归一化坐标环：截断到第一次回到首点的位置。
+///
+/// 真实 OSM 几何的闭合节点可能不在末尾（环在中途闭合后仍带尾点，如
+/// 华东师大普陀校区边界 90 点中第 87 点即首点、其后还带 2 个尾点）。
+/// 归一化保证进入桌面链路的边界是干净单环（去掉重复闭合点与尾点），
+/// 避免确认校验把共享端点的尾边误判为自相交（T33）。
+fn normalize_closed_ring(coords: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    let Some(first) = coords.first().copied() else {
+        return Vec::new();
+    };
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(coords.len());
+    for point in &coords {
+        if out.len() > 1 && *point == first {
+            break;
+        }
+        out.push(*point);
+    }
+    out
+}
+
 /// 解析 Overpass 响应 → WGS-84 转 GCJ-02 → 按 ADR-0029 排序（锚点包含 →
 /// 名称匹配 → 距离最近）→ 取最佳。
 fn select_best(
@@ -369,7 +389,7 @@ fn select_best(
             .get("name")
             .cloned()
             .unwrap_or_else(|| best.element.id.to_string()),
-        geometry: best.element.geometry?,
+        geometry: normalize_closed_ring(best.element.geometry?),
         candidate_count,
     })
 }
