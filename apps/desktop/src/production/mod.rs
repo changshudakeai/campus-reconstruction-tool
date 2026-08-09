@@ -510,6 +510,14 @@ impl ProductionEntries {
         );
     }
 
+    pub(crate) fn review_highlight(&mut self, window: &AppWindow, candidate_id: String) {
+        self.submit_review(window, ReviewRequest::Highlight { candidate_id });
+    }
+
+    pub(crate) fn review_locate(&mut self, window: &AppWindow, candidate_id: String) {
+        self.submit_review(window, ReviewRequest::Locate { candidate_id });
+    }
+
     pub(crate) fn review_toggle_selected(&mut self, window: &AppWindow, candidate_id: String) {
         self.submit_review(window, ReviewRequest::ToggleSelected { candidate_id });
     }
@@ -807,6 +815,21 @@ impl ProductionEntries {
     /// 响应通道（D-3：信封匹配在校区搜索传输内），并交给工作区功能入口
     /// 解析边界/朝向消息。
     pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
+        // T38：评审地图页（步骤 ④）的 IPC 路由到评审入口，不进入边界/朝向解析，
+        // 也不触发 OSM 边界自动获取。
+        if crate::map_webview::is_review_page() {
+            match gaode_client::parse_ipc_message(message) {
+                Ok(IpcMessage::MapReady) => {
+                    self.submit_review(window, ReviewRequest::MapReady);
+                }
+                Ok(IpcMessage::ReviewObjectClicked { candidate_id }) => {
+                    self.submit_review(window, ReviewRequest::Highlight { candidate_id });
+                }
+                Ok(IpcMessage::Error { message }) => self.review_map_error(window, &message),
+                _ => {}
+            }
+            return;
+        }
         let _ = self.campus_search_ipc.send(message.to_owned());
         let presentation = self.workspace.show(
             window,
@@ -819,6 +842,24 @@ impl ProductionEntries {
             // 地图确认朝向覆盖既有朝向：与方位角输入提交走同一确认路径
             self.pending_confirmation = Some(PendingConfirmation::OrientationRecalc);
         }
+    }
+
+    /// 评审地图加载失败：如实标记不可用并隐藏地图（评审抽屉仍可继续操作），
+    /// 经 B7 呈现明确错误（与边界页失败同纪律，T36）。
+    fn review_map_error(&mut self, window: &AppWindow, message: &str) {
+        crate::map_webview::mark_map_failed();
+        crate::map_webview::hide();
+        self.workspace.show(
+            window,
+            &self.center,
+            WorkspaceRequest::MapStatus { available: false },
+        );
+        self.submit_review(
+            window,
+            ReviewRequest::MapFailed {
+                message: message.to_string(),
+            },
+        );
     }
 
     /// 离开工作区前先经功能入口判定；需要确认时挂起目标页等待确认。
@@ -1275,6 +1316,24 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
+        window.on_review_card_highlight_clicked(move |candidate_id| {
+            let Some(window) = weak.upgrade() else { return };
+            shared
+                .borrow_mut()
+                .review_highlight(&window, candidate_id.to_string());
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_locate_clicked(move |candidate_id| {
+            let Some(window) = weak.upgrade() else { return };
+            shared
+                .borrow_mut()
+                .review_locate(&window, candidate_id.to_string());
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
         window.on_review_card_selection_toggled(move |candidate_id| {
             let Some(window) = weak.upgrade() else { return };
             shared
@@ -1364,7 +1423,11 @@ impl ProductionEntries {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_map_ipc(&window, &message);
                 // T31：地图就绪 → Rust 侧 OSM 边界自动获取（后台线程轮询取回）
+                // T38：评审地图就绪走评审入口，不触发边界获取。
                 if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(&message) {
+                    if crate::map_webview::is_review_page() {
+                        return;
+                    }
                     ProductionEntries::start_boundary_fetch_polling(&shared, &window);
                 }
             }

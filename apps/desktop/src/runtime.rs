@@ -657,6 +657,7 @@ fn set_theme_color(theme: &Theme, role: &str, color: Color) {
         "text-quaternary" => theme.set_text_quaternary(color),
         "text-faint" => theme.set_text_faint(color),
         "separator" => theme.set_separator(color),
+        "highlight" => theme.set_highlight(color),
         "bubble-background" => theme.set_bubble_background(color),
         "bubble-border" => theme.set_bubble_border(color),
         "error" => theme.set_error(color),

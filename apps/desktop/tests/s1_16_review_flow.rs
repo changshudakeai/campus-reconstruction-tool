@@ -18,7 +18,8 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::{CampusId, CandidateCategory};
 use slint::Model;
 
-/// 种子：3 栋可评审建筑 + 1 条可评审道路 + 1 处可评审水域；
+/// 种子：3 栋有名称可评审建筑 + 1 栋未命名可评审建筑 + 1 条可评审道路 +
+/// 1 处可评审水域；
 /// 另加 1 条无投影原始观测与 1 个 Isolated 投影（均不得进入评审页）。
 fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
     let mut observations = Vec::new();
@@ -31,6 +32,14 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
             "overpass",
         ));
     }
+    // 未命名建筑：无 name 标签 → 标题回退为实体 ID，评审抽屉显示"未命名建筑 #id"
+    observations.push(RawObservation::new(
+        plan_id,
+        CandidateCategory::Building,
+        "way/b3",
+        serde_json::json!({ "tags": { "building": "yes" } }),
+        "overpass",
+    ));
     observations.push(RawObservation::new(
         plan_id,
         CandidateCategory::Road,
@@ -185,7 +194,7 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         let mut database = injector.projects().database();
         seed_candidates(&mut database, &plan_id.to_string())
     };
-    assert_eq!(reviewable.len(), 5);
+    assert_eq!(reviewable.len(), 6);
     let _runtime = assemble_application(&window, injector, Arc::clone(&center));
 
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
@@ -201,7 +210,7 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     assert_eq!(window.get_workspace_active_step(), 3);
     assert_eq!(
         window.get_review_candidate_count(),
-        5,
+        6,
         "Isolated 与无投影原始观测不得进入评审页"
     );
     assert_eq!(window.get_review_category_labels().row_count(), 6);
@@ -210,26 +219,41 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         .collect();
     assert_eq!(
         counts,
-        vec![3, 1, 1, 0, 0, 0],
+        vec![4, 1, 1, 0, 0, 0],
         "六类标签页计数必须来自 Reviewable"
     );
     assert_eq!(window.get_review_active_category(), 0);
 
-    // 当前激活类别（建筑）显示 3 张卡，初始全部“待定”。
-    assert_eq!(window.get_review_cards().row_count(), 3);
+    // 当前激活类别（建筑）显示 4 张卡，初始全部“待定”。
+    assert_eq!(window.get_review_cards().row_count(), 4);
     assert_eq!(card_title(&window, 0), "教学楼0");
     assert_eq!(card_title(&window, 2), "教学楼2");
-    for index in 0..3 {
+    for index in 0..4 {
         assert_eq!(
             card_state_key(&window, index),
             "pending",
             "候选初始三态必须为待定"
         );
     }
+    // 未命名候选：卡片标题为"未命名建筑 #id"（id = 回退实体 ID），named=false
+    assert_eq!(card_title(&window, 3), "未命名建筑 #way/b3");
+    assert!(
+        !window
+            .get_review_cards()
+            .row_data(3)
+            .expect("未命名卡片必须存在")
+            .named,
+        "未命名候选必须标记 named=false"
+    );
+    assert_eq!(
+        window.get_review_locate_label().as_str(),
+        l10n.t("review.locate"),
+        "定位到地图按钮文案必须经 B6 注入"
+    );
 
     // 逐项判定：建筑 0 改为保留，卡片立即呈现“保留”。
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
-    assert_eq!(window.get_review_cards().row_count(), 3);
+    assert_eq!(window.get_review_cards().row_count(), 4);
     assert_eq!(
         window
             .get_review_cards()
@@ -245,7 +269,7 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     window.invoke_review_category_clicked(1);
     assert_eq!(window.get_review_active_category(), 1);
     assert_eq!(window.get_review_cards().row_count(), 1);
-    window.invoke_review_card_state_clicked(reviewable[3].clone().into(), "remove".into());
+    window.invoke_review_card_state_clicked(reviewable[4].clone().into(), "remove".into());
     assert_eq!(card_state_key(&window, 0), "remove");
     assert_eq!(
         window
@@ -259,7 +283,7 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
 
     // 切回建筑：三态判定结果保留在内存会话中。
     window.invoke_review_category_clicked(0);
-    assert_eq!(window.get_review_cards().row_count(), 3);
+    assert_eq!(window.get_review_cards().row_count(), 4);
     assert_eq!(card_state_key(&window, 0), "keep");
     assert_eq!(card_state_key(&window, 1), "pending");
 
@@ -267,4 +291,37 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     window.invoke_review_category_clicked(2);
     assert_eq!(window.get_review_cards().row_count(), 1);
     assert_eq!(card_state_key(&window, 0), "pending");
+
+    // T38：点卡片 → 高亮 + 选中详情（名称/类别/标签与属性/来源/状态）
+    window.invoke_review_category_clicked(0);
+    window.invoke_review_card_highlight_clicked(reviewable[0].clone().into());
+    assert!(window.get_review_detail_visible(), "高亮候选必须显示详情");
+    assert_eq!(window.get_review_detail_title().as_str(), "教学楼0");
+    assert!(
+        window.get_review_detail_source_label().contains("overpass"),
+        "详情必须给出候选来源"
+    );
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(0)
+            .expect("高亮卡片必须存在")
+            .highlighted,
+        "高亮候选的卡片必须带 highlighted 标记（地图↔卡片联动）"
+    );
+
+    // T38：卡片"定位到地图"→ 高亮同一候选（地图中心跳转由地图页 JS 负责）
+    window.invoke_review_locate_clicked(reviewable[3].clone().into());
+    assert_eq!(
+        window.get_review_detail_title().as_str(),
+        "未命名建筑 #way/b3",
+        "定位后详情必须切换并显示未命名标题"
+    );
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(3)
+            .expect("定位候选卡片必须存在")
+            .highlighted
+    );
 }

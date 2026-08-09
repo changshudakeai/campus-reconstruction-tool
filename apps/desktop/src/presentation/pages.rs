@@ -604,6 +604,24 @@ pub struct ReviewPageState {
     pub card_pending_label: String,
     pub card_keep_label: String,
     pub card_reject_label: String,
+    /// 卡片"定位到地图"按钮文案。
+    pub locate_label: String,
+    /// 选中候选详情是否可见（存在高亮候选时）。
+    pub detail_visible: bool,
+    /// 详情标题（未命名显示"未命名建筑 #id"）。
+    pub detail_title: String,
+    /// 详情类别行（含类别名）。
+    pub detail_category_label: String,
+    /// 详情"标签与属性"行标签。
+    pub detail_tags_label: String,
+    /// 标签与属性行（key=value）。
+    pub detail_tags: Vec<String>,
+    /// 详情"来源"行标签。
+    pub detail_source_label: String,
+    /// 详情来源值（data_source_tag）。
+    pub detail_source: String,
+    /// 详情状态行。
+    pub detail_state_label: String,
     /// 暂停/恢复/封账按钮文案。
     pub pause_label: String,
     pub resume_label: String,
@@ -637,6 +655,15 @@ impl WindowPageState for ReviewPageState {
         window.set_review_card_pending_label(self.card_pending_label.clone().into());
         window.set_review_card_keep_label(self.card_keep_label.clone().into());
         window.set_review_card_reject_label(self.card_reject_label.clone().into());
+        window.set_review_locate_label(self.locate_label.clone().into());
+        window.set_review_detail_visible(self.detail_visible);
+        window.set_review_detail_title(self.detail_title.clone().into());
+        window.set_review_detail_category_label(self.detail_category_label.clone().into());
+        window.set_review_detail_tags_label(self.detail_tags_label.clone().into());
+        window.set_review_detail_tags(string_model(&self.detail_tags));
+        window.set_review_detail_source_label(self.detail_source_label.clone().into());
+        window.set_review_detail_source(self.detail_source.clone().into());
+        window.set_review_detail_state_label(self.detail_state_label.clone().into());
         window.set_review_pause_label(self.pause_label.clone().into());
         window.set_review_resume_label(self.resume_label.clone().into());
         window.set_review_seal_label(self.seal_label.clone().into());
@@ -655,6 +682,14 @@ pub enum ReviewRequest {
     SetCategory { index: usize },
     /// 逐项判定三态（state: pending/keep/remove）。
     SetState { candidate_id: String, state: String },
+    /// 高亮一个候选（点卡片或地图对象；双向联动共用同一份高亮）。
+    Highlight { candidate_id: String },
+    /// 卡片"定位到地图"：地图中心跳转并高亮该候选。
+    Locate { candidate_id: String },
+    /// 评审地图就绪（map_ready IPC）：把候选标注与当前高亮推送到地图。
+    MapReady,
+    /// 评审地图加载失败（页面 onerror / SDK 超时 / Rust 侧加载超时）。
+    MapFailed { message: String },
     /// 切换单卡复选。
     ToggleSelected { candidate_id: String },
     /// 全选当前类别。

@@ -4,6 +4,89 @@
 
 ---
 
+## T38 实施窗口记录（2026-08-09，fix/t38-review-drawer）
+
+工单：`.scratch/v2-implementation/issues/T38-review-drawer-workbench.md`
+（评审工作台抽屉化改造：ADR-0016 更新 + 地图定位/标注）。
+便携包 `dist/MCRebuild-V2.0.0-dev-portable.zip` 已按本分支 HEAD 重建。
+本段为实施窗口记录；验收窗口复核与真实密钥走查另行补充。
+
+### 改造动因（对应"根因"）
+
+T34 工作区"地图为主 + 左侧抽屉"改造时，评审步明确列为不做项（"步骤 ④ 评审
+保持现状整页"）。T38 按产品负责人 2026-08-09 决策把评审并入同一交互范式：
+三栏布局（左卡片 + 中地图 + 右信息面板）改为**地图为主区 + 左侧抽屉**，
+其余评审语义（三态判定/批量确认/暂停恢复/封账/内存操作）不变。
+
+### ADR 与决策落库（验收标准 1）
+
+`docs/adr/0016-review-process-design.md`："界面布局"一节改为抽屉样式（含
+ASCII 布局：类别标签 3×2、选中详情、可滚动候选列表、批量/暂停/封账固定
+操作行）；新增"地图标注与定位"小节——待定=虚线、保留=实线、剔除=地图隐藏
+（卡片保留可改回）、"定位到地图"按钮跳转高亮、地图↔卡片双向联动；
+"原因"第 5 条同步改为"与工作区其他步骤一致"。其余章节不变。
+
+### 实现（F5 / B3 / 壳层三层）
+
+- F5 `review-workbench`：`Candidate` 携带几何（GCJ-02，采集入口已转换）、
+  来源（`data_source_tag`）与命名标记；`CandidateCardView`/`MapObjectView`/
+  `InfoPanelView` 扩展（卡片 named、地图对象 shape_kind/shape_coordinates/
+  source、详情 source/named）；新增文本键 `review.info_source`。
+- B3 `gaode-client`：新增 `review_map_page.rs`（`build_review_map_page_html`）——
+  候选三态标注（待定虚线/保留实线/剔除隐藏）、`locateReviewCandidate` 中心
+  跳转 + 高亮、`highlightReviewCandidate`/`clearReviewHighlight` 双向联动、
+  点击对象 `review_object_clicked` IPC、OSM 署名、无 HTML 工具栏；IPC 枚举
+  新增 `ReviewObjectClicked`。
+- 壳层：`map_webview` 新增 `Review` 页种类与 `show_review`/`is_review_page`/
+  弹窗恢复（步骤④按评审页重建）；`workspace_adapter` 评审步显示评审地图、
+  从评审步返回采集/导出重建边界页（避免标注页串步）；`main.slint` 五个步骤
+  全部地图让位 + 左抽屉，评审步使用 `ReviewDrawer`；评审 IPC（map_ready /
+  review_object_clicked / error）经评审入口路由，不触发 OSM 边界获取。
+- 呈现：抽屉含六类标签页、选中详情（名称/类别/标签与属性/来源/状态，未命名
+  显示"未命名建筑 #id"）、可滚动候选卡片（复选 + 三态 + 定位按钮 + 点击
+  高亮）、批量操作、暂停/恢复、封账（操作行固定抽屉底部）；主题新增
+  `highlight` 角色（联动高亮背景）。
+
+### 逐条验收对照（实施窗口证据）
+
+1. **ADR-0016 更新入库且与实现一致**：ADR 界面布局/标注规则/定位交互已更新
+   （见上），评审页抽屉元素与文档一一对应（`s1_16`/`s1_24` 断言）。
+2. **抽屉全功能可用（回归 T33 大列表场景）**：`s1_22_review_scroll_contract`
+   重构为抽屉布局断言——真实 1026 候选（建筑 1000 + 道路 26）下抽屉展开、
+   列表滚轮/键盘可滚动、分类标签真实点击复位、封账按钮固定抽屉底部真实
+   点击落账（1026 条决定一次性写回）；`s1_16`/`s1_17`/`s1_18` 回归全绿。
+3. **定位按钮跳转高亮**：`s1_24` 断言 `review-locate-clicked` → 高亮候选 +
+   详情切换（未命名显示"未命名建筑 #way/b1"）；地图中心跳转由 B3 地图页
+   `locateReviewCandidate` 单测覆盖（HTML 含 setZoomAndCenter + 高亮）。
+4. **标注规则测试断言**：F5 `drawer_view_carries_source_shape_and_named_flags`
+   （几何/来源/命名标记携带）；B3 `html_annotates_pending_dashed_keep_solid_
+   and_hides_remove`（待定虚线/保留实线/剔除隐藏 JS 断言）；`s1_24` 剔除后
+   卡片保留且详情显示"剔除"、可从卡片改回"保留"。
+5. **联动高亮**：`s1_24` 地图对象点击 → 卡片高亮 + 详情；点卡片 → 高亮 +
+   详情；定位 → 高亮（共用 F5 同一份高亮状态）；地图页 JS 双向命令单测覆盖。
+6. **回归与门禁**：`cargo test -p desktop-shell --test s1_16_review_flow
+   --test s1_17_review_batch_and_seal --test s1_18_review_empty_and_failure`
+   全绿；全部门禁全绿（Windows，`SLINT_BACKEND=software`、
+   `CARGO_BUILD_JOBS=2`）：`cargo machete` ✓ / `cargo test --workspace` ✓ /
+   `cargo fmt --all --check` ✓ / `cargo clippy --workspace --all-targets --
+   -D warnings` ✓ / `cargo deny check advisories bans licenses sources` ✓ /
+   `cargo xtask ci`（tidy + arch）✓ / `cargo xtask timings`（120s 预算内）✓。
+7. **便携包**：`scripts/build-release.ps1` 重建成功并解压启动冒烟。
+
+### 明确未做
+
+- 采集/导出/边界逻辑改动；产品基线其他变更；Overture 离线补充包。
+- 地图标注的真实瓦片在线走查与人工截图留档（同 T31/T34 惯例，由验收窗口在
+  已授权高德密钥下补充；实施窗口已提供 `T33_EVIDENCE_HOLD_MS` 证据保持模式
+  与自动化契约等价断言）。
+
+### 待验收窗口补充
+
+- 已授权高德密钥下评审地图真实瓦片 + 候选标注/定位跳转/双向高亮人工走查；
+- 1000+ 候选真实 GUI 封账操作复核（契约 `s1_22` 已覆盖可点性）。
+
+---
+
 ## T33 修复记录（2026-08-07，实施窗口 fix/t33-review-list-scroll）
 
 工单：`.scratch/v2-implementation/issues/T33-review-list-scroll-fix.md`

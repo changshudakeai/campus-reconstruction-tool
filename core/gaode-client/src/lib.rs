@@ -17,6 +17,9 @@
 //!   —— WebView 地图页（官方 CDN v2.0，安全密钥，地图最小高度 300px）
 //! - [boundary_edit_map_page](crate::boundary_edit_map_page)：`build_boundary_edit_page_html`
 //!   —— T24 边界编辑地图页（Overpass 查询 + PolygonEditor 编辑 + 人工圈画兼底）
+//! - [review_map_page](crate::review_map_page)：`build_review_map_page_html`
+//!   —— T38 评审地图页（候选三态标注：待定虚线/保留实线/剔除隐藏 + 定位跳转 +
+//!   地图↔卡片双向高亮）
 //! - [boundary_sorting](crate::boundary_sorting)：`BoundarySorter`
 //!   —— T24 OSM 边界候选排序（包含锚点 → 名称匹配 → 距离最近，纯函数可单测）
 //!
@@ -33,6 +36,7 @@ mod error;
 mod map_page;
 mod poi;
 mod record;
+mod review_map_page;
 mod search_flow;
 
 pub use boundary_edit_map_page::{
@@ -51,4 +55,7 @@ pub use poi::{
     OsmMember, SchoolPoi, SCHOOL_TYPECODE_PREFIX,
 };
 pub use record::CampusPoiRecord;
+pub use review_map_page::{
+    build_review_map_page_html, ReviewMapPageConfig, REVIEW_MAP_CDN_URL_TEMPLATE,
+};
 pub use search_flow::{CampusSearchFlow, ConfirmedCampus, SearchFlowState};

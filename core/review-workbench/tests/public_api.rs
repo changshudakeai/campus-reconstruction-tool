@@ -36,6 +36,7 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
         text_keys::PENDING_COUNT,
         text_keys::INFO_CATEGORY,
         text_keys::INFO_TAGS,
+        text_keys::INFO_SOURCE,
         text_keys::PAUSE,
         text_keys::RESUME,
         text_keys::CONFIRM_BUTTON,
