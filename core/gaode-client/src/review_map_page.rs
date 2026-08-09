@@ -33,6 +33,11 @@ pub struct ReviewMapPageConfig {
     pub anchor_lat: f64,
     /// 地图容器高度 (像素)
     pub height_px: u32,
+    /// 内嵌候选标注（初始三态：待定/保留/剔除；剔除不绘制——地图隐藏）。
+    /// 页面加载完成后自行绘制并发送 `map_ready`，Rust 侧无需在 IPC 回调栈内
+    /// 回推 evaluate_script（回调栈内不再执行 WebView2 脚本调用，避免 COM
+    /// 通道时序竞争）。
+    pub candidates: Vec<serde_json::Value>,
 }
 
 impl ReviewMapPageConfig {
@@ -44,6 +49,7 @@ impl ReviewMapPageConfig {
             anchor_lon: f64::NAN,
             anchor_lat: f64::NAN,
             height_px: 300,
+            candidates: Vec::new(),
         }
     }
 
@@ -56,6 +62,13 @@ impl ReviewMapPageConfig {
     pub fn effective_height_px(&self) -> u32 {
         self.height_px.max(300)
     }
+
+    /// 设置初始候选标注（与壳层回推协议同一结构：
+    /// `{candidate_id, kind, coordinates, state}`）。
+    pub fn with_candidates(mut self, candidates: Vec<serde_json::Value>) -> Self {
+        self.candidates = candidates;
+        self
+    }
 }
 
 /// 评审标注与定位的 JS 桥接脚本（不经过 format!，因此无需双花括号转义）。
@@ -67,6 +80,9 @@ const REVIEW_SCRIPT: &str = r#"
   var reviewBaseStyle = {};
   var reviewCentroids = {};
   var reviewHighlightId = null;
+  var pendingHighlightId = null;
+  var pendingCandidates = [];
+  var drawTimer = null;
 
   function postReviewClick(candidateId) {
     if (window.ipc && window.ipc.postMessage) {
@@ -111,11 +127,10 @@ const REVIEW_SCRIPT: &str = r#"
     }
   }
 
-  // 按候选三态全量重绘：待定=虚线、保留=实线、剔除=地图隐藏（卡片保留可改回）
-  window.drawReviewCandidates = function(candidatesJson) {
-    var candidates = [];
-    try { candidates = JSON.parse(candidatesJson) || []; } catch (e) { candidates = []; }
-    // 清除旧标注
+  function clearReviewOverlaysInner() {
+    if (drawTimer) { clearInterval(drawTimer); drawTimer = null; }
+    pendingCandidates = [];
+    pendingHighlightId = null;
     Object.keys(reviewObjects).forEach(function(id) {
       map.remove(reviewObjects[id]);
     });
@@ -123,56 +138,120 @@ const REVIEW_SCRIPT: &str = r#"
     reviewBaseStyle = {};
     reviewCentroids = {};
     clearReviewHighlightInner();
+  }
 
-    candidates.forEach(function(c) {
-      if (!c || c.state === 'remove') return; // 剔除候选在地图隐藏，卡片仍保留
-      var baseColor = c.state === 'pending' ? '#95a5a6' : '#3498db';
-      var dash = c.state === 'pending' ? [6, 4] : null;
-      var overlay = null;
-      var centroid = null;
-      if (c.kind === 'point') {
-        centroid = [c.coordinates[0], c.coordinates[1]];
-        overlay = new AMap.CircleMarker({
-          center: c.coordinates,
-          radius: 8,
-          strokeColor: baseColor,
-          strokeWeight: 2,
-          fillColor: baseColor,
-          fillOpacity: 0.45,
-          cursor: 'pointer',
-          clickable: true
-        });
-      } else if (c.kind === 'line_string') {
-        centroid = centroidOf(c.coordinates);
-        overlay = new AMap.Polyline({
-          path: c.coordinates,
-          strokeColor: baseColor,
-          strokeWeight: 3,
-          lineDash: dash,
-          cursor: 'pointer',
-          clickable: true
-        });
-      } else {
-        var path = toPath(c.coordinates);
-        centroid = centroidOf(path);
-        overlay = new AMap.Polygon({
-          path: path,
-          strokeColor: baseColor,
-          strokeWeight: 3,
-          lineDash: dash,
-          fillColor: baseColor,
-          fillOpacity: 0.25,
-          cursor: 'pointer',
-          clickable: true
-        });
+  // 分批绘制（每批 50、间隔 150ms）：一次同步创建 1026+ 个 AMap 多边形会
+  // 触发 WebView2/GPU 过载卡顿甚至崩溃；分批后 WebView2 有喘息窗口，标注
+  // 逐个上屏。
+  function startChunkedDrawing() {
+    if (drawTimer) { clearInterval(drawTimer); drawTimer = null; }
+    drawTimer = setInterval(function() {
+      var count = 0;
+      while (pendingCandidates.length > 0 && count < 50) {
+        var c = pendingCandidates.shift();
+        if (c) addReviewCandidateInner(c);
+        count += 1;
       }
-      if (!overlay) return;
-      overlay.on('click', function() { postReviewClick(c.candidate_id); });
-      map.add(overlay);
-      reviewObjects[c.candidate_id] = overlay;
-      reviewBaseStyle[c.candidate_id] = { strokeColor: baseColor, strokeWeight: 3 };
-      reviewCentroids[c.candidate_id] = centroid;
+      if (pendingHighlightId && reviewObjects[pendingHighlightId]) {
+        window.highlightReviewCandidate(pendingHighlightId);
+        pendingHighlightId = null;
+      }
+      if (pendingCandidates.length === 0) {
+        clearInterval(drawTimer);
+        drawTimer = null;
+      }
+    }, 150);
+  }
+
+  // 全量候选（缓冲 + 分批绘制）
+  window.setReviewCandidates = function(candidatesJson) {
+    var candidates = [];
+    try { candidates = JSON.parse(candidatesJson) || []; } catch (e) { candidates = []; }
+    clearReviewOverlaysInner();
+    candidates.forEach(function(c) { pendingCandidates.push(c); });
+    startChunkedDrawing();
+  };
+
+  // 内嵌初始候选（由 Rust 在 HTML 构建时注入；页面加载后自行绘制）
+  var embeddedCandidates = {__embedded_candidates__};
+
+  // 单个候选标注：待定=虚线、保留=实线、剔除=跳过（地图隐藏，卡片保留可改回）
+  function addReviewCandidateInner(c) {
+    if (!c || c.state === 'remove') return; // 剔除候选在地图隐藏，卡片仍保留
+    var baseColor = c.state === 'pending' ? '#95a5a6' : '#3498db';
+    var dash = c.state === 'pending' ? [6, 4] : null;
+    var overlay = null;
+    var centroid = null;
+    if (c.kind === 'point') {
+      centroid = [c.coordinates[0], c.coordinates[1]];
+      overlay = new AMap.CircleMarker({
+        center: c.coordinates,
+        radius: 8,
+        strokeColor: baseColor,
+        strokeWeight: 2,
+        fillColor: baseColor,
+        fillOpacity: 0.45,
+        cursor: 'pointer',
+        clickable: true
+      });
+    } else if (c.kind === 'line_string') {
+      centroid = centroidOf(c.coordinates);
+      overlay = new AMap.Polyline({
+        path: c.coordinates,
+        strokeColor: baseColor,
+        strokeWeight: 3,
+        lineDash: dash,
+        cursor: 'pointer',
+        clickable: true
+      });
+    } else {
+      var path = toPath(c.coordinates);
+      centroid = centroidOf(path);
+      overlay = new AMap.Polygon({
+        path: path,
+        strokeColor: baseColor,
+        strokeWeight: 3,
+        lineDash: dash,
+        fillColor: baseColor,
+        fillOpacity: 0.25,
+        cursor: 'pointer',
+        clickable: true
+      });
+    }
+    if (!overlay) return;
+    overlay.on('click', function() {
+      // 点击地图对象：JS 自高亮（双向联动的地图侧），Rust 只同步卡片与详情，
+      // 不在 WebView2 IPC 回调栈内回推 evaluate_script（避免 COM 通道时序竞争）。
+      window.highlightReviewCandidate(c.candidate_id);
+      postReviewClick(c.candidate_id);
     });
+    map.add(overlay);
+    reviewObjects[c.candidate_id] = overlay;
+    reviewBaseStyle[c.candidate_id] = { strokeColor: baseColor, strokeWeight: 3 };
+    reviewCentroids[c.candidate_id] = centroid;
+  }
+
+  // 清空全部标注（用于重绘前；分批添加见 addReviewCandidate）
+  window.clearReviewOverlays = function() {
+    clearReviewOverlaysInner();
+  };
+
+  // 单候选标注（Rust 分批推送小载荷；入缓冲由 JS 定时分批上屏，避免
+  // WebView2/GPU 一次创建上千多边形过载崩溃）
+  window.addReviewCandidate = function(candidateJson) {
+    var c = null;
+    try { c = JSON.parse(candidateJson) || null; } catch (e) { c = null; }
+    if (c) {
+      pendingCandidates.push(c);
+      startChunkedDrawing();
+    }
+  };
+
+  // 按候选三态全量重绘（兼容入口：缓冲 + 分批绘制）
+  window.drawReviewCandidates = function(candidatesJson) {
+    var candidates = [];
+    try { candidates = JSON.parse(candidatesJson) || []; } catch (e) { candidates = []; }
+    window.setReviewCandidates(JSON.stringify(candidates));
   };
 
   // "定位到地图"：地图中心跳转到该候选并高亮
@@ -187,7 +266,11 @@ const REVIEW_SCRIPT: &str = r#"
   window.highlightReviewCandidate = function(candidateId) {
     clearReviewHighlightInner();
     var overlay = reviewObjects[candidateId];
-    if (!overlay) return;
+    if (!overlay) {
+      // 候选尚未分批绘制完成：暂存，待其上屏后补高亮
+      pendingHighlightId = candidateId;
+      return;
+    }
     reviewHighlightId = candidateId;
     if (overlay.setOptions) {
       overlay.setOptions({ strokeColor: '#e74c3c', strokeWeight: 5 });
@@ -199,6 +282,12 @@ const REVIEW_SCRIPT: &str = r#"
   };
 
   window.initReviewMap = function() {
+    // 内嵌候选先绘制（待定虚线/保留实线/剔除隐藏），再通知 Rust 就绪——
+    // Rust 侧不再需要在 IPC 回调栈内回推 evaluate_script。
+    if (embeddedCandidates && embeddedCandidates.length > 0) {
+      embeddedCandidates.forEach(function(c) { pendingCandidates.push(c); });
+      startChunkedDrawing();
+    }
     if (window.ipc && window.ipc.postMessage) {
       window.ipc.postMessage(JSON.stringify({ type: 'map_ready' }));
     }
@@ -240,6 +329,8 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
 
     let cdn_url = REVIEW_MAP_CDN_URL_TEMPLATE.replace("{key}", &config.api_key);
     let height = config.effective_height_px();
+    let embedded_candidates =
+        serde_json::to_string(&config.candidates).unwrap_or_else(|_| "[]".to_string());
 
     Ok(format!(
         r#"<!DOCTYPE html>
@@ -367,6 +458,7 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
         anchor_lat = config.anchor_lat,
         review_script = REVIEW_SCRIPT,
     ))
+    .map(|html| html.replace("{__embedded_candidates__}", &embedded_candidates))
 }
 
 #[cfg(test)]
@@ -381,6 +473,10 @@ mod tests {
     fn html_exposes_review_annotation_and_locate_commands() {
         let html = build_review_map_page_html(&config()).unwrap();
         assert!(html.contains("drawReviewCandidates"));
+        assert!(html.contains("clearReviewOverlays"));
+        assert!(html.contains("addReviewCandidate"));
+        assert!(html.contains("setReviewCandidates"));
+        assert!(html.contains("startChunkedDrawing"));
         assert!(html.contains("locateReviewCandidate"));
         assert!(html.contains("highlightReviewCandidate"));
         assert!(html.contains("clearReviewHighlight"));

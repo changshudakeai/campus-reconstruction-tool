@@ -77,6 +77,15 @@ impl ReviewProductionAdapter {
     }
 
     fn page_state(&self) -> ReviewPageState {
+        let page = self.page_state_quiet();
+        self.sync_review_map();
+        page
+    }
+
+    /// 与 [`page_state`] 相同但不回推地图标注（供 WebView2 IPC 回调栈内使用——
+    /// 回调栈内不再执行 WebView2 脚本调用，避免 COM 通道时序竞争；标注由
+    /// 用户操作后的安全上下文（`page_state` 尾部）统一推送）。
+    fn page_state_quiet(&self) -> ReviewPageState {
         let workspace = self.0.page();
         let injector = self.0.injector();
         let injector = injector.borrow();
@@ -204,7 +213,6 @@ impl ReviewProductionAdapter {
             summary_text,
         };
         drop(injector);
-        self.sync_review_map();
         page
     }
 
@@ -223,6 +231,9 @@ impl ReviewProductionAdapter {
     /// 把 F5 当前候选标注（待定虚线/保留实线/剔除隐藏）与高亮状态同步到评审地图。
     ///
     /// 地图不可用或非评审页时为空操作；剔除候选由 JS 侧跳过（卡片保留可改回）。
+    /// 分批推送（清空 + 每批多条 addReviewCandidate）：真实 OSM 几何使全量
+    /// JSON 可达数百 KB，拆分小载荷降低 WebView2 ExecuteScript 通道压力
+    /// （JS 侧再以 50/150ms 分批上屏，避免一次创建上千多边形过载）。
     fn sync_review_map(&self) {
         if !crate::map_webview::is_review_page() || !crate::map_webview::is_visible() {
             return;
@@ -245,16 +256,32 @@ impl ReviewProductionAdapter {
                 })
             })
             .collect();
-        let json = serde_json::to_string(&objects).unwrap_or_else(|_| "[]".to_string());
-        crate::map_webview::evaluate_script(&format!("window.drawReviewCandidates({json});"));
+        log::debug!(
+            "sync_review_map: 推送 {} 个候选标注（分批 {}）",
+            objects.len(),
+            objects.len().div_ceil(CHUNK_SIZE)
+        );
+        const CHUNK_SIZE: usize = 50;
+        let mut scripts = vec!["window.clearReviewOverlays();".to_string()];
+        for chunk in objects.chunks(CHUNK_SIZE) {
+            let mut script = String::new();
+            for object in chunk {
+                let json = serde_json::to_string(object).unwrap_or_else(|_| "{}".to_string());
+                script.push_str("window.addReviewCandidate(");
+                script.push_str(&json);
+                script.push_str(");");
+            }
+            scripts.push(script);
+        }
         match workbench.highlighted() {
             Some(key) => {
                 let id = serde_json::to_string(&key.candidate_id).unwrap_or_else(|_| "\"\"".into());
-                crate::map_webview::evaluate_script(&format!(
-                    "window.highlightReviewCandidate({id});"
-                ));
+                scripts.push(format!("window.highlightReviewCandidate({id});"));
             }
-            None => crate::map_webview::evaluate_script("window.clearReviewHighlight();"),
+            None => scripts.push("window.clearReviewHighlight();".to_string()),
+        }
+        for script in scripts {
+            crate::map_webview::evaluate_script(&script);
         }
     }
 
@@ -384,6 +411,20 @@ impl ReviewProductionAdapter {
         }
     }
 
+    /// 不带地图回推的 apply 呈现（WebView2 IPC 回调栈内专用）。
+    fn present_apply_quiet(
+        &self,
+        result: std::result::Result<Option<()>, review_workbench::Error>,
+    ) -> Presentation<ReviewPageState> {
+        match result {
+            Ok(_) => Presentation::ready(self.page_state_quiet())
+                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            Err(error) => self
+                .review_failure_presentation(&error)
+                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+        }
+    }
+
     /// 结构化失败：经 B7 通知中心呈现错误弹窗，页面保持 F5 返回状态。
     fn review_failure_presentation(
         &self,
@@ -443,12 +484,55 @@ impl ReviewProductionAdapter {
                 injector.enter_review(&plan_id)
             });
         match result {
-            Ok(()) => Presentation::ready(self.page_state())
-                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            Ok(()) => {
+                // T38：评审地图在候选装载后创建——候选标注内嵌 HTML、页面加载后
+                // 自绘并发送 map_ready，Rust 侧无需在 IPC 回调栈内回推脚本
+                // （回调栈内不再执行 WebView2 脚本调用，避免 COM 通道时序竞争）。
+                self.show_review_map();
+                Presentation::ready(self.page_state())
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
             Err(_) => self
                 .enter_failure_presentation()
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
         }
+    }
+
+    /// 创建评审地图（候选标注内嵌 HTML；无密钥/锚点时跳过，抽屉仍可操作）。
+    fn show_review_map(&self) {
+        let Some((keys, anchor)) = self.0.map_credentials() else {
+            return;
+        };
+        if keys.0.is_empty() {
+            return;
+        }
+        let injector = self.0.injector();
+        let injector = injector.borrow();
+        let Some(workbench) = injector.review() else {
+            return;
+        };
+        let objects: Vec<serde_json::Value> = workbench
+            .view()
+            .map_objects
+            .iter()
+            .map(|object| {
+                serde_json::json!({
+                    "candidate_id": object.candidate_id,
+                    "kind": object.shape_kind,
+                    "coordinates": object.shape_coordinates,
+                    "state": object.state.to_identifier(),
+                })
+            })
+            .collect();
+        drop(injector);
+        crate::map_webview::show_review(
+            self.0.window.clone(),
+            keys.0,
+            keys.1,
+            anchor.0,
+            anchor.1,
+            objects,
+        );
     }
 }
 
@@ -482,6 +566,12 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 let key = CandidateKey::new(candidate_id);
                 self.present_apply(self.apply(|workbench| workbench.highlight(&key)))
             }
+            ReviewRequest::MapObjectHighlight { candidate_id } => {
+                // 地图对象点击（IPC 栈内）：JS 已自高亮，这里只同步卡片与详情，
+                // 不回推地图脚本（回调栈内不再执行 WebView2 脚本调用）。
+                let key = CandidateKey::new(candidate_id);
+                self.present_apply_quiet(self.apply(|workbench| workbench.highlight(&key)))
+            }
             ReviewRequest::Locate { candidate_id } => {
                 let key = CandidateKey::new(candidate_id.clone());
                 let result = self.apply(|workbench| workbench.highlight(&key));
@@ -495,8 +585,9 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 self.present_apply(result)
             }
             ReviewRequest::MapReady => {
-                // 评审地图就绪：候选标注与高亮由 page_state 尾部统一同步。
-                Presentation::ready(self.page_state())
+                // 评审地图就绪：仅呈现页面（候选标注已内嵌 HTML 自绘；后续
+                // 状态变更由 page_state 尾部的 sync_review_map 统一同步）。
+                Presentation::ready(self.page_state_quiet())
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             ReviewRequest::MapFailed { message } => {

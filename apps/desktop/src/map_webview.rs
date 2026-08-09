@@ -108,6 +108,8 @@ enum PendingShow {
         security_key: String,
         anchor_lon: f64,
         anchor_lat: f64,
+        /// 初始候选标注（与壳层回推协议同构；内嵌 HTML 由页面自绘）。
+        candidates: Vec<serde_json::Value>,
     },
 }
 
@@ -159,6 +161,8 @@ struct WebViewState {
     last_page_kind: Option<MapPageKind>,
     /// 朝向页配置（含已确认边界半透明参照；弹窗恢复时复用）
     last_orientation_config: Option<gaode_client::BoundaryEditPageConfig>,
+    /// 评审页候选标注（弹窗恢复重建评审地图时复用，T38）
+    last_review_candidates: Vec<serde_json::Value>,
     /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
     campus_search_mode: bool,
     /// resize 跟随轮询定时器（hide 时 drop 即停）
@@ -189,6 +193,7 @@ thread_local! {
             campus_search_mode: false,
             resize_timer: None,
             last_slot_scale: None,
+            last_review_candidates: Vec::new(),
         })
     };
 }
@@ -312,6 +317,10 @@ fn compute_campus_search_bounds(window_width_logical: u32, scale: f32) -> wry::R
 /// 校区搜索页用固定搜索条矩形。
 fn start_resize_timer(window_weak: Weak<crate::AppWindow>) {
     let timer = slint::Timer::default();
+    // T38：WebView 创建后前 1.5s 跳过 set_bounds——让过页面加载/就绪窗口，
+    // 避免评审地图创建初期与页面自绘/首批 IPC 的 COM 通道竞争（防御性让位；
+    // 边界页因 OSM 获取耗时天然错开，评审页需要显式让位）。
+    let settle_deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(300),
@@ -319,6 +328,9 @@ fn start_resize_timer(window_weak: Weak<crate::AppWindow>) {
             let Some(app_window) = window_weak.upgrade() else {
                 return;
             };
+            if std::time::Instant::now() < settle_deadline {
+                return;
+            }
             let scale = app_window.window().scale_factor();
             let kind = page_kind();
             let next = match kind {
@@ -378,10 +390,12 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             security_key,
             anchor_lon,
             anchor_lat,
+            candidates,
             ..
         } => {
             let config = gaode_client::ReviewMapPageConfig::new(api_key, security_key)
-                .with_anchor(*anchor_lon, *anchor_lat);
+                .with_anchor(*anchor_lon, *anchor_lat)
+                .with_candidates(candidates.clone());
             gaode_client::build_review_map_page_html(&config)
         }
     }
@@ -685,12 +699,14 @@ fn request_show(request: PendingShow) {
                 security_key,
                 anchor_lon,
                 anchor_lat,
+                candidates,
                 ..
             } => {
                 state.last_api_key = api_key.clone();
                 state.last_security_key = security_key.clone();
                 state.last_anchor = Some((*anchor_lon, *anchor_lat));
                 state.last_page_kind = Some(MapPageKind::Review);
+                state.last_review_candidates = candidates.clone();
                 state.campus_search_mode = false;
             }
         }
@@ -774,6 +790,7 @@ pub(crate) fn show_review(
     security_key: String,
     anchor_lon: f64,
     anchor_lat: f64,
+    candidates: Vec<serde_json::Value>,
 ) {
     request_show(PendingShow::Review {
         window: window_weak,
@@ -781,7 +798,37 @@ pub(crate) fn show_review(
         security_key,
         anchor_lon,
         anchor_lat,
+        candidates,
     });
+}
+
+/// T38：进程退出前同步释放全部 WebView（供窗口关闭回调调用）。
+///
+/// 窗口关闭（run() 返回）后进程退出时，主线程 TLS 析构会 drop 仍持有的
+/// `InnerWebView`，其 `ICoreWebView2Controller::Close()` 在 COM 拆除阶段
+/// 触发 combase.dll 0xc0000005（CoUnmarshalInterface 通道对端已死）。这里在
+/// 事件循环仍存活、COM 仍健康时先同步关闭控制器（含待退休 WebView），
+/// 使退出时 TLS 析构为空操作。不得在事件循环停止后再调用本函数。
+pub(crate) fn shutdown() {
+    let (webview, retiring) = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        state.resize_timer = None;
+        state.load_timer = None;
+        state.creation_in_flight = false;
+        state.pending_show = None;
+        let webview = state.webview.take();
+        let retiring = std::mem::take(&mut state.retiring);
+        (webview, retiring)
+    });
+    log::debug!(
+        "map_webview: shutdown() 同步释放 {} 个活跃 + {} 个待退休 WebView",
+        usize::from(webview.is_some()),
+        retiring.len()
+    );
+    drop(webview);
+    for retired in retiring {
+        drop(retired);
+    }
 }
 
 /// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）——**唯一延迟销毁入口**。
@@ -885,9 +932,17 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
             return;
         }
         if active_step == 3 {
-            // 评审页：用上次密钥/锚点重建评审地图，候选标注经 map_ready 回推
+            // 评审页：用上次密钥/锚点与缓存候选重建评审地图（候选内嵌 HTML）。
             if let Some((anchor_lon, anchor_lat)) = anchor {
-                show_review(window, api_key, security_key, anchor_lon, anchor_lat);
+                let candidates = STATE.with(|s| s.borrow().last_review_candidates.clone());
+                show_review(
+                    window,
+                    api_key,
+                    security_key,
+                    anchor_lon,
+                    anchor_lat,
+                    candidates,
+                );
             }
             return;
         }
@@ -902,13 +957,15 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
 }
 
 /// 向 JS 发送命令（Rust→JS 单向通道，如 drawBoundaryGcj / enableManualMode /
-/// 抽屉桥接命令 undoManualPointFromDrawer 等）。
+/// 抽屉桥接命令 undoManualPointFromDrawer / 评审标注 clearReviewOverlays /
+/// addReviewCandidate 等）。
 pub(crate) fn evaluate_script(script: &str) {
     STATE.with(|s| {
         let state = s.borrow();
         let Some(webview) = state.webview.as_ref() else {
             return;
         };
+        log::debug!("map_webview: evaluate_script 执行（len={}）", script.len());
         let _ = webview.evaluate_script(script);
     });
 }

@@ -121,6 +121,16 @@ pub fn run_dev() -> Result<()> {
     let window = AppWindow::new()?;
     // T19B-5A 色卡机制（ADR-0023）：启动时加载亮色卡设置 Theme global
     apply_theme(&window);
+    // T38 退出安全：任何关闭请求（用户 X / Alt+F4 / 系统 WM_CLOSE）先同步
+    // 释放地图 WebView（事件循环仍存活、COM 健康），避免进程退出时 TLS
+    // 析构 drop InnerWebView → Close() → combase.dll 0xc0000005 崩溃。
+    {
+        window.window().on_close_requested(|| {
+            log::info!("runtime: 收到窗口关闭请求，先同步释放地图 WebView");
+            crate::map_webview::shutdown();
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
     // T19B-2 装喇叭：Slint 弹窗 Presenter 就位——无论数据库是否可用
     // 都注册（要紧错误从此真正可见，不再只留底）。
     center
@@ -135,7 +145,13 @@ pub fn run_dev() -> Result<()> {
     match injector {
         Some(injector) => {
             let _runtime = assemble_application(&window, injector, Arc::clone(&center));
-            window.run()?;
+            // T38 崩溃取证：记录事件循环退出时机与原因（进程退出前 TLS 析构
+            // 会 drop 仍持有的 wry InnerWebView，Close() 在 COM 拆除阶段触发
+            // combase 崩溃；先确认 run() 何时/为何返回）。
+            log::info!("runtime: 进入事件循环 window.run()");
+            let run_result = window.run();
+            log::info!("runtime: window.run() 已返回（进程即将退出）: {run_result:?}");
+            run_result?;
         }
         None => {
             // 正式数据不可用：明确失败并提示重试，不切换到内存数据或假首开页（ADR-0037）

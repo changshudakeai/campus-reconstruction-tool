@@ -820,10 +820,13 @@ impl ProductionEntries {
         if crate::map_webview::is_review_page() {
             match gaode_client::parse_ipc_message(message) {
                 Ok(IpcMessage::MapReady) => {
+                    // 评审地图就绪：仅呈现页面——候选标注已内嵌 HTML 由页面
+                    // 自绘，不再回推 evaluate_script（回调栈内不再执行
+                    // WebView2 脚本调用，避免 COM 通道时序竞争）。
                     self.submit_review(window, ReviewRequest::MapReady);
                 }
                 Ok(IpcMessage::ReviewObjectClicked { candidate_id }) => {
-                    self.submit_review(window, ReviewRequest::Highlight { candidate_id });
+                    self.submit_review(window, ReviewRequest::MapObjectHighlight { candidate_id });
                 }
                 Ok(IpcMessage::Error { message }) => self.review_map_error(window, &message),
                 _ => {}
@@ -1423,7 +1426,9 @@ impl ProductionEntries {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_map_ipc(&window, &message);
                 // T31：地图就绪 → Rust 侧 OSM 边界自动获取（后台线程轮询取回）
-                // T38：评审地图就绪走评审入口，不触发边界获取。
+                // T38：评审地图就绪走评审入口（不触发边界获取）；标注推送
+                // 定时器由地图创建完成回调（handle_map_status 绑定）排定，
+                // 不在 WebView2 IPC 回调栈内启动。
                 if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(&message) {
                     if crate::map_webview::is_review_page() {
                         return;
@@ -1454,6 +1459,12 @@ impl ProductionEntries {
                 shared.borrow_mut().handle_map_ipc(&window, message);
                 // T31：同上（wry IPC 直达路径同样触发后台获取轮询）
                 if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(message) {
+                    // T38 根因：评审页 map_ready 不得重启边界获取轮询——评审步
+                    // 轮询空态会触发 poll_boundary_fetch 的 RefCell 借用 panic
+                    // （见 workspace_adapter 修复），与 on_workspace_map_ipc 同纪律。
+                    if crate::map_webview::is_review_page() {
+                        return;
+                    }
                     ProductionEntries::start_boundary_fetch_polling(&shared, &window);
                 }
             }

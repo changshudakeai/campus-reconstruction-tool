@@ -85,6 +85,45 @@ ASCII 布局：类别标签 3×2、选中详情、可滚动候选列表、批量
 - 已授权高德密钥下评审地图真实瓦片 + 候选标注/定位跳转/双向高亮人工走查；
 - 1000+ 候选真实 GUI 封账操作复核（契约 `s1_22` 已覆盖可点性）。
 
+### 真机走查与崩溃根因修复（2026-08-10 更新）
+
+评审步真机走查（种子库 1026 可评审候选 + 11 isolated，高德密钥，UIA 全流程）
+已在本窗口完成并通过：开方案 → 边界（种子库已确认）→ 评审步 → 抽屉类别
+（建筑 750 等）→ 候选卡片详情（未命名建筑 #way/283411238 / 类别：建筑 /
+building=apartments / 来源：overpass）→ 定位到地图 → 保留 → 封账。封账落库
+`review_decisions` 共 1026 条（keep=1、pending=1025、remove=0）；证据截图与
+走查日志见 `docs/developer-guide/m5-e2e/evidence/t38/`（`a0-landing-020249`
+… `h1-sealed-020422`、`t38-walkthrough.log.txt`）。
+
+**此前阻塞根因（两处叠加，均已修复）**：
+
+1. 评审步主线程 panic（真凶）：`workspace_adapter.rs::poll_boundary_fetch`
+   在 `session.borrow_mut()` 存活期间调用 `self.context.page()`（无待处理
+   边界获取的空态分支），触发 `RefCell already mutably borrowed`；而
+   `register_ipc_handler` 对评审页 `map_ready` 也重启边界获取轮询定时器
+   （缺少 `on_workspace_map_ipc` 路径已有的 `is_review_page()` 守卫），
+   定时器 20ms 后在评审步空态触发上述 panic → 主线程异常退出。
+2. 退出期 combase 崩溃（WER 表象）：进程退出时主线程 TLS 析构 drop 仍持有的
+   `wry::InnerWebView`，`ICoreWebView2Controller::Close()` 在 COM 拆除阶段
+   `CoUnmarshalInterface` 触发 combase.dll 0xc0000005（此前一直误判为评审
+   地图自身崩溃；事件日志显示同类崩溃自 08-08 起即存在）。
+
+**修复**：`poll_boundary_fetch` 先检查再借用、绝不在 session 借用存活时呈现；
+`register_ipc_handler` 评审页 map_ready 跳过边界轮询重启；新增
+`map_webview::shutdown()` 并在窗口关闭回调（`on_close_requested`）同步释放
+活跃/待退休 WebView，使退出时 TLS 析构为空操作。
+
+**验证**：真机走查全程无崩溃；窗口正常关闭干净退出（日志
+`shutdown() 同步释放 1 个活跃 + 0 个待退休 WebView` → `window.run() 已返回
+Ok`），无新 WER 转储；`cargo test -p desktop-shell`（s1_05/06/16/17/18/
+21/22/23/24/26/27/contract）全绿；`cargo test --workspace` / fmt / clippy
+-D warnings / machete / deny / `cargo xtask ci` 全绿。
+
+**剩余风险（如实）**：高德地图真实瓦片与标注的肉眼复核依赖在线密钥/瓦片
+可达性，本机网络对 overpass 全端点不可达（已回退人工圈画或种子库已确认
+边界）；UIA 走查无法读取 WebView2 内部 DOM，标注样式（虚线/实线）以 B3
+HTML 单测断言 + 截图留档为准。
+
 ---
 
 ## T33 修复记录（2026-08-07，实施窗口 fix/t33-review-list-scroll）
