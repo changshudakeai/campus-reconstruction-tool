@@ -304,6 +304,11 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
                     diff_summary: format!("摘要-{suffix}"),
                     report_entry_label: format!("报告-{suffix}"),
                     report_body: String::new(),
+                    stage_label: String::new(),
+                    elapsed_label: String::new(),
+                    cancel_label: String::new(),
+                    cancel_visible: false,
+                    partial_naming_label: String::new(),
                 },
                 progress,
             )

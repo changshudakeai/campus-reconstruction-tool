@@ -9,6 +9,10 @@
 //! "typecode → 标签"翻译词典把高德类型码译成映射表词汇——翻译是
 //! 数据源方言转换，归类仍完全由 B13 引擎裁决（ADR-0011）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
 use data_transformers::TagMap;
 use gaode_client::{
     convert_pairs_wgs84_to_gcj02, parse_location_value, parse_place_search_response,
@@ -106,6 +110,34 @@ pub trait DataSource {
 
     /// 查询指定边界内的原始对象（带完整标签）
     fn fetch_raw_entities(&self, boundary: &Boundary) -> Result<Vec<RawEntity>>;
+
+    /// 批量补名（T36）：默认不补名；有补名能力的数据源覆写。
+    ///
+    /// `deadline` 为本次采集运行的整体截止时刻：有界并发补名必须在该时刻
+    /// 前停止派发新调用，超限立即结束并如实标记“部分建筑未命名”。
+    fn enrich(&self, entities: Vec<RawEntity>, _deadline: Instant) -> Result<EnrichedEntities> {
+        Ok(EnrichedEntities {
+            entities,
+            partial: false,
+            attempted: 0,
+        })
+    }
+
+    /// 本次补名是否“部分建筑未命名”（截止 / 上限 / 调用失败导致）。
+    fn enrichment_partial(&self) -> bool {
+        false
+    }
+}
+
+/// 一次批量补名后的完整事实（实体 + 是否部分未命名 + 实际调用数）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrichedEntities {
+    /// 补名后的实体（未命名项保持来源 #id 名称）
+    pub entities: Vec<RawEntity>,
+    /// 本次是否“部分建筑未命名”
+    pub partial: bool,
+    /// 本次实际发出的补名调用数
+    pub attempted: usize,
 }
 
 /// 桥接传输：边界 → 高德地点搜索响应 JSON（REST 风格信封）。
@@ -118,13 +150,30 @@ pub type BridgeTransport =
 /// 可注入的 Overpass `out geom` 传输；生产网络由外部适配器提供。
 pub type OverpassTransport = BridgeTransport;
 
-/// 命名补强器：OSM name 缺失时补名（T31 regeo 等）；返回 `None` 表示不补。
-pub type NameEnricher = Box<dyn Fn(&RawEntity) -> Option<String> + Send + Sync>;
+/// 批量补名结果（与入参实体对齐）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchEnrichment {
+    /// 每个入参实体的补名结果；`None` 表示保持来源 #id 名称
+    pub names: Vec<Option<String>>,
+    /// 本次是否“部分建筑未命名”（截止 / 上限 / 调用失败导致）
+    pub partial: bool,
+    /// 本次实际发出的补名调用数
+    pub attempted: usize,
+}
+
+/// 命名补强器（T36）：OSM name 缺失时批量补名（regeo 等）。
+///
+/// 实现必须遵守：有界并发（默认 8 路）、单次调用超时（默认 5s）、
+/// 总体截止（`deadline`）与调用上限，禁止无限等待。
+pub trait NameEnricher: Send + Sync {
+    fn enrich_batch(&self, entities: &[RawEntity], deadline: Instant) -> BatchEnrichment;
+}
 
 /// OSM/Overpass 来源适配器，保留 node/way 的原始几何，不拼接 relation。
 pub struct OverpassDataSource {
     transport: OverpassTransport,
-    name_enricher: Option<NameEnricher>,
+    name_enricher: Option<Arc<dyn NameEnricher>>,
+    last_enrichment_partial: AtomicBool,
 }
 
 impl OverpassDataSource {
@@ -133,11 +182,12 @@ impl OverpassDataSource {
         Self {
             transport,
             name_enricher: None,
+            last_enrichment_partial: AtomicBool::new(false),
         }
     }
 
-    /// 注入命名补强器（仅 OSM name 缺失时调用；点位不参与补名主体）
-    pub fn with_name_enricher(mut self, enricher: Option<NameEnricher>) -> Self {
+    /// 注入命名补强器（仅 OSM name 缺失的面几何调用；点位不参与补名主体）
+    pub fn with_name_enricher(mut self, enricher: Option<Arc<dyn NameEnricher>>) -> Self {
         self.name_enricher = enricher;
         self
     }
@@ -169,20 +219,59 @@ impl DataSource for OverpassDataSource {
             if let Some(geometry) = entity.source_geometry.as_mut() {
                 convert_geometry_to_gcj02(geometry);
             }
-            // 命名两级：OSM name 优先（RawEntity::name 已取 tags.name）；
-            // 缺名的关键建筑（教学楼/图书馆/宿舍等）由补强器（regeo）补名。
-            // 点位只作证据，不参与补名主体（ADR-0040：点位不得扩面/冒充建筑）。
-            if entity.name == entity.entity_id
-                && matches!(entity.source_geometry, Some(SourceGeometry::Polygon(_)))
-            {
-                if let Some(enricher) = &self.name_enricher {
-                    if let Some(name) = enricher(entity) {
-                        entity.name = name;
-                    }
-                }
-            }
         }
         Ok(entities)
+    }
+
+    fn enrich(&self, mut entities: Vec<RawEntity>, deadline: Instant) -> Result<EnrichedEntities> {
+        let Some(enricher) = &self.name_enricher else {
+            self.last_enrichment_partial.store(false, Ordering::SeqCst);
+            return Ok(EnrichedEntities {
+                entities,
+                partial: false,
+                attempted: 0,
+            });
+        };
+        // 命名两级：OSM name 优先（RawEntity::name 已取 tags.name）；
+        // 缺名的关键建筑（教学楼/图书馆/宿舍等）由补强器（regeo）批量补名。
+        // 点位只作证据，不参与补名主体（ADR-0040：点位不得扩面/冒充建筑）。
+        let unnamed: Vec<(usize, RawEntity)> = entities
+            .iter()
+            .enumerate()
+            .filter(|(_, entity)| {
+                entity.name == entity.entity_id
+                    && matches!(entity.source_geometry, Some(SourceGeometry::Polygon(_)))
+            })
+            .map(|(index, entity)| (index, entity.clone()))
+            .collect();
+        if unnamed.is_empty() {
+            self.last_enrichment_partial.store(false, Ordering::SeqCst);
+            return Ok(EnrichedEntities {
+                entities,
+                partial: false,
+                attempted: 0,
+            });
+        }
+        let unnamed_entities: Vec<RawEntity> =
+            unnamed.iter().map(|(_, entity)| entity.clone()).collect();
+        let batch = enricher.enrich_batch(&unnamed_entities, deadline);
+        for (position, name) in batch.names.into_iter().enumerate() {
+            if let Some(name) = name {
+                let (index, _) = &unnamed[position];
+                entities[*index].name = name;
+            }
+        }
+        self.last_enrichment_partial
+            .store(batch.partial, Ordering::SeqCst);
+        Ok(EnrichedEntities {
+            entities,
+            partial: batch.partial,
+            attempted: batch.attempted,
+        })
+    }
+
+    fn enrichment_partial(&self) -> bool {
+        self.last_enrichment_partial.load(Ordering::SeqCst)
     }
 }
 
@@ -636,21 +725,39 @@ mod tests {
     }
 
     #[test]
-    fn overpass_name_enricher_fills_missing_names_with_cache() {
+    fn overpass_batch_enricher_fills_missing_names_with_cache() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_clone = calls.clone();
-        let enricher: NameEnricher = Box::new(move |entity: &RawEntity| {
-            calls_clone.fetch_add(1, Ordering::SeqCst);
-            match entity.source_geometry.as_ref() {
-                Some(SourceGeometry::Polygon(_)) => Some("未命名建筑".to_owned()),
-                _ => None,
+        use std::time::{Duration, Instant};
+
+        struct CountingEnricher {
+            calls: Arc<AtomicUsize>,
+        }
+        impl NameEnricher for CountingEnricher {
+            fn enrich_batch(&self, entities: &[RawEntity], _deadline: Instant) -> BatchEnrichment {
+                self.calls.fetch_add(entities.len(), Ordering::SeqCst);
+                BatchEnrichment {
+                    names: entities
+                        .iter()
+                        .map(|_| Some("未命名建筑".to_owned()))
+                        .collect(),
+                    partial: false,
+                    attempted: entities.len(),
+                }
             }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let enricher = Arc::new(CountingEnricher {
+            calls: Arc::clone(&calls),
         });
         let source = overpass_source(OVERPASS_BUILDINGS).with_name_enricher(Some(enricher));
-        let entities = source.fetch_raw_entities(&boundary()).unwrap();
-        let hospital = entities
+        let fetched = source.fetch_raw_entities(&boundary()).unwrap();
+        // T36：补名从拉取关键路径拆出，由流水线按阶段调用
+        let enriched = source
+            .enrich(fetched, Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        let hospital = enriched
+            .entities
             .iter()
             .find(|e| e.entity_id == "way/160634093")
             .unwrap();
@@ -658,11 +765,13 @@ mod tests {
         // node 是点位：补名器不参与（语义：点位只作证据）
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         // 带 OSM name 的建筑不触发补名
-        let dining = entities
+        let dining = enriched
+            .entities
             .iter()
             .find(|e| e.entity_id == "way/154427164")
             .unwrap();
         assert_eq!(dining.name, "第一餐饮大楼");
+        assert!(!enriched.partial, "全部缺名建筑补名成功时不标记部分未命名");
     }
 
     #[test]

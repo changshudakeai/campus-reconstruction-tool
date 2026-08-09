@@ -402,6 +402,8 @@ pub enum CollectionRequest {
     Poll,
     /// 用户点击“查看采集报告”（完整报告操作）。
     ShowReport,
+    /// 用户点击“取消采集”（T36：A1 CollectionFlow::cancel 已存在，接到抽屉按钮）。
+    Cancel,
     /// 离开采集上下文，过期旧结果交付（export-flow 模板）。
     Abandon,
 }
@@ -530,6 +532,16 @@ pub struct CollectionPageState {
     pub diff_summary: String,
     pub report_entry_label: String,
     pub report_body: String,
+    /// 当前阶段文案（拉取数据 / 补名 / 写库 / 完成）
+    pub stage_label: String,
+    /// 已用时长文案（处理中实时更新）
+    pub elapsed_label: String,
+    /// “取消采集”按钮文案
+    pub cancel_label: String,
+    /// 处理中是否显示取消按钮
+    pub cancel_visible: bool,
+    /// “部分建筑未命名”提示（无则空串）
+    pub partial_naming_label: String,
 }
 
 impl WindowPageState for CollectionPageState {
@@ -544,6 +556,11 @@ impl WindowPageState for CollectionPageState {
         window.set_collection_diff_summary(self.diff_summary.clone().into());
         window.set_collection_report_entry_label(self.report_entry_label.clone().into());
         window.set_collection_report_body(self.report_body.clone().into());
+        window.set_collection_stage_label(self.stage_label.clone().into());
+        window.set_collection_elapsed_label(self.elapsed_label.clone().into());
+        window.set_collection_cancel_label(self.cancel_label.clone().into());
+        window.set_collection_cancel_visible(self.cancel_visible);
+        window.set_collection_partial_naming_label(self.partial_naming_label.clone().into());
     }
 }
 /// 评审页一次返回的完整页面状态（F5 WorkbenchView 的呈现层）。

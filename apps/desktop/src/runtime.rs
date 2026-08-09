@@ -12,7 +12,7 @@ use anyhow::Result;
 use collection_flow::CollectionFlow;
 use data_acquisition::overpass::{boundary_bbox, buildings_query, OverpassClient};
 use data_acquisition::RegeoNamer;
-use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport, RawEntity};
+use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport};
 use data_persistence::Database;
 use data_persistence::{AppSettingKey, AppSettingsApi};
 use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
@@ -589,11 +589,21 @@ fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send
             })
             .filter(|key| !key.is_empty())
     });
-    let namer = Arc::new(RegeoNamer::production(key_provider));
-    let enricher: Option<NameEnricher> = Some(Box::new(move |entity: &RawEntity| {
-        let geometry = entity.source_geometry.as_ref()?;
-        namer.name_for_geometry(geometry)
-    }));
+    // T36：补名缓存从“会话级”改为“持久化 SQLite”（同一开发库文件）。
+    // 打开失败只降级为内存缓存并告警，不阻断采集（缓存非正式业务数据）。
+    let cache: Arc<dyn data_persistence::RegeoNameCacheApi> =
+        match data_persistence::RegeoNameCache::open(DEV_DB_FILE) {
+            Ok(cache) => Arc::new(cache),
+            Err(error) => {
+                log::warn!("regeo 持久化缓存打开失败，本次会话降级为内存缓存：{error}");
+                Arc::new(
+                    data_persistence::RegeoNameCache::open_in_memory()
+                        .expect("内存 regeo 缓存必须可用"),
+                )
+            }
+        };
+    let namer = Arc::new(RegeoNamer::production(key_provider, cache));
+    let enricher: Option<Arc<dyn NameEnricher>> = Some(namer);
     Arc::new(OverpassDataSource::new(transport).with_name_enricher(enricher))
 }
 

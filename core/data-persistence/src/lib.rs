@@ -35,6 +35,7 @@ mod error;
 mod migrations;
 mod projects;
 mod raw_observations;
+mod regeo_cache;
 mod review_decisions;
 mod trash;
 
@@ -51,5 +52,6 @@ pub use projects::{
     AppSettingKey, AppSettingsApi, CampusCrudApi, CampusEntity, PlanCrudApi, PlanEntity,
 };
 pub use raw_observations::RawObservationsApi;
+pub use regeo_cache::{RegeoNameCache, RegeoNameCacheApi};
 pub use review_decisions::ReviewDecisionsApi;
 pub use trash::TrashApi;

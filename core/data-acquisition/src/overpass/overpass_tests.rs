@@ -3,12 +3,46 @@
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crate::overpass::*;
 
     fn bbox() -> (f64, f64, f64, f64) {
         (31.0, 121.4, 31.1, 121.5)
+    }
+
+    #[test]
+    fn endpoint_limits_are_bounded_per_ticket() {
+        assert_eq!(OVERPASS_HTTP_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(OVERPASS_QUERY_DEADLINE, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn three_endpoints_all_hang_respect_overall_query_deadline() {
+        // 注入“三端点全挂 Overpass transport”：每个端点睡满超时后失败。
+        // 整体查询必须 ≤ 15s 截止并返回包含全部端点的结构化错误。
+        let transport = Box::new(|_: &str, timeout: Duration| {
+            // 无卡顿铁律禁用 std::thread::sleep；用 recv_timeout 等满超时
+            let (_tx, rx) = std::sync::mpsc::channel::<()>();
+            let _ = rx.recv_timeout(timeout);
+            Err("模拟端点挂起".to_owned())
+        });
+        let client = OverpassClient::with_transport(transport);
+        let started = Instant::now();
+        let result = client.query_with_fallback(&university_query(bbox()));
+        let elapsed = started.elapsed();
+
+        let message = result.expect_err("三端点全挂必须失败");
+        for endpoint in OVERPASS_ENDPOINTS {
+            assert!(
+                message.contains(endpoint),
+                "错误必须保留每个端点事实：{message}"
+            );
+        }
+        assert!(
+            elapsed <= OVERPASS_QUERY_DEADLINE + Duration::from_secs(1),
+            "整体查询不得超过截止时间：{elapsed:?}"
+        );
     }
 
     #[test]

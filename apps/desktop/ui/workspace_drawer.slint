@@ -56,8 +56,14 @@ export component WorkspaceDrawer inherits Rectangle {
     in property <string> collection-diff-summary;
     in property <string> collection-report-entry-label;
     in property <string> collection-report-body;
+    in property <string> collection-stage-label;
+    in property <string> collection-elapsed-label;
+    in property <string> collection-cancel-label;
+    in property <bool> collection-cancel-visible;
+    in property <string> collection-partial-naming-label;
     callback collection-start-clicked();
     callback collection-report-clicked();
+    callback collection-cancel-clicked();
 
     // ── ⑤ 导出 ──────────────────────────────
     in property <string> export-start-label;
@@ -173,6 +179,24 @@ export component WorkspaceDrawer inherits Rectangle {
                     font-size: 14px;
                     color: Theme.text-primary;
                     wrap: word-wrap;
+                }
+                // T36：处理中阶段 + 已用时长 + 取消采集
+                Text {
+                    text: root.collection-stage-label + (root.collection-elapsed-label != "" ? "  ·  " + root.collection-elapsed-label : "");
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.collection-partial-naming-label;
+                    font-size: 12px;
+                    color: Theme.error;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.collection-cancel-label;
+                    visible: root.collection-cancel-visible;
+                    clicked => { root.collection-cancel-clicked(); }
                 }
                 for label[i] in root.collection-category-labels: HorizontalLayout {
                     Text {

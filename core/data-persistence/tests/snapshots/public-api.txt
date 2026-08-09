@@ -736,6 +736,42 @@ pub fn data_persistence::RawObservation::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::RawObservation
 pub type data_persistence::RawObservation::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::RawObservation where T: ?core::marker::Sized
+pub struct data_persistence::RegeoNameCache
+impl data_persistence::RegeoNameCache
+pub fn data_persistence::RegeoNameCache::open(path: impl core::convert::AsRef<std::path::Path>) -> data_persistence::Result<Self>
+pub fn data_persistence::RegeoNameCache::open_in_memory() -> data_persistence::Result<Self>
+impl core::fmt::Debug for data_persistence::RegeoNameCache
+pub fn data_persistence::RegeoNameCache::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl data_persistence::RegeoNameCacheApi for data_persistence::RegeoNameCache
+pub fn data_persistence::RegeoNameCache::get_regeo_name(&self, cache_key: &str) -> data_persistence::Result<core::option::Option<core::option::Option<alloc::string::String>>>
+pub fn data_persistence::RegeoNameCache::put_regeo_name(&self, cache_key: &str, name: core::option::Option<&str>) -> data_persistence::Result<()>
+impl !core::marker::Freeze for data_persistence::RegeoNameCache
+impl core::marker::Send for data_persistence::RegeoNameCache
+impl core::marker::Sync for data_persistence::RegeoNameCache
+impl core::marker::Unpin for data_persistence::RegeoNameCache
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::RegeoNameCache
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::RegeoNameCache
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::RegeoNameCache where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::RegeoNameCache where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::RegeoNameCache where U: core::convert::From<T>
+pub fn data_persistence::RegeoNameCache::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::RegeoNameCache where U: core::convert::Into<T>
+pub type data_persistence::RegeoNameCache::Error = core::convert::Infallible
+pub fn data_persistence::RegeoNameCache::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::RegeoNameCache where U: core::convert::TryFrom<T>
+pub type data_persistence::RegeoNameCache::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::RegeoNameCache::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for data_persistence::RegeoNameCache where T: 'static + ?core::marker::Sized
+pub fn data_persistence::RegeoNameCache::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::RegeoNameCache where T: ?core::marker::Sized
+pub fn data_persistence::RegeoNameCache::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::RegeoNameCache where T: ?core::marker::Sized
+pub fn data_persistence::RegeoNameCache::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for data_persistence::RegeoNameCache
+pub fn data_persistence::RegeoNameCache::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::RegeoNameCache
+pub type data_persistence::RegeoNameCache::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::RegeoNameCache where T: ?core::marker::Sized
 pub struct data_persistence::ReviewDecision
 pub data_persistence::ReviewDecision::candidate_id: alloc::string::String
 pub data_persistence::ReviewDecision::category: shared_domain_types::category::CandidateCategory
@@ -920,6 +956,12 @@ pub fn data_persistence::Database::find_raw_observation(&self, plan_id: &str, ca
 pub fn data_persistence::Database::list_raw_observations(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::RawObservation>>
 pub fn data_persistence::Database::list_raw_observations_by_category(&self, plan_id: &str, category: shared_domain_types::category::CandidateCategory) -> data_persistence::Result<alloc::vec::Vec<data_persistence::RawObservation>>
 pub fn data_persistence::Database::write_raw_observations(&mut self, observations: &[data_persistence::RawObservation]) -> data_persistence::Result<usize>
+pub trait data_persistence::RegeoNameCacheApi: core::marker::Send + core::marker::Sync
+pub fn data_persistence::RegeoNameCacheApi::get_regeo_name(&self, cache_key: &str) -> data_persistence::Result<core::option::Option<core::option::Option<alloc::string::String>>>
+pub fn data_persistence::RegeoNameCacheApi::put_regeo_name(&self, cache_key: &str, name: core::option::Option<&str>) -> data_persistence::Result<()>
+impl data_persistence::RegeoNameCacheApi for data_persistence::RegeoNameCache
+pub fn data_persistence::RegeoNameCache::get_regeo_name(&self, cache_key: &str) -> data_persistence::Result<core::option::Option<core::option::Option<alloc::string::String>>>
+pub fn data_persistence::RegeoNameCache::put_regeo_name(&self, cache_key: &str, name: core::option::Option<&str>) -> data_persistence::Result<()>
 pub trait data_persistence::ReviewDecisionsApi
 pub fn data_persistence::ReviewDecisionsApi::batch_update_review_decisions(&mut self, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
 pub fn data_persistence::ReviewDecisionsApi::count_review_states(&self, plan_id: &str) -> data_persistence::Result<(usize, usize, usize)>

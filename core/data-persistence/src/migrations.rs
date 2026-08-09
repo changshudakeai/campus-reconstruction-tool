@@ -50,10 +50,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "校区高德地点标识列：poi_id（ADR-0008，重复点选只切换）",
         sql: include_str!("../migrations/006_add_campus_poi_id.sql"),
     },
+    Migration {
+        version: 7,
+        description: "T36: regeo 补名持久化缓存（坐标键 -> 名称）",
+        sql: include_str!("../migrations/007_add_regeo_name_cache.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 6;
+pub const LATEST_SCHEMA_VERSION: u32 = 7;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

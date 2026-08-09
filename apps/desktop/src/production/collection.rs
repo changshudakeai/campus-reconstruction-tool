@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use data_acquisition::{stage_text_key, CollectionStage};
+
 use super::workspace_boundary::WorkspaceProductionContext;
 use crate::presentation::{
     CollectionPageState, CollectionRequest, NavigationDecision, NotificationFact, Presentation,
@@ -72,6 +74,30 @@ impl CollectionProductionAdapter {
         let collect_label = l10n.t("collection.collect_button");
         let category_skip_label = l10n.t("collection.skippable");
         let report_entry_label = l10n.t("audit.report_entry");
+        let stage_label = match view.status {
+            collection_flow::CollectionStatus::Fetching => {
+                l10n.t(stage_text_key(view.progress.stage))
+            }
+            collection_flow::CollectionStatus::Completed => {
+                l10n.t(stage_text_key(CollectionStage::Finished))
+            }
+            collection_flow::CollectionStatus::Pending
+            | collection_flow::CollectionStatus::Failed => String::new(),
+        };
+        let elapsed_label = match view.status {
+            collection_flow::CollectionStatus::Fetching => l10n.t_with_args(
+                "collection.elapsed",
+                serde_json::json!({ "seconds": view.progress.elapsed_secs }),
+            ),
+            _ => String::new(),
+        };
+        let cancel_visible = matches!(view.status, collection_flow::CollectionStatus::Fetching);
+        let cancel_label = l10n.t("collection.cancel_button");
+        let partial_naming_label = if view.progress.naming_partial {
+            l10n.t("collection.partial_naming")
+        } else {
+            String::new()
+        };
         drop(injector);
         CollectionPageState {
             workspace: self.context.page(),
@@ -84,6 +110,11 @@ impl CollectionProductionAdapter {
             diff_summary: view.diff_summary.clone().unwrap_or_default(),
             report_entry_label,
             report_body,
+            stage_label,
+            elapsed_label,
+            cancel_label,
+            cancel_visible,
+            partial_naming_label,
         }
     }
 
@@ -123,6 +154,12 @@ impl PresentationAdapter<CollectionRequest, CollectionPageState> for CollectionP
                     .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             },
             CollectionRequest::Poll => self.poll(),
+            CollectionRequest::Cancel => {
+                self.flow.cancel();
+                self.operation = None;
+                Presentation::ready(self.page_state(&self.flow.page_view()))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
             CollectionRequest::ShowReport => {
                 let mut view = self.flow.page_view();
                 if let Some(report) = self.flow.report_view() {

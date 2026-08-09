@@ -4,6 +4,7 @@
 //! F4/B2/B14/F7 的结构化结果并决定本次操作的影响范围（ADR-0039）。
 
 use data_acquisition::CollectionProgressView;
+use data_acquisition::CollectionStage;
 use notification_center::Notification;
 
 /// 采集页面阶段（A1 已决定；S1 据此绘制进度与状态）。
@@ -117,7 +118,7 @@ impl PlanCollectionState {
                 CollectionOutcome::Succeeded(summary) => summary.page.report.clone(),
                 CollectionOutcome::Failed(_) => None,
             },
-            PlanCollectionStateKind::Fetching => None,
+            PlanCollectionStateKind::Fetching { .. } => None,
         }
     }
 }
@@ -125,8 +126,13 @@ impl PlanCollectionState {
 /// 按方案保存的采集阶段（后台运行中或最近一次完整结果）。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PlanCollectionStateKind {
-    /// 后台采集进行中（页面呈现拉取态）。
-    Fetching,
+    /// 后台采集进行中（T36：记录当前阶段与开始时刻，供页面呈现阶段/已用时长）。
+    Fetching {
+        /// 当前阶段（拉取数据 / 补名 / 写库）
+        stage: CollectionStage,
+        /// 开始时刻（UNIX 毫秒）
+        started_at_millis: u64,
+    },
     /// 最近一次完整结果（成功或失败）。
     Outcome(Box<CollectionOutcome>),
 }

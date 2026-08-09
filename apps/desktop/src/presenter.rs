@@ -130,6 +130,8 @@ impl ShellPresenter {
             if let Some(window) = weak.upgrade() {
                 window.set_error_dialog_visible(false);
                 window.set_error_dialog_diagnostic_action_visible(false);
+                // T36：关闭错误弹窗后清除采集“重试”按钮
+                window.set_error_dialog_retry_visible(false);
                 // T34：弹窗遮挡统一机制——错误弹窗关闭后按当前步骤模式
                 // （边界页 vs 朝向页）恢复地图，不得恢复错页。
                 crate::map_webview::restore_after_modal(window.as_weak());
@@ -145,6 +147,8 @@ impl ShellPresenter {
 
     /// 把通知内容填进主窗口的弹窗属性并点亮遮罩（仅 UI 线程调用）。
     fn present(window: &AppWindow, notification: &Notification) {
+        // T36：新错误弹窗默认不带采集“重试”（由采集失败路径单独点亮）
+        window.set_error_dialog_retry_visible(false);
         window.set_error_dialog_title(notification.title.clone().into());
         window.set_error_dialog_source(notification.source_tag.clone().into());
         window.set_error_dialog_body(notification.body.clone().into());

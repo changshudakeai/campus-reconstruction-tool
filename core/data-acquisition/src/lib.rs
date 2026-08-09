@@ -39,11 +39,12 @@ pub mod source;
 pub use error::{AcquisitionError, Result};
 pub use pipeline::{AcquisitionBatch, AcquisitionPipeline, CandidateDraft, CollectionReport};
 pub use progress::{
-    category_text_key, text_keys, CategoryProgress, CollectionProgressView, ALL_CATEGORIES,
+    category_text_key, stage_text_key, text_keys, CategoryProgress, CollectionProgressView,
+    CollectionStage, StageListener, ALL_CATEGORIES,
 };
 pub use refresh::{DiffEntry, DiffKind, RefreshDiff};
 pub use regeo::{parse_regeo_name, polygon_centroid, RegeoNamer};
 pub use source::{
-    BridgeTransport, DataSource, GaodeDataSource, NameEnricher, OverpassDataSource,
-    OverpassTransport, RawEntity, SourceGeometry,
+    BatchEnrichment, BridgeTransport, DataSource, EnrichedEntities, GaodeDataSource, NameEnricher,
+    OverpassDataSource, OverpassTransport, RawEntity, SourceGeometry,
 };
