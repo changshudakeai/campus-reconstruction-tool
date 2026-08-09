@@ -291,6 +291,28 @@ Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Win8DpiScaling -Value 0 -Ty
 - T19B-5B 破坏性验收项需负责人勾掉并注明此前为崩溃。
 - 若现场发现其他校区边界仍校验失败，作为新缺陷单独开单（先证据后修）。
 
+### 跟进（2026-08-09 上午，负责人反馈“用新版本无法从 OSM 获取边界”）
+
+排查结论（含复现证据，`diagnosing-bugs` 流程）：
+
+1. **最终二进制未破坏 OSM 获取**：干净单实例下在 dev 安装与桌面安装各复验
+   一次，OSM 自动获取均成功（`evidence/t35/t35-osm-fetch-check-111134.png`、
+   `t35-osm-fetch-check-111225.png`，抽屉点数 > 0，无崩溃）。本修复只涉及
+   `hide()`/IPC 回调（弹窗路径），不触碰 OSM 获取链路
+   （workspace_adapter `start_boundary_fetch`/`poll`/`apply`）。
+2. **桌面安装“取不到 OSM 边界”的根因是全新空库**：刚解压的桌面便携包
+   `first_run_completed=false`、**无高德密钥**、无校区/方案——在线功能
+   （校区搜索/地图页/OSM 自动获取）必须先经设置页录入密钥（T22/README
+   既有设计），不是 T35 引入。已把 dev 的 `campus-rebuild.db`（含密钥与
+   华东师大普陀校区）复制到桌面安装使其直接可用，并复验 OSM 成功。
+3. **dev 安装 11:04 有一次 combase.dll 0xc0000005 崩溃**（事件日志证据；
+   WER 临时 dump 已被系统清理，无法取栈、无法确定性复现）。崩溃发生在
+   旧二进制遗留的 WebView2 缓存 + 可能的多实例环境下；已将旧 WebView2
+   缓存目录改名（`campus-rebuild-dev.exe.WebView2.t35-stale-20260809`，
+   可再生缓存）后单实例复验，OSM 正常、无崩溃。运维注意项：**升级/替换
+   二进制后，若旧版本崩溃过，先清理该 exe 旁的 `*.WebView2` 缓存目录再
+   启动**；复现需提供崩溃时间、是否多开、以及 `MCREBUILD_LOG_FILE` 日志。
+
 负责人签名：____________
 
 ---
