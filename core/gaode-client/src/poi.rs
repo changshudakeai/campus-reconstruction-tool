@@ -332,6 +332,9 @@ pub enum IpcMessage {
     ConfirmOrientation { points: [[f64; 2]; 2] },
     /// 清除朝向点
     OrientationClear,
+    // T38: 评审地图
+    /// 点击评审地图上的候选对象 → 高亮对应卡片（双向联动）
+    ReviewObjectClicked { candidate_id: String },
 }
 
 /// T24: OSM 元素结构 (Overpass JSON)
@@ -373,6 +376,7 @@ pub struct OsmMember {
 /// - JSON 含 `type="orientation_points"` → [`IpcMessage::OrientationPoints`]
 /// - JSON 含 `type="confirm_orientation"` → [`IpcMessage::ConfirmOrientation`]
 /// - JSON 含 `type="orientation_clear"` → [`IpcMessage::OrientationClear`]
+/// - JSON 含 `type="review_object_clicked"` → [`IpcMessage::ReviewObjectClicked`]
 /// - 其他 → [`Error::UnsupportedIpcMessage`]
 pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
     // 先尝试直接当作 "经度，纬度" (pick point / manual_point)
@@ -497,6 +501,20 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                 }
                 "orientation_clear" => {
                     return Ok(IpcMessage::OrientationClear);
+                }
+                "review_object_clicked" => {
+                    #[derive(Deserialize)]
+                    struct ReviewClickPayload {
+                        #[serde(default)]
+                        candidate_id: String,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<ReviewClickPayload>(msg) {
+                        if !payload.candidate_id.is_empty() {
+                            return Ok(IpcMessage::ReviewObjectClicked {
+                                candidate_id: payload.candidate_id,
+                            });
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -680,5 +698,24 @@ mod ipc_tests {
         }"#;
         let result = parse_ipc_message(json).unwrap();
         matches!(result, IpcMessage::ManualClear);
+    }
+
+    #[test]
+    fn review_object_clicked_payload_parsed_correctly() {
+        // T38：点击评审地图对象 → 高亮对应卡片
+        let result = parse_ipc_message(
+            r#"{"type":"review_object_clicked","candidate_id":"overpass:way/1:outer"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            result,
+            IpcMessage::ReviewObjectClicked { candidate_id } if candidate_id == "overpass:way/1:outer"
+        ));
+
+        // 空 candidate_id 视为不支持的消息（不产生无主高亮）
+        assert!(
+            parse_ipc_message(r#"{"type":"review_object_clicked","candidate_id":""}"#).is_err(),
+            "空候选 ID 不得产生高亮请求"
+        );
     }
 }

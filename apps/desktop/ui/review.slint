@@ -1,23 +1,31 @@
-// F5 评审页（M3）：仅呈现 F5 WorkbenchView 返回的页面状态并转发用户操作。
-// 三态判定、批量确认、暂停/恢复、封账全部由 F5 评审工作台入口完成。
+// F5 评审页（M3）+ T38 抽屉化：地图为主区 + 左侧评审抽屉。
+// 仅呈现 F5 WorkbenchView 返回的页面状态并转发用户操作。
+// 三态判定、批量确认、暂停/恢复、封账全部由 F5 评审工作台入口完成；
+// 地图标注/定位/联动高亮由评审入口经 map_webview 桥接（本组件零业务逻辑）。
 import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
-/// 评审页上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
+/// 评审抽屉上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
 export struct ReviewCandidateData {
-    /// 稳定候选 ID（三态判定与复选操作回传）。
+    /// 稳定候选 ID（三态判定、复选、定位与高亮操作回传）。
     candidate-id: string,
-    /// 卡片标题。
+    /// 卡片标题（未命名候选由 Rust 侧拼成"未命名建筑 #id"）。
     title: string,
+    /// 标题是否来自真实名称（false → 未命名，UI 显示"未命名建筑 #id"）。
+    named: bool,
     /// 当前三态显示名。
     state-label: string,
     /// 当前三态标识（pending/keep/remove）。
     state-key: string,
     /// 复选状态。
     selected: bool,
+    /// 与地图对象联动高亮（点击地图对象/卡片共用同一份高亮）。
+    highlighted: bool,
 }
 
-export component ReviewView inherits Rectangle {
+/// 左侧评审抽屉：类别标签 + 选中候选详情 + 可滚动候选列表 +
+/// 三态/批量/暂停/封账（操作行固定于抽屉底部，T33 大量候选下仍可达）。
+export component ReviewDrawer inherits Rectangle {
     in property <string> title;
     in property <string> empty-text;
     in property <int> candidate-count;
@@ -27,6 +35,15 @@ export component ReviewView inherits Rectangle {
     in property <[ReviewCandidateData]> cards;
     in property <string> selected-count-label;
     in property <bool> bulk-buttons-visible;
+    // 选中候选详情（名称/类别/标签与属性/来源/状态）。
+    in property <bool> detail-visible;
+    in property <string> detail-title;
+    in property <string> detail-category-label;
+    in property <string> detail-tags-label;
+    in property <[string]> detail-tags;
+    in property <string> detail-source-label;
+    in property <string> detail-source;
+    in property <string> detail-state-label;
     in property <string> set-keep-label;
     in property <string> set-reject-label;
     in property <string> set-pending-label;
@@ -35,6 +52,7 @@ export component ReviewView inherits Rectangle {
     in property <string> card-pending-label;
     in property <string> card-keep-label;
     in property <string> card-reject-label;
+    in property <string> locate-label;
     in property <string> pause-label;
     in property <string> resume-label;
     in property <string> seal-label;
@@ -44,14 +62,14 @@ export component ReviewView inherits Rectangle {
 
     // T33 契约观测（仅布局观测，不参与评审/封账逻辑）：
     // list-viewport-y：候选列表滚动容器当前滚动位置（滚轮/键盘滚动后为负，
-    // 分类切换复位到顶）；可点性由契约测试对“封账”按钮的真实点击断言。
-    // 注意：Slint 双向绑定会替换内部绑定，因此这里只声明 in-out 通道，
-    // 值经内容区内 ScrollView 的 `<=>` 链上联。
+    // 分类切换复位到顶）；可点性由契约测试对"封账"按钮的真实点击断言。
     in-out property <length> list-viewport-y;
 
     callback category-clicked(index: int);
+    callback card-highlight-clicked(candidate-id: string);
     callback card-state-clicked(candidate-id: string, state: string);
     callback card-selection-toggled(candidate-id: string);
+    callback locate-clicked(candidate-id: string);
     callback select-all-clicked();
     callback deselect-all-clicked();
     callback bulk-state-clicked(state: string);
@@ -60,17 +78,23 @@ export component ReviewView inherits Rectangle {
     callback seal-clicked();
 
     background: Theme.surface;
+    border-color: Theme.separator;
+    border-width: 1px;
+    border-radius: 8px;
+    clip: true;
+
     VerticalLayout {
-        x: 16px;
-        y: 8px;
-        width: parent.width - 32px;
-        height: parent.height - 16px;
-        spacing: 12px;
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: parent.height - 24px;
+        spacing: 8px;
 
         Text {
             text: root.title;
+            font-size: 14px;
+            font-weight: 700;
             color: Theme.text-primary;
-            font-size: 16px;
         }
 
         // 无候选空态：明确提示可跳过，不阻塞导出、不伪造评审完成。
@@ -81,24 +105,83 @@ export component ReviewView inherits Rectangle {
         }
 
         if root.candidate-count > 0: VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 10px;
+            spacing: 8px;
 
-            // 六类标签页（ADR-0016 固定顺序）；切换分类时滚动位置复位到顶，
-            // 保证新分类从第一张候选卡开始浏览。
+            // 六类标签页（ADR-0016 固定顺序；抽屉内两行 3 列）；
+            // 切换分类时滚动位置复位到顶，保证新分类从第一张候选卡开始浏览。
             HorizontalLayout {
                 spacing: 6px;
                 for label[i] in root.category-labels:
                     Button {
+                        visible: i < 3;
+                        text: label + " (" + root.category-counts[i] + ")";
+                        primary: root.active-category == i;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(i); }
+                    }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                for label[i] in root.category-labels:
+                    Button {
+                        visible: i >= 3;
                         text: label + " (" + root.category-counts[i] + ")";
                         primary: root.active-category == i;
                         clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(i); }
                     }
             }
 
-            // 候选卡片：复选 + 三态判定（点错可直接改另一态）。
-            // T33：卡片放入可滚动容器（滚轮由 ScrollView 原生处理）；键盘经
-            // FocusScope 转发为滚动（点击列表区域后 Up/Down/PageUp/PageDown/Home/End）。
+            // 选中候选详情（高亮候选；未命名标题由 Rust 侧拼装）。
+            if root.detail-visible: Rectangle {
+                background: Theme.highlight;
+                border-color: Theme.separator;
+                border-width: 1px;
+                border-radius: 6px;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 4px;
+                    Text {
+                        text: root.detail-title;
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.detail-category-label;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.detail-tags-label;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    for tag in root.detail-tags:
+                        Text {
+                            text: tag;
+                            font-size: 12px;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                        }
+                    Text {
+                        text: root.detail-source-label;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.detail-state-label;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // 候选卡片：可滚动（滚轮由 ScrollView 原生处理；键盘经 FocusScope
+            // 转发为滚动）；点击卡片高亮（地图↔卡片双向联动）；三态点错可直接改。
             review-focus := FocusScope {
                 focus-on-click: true;
                 key-pressed(event) => {
@@ -126,38 +209,63 @@ export component ReviewView inherits Rectangle {
                 review-cards-scroll := ScrollView {
                     viewport-y <=> root.list-viewport-y;
                     VerticalLayout {
-                        spacing: 10px;
+                        spacing: 8px;
                         for card in root.cards:
-                            HorizontalLayout {
-                                spacing: 8px;
-                                CheckBox {
-                                    checked: card.selected;
-                                    enabled: !root.sealed;
-                                    toggled => { root.card-selection-toggled(card.candidate-id); }
+                            Rectangle {
+                                background: card.highlighted ? Theme.highlight : transparent;
+                                border-color: card.highlighted ? Theme.separator : transparent;
+                                border-width: 1px;
+                                border-radius: 6px;
+                                TouchArea {
+                                    clicked => {
+                                        review-focus.focus();
+                                        root.card-highlight-clicked(card.candidate-id);
+                                    }
                                 }
-                                Text {
-                                    text: card.title;
-                                    color: Theme.text-primary;
-                                    horizontal-stretch: 1;
-                                }
-                                Text {
-                                    text: card.state-label;
-                                    color: Theme.text-secondary;
-                                }
-                                Button {
-                                    text: root.card-pending-label;
-                                    enabled: !root.sealed;
-                                    clicked => { root.card-state-clicked(card.candidate-id, "pending"); }
-                                }
-                                Button {
-                                    text: root.card-keep-label;
-                                    enabled: !root.sealed;
-                                    clicked => { root.card-state-clicked(card.candidate-id, "keep"); }
-                                }
-                                Button {
-                                    text: root.card-reject-label;
-                                    enabled: !root.sealed;
-                                    clicked => { root.card-state-clicked(card.candidate-id, "remove"); }
+                                VerticalLayout {
+                                    padding: 6px;
+                                    spacing: 4px;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        CheckBox {
+                                            checked: card.selected;
+                                            enabled: !root.sealed;
+                                            toggled => { root.card-selection-toggled(card.candidate-id); }
+                                        }
+                                        Text {
+                                            text: card.title;
+                                            color: Theme.text-primary;
+                                            horizontal-stretch: 1;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: card.state-label;
+                                            color: Theme.text-secondary;
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Button {
+                                            text: root.card-pending-label;
+                                            enabled: !root.sealed;
+                                            clicked => { root.card-state-clicked(card.candidate-id, "pending"); }
+                                        }
+                                        Button {
+                                            text: root.card-keep-label;
+                                            enabled: !root.sealed;
+                                            clicked => { root.card-state-clicked(card.candidate-id, "keep"); }
+                                        }
+                                        Button {
+                                            text: root.card-reject-label;
+                                            enabled: !root.sealed;
+                                            clicked => { root.card-state-clicked(card.candidate-id, "remove"); }
+                                        }
+                                    }
+                                    Button {
+                                        text: root.locate-label;
+                                        enabled: !root.sealed;
+                                        clicked => { root.locate-clicked(card.candidate-id); }
+                                    }
                                 }
                             }
                     }
@@ -171,7 +279,7 @@ export component ReviewView inherits Rectangle {
 
             // 批量操作：勾选 >=2 时浮现（ADR-0016 交互规则）。
             if root.bulk-buttons-visible: HorizontalLayout {
-                spacing: 8px;
+                spacing: 6px;
                 Button {
                     text: root.select-all-label;
                     enabled: !root.sealed;
@@ -182,6 +290,9 @@ export component ReviewView inherits Rectangle {
                     enabled: !root.sealed;
                     clicked => { root.deselect-all-clicked(); }
                 }
+            }
+            if root.bulk-buttons-visible: HorizontalLayout {
+                spacing: 6px;
                 Button {
                     text: root.set-keep-label;
                     enabled: !root.sealed;
@@ -199,9 +310,9 @@ export component ReviewView inherits Rectangle {
                 }
             }
 
-            // 暂停/恢复会话与封账。
+            // 暂停/恢复会话与封账（固定于抽屉底部，T33 大量候选下可达）。
             HorizontalLayout {
-                spacing: 8px;
+                spacing: 6px;
                 Button {
                     text: root.pause-label;
                     enabled: !root.sealed;

@@ -36,6 +36,8 @@
 //!   `map_available=false`，不再保持上一次的 true；
 //! - 工作区页创建附带 10s 加载超时（[`LOAD_TIMEOUT`]）：超时后使在途
 //!   创建过期、经错误 IPC 弹明确错误对话框，用户可退回"方位角手动输入"。
+// ignore-tidy-filelength: T38 评审地图页生命周期（种类路由/show_review/弹窗恢复）并入本文件
+// 后短暂超限；失效里程碑：v2.1.0（2026-12-31），届时按页种类拆出 WebView 生命周期助手后消除
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -66,6 +68,8 @@ enum MapPageKind {
     Boundary,
     /// 朝向编辑页（步骤 ②）
     Orientation,
+    /// 评审地图页（步骤 ④：候选三态标注 + 定位/联动高亮，T38）
+    Review,
     /// 校区在线搜索页（D-3）
     CampusSearch,
 }
@@ -98,6 +102,13 @@ enum PendingShow {
         window: Weak<crate::AppWindow>,
         config: gaode_client::BoundaryEditPageConfig,
     },
+    Review {
+        window: Weak<crate::AppWindow>,
+        api_key: String,
+        security_key: String,
+        anchor_lon: f64,
+        anchor_lat: f64,
+    },
 }
 
 impl PendingShow {
@@ -106,6 +117,7 @@ impl PendingShow {
             PendingShow::Boundary { .. } => MapPageKind::Boundary,
             PendingShow::CampusSearch { .. } => MapPageKind::CampusSearch,
             PendingShow::Orientation { .. } => MapPageKind::Orientation,
+            PendingShow::Review { .. } => MapPageKind::Review,
         }
     }
 
@@ -232,6 +244,11 @@ pub(crate) fn is_boundary_page() -> bool {
     page_kind() == Some(MapPageKind::Boundary)
 }
 
+/// 当前地图是否为评审页（T38：评审步的 IPC 路由到评审入口而非边界入口）。
+pub(crate) fn is_review_page() -> bool {
+    page_kind() == Some(MapPageKind::Review)
+}
+
 /// 从 Slint 布局槽位读取地图矩形（逻辑像素；T34 不再硬编码坐标）。
 ///
 /// 槽位由 `main.slint` 计算：`workspace-map-slot-x/y/width/height`，
@@ -356,6 +373,17 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
         PendingShow::Orientation { config, .. } => {
             gaode_client::build_boundary_edit_page_html(config)
         }
+        PendingShow::Review {
+            api_key,
+            security_key,
+            anchor_lon,
+            anchor_lat,
+            ..
+        } => {
+            let config = gaode_client::ReviewMapPageConfig::new(api_key, security_key)
+                .with_anchor(*anchor_lon, *anchor_lat);
+            gaode_client::build_review_map_page_html(&config)
+        }
     }
 }
 
@@ -471,7 +499,8 @@ fn request_window(request: &PendingShow) -> Weak<crate::AppWindow> {
     match request {
         PendingShow::Boundary { window, .. }
         | PendingShow::CampusSearch { window, .. }
-        | PendingShow::Orientation { window, .. } => window.clone(),
+        | PendingShow::Orientation { window, .. }
+        | PendingShow::Review { window, .. } => window.clone(),
     }
 }
 
@@ -651,6 +680,19 @@ fn request_show(request: PendingShow) {
                 state.last_orientation_config = Some(config.clone());
                 state.campus_search_mode = false;
             }
+            PendingShow::Review {
+                api_key,
+                security_key,
+                anchor_lon,
+                anchor_lat,
+                ..
+            } => {
+                state.last_api_key = api_key.clone();
+                state.last_security_key = security_key.clone();
+                state.last_anchor = Some((*anchor_lon, *anchor_lat));
+                state.last_page_kind = Some(MapPageKind::Review);
+                state.campus_search_mode = false;
+            }
         }
         // 异页已显示：先隐藏（延迟销毁），再排队重建。
         if state.webview.is_some() {
@@ -722,6 +764,26 @@ pub(crate) fn show_with_config(
     });
 }
 
+/// T38: 显示（或重建）评审地图 WebView。
+///
+/// 候选标注由 Rust 侧在 `map_ready` IPC 后经 `drawReviewCandidates` 推送
+/// （候选几何已在 B2 投影中为 GCJ-02，JS 不做坐标转换）。
+pub(crate) fn show_review(
+    window_weak: Weak<crate::AppWindow>,
+    api_key: String,
+    security_key: String,
+    anchor_lon: f64,
+    anchor_lat: f64,
+) {
+    request_show(PendingShow::Review {
+        window: window_weak,
+        api_key,
+        security_key,
+        anchor_lon,
+        anchor_lat,
+    });
+}
+
 /// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）——**唯一延迟销毁入口**。
 ///
 /// 诚实声明：wry 0.55 无 `set_visible` API，这里 drop WebView；返回对应
@@ -775,11 +837,12 @@ fn page_kind() -> Option<MapPageKind> {
 
 /// 模态弹窗关闭后是否需要恢复地图（T34 统一机制）。
 ///
-/// - 工作区（screen 4）：步骤 ①②③ 显示地图；步骤 ③ 评审页不显示。
+/// - 工作区（screen 4）：五个步骤全部显示地图——步骤 ①② 为边界/朝向页，
+///   步骤 ③④⑤ 继续让位显示（评审步骤 ④ 显示评审地图，T38）。
 /// - 校区搜索页（screen 1）：取消弹窗后停留该页时需要恢复搜索地图。
-fn should_restore_after_modal(active_screen: i32, active_step: i32) -> bool {
+fn should_restore_after_modal(active_screen: i32, _active_step: i32) -> bool {
     if active_screen == 4 {
-        return active_step != 3;
+        return true;
     }
     active_screen == 1 && page_kind() == Some(MapPageKind::CampusSearch)
 }
@@ -788,7 +851,7 @@ fn should_restore_after_modal(active_screen: i32, active_step: i32) -> bool {
 ///
 /// T34：关闭错误/确认/输入弹窗后按**当前步骤模式**重建——
 /// 步骤②重建朝向页（复用上次朝向配置，含半透明边界参照），
-/// 步骤①②④重建边界页；不得恢复错页。
+/// 步骤④重建评审地图页（T38），其余步骤重建边界页；不得恢复错页。
 /// T36：地图加载失败（[`mark_map_failed`] / 超时）后跳过自动重建，
 /// 用户显式切换步骤才重试。
 pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
@@ -818,6 +881,13 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
             let config = STATE.with(|s| s.borrow().last_orientation_config.clone());
             if let Some(config) = config {
                 show_with_config(window, config);
+            }
+            return;
+        }
+        if active_step == 3 {
+            // 评审页：用上次密钥/锚点重建评审地图，候选标注经 map_ready 回推
+            if let Some((anchor_lon, anchor_lat)) = anchor {
+                show_review(window, api_key, security_key, anchor_lon, anchor_lat);
             }
             return;
         }

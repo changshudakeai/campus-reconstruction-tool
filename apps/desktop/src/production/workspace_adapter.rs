@@ -4,6 +4,8 @@
 //! B5 foundation-mode 完成；朝向校验与保存经 F5 OrientationCalculator / B1
 //! Orientation；地图通道只负责显示与转交原始动作。状态与上下文见
 //! `super::workspace_boundary`（会话状态 / 共享上下文 / 几何与通知辅助）。
+// ignore-tidy-filelength: T38 评审步地图让位（评审地图 + 返回采集/导出重建边界页）并入导航
+// 后短暂超限；失效里程碑：v2.1.0（2026-12-31），届时按职责拆出地图导航决策助手后消除
 
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -274,10 +276,59 @@ impl WorkspaceProductionAdapter {
             };
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
-        // T34：仅步骤④评审页隐藏地图（整页评审不并入抽屉）；步骤③采集与
-        // 步骤⑤导出的操作已迁入左侧抽屉，地图继续作为主画面让位显示。
+        // T38：步骤 ④（索引 3）评审显示评审地图；步骤 ③ 采集与步骤 ⑤ 导出
+        // 继续让位显示边界页——从评审步返回时若当前不是边界页则重建，避免
+        // 候选标注页串到采集/导出步。
         if step == 3 {
-            crate::map_webview::hide();
+            let Some((keys, anchor)) = self.context.map_credentials() else {
+                let l10n = self.l10n();
+                return Presentation::ready(self.context.page())
+                    .with_notification(info_fact(
+                        &l10n,
+                        "boundary.map_notice_title",
+                        &l10n.t("boundary.map_load_failed"),
+                    ))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            };
+            self.context.session.borrow_mut().active_step = 3;
+            let presentation = if keys.0.is_empty() {
+                Presentation::ready(self.context.page())
+            } else {
+                crate::map_webview::hide();
+                crate::map_webview::show_review(
+                    self.context.window.clone(),
+                    keys.0,
+                    keys.1,
+                    anchor.0,
+                    anchor.1,
+                );
+                self.context.session.borrow_mut().map_available = true;
+                self.context.mark_map_loading();
+                Presentation::processing(self.context.page(), Progress::ZERO)
+            };
+            return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
+        }
+        if matches!(step, 2 | 4) {
+            // 从评审步返回（或地图页为评审/朝向页）时重建边界页，保证
+            // 采集/导出步骤的让位地图始终是边界页。
+            let map_is_boundary =
+                crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
+            if !map_is_boundary {
+                if let Some((keys, anchor)) = self.context.map_credentials() {
+                    if !keys.0.is_empty() {
+                        crate::map_webview::hide();
+                        crate::map_webview::show(
+                            self.context.window.clone(),
+                            keys.0,
+                            keys.1,
+                            anchor.0,
+                            anchor.1,
+                        );
+                        self.context.session.borrow_mut().map_available = true;
+                        self.context.mark_map_loading();
+                    }
+                }
+            }
         }
         self.context.session.borrow_mut().active_step = step;
         Presentation::ready(self.context.page())
@@ -718,7 +769,10 @@ impl WorkspaceProductionAdapter {
             return Presentation::ready(self.context.page());
         };
         match parsed {
-            IpcMessage::MapReady => self.start_boundary_fetch(),
+            // T37：地图就绪后按当前步骤激活对应交互模式——朝向步（步骤②）
+            // 显式调用 ORIENTATION_SCRIPT 的 initOrientationMode 挂接两点
+            // 选择点击处理器；边界步仍走 T31 Rust 侧 OSM 自动获取。
+            IpcMessage::MapReady => self.map_ready_for_active_step(),
             // T24 旧路径已由 T31 Rust 侧 Overpass 取代：HTML 不再发送
             // osm_elements，保留解析兼容但不再走 convertAndDraw 死接线。
             IpcMessage::OsmElements { .. } => Presentation::ready(self.context.page()),
@@ -765,6 +819,9 @@ impl WorkspaceProductionAdapter {
             IpcMessage::OrientationPoints { points } => self.orientation_points(points),
             IpcMessage::ConfirmOrientation { points } => self.confirm_orientation_points(points),
             IpcMessage::OrientationClear => self.orientation_clear(),
+            // T38：评审地图 IPC 由 handle_map_ipc 在 is_review_page 分支路由，
+            // 不会到达工作区适配器；此处保留显式空分支满足穷尽匹配。
+            IpcMessage::ReviewObjectClicked { .. } => Presentation::ready(self.context.page()),
             IpcMessage::Error { message } => {
                 let l10n = self.l10n();
                 // T36：页面 onerror / 5s SDK 超时（及 Rust 侧 10s 加载超时）→
@@ -785,6 +842,24 @@ impl WorkspaceProductionAdapter {
                 }
                 Presentation::ready(self.context.page()).with_notification(error_fact(&l10n, &body))
             }
+        }
+    }
+
+    /// T37：地图就绪后按当前步骤激活交互模式。
+    ///
+    /// 朝向步（步骤②）：经 `map_webview::evaluate_script` 显式调用页面
+    /// `initOrientationMode()`（页面 ORIENTATION_SCRIPT 已定义，:154），
+    /// 挂接两点选择点击处理器并回显已确认边界半透明参照；这是对页面自身
+    /// `onMapReadyForMode` 自动激活的防御性兜底，确保朝向步地图点击可点。
+    /// 边界步（其余步骤）：仍走 [`Self::start_boundary_fetch`]（T31 Rust
+    /// 侧 Nominatim → Overpass → WGS→GCJ 自动获取）。
+    fn map_ready_for_active_step(&mut self) -> Presentation<WorkspacePageState> {
+        let active_step = self.context.session.borrow().active_step;
+        if active_step == 1 {
+            crate::map_webview::evaluate_script("initOrientationMode();");
+            Presentation::ready(self.context.page())
+        } else {
+            self.start_boundary_fetch()
         }
     }
 

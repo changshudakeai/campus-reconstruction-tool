@@ -1,6 +1,6 @@
 # MCRebuild V2 —— F5 候选审核工作台
 #
-# 职责：三态评审状态机（待定/保留/剔除）、左中右三栏布局 ViewModel、
+# 职责：三态评审状态机（待定/保留/剔除）、抽屉布局 ViewModel（地图主区+左抽屉）、
 # 批量操作确认闸、评审暂停/恢复、封账批量写回。
 # 依据 ADR-0016（评审交互设计）+ ADR-0022（三态评审 + 撤销暂缓）。
 # ⚖️ 本依赖段即白名单：F5 依赖 B1/B2，不得依赖其他 F* 功能模块
@@ -16,7 +16,7 @@ name = "review-workbench"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "F5 候选审核工作台：三态评审、三栏布局 ViewModel、批量确认闸、封账批量写回"
+description = "F5 候选审核工作台：三态评审、抽屉布局 ViewModel、批量确认闸、封账批量写回"
 
 [dependencies]
 # B1 共享领域类型（基础层唯一合法内部依赖：人人可依 B1）

@@ -6,6 +6,7 @@ pub const review_workbench::text_keys::CANCEL_BUTTON: &str
 pub const review_workbench::text_keys::CONFIRM_BUTTON: &str
 pub const review_workbench::text_keys::DESELECT_ALL: &str
 pub const review_workbench::text_keys::INFO_CATEGORY: &str
+pub const review_workbench::text_keys::INFO_SOURCE: &str
 pub const review_workbench::text_keys::INFO_TAGS: &str
 pub const review_workbench::text_keys::ITEM_COUNT: &str
 pub const review_workbench::text_keys::PAUSE: &str
@@ -118,7 +119,10 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub struct review_workbench::Candidate
 pub review_workbench::Candidate::category: shared_domain_types::category::CandidateCategory
 pub review_workbench::Candidate::key: review_workbench::CandidateKey
+pub review_workbench::Candidate::named: bool
 pub review_workbench::Candidate::selected: bool
+pub review_workbench::Candidate::shape: data_persistence::candidate_projections::CandidateShape
+pub review_workbench::Candidate::source: alloc::string::String
 pub review_workbench::Candidate::state: shared_domain_types::review::ReviewState
 pub review_workbench::Candidate::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub review_workbench::Candidate::title: alloc::string::String
@@ -126,7 +130,6 @@ impl review_workbench::Candidate
 pub fn review_workbench::Candidate::from_projection(projection: &data_persistence::candidate_projections::CandidateProjection) -> Self
 impl core::clone::Clone for review_workbench::Candidate
 pub fn review_workbench::Candidate::clone(&self) -> review_workbench::Candidate
-impl core::cmp::Eq for review_workbench::Candidate
 impl core::cmp::PartialEq for review_workbench::Candidate
 pub fn review_workbench::Candidate::eq(&self, other: &review_workbench::Candidate) -> bool
 impl core::fmt::Debug for review_workbench::Candidate
@@ -138,8 +141,6 @@ impl core::marker::Sync for review_workbench::Candidate
 impl core::marker::Unpin for review_workbench::Candidate
 impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::Candidate
 impl core::panic::unwind_safe::UnwindSafe for review_workbench::Candidate
-impl<Q, K> hashbrown::Equivalent<K> for review_workbench::Candidate where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
-pub fn review_workbench::Candidate::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::Candidate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::Candidate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for review_workbench::Candidate where U: core::convert::From<T>
@@ -170,6 +171,7 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 #[non_exhaustive] pub struct review_workbench::CandidateCardView
 pub review_workbench::CandidateCardView::candidate_id: alloc::string::String
 pub review_workbench::CandidateCardView::highlighted: bool
+pub review_workbench::CandidateCardView::named: bool
 pub review_workbench::CandidateCardView::selected: bool
 pub review_workbench::CandidateCardView::state: shared_domain_types::review::ReviewState
 pub review_workbench::CandidateCardView::state_key: &'static str
@@ -422,6 +424,9 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 #[non_exhaustive] pub struct review_workbench::InfoPanelView
 pub review_workbench::InfoPanelView::category_key: &'static str
 pub review_workbench::InfoPanelView::category_label_key: &'static str
+pub review_workbench::InfoPanelView::named: bool
+pub review_workbench::InfoPanelView::source: alloc::string::String
+pub review_workbench::InfoPanelView::source_label_key: &'static str
 pub review_workbench::InfoPanelView::state_key: &'static str
 pub review_workbench::InfoPanelView::state_label_key: &'static str
 pub review_workbench::InfoPanelView::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
@@ -474,6 +479,9 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub review_workbench::MapObjectView::candidate_id: alloc::string::String
 pub review_workbench::MapObjectView::category: shared_domain_types::category::CandidateCategory
 pub review_workbench::MapObjectView::highlighted: bool
+pub review_workbench::MapObjectView::shape_coordinates: serde_json::value::Value
+pub review_workbench::MapObjectView::shape_kind: alloc::string::String
+pub review_workbench::MapObjectView::source: alloc::string::String
 pub review_workbench::MapObjectView::state: shared_domain_types::review::ReviewState
 impl core::clone::Clone for review_workbench::MapObjectView
 pub fn review_workbench::MapObjectView::clone(&self) -> review_workbench::MapObjectView

@@ -614,6 +614,48 @@ fn three_pane_view_reflects_active_category() {
 }
 
 #[test]
+fn drawer_view_carries_source_shape_and_named_flags() {
+    // T38：地图标注与"定位到地图"依赖几何（GCJ-02）与来源；详情面板与卡片
+    // 标题依赖 named（未命名 → "未命名建筑 #id"）。
+    let (db, plan_id) = fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+
+    // 地图对象：全部候选携带几何种类/坐标与来源
+    let view = workbench.view();
+    assert_eq!(view.map_objects.len(), 9);
+    for object in &view.map_objects {
+        assert_eq!(object.source, "overpass", "来源必须随地图对象携带");
+        assert_eq!(object.shape_kind, "polygon");
+        assert!(
+            object.shape_coordinates.is_array(),
+            "几何坐标必须是数组: {}",
+            object.shape_coordinates
+        );
+    }
+
+    // 未命名候选（道路夹具标题回退为实体 ID）→ named=false，详情面板给出来源
+    workbench.set_active_category(CandidateCategory::Road);
+    let view = workbench.view();
+    let road_card = view
+        .cards
+        .iter()
+        .find(|c| c.candidate_id == "overpass:way/r0:outer")
+        .expect("道路卡片存在");
+    assert_eq!(road_card.title, "way/r0");
+    assert!(!road_card.named, "回退标识的候选必须标记为未命名");
+
+    workbench
+        .highlight(&CandidateKey::new("overpass:way/r0:outer"))
+        .unwrap();
+    let view = workbench.view();
+    let info = view.info_panel.expect("高亮时信息面板可见");
+    assert_eq!(info.title, "way/r0");
+    assert!(!info.named);
+    assert_eq!(info.source, "overpass");
+    assert_eq!(info.source_label_key, "review.info_source");
+}
+
+#[test]
 fn pause_and_resume_roundtrip_via_temp_file() {
     let (db, plan_id) = fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();

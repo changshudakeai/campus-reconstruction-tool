@@ -1,11 +1,11 @@
-//! S1-22 / T33 契约测试：大量评审候选下列表可滚动、操作栏始终可达。
+//! S1-22 / T33 契约测试：大量评审候选下抽屉内列表可滚动、操作栏始终可达。
 //!
 //! 构造 1026 个可评审候选（建筑 1000 + 道路 26，贴近 T32 走查 1026）真实进入
-//! 评审工作台，仅做呈现层断言：
+//! 评审工作台（T38 抽屉布局：地图为主区 + 左侧评审抽屉），仅做呈现层断言：
 //! 1. 滚轮向下滚动有效（PointerScrolled 后 viewport-y < 0）；
 //! 2. 键盘滚动有效（点击列表获得焦点后 DownArrow 继续向下滚动）；
 //! 3. 分类切换后滚动状态合理（真实标签点击复位到顶）；
-//! 4. “封账完成评审”按钮在大量候选下真实可点（点击后封账落账）。
+//! 4. “封账完成评审”按钮固定于抽屉底部，大量候选下真实可点（点击后封账落账）。
 //!
 //! 窗口以默认 800×600 显示并短跑事件循环完成真实布局；断言全程不触碰
 //! 评审/封账业务逻辑本身（F5 入口不变），仅验证 UI 布局呈现与可点性。
@@ -24,6 +24,7 @@ use global_settings::FirstRunSetup;
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::{CampusId, CandidateCategory};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
+use slint::Model;
 use slint::{ComponentHandle, LogicalPosition};
 
 /// 种子：1000 栋建筑 + 26 条道路 = 1026 个可评审候选（贴近 T32 走查的 1026）。
@@ -157,6 +158,9 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
         1026,
         "候选必须全部进入评审页"
     );
+    // T38：评审步为抽屉布局——展开左侧抽屉（地图为主区 + 左抽屉）
+    window.invoke_workspace_drawer_toggle_clicked();
+    assert!(window.get_workspace_drawer_open(), "评审抽屉必须可展开");
     // 未显示窗口时项目树未实例化/布局未计算：显示窗口并短跑一次事件循环，
     // 让渲染首帧完成真实布局（对齐 s1_08/s1_15 的做法）。
     window.show().expect("显示窗口");
@@ -177,14 +181,24 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     // 布局已就绪后隐藏窗口：后续输入事件仍正常处理，但避免逐事件重绘 1026 行场景。
     window.hide().expect("隐藏窗口");
 
-    // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件）。
-    let list_position = LogicalPosition::new(400.0, 300.0);
+    // 抽屉几何（逻辑像素）：x=20、宽=drawer-width、y=map-slot-y、高=map-slot-height
+    let drawer_x = 20.0_f32;
+    let drawer_y = window.get_workspace_map_slot_y();
+    let drawer_h = window.get_workspace_map_slot_height();
+    let drawer_w = window.get_workspace_drawer_width();
+    assert!(drawer_h > 200.0, "抽屉必须有足够高度容纳操作栏");
+
+    // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件，落在抽屉列表区）。
+    let list_position = LogicalPosition::new(
+        drawer_x + drawer_w / 2.0,
+        drawer_y + drawer_h * 0.45,
+    );
     window
         .window()
         .dispatch_event(WindowEvent::PointerScrolled {
             position: list_position,
             delta_x: 0.0,
-            delta_y: -120.0,
+            delta_y: -240.0,
         });
     // 短跑事件循环推进滚轮滚动动画（180ms）到终值。
     slint::Timer::single_shot(std::time::Duration::from_millis(250), || {
@@ -197,17 +211,45 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
         "滚轮向下滚动后 viewport-y 必须为负（当前 {wheel_y}）"
     );
 
-    // 契约 2：键盘滚动有效（点击列表背景获得焦点后 DownArrow 继续向下滚动）。
-    window.window().dispatch_event(WindowEvent::PointerPressed {
-        position: list_position,
-        button: PointerEventButton::Left,
-    });
-    window
-        .window()
-        .dispatch_event(WindowEvent::PointerReleased {
-            position: list_position,
-            button: PointerEventButton::Left,
-        });
+    // 契约 2：键盘滚动有效（点击列表卡片获得焦点后 DownArrow 继续向下滚动）。
+    // 先网格扫描确认真实点击能命中卡片（点卡片 → 高亮 → FocusScope 聚焦）。
+    let mut clicked_card = false;
+    for x in [60.0_f32, 110.0, 170.0, 230.0, 290.0] {
+        for y_step in [0.25_f32, 0.35, 0.45, 0.55, 0.65] {
+            let position =
+                LogicalPosition::new(drawer_x + x, drawer_y + drawer_h * y_step);
+            window.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+            let highlighted: Vec<bool> = (0..window.get_review_cards().row_count())
+                .map(|index| {
+                    window
+                        .get_review_cards()
+                        .row_data(index)
+                        .unwrap()
+                        .highlighted
+                })
+                .collect();
+            if highlighted.iter().any(|h| *h) {
+                clicked_card = true;
+                break;
+            }
+        }
+        if clicked_card {
+            break;
+        }
+    }
+    assert!(
+        clicked_card,
+        "真实点击必须命中抽屉内候选卡片并触发高亮（卡片→地图联动入口）"
+    );
     let before_key = window.get_review_list_viewport_y();
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::DownArrow.into(),
@@ -218,8 +260,9 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
         "DownArrow 必须继续向下滚动：before={before_key} after={after_key}"
     );
 
-    // 契约 3a：真实点击“建筑”标签（第一个）→ 滚动位置复位到顶。
-    let first_tab = LogicalPosition::new(70.0, 185.0);
+    // 契约 3a：真实点击“建筑”标签（第一行第一个）→ 滚动位置复位到顶。
+    // 抽屉标题下第一行标签中心约在 y=+54px、x=左缘+56px。
+    let first_tab = LogicalPosition::new(drawer_x + 56.0, drawer_y + 54.0);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position: first_tab,
         button: PointerEventButton::Left,
@@ -242,15 +285,21 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     window.invoke_review_category_clicked(0);
     assert_eq!(window.get_review_active_category(), 0);
 
-    // 契约 4：大量候选下“封账完成评审”操作栏真实可见可点。
-    // 三个按钮横向拉伸均分行宽，封账按钮位于底部行右侧 1/3（约 x=512..768、
-    // y=548..575）。先点中心点，若因字体/布局差异未命中则小范围扫描，
+    // 契约 4：大量候选下“封账完成评审”固定于抽屉底部，真实可见可点。
+    // 抽屉底部为操作行（暂停/继续/封账），先点预估中心，未命中则小范围扫描，
     // 点击成功后 F5 封账落账（1026 条决定一次性写回），呈现 sealed + 导出摘要。
     let mut sealed = window.get_review_sealed();
-    let mut candidates = vec![LogicalPosition::new(640.0, 560.0)];
-    for x in [540.0, 600.0, 660.0, 720.0] {
-        for y in [545.0, 555.0, 565.0, 575.0] {
-            candidates.push(LogicalPosition::new(x, y));
+    let seal_y_base = drawer_y + drawer_h - 24.0;
+    let mut candidates = vec![LogicalPosition::new(
+        drawer_x + drawer_w * 0.62,
+        seal_y_base,
+    )];
+    for x_ratio in [0.55_f32, 0.65, 0.75, 0.85] {
+        for y_delta in [-16.0_f32, -8.0, 0.0, 8.0] {
+            candidates.push(LogicalPosition::new(
+                drawer_x + drawer_w * x_ratio,
+                seal_y_base + y_delta,
+            ));
         }
     }
     for position in candidates {

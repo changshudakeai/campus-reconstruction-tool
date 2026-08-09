@@ -56,6 +56,15 @@ impl ReviewProductionAdapter {
             card_pending_label: l10n.t("review.pending"),
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
+            locate_label: l10n.t("review.locate"),
+            detail_visible: false,
+            detail_title: String::new(),
+            detail_category_label: String::new(),
+            detail_tags_label: String::new(),
+            detail_tags: Vec::new(),
+            detail_source_label: String::new(),
+            detail_source: String::new(),
+            detail_state_label: String::new(),
             pause_label: l10n.t("review.pause"),
             resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
@@ -97,12 +106,59 @@ impl ReviewProductionAdapter {
             .iter()
             .map(|card| ReviewCandidateData {
                 candidate_id: card.candidate_id.clone().into(),
-                title: card.title.clone().into(),
+                title: self.display_title(l10n, card.named, &card.title).into(),
+                named: card.named,
                 state_label: l10n.t(card.state_key).into(),
                 state_key: card.state.to_identifier().into(),
                 selected: card.selected,
+                highlighted: card.highlighted,
             })
             .collect();
+        let (
+            detail_visible,
+            detail_title,
+            detail_category_label,
+            detail_tags_label,
+            detail_tags,
+            detail_source_label,
+            detail_source,
+            detail_state_label,
+        ) = match view.info_panel.as_ref() {
+            Some(info) => {
+                let tags: Vec<String> = info
+                    .tags
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect();
+                (
+                    true,
+                    self.display_title(l10n, info.named, &info.title),
+                    format!(
+                        "{}：{}",
+                        l10n.t(info.category_label_key),
+                        l10n.t(info.category_key)
+                    ),
+                    format!("{}：", l10n.t(info.tags_label_key)),
+                    tags,
+                    format!("{}：{}", l10n.t(info.source_label_key), info.source),
+                    info.source.clone(),
+                    l10n.t_with_args(
+                        info.state_label_key,
+                        serde_json::json!({ "state": l10n.t(info.state_key) }),
+                    ),
+                )
+            }
+            None => (
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
         let selected_count_label = l10n.t_with_args(
             "review.selected_count",
             serde_json::json!({ "count": view.selected_count }),
@@ -131,6 +187,15 @@ impl ReviewProductionAdapter {
             card_pending_label: l10n.t("review.pending"),
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
+            locate_label: l10n.t("review.locate"),
+            detail_visible,
+            detail_title,
+            detail_category_label,
+            detail_tags_label,
+            detail_tags,
+            detail_source_label,
+            detail_source,
+            detail_state_label,
             pause_label: l10n.t("review.pause"),
             resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
@@ -139,7 +204,58 @@ impl ReviewProductionAdapter {
             summary_text,
         };
         drop(injector);
+        self.sync_review_map();
         page
+    }
+
+    /// 候选标题：有真实名称原样显示；未命名显示"未命名建筑 #id"（id 为回退标识）。
+    fn display_title(&self, l10n: &Localization, named: bool, title: &str) -> String {
+        if named {
+            title.to_owned()
+        } else {
+            l10n.t_with_args(
+                "review.unnamed_building",
+                serde_json::json!({ "id": title }),
+            )
+        }
+    }
+
+    /// 把 F5 当前候选标注（待定虚线/保留实线/剔除隐藏）与高亮状态同步到评审地图。
+    ///
+    /// 地图不可用或非评审页时为空操作；剔除候选由 JS 侧跳过（卡片保留可改回）。
+    fn sync_review_map(&self) {
+        if !crate::map_webview::is_review_page() || !crate::map_webview::is_visible() {
+            return;
+        }
+        let injector = self.0.injector();
+        let injector = injector.borrow();
+        let Some(workbench) = injector.review() else {
+            return;
+        };
+        let view = workbench.view();
+        let objects: Vec<serde_json::Value> = view
+            .map_objects
+            .iter()
+            .map(|object| {
+                serde_json::json!({
+                    "candidate_id": object.candidate_id,
+                    "kind": object.shape_kind,
+                    "coordinates": object.shape_coordinates,
+                    "state": object.state.to_identifier(),
+                })
+            })
+            .collect();
+        let json = serde_json::to_string(&objects).unwrap_or_else(|_| "[]".to_string());
+        crate::map_webview::evaluate_script(&format!("window.drawReviewCandidates({json});"));
+        match workbench.highlighted() {
+            Some(key) => {
+                let id = serde_json::to_string(&key.candidate_id).unwrap_or_else(|_| "\"\"".into());
+                crate::map_webview::evaluate_script(&format!(
+                    "window.highlightReviewCandidate({id});"
+                ));
+            }
+            None => crate::map_webview::evaluate_script("window.clearReviewHighlight();"),
+        }
     }
 
     /// 封账后的导出摘要文案（保留/待定/剔除计数 + 按类别保留明细）。
@@ -361,6 +477,46 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 self.present_submit(
                     self.submit(|workbench| workbench.submit(StateChange::single(key, state))),
                 )
+            }
+            ReviewRequest::Highlight { candidate_id } => {
+                let key = CandidateKey::new(candidate_id);
+                self.present_apply(self.apply(|workbench| workbench.highlight(&key)))
+            }
+            ReviewRequest::Locate { candidate_id } => {
+                let key = CandidateKey::new(candidate_id.clone());
+                let result = self.apply(|workbench| workbench.highlight(&key));
+                // 地图中心跳转 + 高亮（JS 侧；无 WebView/非评审页时为空操作）
+                if result.is_ok() && crate::map_webview::is_review_page() {
+                    let id = serde_json::to_string(&candidate_id).unwrap_or_else(|_| "\"\"".into());
+                    crate::map_webview::evaluate_script(&format!(
+                        "window.locateReviewCandidate({id});"
+                    ));
+                }
+                self.present_apply(result)
+            }
+            ReviewRequest::MapReady => {
+                // 评审地图就绪：候选标注与高亮由 page_state 尾部统一同步。
+                Presentation::ready(self.page_state())
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            ReviewRequest::MapFailed { message } => {
+                let injector = self.0.injector();
+                let injector = injector.borrow();
+                let l10n = injector.l10n();
+                let body = if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
+                    l10n.t("map.load_timeout_body")
+                } else {
+                    l10n.t_with_array("map.load_failed_body", &[&message])
+                };
+                let notification = Notification::error(
+                    l10n.t("app.source_tag"),
+                    l10n.t("boundary.map_notice_title"),
+                    body,
+                );
+                drop(injector);
+                Presentation::failed(self.page_state())
+                    .with_notification(NotificationFact::new(notification))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             ReviewRequest::ToggleSelected { candidate_id } => {
                 let key = CandidateKey::new(candidate_id);

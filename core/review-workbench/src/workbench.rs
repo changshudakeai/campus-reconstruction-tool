@@ -358,9 +358,9 @@ impl ReviewWorkbench {
         self.sealed
     }
 
-    // ── 三栏布局视图 ─────────────────────────────────────
+    // ── 抽屉布局视图（地图为主区 + 左侧抽屉）────────────────
 
-    /// 产出三栏布局整体视图（左卡片列表 + 中大地图 + 右信息面板）
+    /// 产出抽屉布局整体视图（左抽屉 + 中大地图）
     pub fn view(&self) -> WorkbenchView {
         let category_tabs = CATEGORY_ORDER
             .into_iter()
@@ -383,6 +383,7 @@ impl ReviewWorkbench {
             .map(|c| CandidateCardView {
                 candidate_id: c.key.candidate_id.clone(),
                 title: c.title.clone(),
+                named: c.named,
                 state: c.state,
                 state_key: state_text_key(c.state),
                 selected: c.selected,
@@ -397,6 +398,9 @@ impl ReviewWorkbench {
                 candidate_id: c.key.candidate_id.clone(),
                 category: c.category,
                 state: c.state,
+                shape_kind: c.shape.kind.clone(),
+                shape_coordinates: c.shape.coordinates.clone(),
+                source: c.source.clone(),
                 highlighted: self.highlighted.as_ref() == Some(&c.key),
             })
             .collect();
@@ -407,10 +411,13 @@ impl ReviewWorkbench {
                 .find(|c| &c.key == key)
                 .map(|c| InfoPanelView {
                     title: c.title.clone(),
+                    named: c.named,
                     category_label_key: text_keys::INFO_CATEGORY,
                     category_key: category_text_key(c.category),
                     tags_label_key: text_keys::INFO_TAGS,
                     tags: c.tags.clone(),
+                    source_label_key: text_keys::INFO_SOURCE,
+                    source: c.source.clone(),
                     state_label_key: text_keys::STATE_LABEL,
                     state_key: state_text_key(c.state),
                 })

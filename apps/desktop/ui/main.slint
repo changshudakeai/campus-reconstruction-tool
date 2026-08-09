@@ -18,7 +18,7 @@ import { Stepper } from "stepper.slint";
 import { BoundaryPointData } from "boundary_edit.slint";
 import { OrientationPointData } from "orientation.slint";
 import { WorkspaceDrawer } from "workspace_drawer.slint";
-import { ReviewView, ReviewCandidateData } from "review.slint";
+import { ReviewDrawer, ReviewCandidateData } from "review.slint";
 
 // 重新导出 Theme global 供 Rust 侧访问（ADR-0023 色卡机制）
 export { Theme }
@@ -268,12 +268,25 @@ export component AppWindow inherits Window {
     in property <bool> review-sealed;
     in property <bool> review-summary-visible;
     in property <string> review-summary-text;
+    // T38 抽屉：选中候选详情（名称/类别/标签与属性/来源/状态）
+    in property <bool> review-detail-visible;
+    in property <string> review-detail-title;
+    in property <string> review-detail-category-label;
+    in property <string> review-detail-tags-label;
+    in property <[string]> review-detail-tags;
+    in property <string> review-detail-source-label;
+    in property <string> review-detail-source;
+    in property <string> review-detail-state-label;
+    // T38：卡片"定位到地图"按钮文案
+    in property <string> review-locate-label;
     // T33 契约观测：评审候选列表滚动（大量候选下操作栏可达）。只读布局观测，
     // 不参与评审/封账逻辑；由 ReviewView 内部几何经双向绑定上联。
     in-out property <length> review-list-viewport-y;
     callback review-category-clicked(index: int);
+    callback review-card-highlight-clicked(candidate-id: string);
     callback review-card-state-clicked(candidate-id: string, state: string);
     callback review-card-selection-toggled(candidate-id: string);
+    callback review-locate-clicked(candidate-id: string);
     callback review-select-all-clicked();
     callback review-deselect-all-clicked();
     callback review-bulk-state-clicked(state: string);
@@ -929,9 +942,9 @@ export component AppWindow inherits Window {
             }
         }
     
-            // T34: 步骤①②③⑤ = 地图主画面 + 左侧可收拉抽屉（做法 A：地图让位）；
-            // 步骤④评审保持现状整页（ReviewView）。
-            if root.workspace-active-step != 3: Rectangle {
+            // T34/T38: 五个步骤全部 = 地图主画面 + 左侧可收拉抽屉（做法 A：
+            // 地图让位）；步骤 ④ 评审使用评审抽屉（候选标注/定位/联动高亮）。
+            Rectangle {
                 // 左缘收拉箭头（常驻；点击开合抽屉）
                 Rectangle {
                     x: 0px;
@@ -953,8 +966,58 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // 左侧抽屉（展开时显示；内容按步骤）
-                if root.workspace-drawer-open: WorkspaceDrawer {
+                // 左侧抽屉（展开时显示；内容按步骤；评审步用评审抽屉）
+                if root.workspace-drawer-open && root.workspace-active-step == 3: ReviewDrawer {
+                    x: 20px;
+                    y: root.workspace-map-slot-y;
+                    width: root.workspace-drawer-width;
+                    height: root.workspace-map-slot-height;
+                    title: root.review-title;
+                    empty-text: root.review-empty-text;
+                    candidate-count: root.review-candidate-count;
+                    category-labels: root.review-category-labels;
+                    category-counts: root.review-category-counts;
+                    active-category: root.review-active-category;
+                    cards: root.review-cards;
+                    selected-count-label: root.review-selected-count-label;
+                    bulk-buttons-visible: root.review-bulk-buttons-visible;
+                    detail-visible: root.review-detail-visible;
+                    detail-title: root.review-detail-title;
+                    detail-category-label: root.review-detail-category-label;
+                    detail-tags-label: root.review-detail-tags-label;
+                    detail-tags: root.review-detail-tags;
+                    detail-source-label: root.review-detail-source-label;
+                    detail-source: root.review-detail-source;
+                    detail-state-label: root.review-detail-state-label;
+                    set-keep-label: root.review-set-keep-label;
+                    set-reject-label: root.review-set-reject-label;
+                    set-pending-label: root.review-set-pending-label;
+                    select-all-label: root.review-select-all-label;
+                    deselect-all-label: root.review-deselect-all-label;
+                    card-pending-label: root.review-card-pending-label;
+                    card-keep-label: root.review-card-keep-label;
+                    card-reject-label: root.review-card-reject-label;
+                    locate-label: root.review-locate-label;
+                    pause-label: root.review-pause-label;
+                    resume-label: root.review-resume-label;
+                    seal-label: root.review-seal-label;
+                    sealed: root.review-sealed;
+                    summary-visible: root.review-summary-visible;
+                    summary-text: root.review-summary-text;
+                    list-viewport-y <=> root.review-list-viewport-y;
+                    category-clicked(index) => { root.review-category-clicked(index); }
+                    card-highlight-clicked(candidate-id) => { root.review-card-highlight-clicked(candidate-id); }
+                    card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
+                    card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }
+                    locate-clicked(candidate-id) => { root.review-locate-clicked(candidate-id); }
+                    select-all-clicked => { root.review-select-all-clicked(); }
+                    deselect-all-clicked => { root.review-deselect-all-clicked(); }
+                    bulk-state-clicked(state) => { root.review-bulk-state-clicked(state); }
+                    pause-clicked => { root.review-pause-clicked(); }
+                    resume-clicked => { root.review-resume-clicked(); }
+                    seal-clicked => { root.review-seal-clicked(); }
+                }
+                if root.workspace-drawer-open && root.workspace-active-step != 3: WorkspaceDrawer {
                     x: 20px;
                     y: root.workspace-map-slot-y;
                     width: root.workspace-drawer-width;
@@ -1079,46 +1142,6 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-            }
-
-            // 步骤④+: 占位 (Phase 2 Step C 后续实现)
-            if root.workspace-active-step == 3: ReviewView {
-                x: 16px;
-                y: 128px;
-                height: parent.height - 128px;
-                title: root.review-title;
-                empty-text: root.review-empty-text;
-                candidate-count: root.review-candidate-count;
-                category-labels: root.review-category-labels;
-                category-counts: root.review-category-counts;
-                active-category: root.review-active-category;
-                cards: root.review-cards;
-                selected-count-label: root.review-selected-count-label;
-                bulk-buttons-visible: root.review-bulk-buttons-visible;
-                set-keep-label: root.review-set-keep-label;
-                set-reject-label: root.review-set-reject-label;
-                set-pending-label: root.review-set-pending-label;
-                select-all-label: root.review-select-all-label;
-                deselect-all-label: root.review-deselect-all-label;
-                card-pending-label: root.review-card-pending-label;
-                card-keep-label: root.review-card-keep-label;
-                card-reject-label: root.review-card-reject-label;
-                pause-label: root.review-pause-label;
-                resume-label: root.review-resume-label;
-                seal-label: root.review-seal-label;
-                sealed: root.review-sealed;
-                summary-visible: root.review-summary-visible;
-                summary-text: root.review-summary-text;
-                list-viewport-y <=> root.review-list-viewport-y;
-                category-clicked(index) => { root.review-category-clicked(index); }
-                card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
-                card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }
-                select-all-clicked => { root.review-select-all-clicked(); }
-                deselect-all-clicked => { root.review-deselect-all-clicked(); }
-                bulk-state-clicked(state) => { root.review-bulk-state-clicked(state); }
-                pause-clicked => { root.review-pause-clicked(); }
-                resume-clicked => { root.review-resume-clicked(); }
-                seal-clicked => { root.review-seal-clicked(); }
             }
 
         // 步骤条教程气泡 (F2 钩子，ADR-0028)——只在首次进入时显示

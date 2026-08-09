@@ -1,4 +1,4 @@
-//! 三栏布局 ViewModel（ADR-0016：左卡片列表 + 中间大地图 + 右信息面板）
+//! 抽屉布局 ViewModel（ADR-0016：地图为主区 + 左侧抽屉）
 //!
 //! 全部是面向 UI 的纯数据：Slint 声明层只做绑定，不含业务逻辑。
 //! 文案一律产出 B6 文本键（[`text_keys`]），由 UI 层经 `localization::t()`
@@ -20,6 +20,8 @@ pub mod text_keys {
     pub const STATE_REJECT: &str = "review.reject";
     /// 信息面板状态行（含 `{state}` 占位符）
     pub const STATE_LABEL: &str = "review.state_label";
+    /// 信息面板：来源行标签
+    pub const INFO_SOURCE: &str = "review.info_source";
     /// 浮动按钮：全选
     pub const SELECT_ALL: &str = "review.select_all";
     /// 浮动按钮：取消全选
@@ -100,6 +102,8 @@ pub struct CandidateCardView {
     pub candidate_id: String,
     /// 卡片标题（原始标签 name，无则实体 ID）
     pub title: String,
+    /// 标题是否来自真实名称（false → UI 显示"未命名建筑 #id"）
+    pub named: bool,
     /// 当前三态
     pub state: ReviewState,
     /// 三态显示名文本键
@@ -120,6 +124,12 @@ pub struct MapObjectView {
     pub category: CandidateCategory,
     /// 当前三态（剔除态在地图上淡显）
     pub state: ReviewState,
+    /// 几何种类（point / line_string / polygon；GCJ-02 工作坐标系）
+    pub shape_kind: String,
+    /// 几何坐标（GCJ-02；点 = `[lon, lat]`，线/面 = `[[lon, lat], ...]`）
+    pub shape_coordinates: serde_json::Value,
+    /// 来源标签（`data_source_tag`，详情面板"来源"行）
+    pub source: String,
     /// 是否与卡片联动高亮
     pub highlighted: bool,
 }
@@ -130,6 +140,8 @@ pub struct MapObjectView {
 pub struct InfoPanelView {
     /// 标题（候选名称）
     pub title: String,
+    /// 标题是否来自真实名称（false → UI 显示"未命名建筑 #id"）
+    pub named: bool,
     /// "类别"行标签文本键
     pub category_label_key: &'static str,
     /// 类别显示名文本键
@@ -138,13 +150,17 @@ pub struct InfoPanelView {
     pub tags_label_key: &'static str,
     /// 标签与属性（key=value 对）
     pub tags: Vec<(String, String)>,
+    /// "来源"行标签文本键
+    pub source_label_key: &'static str,
+    /// 来源标签（data_source_tag）
+    pub source: String,
     /// 状态行文本键（含 `{state}` 占位符）
     pub state_label_key: &'static str,
     /// 当前三态显示名文本键
     pub state_key: &'static str,
 }
 
-/// 评审台整体视图：三栏布局一次性产出（Slint 绑定层直接消费）
+/// 评审台整体视图：抽屉布局一次性产出（Slint 绑定层直接消费）
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WorkbenchView {

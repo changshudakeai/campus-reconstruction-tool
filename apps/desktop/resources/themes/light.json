@@ -7,6 +7,7 @@
   "text-quaternary": "#999999",
   "text-faint": "#aaaaaa",
   "separator": "#e0e0e0",
+  "highlight": "#e3f2fd",
   "bubble-background": "#fffde7",
   "bubble-border": "#fbc02d",
   "error": "#c62828"

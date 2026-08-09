@@ -4,7 +4,7 @@
 //! 评审期间所有状态都在这里改，不碰数据库。
 //! 类别与三态复用 B1 共享领域类型（不重新定义）。
 
-use data_persistence::CandidateProjection;
+use data_persistence::{CandidateProjection, CandidateShape};
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 /// 候选对象的稳定标识。
@@ -33,7 +33,7 @@ impl std::fmt::Display for CandidateKey {
 }
 
 /// 评审台上的一个候选（纯内存状态）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     /// 稳定候选标识。
     pub key: CandidateKey,
@@ -41,8 +41,15 @@ pub struct Candidate {
     pub category: CandidateCategory,
     /// 卡片标题：原始标签里的 `name`，没有则回落到实体 ID
     pub title: String,
+    /// 标题是否来自真实名称（OSM `name` 或 regeo 补名）；false = 回退标识，
+    /// UI 显示"未命名建筑 #id"（T38 抽屉详情）。
+    pub named: bool,
+    /// 来源标签（`data_source_tag`，如 overpass；详情面板"来源"行）。
+    pub source: String,
     /// 标签与属性（key=value 对，信息面板展示用）
     pub tags: Vec<(String, String)>,
+    /// GCJ-02 几何（点/线/面；评审地图标注与"定位到地图"用）。
+    pub shape: CandidateShape,
     /// 评审三态（初始一律"待定"，ADR-0022）
     pub state: ReviewState,
     /// 卡片复选框勾选状态（批量操作的输入）
@@ -56,7 +63,10 @@ impl Candidate {
             key: CandidateKey::new(projection.candidate_id.clone()),
             category: projection.category,
             title: projection.display.title.clone(),
+            named: projection.display.title != projection.source_entity_id,
+            source: projection.data_source_tag.clone(),
             tags: projection.display.tags.clone(),
+            shape: projection.shape.clone(),
             state: ReviewState::Pending,
             selected: false,
         }
@@ -100,12 +110,39 @@ mod tests {
         assert_eq!(candidate.key.candidate_id, "overpass:way/100:outer");
         assert_eq!(candidate.category, CandidateCategory::Building);
         assert_eq!(candidate.title, "体育馆");
+        assert!(candidate.named, "有真实名称的候选必须标记为 named");
+        assert_eq!(candidate.source, "overpass");
         assert_eq!(
             candidate.tags,
             vec![("building".to_owned(), "gymnasium".to_owned())]
         );
+        assert_eq!(candidate.shape.kind, "polygon");
         assert_eq!(candidate.state, ReviewState::Pending);
         assert!(!candidate.selected);
+    }
+
+    #[test]
+    fn projection_without_name_is_marked_unnamed_and_keeps_fallback_identifier() {
+        // T38：无名称候选的标题回退为实体 ID；named=false 供 UI 显示
+        // "未命名建筑 #id"（id 即回退标识）。
+        let unnamed = CandidateProjection::new(
+            "overpass:way/101:outer",
+            "plan-1",
+            "raw-2",
+            "overpass",
+            "way/101",
+            "outer",
+            CandidateCategory::Building,
+            CandidateDisplay::new("way/101", Vec::new()),
+            CandidateShape::point(serde_json::json!([121.4, 31.2])),
+            CandidateValidation::Retained,
+            CandidateEligibility::Reviewable,
+        );
+        let candidate = Candidate::from_projection(&unnamed);
+        assert_eq!(candidate.title, "way/101");
+        assert!(!candidate.named, "无名称候选必须标记为未命名");
+        assert_eq!(candidate.source, "overpass");
+        assert_eq!(candidate.shape.kind, "point");
     }
 
     #[test]
