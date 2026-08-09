@@ -684,9 +684,12 @@ pub enum ReviewRequest {
     SetState { candidate_id: String, state: String },
     /// 高亮一个候选（点卡片或地图对象；双向联动共用同一份高亮）。
     Highlight { candidate_id: String },
+    /// 地图对象点击（IPC）：JS 已自高亮，Rust 只同步卡片高亮与详情，
+    /// 不在 WebView2 IPC 回调栈内回推 evaluate_script。
+    MapObjectHighlight { candidate_id: String },
     /// 卡片"定位到地图"：地图中心跳转并高亮该候选。
     Locate { candidate_id: String },
-    /// 评审地图就绪（map_ready IPC）：把候选标注与当前高亮推送到地图。
+    /// 评审地图就绪（map_ready IPC）：仅呈现页面，不推送标注。
     MapReady,
     /// 评审地图加载失败（页面 onerror / SDK 超时 / Rust 侧加载超时）。
     MapFailed { message: String },

@@ -280,33 +280,11 @@ impl WorkspaceProductionAdapter {
         // 继续让位显示边界页——从评审步返回时若当前不是边界页则重建，避免
         // 候选标注页串到采集/导出步。
         if step == 3 {
-            let Some((keys, anchor)) = self.context.map_credentials() else {
-                let l10n = self.l10n();
-                return Presentation::ready(self.context.page())
-                    .with_notification(info_fact(
-                        &l10n,
-                        "boundary.map_notice_title",
-                        &l10n.t("boundary.map_load_failed"),
-                    ))
-                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
-            };
+            // 评审地图由评审入口（ReviewRequest::Open）在候选装载后创建并
+            // 内嵌标注（候选在 navigate 时尚未载入；T38 弹窗恢复复用缓存）。
             self.context.session.borrow_mut().active_step = 3;
-            let presentation = if keys.0.is_empty() {
-                Presentation::ready(self.context.page())
-            } else {
-                crate::map_webview::hide();
-                crate::map_webview::show_review(
-                    self.context.window.clone(),
-                    keys.0,
-                    keys.1,
-                    anchor.0,
-                    anchor.1,
-                );
-                self.context.session.borrow_mut().map_available = true;
-                self.context.mark_map_loading();
-                Presentation::processing(self.context.page(), Progress::ZERO)
-            };
-            return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
+            return Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
         if matches!(step, 2 | 4) {
             // 从评审步返回（或地图页为评审/朝向页）时重建边界页，保证
@@ -922,23 +900,42 @@ impl WorkspaceProductionAdapter {
 
     /// 轮询后台边界获取结果：终态到达即应用（绘制/人工圈画兜底），未到保持处理态。
     fn poll_boundary_fetch(&mut self) -> Presentation<WorkspacePageState> {
+        // T38 根因：无待处理的后台获取（评审步等非边界场景误触发轮询）时，
+        // 必须先释放 session 借用再呈现页面——旧实现直接在
+        // `session.borrow_mut()` 存活期间调用 `self.context.page()`，触发
+        // RefCell already mutably borrowed → 主线程 panic → 进程退出时
+        // TLS 析构 drop WebView → Close() → combase.dll 0xc0000005 崩溃。
+        if self
+            .context
+            .session
+            .borrow()
+            .pending_boundary_fetch
+            .is_none()
+        {
+            return Presentation::ready(self.context.page());
+        }
         let outcome = {
             let mut session = self.context.session.borrow_mut();
-            let Some(receiver) = session.pending_boundary_fetch.as_mut() else {
-                return Presentation::ready(self.context.page());
-            };
-            match receiver.try_recv() {
-                Ok(outcome) => {
-                    session.pending_boundary_fetch = None;
-                    session.map_processing = false;
-                    Some(outcome)
-                }
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    session.pending_boundary_fetch = None;
+            match session.pending_boundary_fetch.as_mut() {
+                // 双检兜底（主线程无并发，理论不可达）：复位处理态并让
+                // 借用在块尾释放，绝不在此处调用 page()。
+                None => {
                     session.map_processing = false;
                     None
                 }
+                Some(receiver) => match receiver.try_recv() {
+                    Ok(outcome) => {
+                        session.pending_boundary_fetch = None;
+                        session.map_processing = false;
+                        Some(outcome)
+                    }
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        session.pending_boundary_fetch = None;
+                        session.map_processing = false;
+                        None
+                    }
+                },
             }
         };
         let Some(outcome) = outcome else {
