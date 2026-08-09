@@ -189,10 +189,7 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     assert!(drawer_h > 200.0, "抽屉必须有足够高度容纳操作栏");
 
     // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件，落在抽屉列表区）。
-    let list_position = LogicalPosition::new(
-        drawer_x + drawer_w / 2.0,
-        drawer_y + drawer_h * 0.45,
-    );
+    let list_position = LogicalPosition::new(drawer_x + drawer_w / 2.0, drawer_y + drawer_h * 0.45);
     window
         .window()
         .dispatch_event(WindowEvent::PointerScrolled {
@@ -216,8 +213,7 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     let mut clicked_card = false;
     for x in [60.0_f32, 110.0, 170.0, 230.0, 290.0] {
         for y_step in [0.25_f32, 0.35, 0.45, 0.55, 0.65] {
-            let position =
-                LogicalPosition::new(drawer_x + x, drawer_y + drawer_h * y_step);
+            let position = LogicalPosition::new(drawer_x + x, drawer_y + drawer_h * y_step);
             window.window().dispatch_event(WindowEvent::PointerPressed {
                 position,
                 button: PointerEventButton::Left,
