@@ -339,7 +339,9 @@ fn render_presentation<Page>(
         window.set_confirm_dialog_confirm_label(confirmation.confirm_label.clone().into());
         window.set_confirm_dialog_cancel_label(confirmation.cancel_label.clone().into());
         window.set_confirm_dialog_visible(true);
-        // T34：弹窗遮挡统一机制——确认弹窗显示前隐藏地图 WebView
+        // T34：弹窗遮挡统一机制——确认弹窗显示前隐藏地图 WebView。
+        // T35：hide() 为统一延迟销毁入口（下一拍 drop，避免 IPC 回调栈内
+        // 同步销毁 WebView 触发 COM 重入崩溃）。
         crate::map_webview::hide();
     }
 
@@ -348,7 +350,9 @@ fn render_presentation<Page>(
         window.set_input_dialog_text(input.text.clone().into());
         window.set_input_dialog_mode(input.mode);
         window.set_input_dialog_visible(true);
-        // T34：弹窗遮挡统一机制——输入弹窗显示前隐藏地图 WebView
+        // T34：弹窗遮挡统一机制——输入弹窗显示前隐藏地图 WebView。
+        // T35：hide() 为统一延迟销毁入口（下一拍 drop，避免 IPC 回调栈内
+        // 同步销毁 WebView 触发 COM 重入崩溃）。
         crate::map_webview::hide();
     }
 }

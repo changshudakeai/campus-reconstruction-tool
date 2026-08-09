@@ -159,6 +159,8 @@ impl ShellPresenter {
         window.set_error_dialog_visible(true);
         // T34：地图 WebView 是原生子窗口，会渲染在 Slint 模态遮罩之上，
         // 让错误弹窗（及其拦截输入的遮罩）不可见；弹窗前先隐藏地图。
+        // T35：hide() 是统一延迟销毁入口——wry IPC 回调栈内调用时，drop
+        // 排到事件循环下一拍（回调返回后），杜绝 COM 重入崩溃。
         crate::map_webview::hide();
     }
 }

@@ -23,6 +23,16 @@
 //! 地图 WebView 是原生子窗口，会渲染在 Slint 模态遮罩之上；错误/确认/
 //! 输入弹窗前统一 [`hide`]，关闭后经 [`restore_after_modal`] 按当前步骤
 //! 模式（边界页 vs 朝向页）重建，不得恢复错页。
+//!
+//! ## T35：销毁延迟到事件循环下一拍（P0 崩溃修复）
+//! wry 的 IPC 回调（`window.ipc.postMessage` → `with_ipc_handler`）运行在
+//! WebView2 自身 COM 回调栈内。错误/确认/输入弹窗路径都会在回调栈内调用
+//! [`hide`]；若同步 drop WebView，WebView2 COM 重入会在 combase.dll 崩溃
+//! （WER 0xc0000005 / 0xc0000409）。因此 [`hide`] 是**唯一延迟销毁入口**：
+//! 活跃 WebView 立即移入 `retiring`（逻辑隐藏即刻生效），经
+//! `slint::invoke_from_event_loop` 排定下一拍回调，IPC 回调返回后才真正
+//! drop；全部弹窗遮挡调用点（presenter / presentation / 工作区适配器）
+//! 统一走本入口。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,6 +71,11 @@ struct MapSlotRect {
 struct WebViewState {
     /// 活跃 WebView（None = 已隐藏/未创建）
     webview: Option<wry::WebView>,
+    /// T35：已排定"下一拍"销毁的 WebView（IPC 回调栈内不得同步 drop）。
+    /// [`hide`] 把活跃 WebView 移入此处，事件循环回调返回后统一销毁。
+    retiring: Vec<wry::WebView>,
+    /// T35：下一拍销毁是否已排定（同一事件循环轮次内多次 hide 只排一次）
+    hide_scheduled: bool,
     /// 功能入口注册的 IPC 处理器
     ipc_handler: Option<IpcHandler>,
     /// 功能入口注册的地图加载状态处理器
@@ -87,6 +102,8 @@ thread_local! {
     static STATE: RefCell<WebViewState> = const {
         RefCell::new(WebViewState {
             webview: None,
+            retiring: Vec::new(),
+            hide_scheduled: false,
             ipc_handler: None,
             status_handler: None,
             last_api_key: String::new(),
@@ -113,11 +130,25 @@ pub(crate) fn register_status_handler(handler: MapStatusHandler) {
 
 /// 通知地图加载完成状态（WebView 创建成功或失败后调用一次）
 fn notify_status(available: bool) {
-    STATE.with(|s| {
-        if let Some(handler) = s.borrow().status_handler.clone() {
-            handler(available);
-        }
-    });
+    // 与 IPC 回调同纪律：先克隆释放借用，再调用外部 handler（T35）。
+    let handler = STATE.with(|s| s.borrow().status_handler.clone());
+    if let Some(handler) = handler {
+        handler(available);
+    }
+}
+
+/// 把 WebView2 IPC 原始载荷转交注册的业务 handler。
+///
+/// T35 根因（RefCell already borrowed → WebView2 回调内不可 unwind 崩溃）：
+/// 不得在 `STATE` 借用存活期间调用 handler——`if let Some(handler) =
+/// s.borrow()...` 的临时 `Ref` 会活到 if-let 体结束，而错误/确认/输入弹窗
+/// 路径会在 handler 内调用 [`hide`]（`borrow_mut`）→ `RefCell` panic
+/// （WER 0xc0000409）。这里先克隆出 handler、释放借用，再在回调栈内执行业务。
+fn dispatch_ipc(body: &str) {
+    let handler = STATE.with(|s| s.borrow().ipc_handler.clone());
+    if let Some(handler) = handler {
+        handler(body);
+    }
 }
 
 /// 是否已有活跃 WebView
@@ -285,11 +316,12 @@ pub(crate) fn show(
             .with_bounds(bounds)
             .with_ipc_handler(|request: wry::http::Request<String>| {
                 let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
+                log::debug!(
+                    "map_webview: WebView2 IPC 回调进入（body={} 字节）",
+                    body.len()
+                );
+                dispatch_ipc(&body);
+                log::debug!("map_webview: WebView2 IPC 回调返回");
             })
             .build_as_child(&*winit_win);
 
@@ -353,11 +385,12 @@ pub(crate) fn show_campus_search(
             .with_bounds(bounds)
             .with_ipc_handler(|request: wry::http::Request<String>| {
                 let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
+                log::debug!(
+                    "map_webview: WebView2 IPC 回调进入（body={} 字节）",
+                    body.len()
+                );
+                dispatch_ipc(&body);
+                log::debug!("map_webview: WebView2 IPC 回调返回");
             })
             .build_as_child(&*winit_win);
 
@@ -419,11 +452,12 @@ pub(crate) fn show_with_config(
             .with_bounds(bounds)
             .with_ipc_handler(|request: wry::http::Request<String>| {
                 let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
+                log::debug!(
+                    "map_webview: WebView2 IPC 回调进入（body={} 字节）",
+                    body.len()
+                );
+                dispatch_ipc(&body);
+                log::debug!("map_webview: WebView2 IPC 回调返回");
             })
             .build_as_child(&*winit_win);
 
@@ -441,19 +475,53 @@ pub(crate) fn show_with_config(
     });
 }
 
-/// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）。
+/// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）——**唯一延迟销毁入口**。
 ///
-/// 诚实声明：wry 0.55 无 `set_visible` API，这里直接 drop WebView；
-/// 返回屏幕 4 时由 [`show`] / [`show_with_config`] 重建。重建期间地图状态
-/// （缩放/编辑内容）不保留——已确认边界已由 Rust 侧保管，不影响数据正确性。
-/// 页面种类与配置被保留，供 [`restore_after_modal`] 按模式重建。
+/// 诚实声明：wry 0.55 无 `set_visible` API，这里 drop WebView；返回对应
+/// 页面时由 [`show`] / [`show_with_config`] / [`show_campus_search`] 重建。
+/// 重建期间地图状态（缩放/编辑内容）不保留——已确认边界已由 Rust 侧保管，
+/// 不影响数据正确性。页面种类与配置被保留，供 [`restore_after_modal`] 按
+/// 模式重建。
+///
+/// T35 崩溃根因：错误/确认/输入弹窗的 `hide` 可能发生在 wry IPC 回调栈内
+/// （WebView2 COM 回调），同步 drop WebView 导致 COM 重入崩溃。本入口一律
+/// 把销毁排到事件循环下一拍：`is_visible()` 立即为 false（逻辑隐藏），
+/// 但实际 drop 由 `invoke_from_event_loop` 回调在 IPC 回调返回后执行。
 pub(crate) fn hide() {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        state.webview = None;
+        // 活跃 WebView 立即移入待销毁队列：逻辑隐藏立即生效，drop 延后。
+        if let Some(webview) = state.webview.take() {
+            state.retiring.push(webview);
+        }
         state.resize_timer = None; // drop 即停止轮询
         state.last_slot_scale = None;
         state.campus_search_mode = false;
+        if state.hide_scheduled || state.retiring.is_empty() {
+            return;
+        }
+        state.hide_scheduled = true;
+        log::debug!(
+            "map_webview: hide() 已排定下一拍销毁 {} 个 WebView（IPC 回调返回后 drop）",
+            state.retiring.len()
+        );
+        let dispatched = slint::invoke_from_event_loop(|| {
+            let retired = STATE.with(|s| {
+                let mut state = s.borrow_mut();
+                state.hide_scheduled = false;
+                std::mem::take(&mut state.retiring)
+            });
+            log::debug!(
+                "map_webview: 事件循环下一拍，销毁 {} 个待退休 WebView（IPC 回调已返回）",
+                retired.len()
+            );
+            drop(retired);
+        });
+        if dispatched.is_err() {
+            // 事件循环不可用（无界面/单元测试环境）：无法延迟，立即销毁。
+            state.hide_scheduled = false;
+            state.retiring.clear();
+        }
     });
 }
 
@@ -538,6 +606,49 @@ mod tests {
         hide();
         hide();
         assert!(!is_visible());
+        // T35：无活跃 WebView 时不得排定下一拍销毁（单元测试无事件循环，
+        // 也不允许残留排定标记）。
+        STATE.with(|s| {
+            let state = s.borrow();
+            assert!(!state.hide_scheduled, "无待销毁对象不得排定");
+            assert!(state.retiring.is_empty(), "无待销毁对象");
+        });
+    }
+
+    #[test]
+    fn hide_without_webview_keeps_state_clean_in_headless_environment() {
+        // T35：单元测试进程没有运行中的 Slint 事件循环，hide() 必须在
+        // 无 WebView 时直接返回（不调用 invoke_from_event_loop、不残留
+        // 排定标记），否则无界面环境下会误排定一次永不执行的销毁回调。
+        hide();
+        STATE.with(|s| {
+            let state = s.borrow();
+            assert!(!state.hide_scheduled);
+            assert!(state.retiring.is_empty());
+            assert!(!state.campus_search_mode);
+            assert_eq!(state.last_slot_scale, None);
+        });
+        assert!(!is_visible());
+    }
+
+    #[test]
+    fn ipc_dispatch_releases_borrow_before_invoking_handler() {
+        // T35 根因回归（RefCell already borrowed → WebView2 回调内不可 unwind
+        // 崩溃，WER 0xc0000409）：错误弹窗路径会在 IPC handler 内调用
+        // hide()（对 STATE 做 borrow_mut）。若 dispatch 在 STATE 借用存活期间
+        // 调用 handler（旧写法 `if let Some(handler) = s.borrow()...` 的临时
+        // Ref 活到 if-let 体结束），这里会直接 panic。
+        register_ipc_handler(Rc::new(|_body| {
+            hide();
+        }));
+        dispatch_ipc(r#"{"type":"confirm_boundary","coords":[]}"#);
+        // 走到这里说明 handler 调用期间 STATE 无存活借用、无 panic。
+        STATE.with(|s| {
+            let state = s.borrow();
+            assert!(!state.hide_scheduled, "handler 内 hide() 后不得残留排定");
+            assert!(state.retiring.is_empty());
+        });
+        STATE.with(|s| s.borrow_mut().ipc_handler = None);
     }
 
     #[test]

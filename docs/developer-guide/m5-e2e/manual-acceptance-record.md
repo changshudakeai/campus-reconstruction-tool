@@ -151,6 +151,150 @@ visible-height=0`、滚轮/键盘 viewport-y 恒 0、封账按钮点击无效）
 
 ---
 
+## T35 走查记录（2026-08-09，实施窗口 fix/t35-boundary-confirm-crash）
+
+工单：`.scratch/v2-implementation/issues/T35-boundary-confirm-crash-fix.md`
+（P0：真实 OSM 边界确认失败时程序直接退出、无任何反馈；对应 T19B-5B
+破坏性验收项“画自相交多边形 → 弹窗报错而非崩溃”，此前为崩溃）。
+最终二进制：`dist/MCRebuild-V2.0.0-dev-portable.zip`（7.95 MB），
+`campus-rebuild-dev.exe` SHA256 `120C99857665465D276BD6BF7549D077D3BBBFD35FBACB60EE2202EC2526F8B4`。
+走查实例：`dist/t35-walkthrough/`（新 exe + dev DB 副本，DB 未经改动）。
+
+### 根因（实测定位，2026-08-09）
+
+1. **RefCell already borrowed panic（WER 0xc0000409 主因）**：
+   `apps/desktop/src/map_webview.rs` wry IPC 回调闭包
+   `if let Some(handler) = s.borrow().ipc_handler.clone() { handler(&body); }`
+   的临时 `Ref` 活到 if-let 体结束，业务 handler 执行期间 `STATE` 一直被
+   借用；错误弹窗路径 `hide()` 对 `STATE` 做 `borrow_mut` → panic。panic 在
+   WebView2 COM 回调栈内不可 unwind → 进程 abort（BEX64 / 0xc0000409）。
+   debug 复现 stderr：`thread 'main' panicked at
+   apps\desktop\src\map_webview.rs:490:27: RefCell already borrowed` +
+   `thread caused non-unwinding panic. aborting.`（Windows 事件日志
+   Application Error：0xc0000409，faulting module campus-rebuild-dev.exe，
+   时间与蝴蝶结确认 IPC 一致）。
+2. **同步 drop WebView 的 COM 重入（WER 0xc0000005 combase.dll）**：
+   即使借用不冲突，WebView2 IPC 回调栈内同步 drop 也会 COM 重入；wry 0.55
+   无 `set_visible`，`hide()` 是 drop/recreate 兜底。
+
+### 修复（仅呈现层，ADR-0037；业务规则不变）
+
+- `map_webview.rs`：IPC 回调先克隆 handler 释放 `STATE` 借用再执行业务
+  （新增 `dispatch_ipc`，3 处 `with_ipc_handler` 与 `notify_status` 统一）；
+  `hide()` 成为**唯一延迟销毁入口**：活跃 WebView 立即移入 `retiring`
+  （`is_visible()` 即刻为 false），经 `slint::invoke_from_event_loop` 排定
+  下一拍回调，IPC 回调返回后才真正 drop；事件循环不可用（无界面/单测）时
+  fallback 立即销毁；同轮多次 hide 只排一次。
+- `presenter.rs`（ShellPresenter::present）与 `presentation.rs`
+  （render_presentation 两处）的弹窗 hide() 调用点注释标明统一走延迟入口，
+  行为不变。
+- 校验失败仍经 B7 error 通知 + 错误弹窗 + 公告栏留底（ADR-0021），不静默
+  吞错；T33 `normalize_closed_ring` + validation 共享端点跳过保留未动。
+- `main.rs` 新增 std-only 文件日志（`MCREBUILD_LOG_FILE` 环境变量启用，
+  log::* 现可落盘），用于验收 3 的 drop 顺序证据；零新依赖。
+
+### 自动化回归（去 zz_ 前缀，s1_ 契约风格）
+
+- `apps/desktop/tests/s1_24_boundary_confirm_error_contract.rs`：自相交
+  蝴蝶结 → 错误弹窗可见、`边界面积过小…; 边界自相交：第 0 条边与第 2 条边
+  相交`、边界未确认、操作状态 Failed、B7 留底；点“知道了”后程序存活、
+  边界仍未确认；同一会话内有效环确认成功、五步解锁。
+- `apps/desktop/tests/s1_25_osm_boundary_confirm_canned_contract.rs`：
+  真实 OSM 环确认成功（罐头 Overpass/Nominatim，无网络）——华东师大普陀
+  relation 6179557（90 点、第 87 点中途闭合 + 2 尾点，T33 场景）、上交闵行
+  way 288249651（39 点），断言 `normalize_closed_ring` 截断尾点后确认成功。
+- `map_webview::tests::ipc_dispatch_releases_borrow_before_invoking_handler`：
+  RefCell 借用根因回归（handler 内调用 hide() 不得 panic）；另有
+  `hide_without_webview_keeps_state_clean_in_headless_environment`（无事件
+  循环环境不误排定）。
+- 删除 `zz_t33_diag_boundary_confirm.rs` / `zz_t33_diag_osm_boundary.rs`
+  （临时诊断已由 s1_24 / s1_25 正式固化）。
+
+### 真机走查（真实 WebView2 + 真实 OSM/Nominatim/Overpass/高德，100% DPI）
+
+驱动：`scripts/t35-walkthrough-drive.py`（pywinauto UIA + WebView2 CDP
+`--remote-debugging-port=9222 --remote-allow-origins=*`）；截图见
+`docs/developer-guide/m5-e2e/evidence/t35/`。
+
+1. **华东师大普陀（真实 OSM）**：dev DB 已有校区
+   “华东师范大学普陀校区”（中山北路 3663 号）与方案“新方案 1”。打开方案 →
+   地图页“来自 OSM: 华东师范大学 ✓”自动绘制（高德瓦片 + OSM 署名可见）→
+   抽屉“当前点数：87” → 点“确认边界” → 状态“边界已确认，可点'重置'
+   重新绘制”（`t35-A-confirmed-095258.png`）→ 程序不退出。
+2. **上交闵行（真实 OSM）**：切换校区 → 高德在线搜索“上海交通大学”→
+   真实结果列表（闵行本部/徐汇/长宁/七宝/医学院等，
+   `t35-B-search-results-095306.png`）→ 点选“上海交通大学(闵行本部校区)”
+   → 确认添加 → 新建方案“T35走查方案” → 打开 → OSM amenity 级联自动选中
+   并绘制（“当前点数：87”，真实 Overpass amenity 查询命中）→ 点“确认边界”
+   → “边界已确认”（`t35-B-confirmed-095322.png`）→ 程序不退出。
+3. **自相交蝴蝶结（对应 T19B-5B 破坏性验收项，修复前为崩溃）**：CDP 在真实
+   边界页执行 `enableManualMode()` + 4 个 `handleMapClick`（蝴蝶结坐标）+
+   `submitBoundaryFromDrawer()` → 真实 wry IPC 回调 → B5 校验失败 → 错误弹窗
+   可见：`错误 / 应用 / 边界面积过小：0.0 平方米…; 边界自相交：第 0 条边与
+   第 2 条边相交` + “知道了”按钮（`t35-C-error-modal-095329.png`）→ 点
+   “知道了” → 程序存活（`t35-C-after-dismiss-095331.png`）、边界保持未确认
+   → CDP 画有效矩形再确认 → “边界已确认”（`t35-C-recovered-095338.png`），
+   会话内恢复能力成立。
+4. **error 通知在地图可见时发布（验收 3）**：蝴蝶结确认即为地图可见时的
+   error 通知（B7 弹窗 + 留底），弹窗正常显示、程序不退出；日志
+   `dist/t35-walkthrough/t35-walkthrough.log` 证明 drop 顺序：
+
+   ```text
+   WebView2 IPC 回调进入（body=104 字节）
+   hide() 已排定下一拍销毁 1 个 WebView（IPC 回调返回后 drop）
+   WebView2 IPC 回调返回
+   事件循环下一拍，销毁 1 个待退休 WebView（IPC 回调已返回）
+   ```
+
+   即 WebView 实际 drop 发生在 IPC 回调返回之后的事件循环下一拍。
+
+### 125% DPI（待会话刷新补充）
+
+本机当前 100% DPI（96）。Windows 11（build 26200）更改显示缩放需登出/登入
+才生效（已实测：注册表 `LogPixels=120` + `Win8DpiScaling=1` +
+`UpdatePerUserSystemParameters` + 重启 Explorer 后 `GetDpiForSystem()` 仍为
+96；随后已恢复原值）。125% 走查步骤（验收窗口执行，完成后请恢复 100%）：
+
+```powershell
+Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name LogPixels -Value 120 -Type DWord
+Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Win8DpiScaling -Value 1 -Type DWord
+# 登出 → 登入 → 运行 scripts\t35-dpi-walkthrough.py（华东师大普陀方案确认 + UIA 矩形 + 截图）
+# 完成后恢复：
+Remove-ItemProperty 'HKCU:\Control Panel\Desktop' -Name LogPixels
+Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Win8DpiScaling -Value 0 -Type DWord
+# 再登出/登入一次
+```
+
+125% 布局正确性已有自动化覆盖：`map_webview` 单测在 scale 1.25 下断言物理
+右缘不越界（T32/T34 回归），`s1_23` 断言 800×666 / 1000×666 抽屉让位。
+
+### 门禁与便携包
+
+- 全部门禁全绿（Windows，`SLINT_BACKEND=software`、`CARGO_BUILD_JOBS=2`）：
+  `cargo machete` ✓ / `cargo test --workspace`（113 结果行全 ok）✓ /
+  `cargo fmt --all --check` ✓ / `cargo clippy --workspace --all-targets --
+  -D warnings` ✓ / `cargo deny check advisories bans licenses sources` ✓ /
+  `cargo xtask tidy` ✓ / `cargo xtask arch` ✓（`xtask ci` 同为绿）。
+- 便携包重建 `dist/MCRebuild-V2.0.0-dev-portable.zip`（7.95 MB）；
+  `C:\Users\chang\AppData\Local\MCRebuildV2\dev\campus-rebuild-dev.exe`
+  已替换为最终二进制（旧版备份至 `previous/campus-rebuild-dev.exe.
+  20260809-pre-t35.exe`；dev DB 与 WebView2 数据未动），启动验证通过。
+  三处 exe（staging / dev / 走查实例）SHA256 一致。
+
+### 剩余风险与交接
+
+- 仍有其他校验失败入口可能走到同一隐藏弹窗路径（如朝向两点重合、校区搜索
+  失败重试、评审/导出失败等，地图可见时弹窗都会触发 `hide()`）；本修复将
+  `hide()` 统一收口为延迟销毁入口 + 修复 IPC 借用，覆盖全部入口，但未逐条
+  人工复核，建议验收窗口抽查 1–2 条（如朝向页两点重合弹窗）。
+- 125% DPI 窗口走查待 Windows 会话刷新后执行（步骤见上）。
+- T19B-5B 破坏性验收项需负责人勾掉并注明此前为崩溃。
+- 若现场发现其他校区边界仍校验失败，作为新缺陷单独开单（先证据后修）。
+
+负责人签名：____________
+
+---
+
 ## T34 实施窗口记录（2026-08-08，fix/t34-map-first-workspace-layout）
 
 工单：五步工作区"地图为主 + 左侧抽屉"布局改造（做法 A：地图让位）。
