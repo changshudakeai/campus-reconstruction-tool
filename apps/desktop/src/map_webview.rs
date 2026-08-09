@@ -1,6 +1,6 @@
-//! 屏幕 4 边界地图 WebView 嵌入与生命周期管理
+//! 屏幕 4 边界地图 WebView 嵌入与生命周期管理。
 //!
-//! 薄壳原则（ADR-0017）：本模块只做嵌入显示与消息桥接，零业务计算——
+//! 薄壳原则：（ADR-0017）本模块只做嵌入显示与消息桥接，零业务计算——
 //! OSM 候选排序在 B3 `gaode_client::BoundarySorter`，校验在 B5
 //! `validate_polygon_closure`，HTML 生成在 B3 `gaode_client`。
 //!
@@ -12,23 +12,44 @@
 //! **drop/recreate** 兜底并诚实声明（验收条目"随屏显隐"以此实现）。
 //! 屏幕切换处由注入器调用 [`show`] / [`hide`]。
 //!
-//! ## resize 跟随（T34：Slint 布局槽位上报真实矩形）
-//! slint 1.17 无公开窗口 resize 回调，采用 300ms 轮询兜底：
-//! 轮询 `AppWindow::workspace-map-slot-*`（逻辑像素矩形，由 Slint 布局
-//! 计算，含左侧抽屉开合让位）与缩放因子，变化时经 `WebView::set_bounds`
-//! 重定位；HTML 内 `window resize` 监听再调 `map.resize()` 同步画布。
-//! 不再硬编码 (32,184,w-32,340)。
+//! ## T35：销毁延迟到事件循环下一拍（P0 崩溃修复，本分支自带）
+//! wry 的 IPC 回调（`window.ipc.postMessage` → `with_ipc_handler`）运行在
+//! WebView2 自身 COM 回调栈内。错误/确认/输入弹窗路径都会在回调栈内调用
+//! [`hide`]；若同步 drop WebView，WebView2 COM 重入会在 combase.dll 崩溃
+//! （WER 0xc0000005 / 0xc0000409）。因此 [`hide`] 是**唯一延迟销毁入口**：
+//! 活跃 WebView 立即移入 `retiring`（逻辑隐藏即刻生效），经
+//! `slint::invoke_from_event_loop` 排定下一拍回调，IPC 回调返回后才真正
+//! drop；全部弹窗遮挡调用点（presenter / presentation / 工作区适配器）
+//! 统一走本入口。同时 IPC/状态回调先克隆 handler 释放 `STATE` 借用再执行
+//! （`RefCell already borrowed` 根因，WER 0xc0000409）。
 //!
-//! ## T34：弹窗遮挡统一机制
-//! 地图 WebView 是原生子窗口，会渲染在 Slint 模态遮罩之上；错误/确认/
-//! 输入弹窗前统一 [`hide`]，关闭后经 [`restore_after_modal`] 按当前步骤
-//! 模式（边界页 vs 朝向页）重建，不得恢复错页。
+//! ## T36：hide→show 步骤切换串行化（P1）
+//! T35 延迟销毁后，"旧 WebView 尚未真正 drop 就新建下一份"会产生时序窗口：
+//! 两个 WebView2 子窗口并存、Z 序/焦点错乱，朝向页点击无反应。本模块把
+//! 创建也纳入同一生命周期：
+//! - 每次 show 请求自增 `generation`；在途创建的完成结果只允许"当前代"
+//!   生效，过期结果一律转入 `retiring` 延迟销毁，绝不触碰当前状态；
+//! - 新建 WebView 前必须满足：无活跃 WebView、无在途创建、`retiring`
+//!   队列已清空（销毁回调执行完后 `pump_creation` 才放行）——步骤切换
+//!   hide→show 由此串行化；
+//! - HTML 构建改为同步：密钥/锚点非法等创建前失败**如实**上报
+//!   `map_available=false`，不再保持上一次的 true；
+//! - 工作区页创建附带 10s 加载超时（[`LOAD_TIMEOUT`]）：超时后使在途
+//!   创建过期、经错误 IPC 弹明确错误对话框，用户可退回"方位角手动输入"。
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use slint::ComponentHandle;
 use slint::{winit_030::WinitWindowAccessor, Weak};
+
+/// 地图加载超时（T36）：WebView 创建/SDK 就绪的硬性上限。
+pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// T36：Rust 侧超时经错误 IPC 上报时使用的标记；工作区入口把它本地化为
+/// 明确的超时文案（ADR-0005 禁止硬编码可见文本）。
+pub const MAP_LOAD_TIMEOUT_MARKER: &str = "__t36_map_load_timeout__";
 
 /// IPC 消息处理签名：输入原始消息文本，输出是否已识别处理。
 /// 由功能入口注册；返回值仅用于诊断记录。
@@ -38,10 +59,10 @@ pub(crate) type IpcHandler = Rc<dyn Fn(&str)>;
 /// 由功能入口注册；故障只暂停地图相关操作，不阻塞其他页面（ADR-0037）。
 pub(crate) type MapStatusHandler = Rc<dyn Fn(bool)>;
 
-/// 地图页种类：决定弹窗关闭后按哪个页面重建。
+/// 地图页面种类：决定弹窗关闭后按哪个页面重建。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapPageKind {
-    /// 边界编辑页（步骤 ①/③/⑤ 的常驻地图）
+    /// 边界编辑页（步骤 ①②③ 的常驻地图）
     Boundary,
     /// 朝向编辑页（步骤 ②）
     Orientation,
@@ -58,9 +79,61 @@ struct MapSlotRect {
     height: f32,
 }
 
+/// T36：一次待执行的 show 请求（retiring 未清空或在途创建时暂存，后到覆盖先到）。
+#[derive(Clone)]
+enum PendingShow {
+    Boundary {
+        window: Weak<crate::AppWindow>,
+        api_key: String,
+        security_key: String,
+        anchor_lon: f64,
+        anchor_lat: f64,
+    },
+    CampusSearch {
+        window: Weak<crate::AppWindow>,
+        api_key: String,
+        security_key: String,
+    },
+    Orientation {
+        window: Weak<crate::AppWindow>,
+        config: gaode_client::BoundaryEditPageConfig,
+    },
+}
+
+impl PendingShow {
+    fn page_kind(&self) -> MapPageKind {
+        match self {
+            PendingShow::Boundary { .. } => MapPageKind::Boundary,
+            PendingShow::CampusSearch { .. } => MapPageKind::CampusSearch,
+            PendingShow::Orientation { .. } => MapPageKind::Orientation,
+        }
+    }
+
+    /// 工作区页（边界/朝向）需要回传 map_available 状态；校区搜索页不回传。
+    fn reports_status(&self) -> bool {
+        !matches!(self, PendingShow::CampusSearch { .. })
+    }
+}
+
 struct WebViewState {
     /// 活跃 WebView（None = 已隐藏/未创建）
     webview: Option<wry::WebView>,
+    /// T35：已排定"下一拍"销毁的 WebView（IPC 回调栈内不得同步 drop）。
+    /// [`hide`] 把活跃 WebView 移入此处，事件循环回调返回后统一销毁。
+    retiring: Vec<wry::WebView>,
+    /// T35：下一拍销毁是否已排定（同一事件循环轮次内多次 hide 只排一次）
+    hide_scheduled: bool,
+    /// T36：show 请求代际；在途创建完成时只有"当前代"可生效。
+    generation: u64,
+    /// T36：是否已有在途的异步 WebView 创建（防止重复 spawn）。
+    creation_in_flight: bool,
+    /// T36：等待执行的 show 请求（retiring 未清空或在途创建时暂存）。
+    pending_show: Option<PendingShow>,
+    /// T36：工作区页创建加载超时（一次性；成功后或 hide 时取消）。
+    load_timer: Option<slint::Timer>,
+    /// T36：地图加载失败后禁止弹窗关闭自动重建（避免反复失败弹窗）；
+    /// 用户显式切换步骤重新请求时才清除。
+    suppress_restore: bool,
     /// 功能入口注册的 IPC 处理器
     ipc_handler: Option<IpcHandler>,
     /// 功能入口注册的地图加载状态处理器
@@ -70,7 +143,7 @@ struct WebViewState {
     last_security_key: String,
     /// 上次使用的校区锚点（recreate 时复用；模态弹窗隐藏后恢复用）
     last_anchor: Option<(f64, f64)>,
-    /// 上次显示的地图页种类（弹窗恢复按此/当前步骤重建）
+    /// 上次显示的地图页面种类（弹窗恢复按此步骤重建）
     last_page_kind: Option<MapPageKind>,
     /// 朝向页配置（含已确认边界半透明参照；弹窗恢复时复用）
     last_orientation_config: Option<gaode_client::BoundaryEditPageConfig>,
@@ -87,6 +160,13 @@ thread_local! {
     static STATE: RefCell<WebViewState> = const {
         RefCell::new(WebViewState {
             webview: None,
+            retiring: Vec::new(),
+            hide_scheduled: false,
+            generation: 0,
+            creation_in_flight: false,
+            pending_show: None,
+            load_timer: None,
+            suppress_restore: false,
             ipc_handler: None,
             status_handler: None,
             last_api_key: String::new(),
@@ -112,12 +192,26 @@ pub(crate) fn register_status_handler(handler: MapStatusHandler) {
 }
 
 /// 通知地图加载完成状态（WebView 创建成功或失败后调用一次）
+///
+/// 与 IPC 回调同纪律：先克隆释放借用，再调用外部 handler（T35）。
 fn notify_status(available: bool) {
-    STATE.with(|s| {
-        if let Some(handler) = s.borrow().status_handler.clone() {
-            handler(available);
-        }
-    });
+    log::debug!("map_webview: notify_status(available={available})");
+    let handler = STATE.with(|s| s.borrow().status_handler.clone());
+    if let Some(handler) = handler {
+        handler(available);
+    }
+}
+
+/// 把 WebView2 IPC 原始载荷转交注册的业务 handler。
+///
+/// T35 根因（RefCell already borrowed → WebView2 回调内不可 unwind 崩溃，
+/// WER 0xc0000409）：不得在 `STATE` 借用存活期间调用 handler。这里先克隆出
+/// handler、释放借用，再在回调栈内执行业务（handler 内可能调用 [`hide`]）。
+fn dispatch_ipc(body: &str) {
+    let handler = STATE.with(|s| s.borrow().ipc_handler.clone());
+    if let Some(handler) = handler {
+        handler(body);
+    }
 }
 
 /// 是否已有活跃 WebView
@@ -141,7 +235,7 @@ pub(crate) fn is_boundary_page() -> bool {
 /// 从 Slint 布局槽位读取地图矩形（逻辑像素；T34 不再硬编码坐标）。
 ///
 /// 槽位由 `main.slint` 计算：`workspace-map-slot-x/y/width/height`，
-/// 含左侧抽屉开合让位（做法 A）。宽度/高度钳制为非负。
+/// 含左侧抽屉开合让位（做法 A）。宽高钳制为非负。
 fn map_slot(window: &crate::AppWindow) -> MapSlotRect {
     MapSlotRect {
         x: window.get_workspace_map_slot_x(),
@@ -197,13 +291,13 @@ fn compute_campus_search_bounds(window_width_logical: u32, scale: f32) -> wry::R
 
 /// 启动 resize 跟随轮询（slint 1.17 无公开 resize 回调 → 定时器兜底）。
 ///
-/// T34：按当前地图页种类取对应矩形——工作区页读 Slint 槽位（含抽屉让位），
+/// T34：按当前地图页面种类取对应矩形——工作区页读 Slint 槽位（含抽屉让位），
 /// 校区搜索页用固定搜索条矩形。
 fn start_resize_timer(window_weak: Weak<crate::AppWindow>) {
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(300),
+        Duration::from_millis(300),
         move || {
             let Some(app_window) = window_weak.upgrade() else {
                 return;
@@ -237,10 +331,349 @@ fn start_resize_timer(window_weak: Weak<crate::AppWindow>) {
     STATE.with(|s| s.borrow_mut().resize_timer = Some(timer));
 }
 
+/// 为待执行请求构建 HTML（同步；T36：创建前失败如实上报，不静默）。
+fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> {
+    match request {
+        PendingShow::Boundary {
+            api_key,
+            security_key,
+            anchor_lon,
+            anchor_lat,
+            ..
+        } => {
+            let config = gaode_client::BoundaryEditPageConfig::new(api_key, security_key)
+                .with_anchor(*anchor_lon, *anchor_lat);
+            gaode_client::build_boundary_edit_page_html(&config)
+        }
+        PendingShow::CampusSearch {
+            api_key,
+            security_key,
+            ..
+        } => {
+            let config = gaode_client::MapPageConfig::new(api_key, security_key);
+            gaode_client::build_map_page_html(&config)
+        }
+        PendingShow::Orientation { config, .. } => {
+            gaode_client::build_boundary_edit_page_html(config)
+        }
+    }
+}
+
+/// T35：把待销毁 WebView 排定到事件循环下一拍（唯一延迟销毁出口）。
+///
+/// 调用方必须已持有 `STATE` 借用（borrow_mut）并把 WebView 移入 `retiring`。
+/// 销毁回调执行后调用 [`pump_creation`]，使等待中的 show 请求（T36 串行化）
+/// 只在上一份真正 drop 后放行。
+fn schedule_drop(state: &mut WebViewState) {
+    if state.hide_scheduled || state.retiring.is_empty() {
+        return;
+    }
+    state.hide_scheduled = true;
+    log::debug!(
+        "map_webview: hide() 已排定下一拍销毁 {} 个 WebView（IPC 回调返回后 drop）",
+        state.retiring.len()
+    );
+    let dispatched = slint::invoke_from_event_loop(|| {
+        let retired = STATE.with(|s| {
+            let mut state = s.borrow_mut();
+            state.hide_scheduled = false;
+            std::mem::take(&mut state.retiring)
+        });
+        log::debug!(
+            "map_webview: 事件循环下一拍，销毁 {} 个待退休 WebView（IPC 回调已返回）",
+            retired.len()
+        );
+        drop(retired);
+        // T36：销毁完成后才允许新建（串行化 hide→show）。
+        pump_creation();
+    });
+    if dispatched.is_err() {
+        // 事件循环不可用（无界面/单元测试环境）：无法延迟，立即销毁。
+        log::debug!("map_webview: 事件循环不可用，立即销毁待退休 WebView");
+        state.hide_scheduled = false;
+        state.retiring.clear();
+    }
+}
+
+/// T36：在当前状态允许时发起 pending 的 WebView 创建。
+///
+/// 放行条件：无活跃 WebView、无在途创建、`retiring` 已清空。HTML 构建
+/// 同步完成——失败立即上报 `map_available=false`（工作区页），不进入异步
+/// 创建；成功则带代际令牌异步 `build_as_child`。
+fn pump_creation() {
+    let action = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        if state.webview.is_some() || state.creation_in_flight || !state.retiring.is_empty() {
+            return None;
+        }
+        let request = state.pending_show.take()?;
+        let reports_status = request.reports_status();
+        let page_kind = request.page_kind();
+        match build_html_for(&request) {
+            Err(error) => {
+                if reports_status {
+                    log::warn!(
+                        "map_webview: HTML 构建失败（page={page_kind:?}），如实上报地图不可用: {error}"
+                    );
+                }
+                Some(PumpAction::HtmlFailed { reports_status })
+            }
+            Ok(html) => {
+                state.creation_in_flight = true;
+                let generation = state.generation;
+                let window = request_window(&request);
+                if reports_status {
+                    state.load_timer = Some(start_load_timer(generation));
+                }
+                Some(PumpAction::Spawn {
+                    html,
+                    generation,
+                    window,
+                    page_kind,
+                    reports_status,
+                })
+            }
+        }
+    });
+    match action {
+        Some(PumpAction::HtmlFailed { reports_status }) => {
+            if reports_status {
+                notify_status(false);
+            }
+        }
+        Some(PumpAction::Spawn {
+            html,
+            generation,
+            window,
+            page_kind,
+            reports_status,
+        }) => {
+            spawn_creation(html, generation, window, page_kind, reports_status);
+        }
+        None => {}
+    }
+}
+
+enum PumpAction {
+    HtmlFailed {
+        reports_status: bool,
+    },
+    Spawn {
+        html: String,
+        generation: u64,
+        window: Weak<crate::AppWindow>,
+        page_kind: MapPageKind,
+        reports_status: bool,
+    },
+}
+
+fn request_window(request: &PendingShow) -> Weak<crate::AppWindow> {
+    match request {
+        PendingShow::Boundary { window, .. }
+        | PendingShow::CampusSearch { window, .. }
+        | PendingShow::Orientation { window, .. } => window.clone(),
+    }
+}
+
+/// T36：工作区页（边界/朝向）创建附带 10s 加载超时（一次性）。
+fn start_load_timer(generation: u64) -> slint::Timer {
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::SingleShot, LOAD_TIMEOUT, move || {
+        handle_load_timeout(generation);
+    });
+    timer
+}
+
+/// T36：加载超时——使在途创建过期、取消 pending，经错误 IPC 弹明确错误。
+///
+/// 页面自身的 onerror / 5s SDK 超时已会回传 `{"type":"error",...}` IPC，
+/// 本超时是 Rust 侧兜底（WebView 创建/SDK 就绪 10 秒未完成）。
+fn handle_load_timeout(generation: u64) {
+    let timed_out = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        if generation != state.generation || state.webview.is_some() {
+            return false;
+        }
+        log::warn!("map_webview: 地图加载超时（{LOAD_TIMEOUT:?}），上报失败并禁止自动重建");
+        state.generation += 1;
+        state.creation_in_flight = false;
+        state.pending_show = None;
+        state.load_timer = None;
+        state.suppress_restore = true;
+        true
+    });
+    if timed_out {
+        // 状态（map_available=false / 处理中清除）由工作区入口在错误 IPC
+        // 分支统一处理并弹明确错误对话框；这里只发 IPC，避免重复通知。
+        dispatch_ipc(&format!(
+            r#"{{"type":"error","message":"{MAP_LOAD_TIMEOUT_MARKER}"}}"#
+        ));
+    }
+    pump_creation();
+}
+
+/// 异步创建 WebView 并以其完成结果收口（代际校验）。
+fn spawn_creation(
+    html: String,
+    generation: u64,
+    window_weak: Weak<crate::AppWindow>,
+    page_kind: MapPageKind,
+    reports_status: bool,
+) {
+    log::debug!(
+        "map_webview: 开始异步创建 WebView（page={page_kind:?}, generation={generation}, 上报状态={reports_status}）"
+    );
+    let _ = slint::spawn_local(async move {
+        let Some(app_window) = window_weak.upgrade() else {
+            log::debug!("map_webview: 窗口已失效，放弃创建（generation={generation}）");
+            finish_creation(generation, Err(wry::Error::NotMainThread), window_weak);
+            return;
+        };
+        let Ok(winit_win) = app_window.window().winit_window().await else {
+            log::debug!("map_webview: 拿不到 winit 窗口，放弃创建（generation={generation}）");
+            finish_creation(generation, Err(wry::Error::NotMainThread), window_weak);
+            return;
+        };
+
+        let scale = app_window.window().scale_factor();
+        let bounds = match page_kind {
+            MapPageKind::CampusSearch => {
+                let width = logical_window_width(app_window.window());
+                compute_campus_search_bounds(width, scale)
+            }
+            _ => compute_slot_bounds(map_slot(&app_window), scale),
+        };
+
+        let result = wry::WebViewBuilder::new()
+            .with_html(html)
+            .with_bounds(bounds)
+            .with_ipc_handler(|request: wry::http::Request<String>| {
+                let body = request.body().to_string();
+                log::debug!(
+                    "map_webview: WebView2 IPC 回调进入（body={} 字节）",
+                    body.len()
+                );
+                dispatch_ipc(&body);
+                log::debug!("map_webview: WebView2 IPC 回调返回");
+            })
+            .build_as_child(&*winit_win);
+
+        finish_creation(generation, result, window_weak);
+    });
+}
+
+/// 一次创建尝试的收口：当前代生效（设置活跃/上报），过期代转入延迟销毁。
+fn finish_creation(
+    generation: u64,
+    result: std::result::Result<wry::WebView, wry::Error>,
+    window_weak: Weak<crate::AppWindow>,
+) {
+    enum Outcome {
+        Active,
+        Failed,
+        Stale,
+    }
+    let outcome = STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        state.creation_in_flight = false;
+        state.load_timer = None;
+        if generation != state.generation {
+            log::debug!(
+                "map_webview: 过期创建完成（gen={generation}，当前={}），转入延迟销毁",
+                state.generation
+            );
+            if let Ok(webview) = result {
+                state.retiring.push(webview);
+                schedule_drop(&mut state);
+            }
+            return Outcome::Stale;
+        }
+        match result {
+            Ok(webview) => {
+                log::debug!("map_webview: WebView 创建成功（gen={generation}）");
+                state.webview = Some(webview);
+                Outcome::Active
+            }
+            Err(error) => {
+                log::warn!("map_webview: WebView 创建失败（gen={generation}）: {error}");
+                Outcome::Failed
+            }
+        }
+    });
+    match outcome {
+        Outcome::Active => {
+            start_resize_timer(window_weak);
+            notify_status(true);
+        }
+        Outcome::Failed => notify_status(false),
+        Outcome::Stale => {}
+    }
+    pump_creation();
+}
+
+/// 记录待执行请求并尝试放行（T36 统一 show 入口）。
+fn request_show(request: PendingShow) {
+    let page_kind = request.page_kind();
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        // 幂等：同页已显示时不重建（键/锚点已被记录供 recreate 复用）。
+        if state.webview.is_some() && state.last_page_kind == Some(page_kind) {
+            return;
+        }
+        match &request {
+            PendingShow::Boundary {
+                api_key,
+                security_key,
+                anchor_lon,
+                anchor_lat,
+                ..
+            } => {
+                state.last_api_key = api_key.clone();
+                state.last_security_key = security_key.clone();
+                state.last_anchor = Some((*anchor_lon, *anchor_lat));
+                state.last_page_kind = Some(MapPageKind::Boundary);
+                state.campus_search_mode = false;
+            }
+            PendingShow::CampusSearch {
+                api_key,
+                security_key,
+                ..
+            } => {
+                state.last_api_key = api_key.clone();
+                state.last_security_key = security_key.clone();
+                state.last_page_kind = Some(MapPageKind::CampusSearch);
+                state.campus_search_mode = true;
+            }
+            PendingShow::Orientation { config, .. } => {
+                state.last_api_key = config.api_key.clone();
+                state.last_security_key = config.security_key.clone();
+                state.last_page_kind = Some(MapPageKind::Orientation);
+                state.last_orientation_config = Some(config.clone());
+                state.campus_search_mode = false;
+            }
+        }
+        // 异页已显示：先隐藏（延迟销毁），再排队重建。
+        if state.webview.is_some() {
+            if let Some(webview) = state.webview.take() {
+                state.retiring.push(webview);
+            }
+            state.resize_timer = None;
+            state.last_slot_scale = None;
+            state.campus_search_mode = false;
+            schedule_drop(&mut state);
+        }
+        // 显式请求清除"失败后禁止自动重建"标记。
+        state.suppress_restore = false;
+        state.generation += 1;
+        state.pending_show = Some(request);
+    });
+    pump_creation();
+}
+
 /// 显示（或重建）边界地图 WebView。
 ///
 /// 幂等：已存在时不重复创建。密钥/锚点被记录供 recreate 复用。
-/// 创建失败静默降级（地图不可用 → 人工圈画画布仍在 Slint 侧可用）。
+/// 创建失败如实上报（地图不可用 → 人工圈画画布仍在 Slint 侧可用）。
 pub(crate) fn show(
     window_weak: Weak<crate::AppWindow>,
     api_key: String,
@@ -248,63 +681,12 @@ pub(crate) fn show(
     anchor_lon: f64,
     anchor_lat: f64,
 ) {
-    // 幂等：已显示时不重复创建
-    if is_visible() {
-        return;
-    }
-    STATE.with(|s| {
-        let mut state = s.borrow_mut();
-        state.last_api_key = api_key.clone();
-        state.last_security_key = security_key.clone();
-        state.last_anchor = Some((anchor_lon, anchor_lat));
-        state.last_page_kind = Some(MapPageKind::Boundary);
-        state.campus_search_mode = false;
-    });
-
-    let weak_for_timer = window_weak.clone();
-    let _ = slint::spawn_local(async move {
-        let Some(app_window) = window_weak.upgrade() else {
-            return;
-        };
-        let Ok(winit_win) = app_window.window().winit_window().await else {
-            return;
-        };
-
-        // HTML 由 B3 生成（密钥注入校验在 B3 内）
-        let config = gaode_client::BoundaryEditPageConfig::new(&api_key, &security_key)
-            .with_anchor(anchor_lon, anchor_lat);
-        let Ok(html) = gaode_client::build_boundary_edit_page_html(&config) else {
-            return;
-        };
-
-        let scale = app_window.window().scale_factor();
-        let bounds = compute_slot_bounds(map_slot(&app_window), scale);
-
-        let result = wry::WebViewBuilder::new()
-            .with_html(html)
-            .with_bounds(bounds)
-            .with_ipc_handler(|request: wry::http::Request<String>| {
-                let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
-            })
-            .build_as_child(&*winit_win);
-
-        let map_created = result.is_ok();
-        if let Ok(webview) = result {
-            STATE.with(|s| {
-                let mut state = s.borrow_mut();
-                state.webview = Some(webview);
-                state.last_slot_scale = Some((map_slot(&app_window), scale));
-            });
-            // resize 跟随（先静态 bounds 验证位置正确，再轮询跟随）
-            start_resize_timer(weak_for_timer);
-        }
-        // 创建成功或失败都如实回报：故障只暂停地图相关操作
-        notify_status(map_created);
+    request_show(PendingShow::Boundary {
+        window: window_weak,
+        api_key,
+        security_key,
+        anchor_lon,
+        anchor_lat,
     });
 }
 
@@ -318,65 +700,10 @@ pub(crate) fn show_campus_search(
     api_key: String,
     security_key: String,
 ) {
-    if is_visible() {
-        return;
-    }
-    STATE.with(|s| {
-        let mut state = s.borrow_mut();
-        state.last_api_key = api_key.clone();
-        state.last_security_key = security_key.clone();
-        state.last_page_kind = Some(MapPageKind::CampusSearch);
-        state.campus_search_mode = true;
-    });
-
-    let weak_for_timer = window_weak.clone();
-    let _ = slint::spawn_local(async move {
-        let Some(app_window) = window_weak.upgrade() else {
-            return;
-        };
-        let Ok(winit_win) = app_window.window().winit_window().await else {
-            return;
-        };
-
-        // HTML 由 B3 生成（密钥注入校验在 B3 内）
-        let config = gaode_client::MapPageConfig::new(&api_key, &security_key);
-        let Ok(html) = gaode_client::build_map_page_html(&config) else {
-            return;
-        };
-
-        let scale = app_window.window().scale_factor();
-        let width = logical_window_width(app_window.window());
-        let bounds = compute_campus_search_bounds(width, scale);
-
-        let result = wry::WebViewBuilder::new()
-            .with_html(html)
-            .with_bounds(bounds)
-            .with_ipc_handler(|request: wry::http::Request<String>| {
-                let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
-            })
-            .build_as_child(&*winit_win);
-
-        if let Ok(webview) = result {
-            STATE.with(|s| {
-                let mut state = s.borrow_mut();
-                state.webview = Some(webview);
-                state.last_slot_scale = Some((
-                    MapSlotRect {
-                        x: 16.0,
-                        y: 110.0,
-                        width: (f64::from(width) - 32.0).max(300.0) as f32,
-                        height: 300.0,
-                    },
-                    scale,
-                ));
-            });
-            start_resize_timer(weak_for_timer);
-        }
+    request_show(PendingShow::CampusSearch {
+        window: window_weak,
+        api_key,
+        security_key,
     });
 }
 
@@ -389,83 +716,67 @@ pub(crate) fn show_with_config(
     window_weak: Weak<crate::AppWindow>,
     config: gaode_client::BoundaryEditPageConfig,
 ) {
-    STATE.with(|s| {
-        let mut state = s.borrow_mut();
-        state.last_api_key = config.api_key.clone();
-        state.last_security_key = config.security_key.clone();
-        state.last_page_kind = Some(MapPageKind::Orientation);
-        state.last_orientation_config = Some(config.clone());
-    });
-
-    let weak_for_timer = window_weak.clone();
-    let _ = slint::spawn_local(async move {
-        let Some(app_window) = window_weak.upgrade() else {
-            return;
-        };
-        let Ok(winit_win) = app_window.window().winit_window().await else {
-            return;
-        };
-
-        // HTML 由 B3 生成（密钥注入校验在 B3 内）
-        let Ok(html) = gaode_client::build_boundary_edit_page_html(&config) else {
-            return;
-        };
-
-        let scale = app_window.window().scale_factor();
-        let bounds = compute_slot_bounds(map_slot(&app_window), scale);
-
-        let result = wry::WebViewBuilder::new()
-            .with_html(html)
-            .with_bounds(bounds)
-            .with_ipc_handler(|request: wry::http::Request<String>| {
-                let body = request.body().to_string();
-                STATE.with(|s| {
-                    if let Some(handler) = s.borrow().ipc_handler.clone() {
-                        handler(&body);
-                    }
-                });
-            })
-            .build_as_child(&*winit_win);
-
-        let map_created = result.is_ok();
-        if let Ok(webview) = result {
-            STATE.with(|s| {
-                let mut state = s.borrow_mut();
-                state.webview = Some(webview);
-                state.last_slot_scale = Some((map_slot(&app_window), scale));
-            });
-            start_resize_timer(weak_for_timer);
-        }
-        // 创建成功或失败都如实回报：故障只暂停地图相关操作
-        notify_status(map_created);
+    request_show(PendingShow::Orientation {
+        window: window_weak,
+        config,
     });
 }
 
-/// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）。
+/// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）——**唯一延迟销毁入口**。
 ///
-/// 诚实声明：wry 0.55 无 `set_visible` API，这里直接 drop WebView；
-/// 返回屏幕 4 时由 [`show`] / [`show_with_config`] 重建。重建期间地图状态
-/// （缩放/编辑内容）不保留——已确认边界已由 Rust 侧保管，不影响数据正确性。
-/// 页面种类与配置被保留，供 [`restore_after_modal`] 按模式重建。
+/// 诚实声明：wry 0.55 无 `set_visible` API，这里 drop WebView；返回对应
+/// 页面时由 [`show`] / [`show_with_config`] / [`show_campus_search`] 重建。
+/// 重建期间地图状态（缩放/编辑内容）不保留——已确认边界已由 Rust 侧保管，
+/// 不影响数据正确性。页面种类与配置被保留，供 [`restore_after_modal`] 按
+/// 模式重建。
+///
+/// T35 崩溃根因：错误/确认/输入弹窗的 `hide` 可能发生在 wry IPC 回调栈内
+/// （WebView2 COM 回调），同步 drop WebView 导致 COM 重入崩溃。本入口一律
+/// 把销毁排到事件循环下一拍：`is_visible()` 立即为 false（逻辑隐藏），
+/// 但实际 drop 由 `invoke_from_event_loop` 回调在 IPC 回调返回后执行。
+/// T36：同时使在途创建过期（完成后转入延迟销毁）并取消等待中的 show。
 pub(crate) fn hide() {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        state.webview = None;
+        state.generation += 1;
+        state.creation_in_flight = false;
+        state.pending_show = None;
+        if let Some(webview) = state.webview.take() {
+            state.retiring.push(webview);
+        }
         state.resize_timer = None; // drop 即停止轮询
         state.last_slot_scale = None;
         state.campus_search_mode = false;
+        state.load_timer = None;
+        schedule_drop(&mut state);
     });
 }
 
-/// 当前记录的地图页种类（测试与弹窗恢复决策用）。
+/// T36：地图加载失败标记——弹窗关闭不得自动重建（避免反复失败弹窗）。
+/// 用户显式切换步骤（新的 [`show`] 请求）时清除。
+pub(crate) fn mark_map_failed() {
+    STATE.with(|s| {
+        let mut state = s.borrow_mut();
+        state.suppress_restore = true;
+        if state.creation_in_flight {
+            state.generation += 1;
+            state.creation_in_flight = false;
+            state.pending_show = None;
+            state.load_timer = None;
+        }
+    });
+    pump_creation();
+}
+
+/// 当前记录的地图页面种类（测试与弹窗恢复决策用）。
 fn page_kind() -> Option<MapPageKind> {
     STATE.with(|s| s.borrow().last_page_kind)
 }
 
 /// 模态弹窗关闭后是否需要恢复地图（T34 统一机制）。
 ///
-/// - 工作区（screen 4）：步骤 ①②③⑤ 显示地图；步骤 ④ 评审页不显示。
-/// - 校区搜索页（screen 1）：取消弹窗后停留在该页时需要恢复搜索地图。
+/// - 工作区（screen 4）：步骤 ①②③ 显示地图；步骤 ③ 评审页不显示。
+/// - 校区搜索页（screen 1）：取消弹窗后停留该页时需要恢复搜索地图。
 fn should_restore_after_modal(active_screen: i32, active_step: i32) -> bool {
     if active_screen == 4 {
         return active_step != 3;
@@ -477,8 +788,14 @@ fn should_restore_after_modal(active_screen: i32, active_step: i32) -> bool {
 ///
 /// T34：关闭错误/确认/输入弹窗后按**当前步骤模式**重建——
 /// 步骤②重建朝向页（复用上次朝向配置，含半透明边界参照），
-/// 步骤①③⑤重建边界页；不得恢复错页。
+/// 步骤①②④重建边界页；不得恢复错页。
+/// T36：地图加载失败（[`mark_map_failed`] / 超时）后跳过自动重建，
+/// 用户显式切换步骤才重试。
 pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
+    if STATE.with(|s| s.borrow().suppress_restore) {
+        log::debug!("map_webview: 地图加载失败后跳过弹窗自动重建（等待显式重新进入）");
+        return;
+    }
     let Some(app_window) = window.upgrade() else {
         return;
     };
@@ -518,9 +835,11 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
 /// 抽屉桥接命令 undoManualPointFromDrawer 等）。
 pub(crate) fn evaluate_script(script: &str) {
     STATE.with(|s| {
-        if let Some(webview) = s.borrow().webview.as_ref() {
-            let _ = webview.evaluate_script(script);
-        }
+        let state = s.borrow();
+        let Some(webview) = state.webview.as_ref() else {
+            return;
+        };
+        let _ = webview.evaluate_script(script);
     });
 }
 
@@ -528,207 +847,89 @@ pub(crate) fn evaluate_script(script: &str) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn initially_hidden() {
-        assert!(!is_visible());
-    }
-
-    #[test]
-    fn hide_is_idempotent_and_keeps_page_kind_for_modal_restore() {
-        hide();
-        hide();
-        assert!(!is_visible());
-    }
-
-    #[test]
-    fn slot_bounds_follow_layout_slot() {
-        // T34：地图矩形来自 Slint 槽位（含抽屉让位），不再硬编码 (32,184)。
-        let slot = MapSlotRect {
-            x: 20.0,
-            y: 128.0,
-            width: 800.0 - 20.0 - 16.0,
-            height: 666.0 - 128.0 - 16.0,
-        };
-        let bounds = compute_slot_bounds(slot, 1.0);
-        let wry::Rect { position, size } = bounds;
-        let wry::dpi::Position::Physical(pos) = position else {
-            panic!("position 必须是物理像素");
-        };
-        let wry::dpi::Size::Physical(sz) = size else {
-            panic!("size 必须是物理像素");
-        };
-        assert_eq!((pos.x, pos.y), (20, 128));
-        assert_eq!((sz.width, sz.height), (764, 522));
-    }
-
-    #[test]
-    fn slot_bounds_scale_to_physical_pixels() {
-        // 2 倍缩放：逻辑像素 × 2 = 物理像素
-        let slot = MapSlotRect {
-            x: 20.0,
-            y: 128.0,
-            width: 764.0,
-            height: 522.0,
-        };
-        let bounds = compute_slot_bounds(slot, 2.0);
-        let wry::Rect { position, size } = bounds;
-        let wry::dpi::Position::Physical(pos) = position else {
-            panic!("position 必须是物理像素");
-        };
-        let wry::dpi::Size::Physical(sz) = size else {
-            panic!("size 必须是物理像素");
-        };
-        assert_eq!((pos.x, pos.y), (40, 256));
-        assert_eq!((sz.width, sz.height), (1528, 1044));
-    }
-
-    #[test]
-    fn slot_bounds_stay_inside_window_at_125_percent_scale() {
-        // T32/T34：800 逻辑宽 × 1.25 = 1000 物理宽；地图右缘不得越界。
-        let slot = MapSlotRect {
-            x: 20.0,
-            y: 128.0,
-            width: 764.0,
-            height: 522.0,
-        };
-        let bounds = compute_slot_bounds(slot, 1.25);
-        let wry::Rect { position, size } = bounds;
-        let wry::dpi::Position::Physical(pos) = position else {
-            panic!("position 必须是物理像素");
-        };
-        let wry::dpi::Size::Physical(sz) = size else {
-            panic!("size 必须是物理像素");
-        };
-        assert_eq!(pos.x, 25);
-        assert_eq!(sz.width, 955);
-        assert!(
-            pos.x + sz.width as i32 <= 1000,
-            "WebView 右缘不得超出窗口物理宽 1000（实际 {}）",
-            pos.x + sz.width as i32
-        );
-    }
-
-    #[test]
-    fn drawer_open_shrinks_map_slot() {
-        // T34 做法 A：抽屉展开 → 地图右移让位，宽度相应收窄。
-        let closed = MapSlotRect {
-            x: 20.0,
-            y: 128.0,
-            width: 764.0,
-            height: 522.0,
-        };
-        let open = MapSlotRect {
-            x: 20.0 + 300.0 + 12.0,
-            y: 128.0,
-            width: 764.0 - 312.0,
-            height: 522.0,
-        };
-        let closed_bounds = compute_slot_bounds(closed, 1.0);
-        let open_bounds = compute_slot_bounds(open, 1.0);
-        let wry::dpi::Position::Physical(closed_pos) = closed_bounds.position else {
-            panic!("物理像素");
-        };
-        let wry::dpi::Position::Physical(open_pos) = open_bounds.position else {
-            panic!("物理像素");
-        };
-        let wry::dpi::Size::Physical(open_sz) = open_bounds.size else {
-            panic!("物理像素");
-        };
-        assert_eq!(
-            open_pos.x - closed_pos.x,
-            312,
-            "抽屉展开地图右移 312 逻辑像素"
-        );
-        assert_eq!(open_sz.width, 764 - 312);
-    }
-
-    #[test]
-    fn campus_search_bounds_follow_search_strip() {
-        let bounds = compute_campus_search_bounds(800, 1.0);
-        let wry::Rect { position, size } = bounds;
-        let wry::dpi::Position::Physical(pos) = position else {
-            panic!("position 必须是物理像素");
-        };
-        let wry::dpi::Size::Physical(sz) = size else {
-            panic!("size 必须是物理像素");
-        };
-        assert_eq!((pos.x, pos.y), (16, 110));
-        assert_eq!((sz.width, sz.height), (800 - 32, 300));
-    }
-
-    #[test]
-    fn modal_restore_guard_keeps_review_page_unchanged() {
-        // T34：步骤④评审页不显示地图；弹窗关闭后不得恢复地图。
+    /// 清空注册的 handler 与状态（thread_local 在测试线程间共享）。
+    fn reset_state() {
         STATE.with(|s| {
             let mut state = s.borrow_mut();
-            state.last_page_kind = Some(MapPageKind::Boundary);
-        });
-        assert!(!should_restore_after_modal(4, 3), "评审页不恢复地图");
-        assert!(should_restore_after_modal(4, 0), "边界页恢复地图");
-        assert!(should_restore_after_modal(4, 1), "朝向页恢复地图");
-        assert!(should_restore_after_modal(4, 2), "采集页恢复地图");
-        assert!(should_restore_after_modal(4, 4), "导出页恢复地图");
-    }
-
-    #[test]
-    fn modal_restore_guard_handles_campus_search() {
-        STATE.with(|s| {
-            let mut state = s.borrow_mut();
-            state.last_page_kind = Some(MapPageKind::CampusSearch);
-        });
-        assert!(
-            should_restore_after_modal(1, 0),
-            "校区搜索页取消弹窗后停留在该页，需恢复搜索地图"
-        );
-        assert!(
-            !should_restore_after_modal(2, 0),
-            "确认校区后进入方案列表，不再恢复搜索地图"
-        );
-        STATE.with(|s| {
-            let mut state = s.borrow_mut();
-            state.last_page_kind = Some(MapPageKind::Boundary);
-        });
-        assert!(
-            !should_restore_after_modal(1, 0),
-            "非校区搜索页种类不恢复搜索地图"
-        );
-    }
-
-    #[test]
-    fn hide_keeps_kind_and_config_for_modal_restore() {
-        // 模拟朝向页：记录配置后 hide，再验证种类与配置保留。
-        let config = gaode_client::BoundaryEditPageConfig::new("abc123", "xyz789")
-            .with_anchor(116.4, 39.9)
-            .with_orientation_mode(true);
-        STATE.with(|s| {
-            let mut state = s.borrow_mut();
-            state.last_api_key = config.api_key.clone();
-            state.last_security_key = config.security_key.clone();
-            state.last_anchor = Some((116.4, 39.9));
-            state.last_page_kind = Some(MapPageKind::Orientation);
-            state.last_orientation_config = Some(config.clone());
+            state.ipc_handler = None;
+            state.status_handler = None;
             state.webview = None;
+            state.retiring.clear();
+            state.hide_scheduled = false;
+            state.generation = 0;
+            state.creation_in_flight = false;
+            state.pending_show = None;
+            state.load_timer = None;
+            state.suppress_restore = false;
         });
+    }
+
+    #[test]
+    fn hide_without_webview_keeps_state_clean_in_headless_environment() {
+        // T35：单元测试进程没有运行中的 Slint 事件循环，hide() 必须在
+        // 无 WebView 时直接返回（不调用 invoke_from_event_loop、不残留
+        // 排定标记），否则无界面环境下会误排定一次永不执行的销毁回调。
+        reset_state();
         hide();
-        assert_eq!(page_kind(), Some(MapPageKind::Orientation));
         STATE.with(|s| {
             let state = s.borrow();
-            assert_eq!(state.last_orientation_config.as_ref(), Some(&config));
-            assert_eq!(state.last_anchor, Some((116.4, 39.9)));
+            assert!(!state.hide_scheduled);
+            assert!(state.retiring.is_empty());
+            assert!(!state.campus_search_mode);
+            assert_eq!(state.last_slot_scale, None);
         });
+        assert!(!is_visible());
     }
 
     #[test]
-    fn campus_search_ready_follows_mode_and_visibility() {
-        hide();
-        assert!(!campus_search_ready(), "无 WebView 时不算就绪");
+    fn ipc_dispatch_releases_borrow_before_invoking_handler() {
+        // T35 根因回归（RefCell already borrowed → WebView2 回调内不可 unwind
+        // 崩溃，WER 0xc0000409）：错误弹窗路径会在 IPC handler 内调用
+        // hide()（对 STATE 做 borrow_mut）。若 dispatch 在 STATE 借用存活期间
+        // 调用 handler（旧写法 `if let Some(handler) = s.borrow()...` 的临时
+        // Ref 活到 if-let 体结束），这里会直接 panic。
+        reset_state();
+        register_ipc_handler(Rc::new(|_body| {
+            hide();
+        }));
+        dispatch_ipc(r#"{"type":"confirm_boundary","coords":[]}"#);
+        // 走到这里说明 handler 调用期间 STATE 无存活借用、无 panic。
         STATE.with(|s| {
-            let mut state = s.borrow_mut();
-            state.campus_search_mode = true;
-            state.webview = None;
+            let state = s.borrow();
+            assert!(!state.hide_scheduled, "handler 内 hide() 后不得残留排定");
+            assert!(state.retiring.is_empty());
         });
-        assert!(!campus_search_ready(), "有模式标记但无 WebView 仍不算就绪");
-        hide();
-        assert!(!campus_search_ready());
+        reset_state();
+    }
+
+    #[test]
+    fn creation_failure_reports_map_unavailable_immediately() {
+        // T36：步骤②切换后必须如实上报 map_available——创建前失败（如非法
+        // 密钥）不得保持上一次的 true，也不得静默。HTML 构建为同步路径，
+        // 无事件循环也能断言状态回调收到 false。
+        reset_state();
+        let received: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&received);
+        register_status_handler(Rc::new(move |available| {
+            captured.borrow_mut().push(available);
+        }));
+        // 非法密钥：gaode_client 要求纯字母数字 → HTML 构建失败。
+        let config = gaode_client::BoundaryEditPageConfig::new("bad key!", "xyz789")
+            .with_anchor(116.4, 39.9)
+            .with_orientation_mode(true);
+        show_with_config(Weak::<crate::AppWindow>::default(), config);
+        assert_eq!(
+            received.borrow().as_slice(),
+            &[false],
+            "创建前失败必须如实上报 map_available=false"
+        );
+        STATE.with(|s| {
+            let state = s.borrow();
+            assert!(state.webview.is_none(), "失败后不得持有 WebView");
+            assert!(!state.creation_in_flight, "失败后不得残留在途创建");
+            assert!(state.pending_show.is_none(), "失败后不得残留等待请求");
+            assert!(state.retiring.is_empty(), "失败后不得残留待销毁队列");
+        });
+        reset_state();
     }
 }

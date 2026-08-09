@@ -111,6 +111,10 @@ pub fn assemble_application(
 
 /// 开发版桌面应用入口：装配主窗口并进入事件循环。
 pub fn run_dev() -> Result<()> {
+    // T36：MCREBUILD_LOG_FILE 环境变量 → 把 map_webview 生命周期/IPC/销毁
+    // 日志写入文件作为真机走查证据；未设置时不安装 logger（log 宏自动空转）。
+    crate::diagnostic_log::init();
+
     // B7 一本账先于任何回调可用（弹窗铁律 ADR-0021）。
     let center = NotificationCenter::init(PresenterRegistry::new());
 

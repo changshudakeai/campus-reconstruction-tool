@@ -151,6 +151,10 @@ export component AppWindow inherits Window {
     in property <length> workspace-drawer-width: 300px;
     // T34: 地图 WebView 是否可用（不可用时边界步骤显示 Slint 兜底画布）
     in property <bool> workspace-map-available: true;
+    // T36：地图加载中/失败占位（步骤②地图不可用时不得面对无声空白）
+    in property <bool> workspace-map-loading: false;
+    in property <string> workspace-map-loading-label;
+    in property <string> workspace-map-failed-label;
     // T34: 地图槽位由 Slint 布局计算并上报（逻辑像素）——不再硬编码坐标；
     // map_webview 轮询这些属性经 set_bounds 跟随（含抽屉开合让位）。
     in property <length> workspace-map-slot-x: 20px + (root.workspace-drawer-open ? root.workspace-drawer-width + 12px : 0px);
@@ -1047,6 +1051,31 @@ export component AppWindow inherits Window {
                         height: parent.height;
                         clicked => {
                             root.workspace-boundary-canvas-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
+                        }
+                    }
+                }
+
+                // T36：步骤②/③（非边界、非评审）地图不可用时显示明确占位，
+                // 不得面对无声空白；加载中显示"地图加载中…"，失败提示可退回
+                // 左侧抽屉"方位角手动输入"完成朝向。
+                if root.workspace-active-step != 0 && !root.workspace-map-available: Rectangle {
+                    x: root.workspace-map-slot-x;
+                    y: root.workspace-map-slot-y;
+                    width: root.workspace-map-slot-width;
+                    height: root.workspace-map-slot-height;
+                    background: Theme.surface;
+                    border-color: Theme.separator;
+                    border-width: 1px;
+                    border-radius: 4px;
+                    VerticalLayout {
+                        padding: 16px;
+                        Text {
+                            text: root.workspace-map-loading ? root.workspace-map-loading-label : root.workspace-map-failed-label;
+                            font-size: 14px;
+                            color: root.workspace-map-loading ? Theme.text-secondary : Theme.error;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
                     }
                 }

@@ -303,7 +303,11 @@
   },
   "map": {
     "pick_page_title": "圈选边界",
-    "search_campus_button": "搜索校区"
+    "search_campus_button": "搜索校区",
+    "loading": "地图加载中…",
+    "load_failed": "地图加载失败，可打开左侧抽屉使用“方位角手动输入”完成朝向",
+    "load_failed_body": "地图加载失败：{0}。可关闭后打开左侧抽屉，使用“方位角手动输入”完成朝向。",
+    "load_timeout_body": "地图加载超时（10 秒）。请检查网络后重新进入步骤，或打开左侧抽屉使用“方位角手动输入”完成朝向。"
   },
   "error": {
     "campus_not_found": "校区不存在",

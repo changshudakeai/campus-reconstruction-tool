@@ -1,0 +1,68 @@
+2026-08-09T14:26:59.963 [DEBUG] desktop_shell::map_webview: map_webview: 开始异步创建 WebView（page=Boundary, generation=3, 上报状态=true）
+2026-08-09T14:27:00.318 [DEBUG] desktop_shell::map_webview: map_webview: WebView 创建成功（gen=3）
+2026-08-09T14:27:00.318 [DEBUG] desktop_shell::map_webview: map_webview: notify_status(available=true)
+2026-08-09T14:27:00.825 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调进入（body=20 字节）
+2026-08-09T14:27:00.825 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调返回
+2026-08-09T14:27:00.832 [DEBUG] ureq::stream: connecting to nominatim.openstreetmap.org:443 at 198.18.0.21:443
+2026-08-09T14:27:01.091 [DEBUG] ureq::stream: created stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50368, peer: 198.18.0.21:443, socket: 1116 } })
+2026-08-09T14:27:01.092 [DEBUG] ureq::unit: sending request GET https://nominatim.openstreetmap.org/search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5
+2026-08-09T14:27:01.092 [DEBUG] ureq::unit: writing prelude: GET /search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5 HTTP/1.1
+Host: nominatim.openstreetmap.org
+User-Agent: MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)
+Accept: */*
+accept-encoding: gzip
+2026-08-09T14:27:01.904 [DEBUG] ureq::response: Streaming body until content-length: 425
+2026-08-09T14:27:01.904 [DEBUG] ureq::pool: adding stream to pool: https|nominatim.openstreetmap.org|443 -> Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50368, peer: 198.18.0.21:443, socket: 1116 } })
+2026-08-09T14:27:01.904 [DEBUG] ureq::unit: response 200 to GET https://nominatim.openstreetmap.org/search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5
+2026-08-09T14:27:01.904 [DEBUG] ureq::stream: dropping stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50368, peer: 198.18.0.21:443, socket: 1116 } })
+2026-08-09T14:27:01.905 [DEBUG] ureq::stream: connecting to overpass-api.de:443 at 198.18.1.229:443
+2026-08-09T14:27:02.376 [DEBUG] ureq::stream: created stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50848, peer: 198.18.1.229:443, socket: 3196 } })
+2026-08-09T14:27:02.377 [DEBUG] ureq::unit: sending request GET https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B
+2026-08-09T14:27:02.377 [DEBUG] ureq::unit: writing prelude: GET /api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B HTTP/1.1
+Host: overpass-api.de
+User-Agent: MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)
+Accept: */*
+accept-encoding: gzip
+2026-08-09T14:27:02.735 [DEBUG] ureq::response: Body entirely buffered (length: 1094)
+2026-08-09T14:27:02.735 [DEBUG] ureq::stream: dropping stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50848, peer: 198.18.1.229:443, socket: 3196 } })
+2026-08-09T14:27:02.736 [DEBUG] ureq::unit: response 200 to GET https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B
+2026-08-09T14:27:02.753 [INFO ] notification_center::center: [应用] OSM 边界已自动选取
+2026-08-09T14:27:24.180 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调进入（body=931 字节）
+2026-08-09T14:27:24.180 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调返回
+2026-08-09T14:27:33.124 [DEBUG] desktop_shell::map_webview: map_webview: hide() 已排定下一拍销毁 1 个 WebView（IPC 回调返回后 drop）
+2026-08-09T14:27:33.125 [DEBUG] desktop_shell::map_webview: map_webview: 事件循环下一拍，销毁 1 个待退休 WebView（IPC 回调已返回）
+2026-08-09T14:27:33.162 [DEBUG] desktop_shell::map_webview: map_webview: 开始异步创建 WebView（page=Orientation, generation=5, 上报状态=true）
+2026-08-09T14:27:33.314 [DEBUG] desktop_shell::map_webview: map_webview: WebView 创建成功（gen=5）
+2026-08-09T14:27:33.314 [DEBUG] desktop_shell::map_webview: map_webview: notify_status(available=true)
+2026-08-09T14:29:39.932 [DEBUG] desktop_shell::map_webview: map_webview: hide() 已排定下一拍销毁 1 个 WebView（IPC 回调返回后 drop）
+2026-08-09T14:29:39.934 [DEBUG] desktop_shell::map_webview: map_webview: 事件循环下一拍，销毁 1 个待退休 WebView（IPC 回调已返回）
+2026-08-09T14:30:55.136 [INFO ] notification_center::center: [校区] 校区已切换
+2026-08-09T14:31:02.503 [DEBUG] desktop_shell::map_webview: map_webview: 开始异步创建 WebView（page=Boundary, generation=10, 上报状态=true）
+2026-08-09T14:31:02.870 [DEBUG] desktop_shell::map_webview: map_webview: WebView 创建成功（gen=10）
+2026-08-09T14:31:02.871 [DEBUG] desktop_shell::map_webview: map_webview: notify_status(available=true)
+2026-08-09T14:31:03.169 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调进入（body=20 字节）
+2026-08-09T14:31:03.169 [DEBUG] desktop_shell::map_webview: map_webview: WebView2 IPC 回调返回
+2026-08-09T14:31:03.171 [DEBUG] ureq::stream: connecting to nominatim.openstreetmap.org:443 at 198.18.0.21:443
+2026-08-09T14:31:03.331 [DEBUG] ureq::stream: created stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50245, peer: 198.18.0.21:443, socket: 3356 } })
+2026-08-09T14:31:03.331 [DEBUG] ureq::unit: sending request GET https://nominatim.openstreetmap.org/search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5
+2026-08-09T14:31:03.331 [DEBUG] ureq::unit: writing prelude: GET /search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5 HTTP/1.1
+Host: nominatim.openstreetmap.org
+User-Agent: MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)
+Accept: */*
+accept-encoding: gzip
+2026-08-09T14:31:03.433 [DEBUG] ureq::response: Streaming body until content-length: 425
+2026-08-09T14:31:03.433 [DEBUG] ureq::pool: adding stream to pool: https|nominatim.openstreetmap.org|443 -> Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50245, peer: 198.18.0.21:443, socket: 3356 } })
+2026-08-09T14:31:03.433 [DEBUG] ureq::unit: response 200 to GET https://nominatim.openstreetmap.org/search?q=%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E5%A4%A7%E5%AD%A6%E9%97%B5%E8%A1%8C%E6%A0%A1%E5%8C%BA&format=json&limit=5
+2026-08-09T14:31:03.433 [DEBUG] ureq::stream: dropping stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:50245, peer: 198.18.0.21:443, socket: 3356 } })
+2026-08-09T14:31:03.435 [DEBUG] ureq::stream: connecting to overpass-api.de:443 at 198.18.1.229:443
+2026-08-09T14:31:03.907 [DEBUG] ureq::stream: created stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:57692, peer: 198.18.1.229:443, socket: 3384 } })
+2026-08-09T14:31:03.907 [DEBUG] ureq::unit: sending request GET https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B
+2026-08-09T14:31:03.907 [DEBUG] ureq::unit: writing prelude: GET /api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B HTTP/1.1
+Host: overpass-api.de
+User-Agent: MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)
+Accept: */*
+accept-encoding: gzip
+2026-08-09T14:31:04.286 [DEBUG] ureq::response: Body entirely buffered (length: 1094)
+2026-08-09T14:31:04.286 [DEBUG] ureq::stream: dropping stream: Stream(TlsStream { stream: TcpStream { addr: 198.18.0.1:57692, peer: 198.18.1.229:443, socket: 3384 } })
+2026-08-09T14:31:04.286 [DEBUG] ureq::unit: response 200 to GET https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bway%28288249651%29%3Bout%20geom%3B
+2026-08-09T14:31:04.291 [INFO ] notification_center::center: [应用] OSM 边界已自动选取
