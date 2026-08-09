@@ -146,6 +146,8 @@ export component WorkspaceDrawer inherits Rectangle {
                 LineEdit {
                     text <=> root.orientation-input-text;
                     placeholder-text: root.orientation-angle-input-placeholder;
+                    // T37：角度输入框只接受数字（可小数，按当前 locale 的小数分隔符）
+                    input-type: InputType.decimal;
                 }
                 Button {
                     text: root.orientation-submit-label;

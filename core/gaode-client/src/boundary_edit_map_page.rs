@@ -263,7 +263,6 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     }
 
     let cdn_url = GAODE_CDN_URL_TEMPLATE.replace("{key}", &config.api_key);
-    let height = config.effective_height_px();
 
     // T25: 将已确认边界坐标序列化为 JSON 注入 JS
     let existing_boundary_json = serde_json::to_string(&config.existing_boundary_gcj02)
@@ -280,7 +279,9 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
      可能把地图画布撑到视口右侧之外（T31-D6）。T34：不再有工具栏按钮，
      保留该约束防止画布溢出。 */
   html, body {{ margin: 0; padding: 0; height: 100%; overflow-x: hidden; }}
-  #map-container {{ width: 100%; max-width: 100%; box-sizing: border-box; height: {height}px; min-height: 300px; }}
+  /* T37：地图容器高度随 WebView 视口填满（html/body 100%），不再固定
+     300px——WebView 槽位已按 Slint 布局填满窗口，固定高度会在下方留白。 */
+  #map-container {{ width: 100%; max-width: 100%; box-sizing: border-box; height: 100%; min-height: 300px; }}
   #status-panel {{
     position: absolute; top: 10px; left: 10px; z-index: 1000;
     background: white; padding: 12px; border-radius: 6px;
@@ -351,48 +352,45 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     statusPanel.className = type || '';
   }}
 
+  // T37：把地图容器同步到 WebView 视口尺寸（html/body 100% + 显式
+  // innerHeight），再 map.resize()；窗口 resize 与抽屉开合让位（WebView
+  // bounds 变化）均依赖此机制，保证地图上下填满可用区域。
+  function syncContainerSize() {{
+    var container = document.getElementById('map-container');
+    var viewportW = Math.max(document.documentElement.clientWidth || 1, 1);
+    var viewportH = Math.max(window.innerHeight || document.documentElement.clientHeight || 1, 1);
+    if (container) {{
+      container.style.width = '100%';
+      container.style.maxWidth = '100%';
+      if (container.offsetWidth > viewportW) {{
+        container.style.width = viewportW + 'px';
+      }}
+      container.style.height = viewportH + 'px';
+    }}
+    if (map && typeof map.resize === 'function') {{
+      map.resize();
+    }}
+  }}
+
   // T31：锚点来自高德 POI（GCJ-02），地图中心直接使用锚点，不再二次转换；
   // OSM 边界坐标由 Rust 侧直连获取并转 GCJ-02 后经 drawBoundaryGcj 上屏。
   function initWithAnchor() {{
     try {{
-      // T32：AMap 初始化前把容器宽度钳制到当前视口（WebView 布局可能
-      // 尚未稳定，AMap 会按容器当前宽度创建画布）
-      var container = document.getElementById('map-container');
-      var viewportW = Math.max(document.documentElement.clientWidth || 1, 1);
-      if (container) {{
-        container.style.width = '100%';
-        container.style.maxWidth = '100%';
-        if (container.offsetWidth > viewportW) {{
-          container.style.width = viewportW + 'px';
-        }}
-      }}
+      // T32/T37：AMap 初始化前把容器宽高钳制到当前 WebView 视口（布局
+      // 可能尚未稳定，AMap 会按容器当前尺寸创建画布；T37 高度随视口填满）
+      syncContainerSize();
       map = new AMap.Map('map-container', {{
         zoom: 16,
         center: [anchorPoint.lng, anchorPoint.lat],
         viewMode: '3D'
       }});
 
-      // T32：布局完成后同步一次画布尺寸
-      if (typeof map.resize === 'function') {{
-        map.resize();
-      }}
+      // T32/T37：布局完成后同步一次画布尺寸（含 map.resize()）
+      syncContainerSize();
 
-      // T32/T34：WebView bounds 变化（窗口 resize 或抽屉开合让位）时同步
-      // 地图容器尺寸，防止画布残留旧宽度导致内容横向溢出。
-      window.addEventListener('resize', function() {{
-        var c = document.getElementById('map-container');
-        var vw = document.documentElement.clientWidth || 1;
-        if (c) {{
-          c.style.width = '100%';
-          c.style.maxWidth = '100%';
-          if (c.offsetWidth > vw) {{
-            c.style.width = vw + 'px';
-          }}
-        }}
-        if (map && typeof map.resize === 'function') {{
-          map.resize();
-        }}
-      }});
+      // T32/T34/T37：WebView bounds 变化（窗口 resize 或抽屉开合让位）时
+      // 同步地图容器尺寸，防止画布残留旧宽高导致横向溢出或下方空白。
+      window.addEventListener('resize', syncContainerSize);
 
       // 显示校区锚点（GCJ-02）
       new AMap.Marker({{
@@ -600,7 +598,6 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 {orientation_script}
 </body>
 </html>"#,
-        height = height,
         cdn_url = cdn_url,
         security_js_code = config.security_key,
         anchor_lon = config.anchor_lon,
@@ -676,6 +673,8 @@ mod tests {
     fn html_forbids_horizontal_overflow_and_clamps_map_container() {
         // T32：body/文档禁止横向滚动；地图容器 max-width 100% 且初始化前
         // 钳制到视口宽，防止 AMap 画布把内容挤出 WebView 视口（T31-D6）。
+        // T37：容器高度随 WebView 视口填满（html/body 100% + 显式
+        // innerHeight + map.resize()），不再固定 300px 造成下方留白。
         let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(
@@ -689,6 +688,26 @@ mod tests {
         assert!(
             html.contains("container.style.maxWidth = '100%'"),
             "AMap 初始化前必须钳制容器宽度"
+        );
+        assert!(
+            html.contains("#map-container { width: 100%; max-width: 100%; box-sizing: border-box; height: 100%; min-height: 300px;"),
+            "地图容器高度必须随视口填满（height: 100%，仅保留最小高度兜底）"
+        );
+        assert!(
+            !html.contains("border-box; height: 300px"),
+            "地图容器不得再固定 300px 高度（T37 根因）"
+        );
+        assert!(
+            html.contains("container.style.height = viewportH + 'px'"),
+            "初始化与 resize 必须把容器高度显式同步到 WebView 视口高"
+        );
+        assert!(
+            html.contains("window.addEventListener('resize', syncContainerSize)"),
+            "resize/抽屉开合必须经同一函数同步宽高并 map.resize()"
+        );
+        assert!(
+            html.contains("syncContainerSize();"),
+            "AMap 初始化前后必须调用尺寸同步（含 map.resize()）"
         );
         assert!(
             html.contains("window.addEventListener('resize'"),

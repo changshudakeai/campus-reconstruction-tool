@@ -90,6 +90,30 @@ fn s1_27_orientation_step_map_available_and_error_contract() {
         "边界确认后朝向步骤必须解锁"
     );
 
+    // ── 2.5 T37：朝向步收到 map_ready 按当前步骤激活朝向模式，不触发边界 OSM 获取 ──
+    // 地图就绪（status=true）后，朝向步的 map_ready 只应显式激活
+    // initOrientationMode（测试环境无真实 WebView，evaluate_script 为空操作），
+    // 不得再走 start_boundary_fetch（否则 map_processing 会重新置 true）。
+    window.invoke_workspace_map_status_changed(true);
+    assert!(
+        window.get_workspace_map_available(),
+        "地图创建成功必须如实上报可用"
+    );
+    assert!(
+        !window.get_workspace_map_loading(),
+        "status(true) 后处理中必须清除"
+    );
+    window.invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
+    assert!(
+        !window.get_workspace_map_loading(),
+        "朝向步 map_ready 不得触发 start_boundary_fetch（应只激活 initOrientationMode）"
+    );
+    assert_eq!(
+        window.get_operation_state(),
+        OperationPresentationState::Ready,
+        "朝向步 map_ready 后保持就绪态"
+    );
+
     // ── 3. 创建失败如实上报：status(false) → map_available=false、处理中清除 ──
     window.invoke_workspace_map_status_changed(false);
     assert!(
