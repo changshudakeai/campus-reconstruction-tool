@@ -1,22 +1,35 @@
-//! 高德逆地理编码（regeo）补名（T31 命名第二级）。
+//! 高德逆地理编码（regeo）补名（T31 命名第二级；T36 有界并发 + 持久化缓存）。
 //!
 //! 命名两级：优先 OSM `name` 标签（零成本、与几何同源）；无名字的关键建筑
-//! （教学楼/图书馆/宿舍等）用高德 regeo 反查最近 POI/地址补名并**缓存**。
+//! （教学楼/图书馆/宿舍等）用高德 regeo 反查最近 POI/地址补名并**持久化缓存**
+//! （SQLite，B2 [`data_persistence::RegeoNameCache`]），重复采集不再重复调用。
 //!
-//! - regeo 需要独立 Web 服务 Key（与 JS API Key 不同；ADR-0004 设置页
-//!   “高德 Web服务 Key（开发人员使用）”）；
-//! - 配额：个人 5000 次/日（调研 §3.2），一所学校几百栋建筑够用；
-//! - 缓存按坐标键（GCJ-02，5 位小数 ≈ 1 米）存放本次会话结果，避免重复调用；
-//! - 未配置 Key / 调用失败时返回 `None`，名称保持“未命名建筑 #id”，不阻塞导出。
+//! T36 铁律：
+//! - 生产补名为**有界并发批量补名**（默认 8 路），不串行阻塞采集主链路；
+//! - 单次 regeo 调用超时 10s → 5s；失败立即降级为不补名（名称保持 #id）；
+//! - 每次采集运行设总体截止时间（默认 ≤60s，由 A1 传入）与补名调用上限
+//!   （默认 256 次），超限立即结束并如实标注“部分建筑未命名”，禁止无限等待；
+//! - 未配置 Key / 调用失败时返回 `None`，名称保持“未命名建筑 #id”，不阻断导出。
 
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::source::SourceGeometry;
+use data_persistence::RegeoNameCacheApi;
+
+use crate::source::{BatchEnrichment, NameEnricher, RawEntity, SourceGeometry};
 
 /// 高德 Web 服务 regeo 端点
 pub const REGEO_ENDPOINT: &str = "https://restapi.amap.com/v3/geocode/regeo";
+
+/// 单次 regeo 调用超时（工单：10s → 5s）
+pub const REGEO_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 生产补名并发路数（有界并发）
+pub const REGEO_CONCURRENCY: usize = 8;
+
+/// 单次采集运行的补名调用上限（超限立即结束）
+pub const REGEO_MAX_CALLS_PER_RUN: usize = 256;
 
 /// regeo HTTP 传输（生产为 ureq；测试注入罐头）
 pub type RegeoTransport =
@@ -25,26 +38,27 @@ pub type RegeoTransport =
 /// Web 服务 Key 提供器（只经设置页录入；生产按数据库路径实时读取）
 pub type KeyProvider = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
-/// regeo 补名器：面几何中心点反查 + 会话级缓存
+/// regeo 补名器：面几何中心点反查 + 持久化缓存 + 有界并发批量补名
 pub struct RegeoNamer {
     transport: RegeoTransport,
     key_provider: KeyProvider,
-    cache: Mutex<HashMap<String, Option<String>>>,
+    cache: Arc<dyn RegeoNameCacheApi>,
 }
 
 impl RegeoNamer {
+    /// 测试 / 默认：注入传输 + 内存缓存（语义与 SQLite 持久化版一致）
     pub fn new(transport: RegeoTransport, key_provider: KeyProvider) -> Self {
         Self {
             transport,
             key_provider,
-            cache: Mutex::new(HashMap::new()),
+            cache: Arc::new(InMemoryRegeoCache::default()),
         }
     }
 
-    /// 生产：ureq 直连 + 设置页 Key 提供器
-    pub fn production(key_provider: KeyProvider) -> Self {
-        Self::new(
-            Box::new(|url: &str, timeout: Duration| {
+    /// 生产：ureq 直连 + 设置页 Key 提供器 + 持久化 SQLite 缓存
+    pub fn production(key_provider: KeyProvider, cache: Arc<dyn RegeoNameCacheApi>) -> Self {
+        Self {
+            transport: Box::new(|url: &str, timeout: Duration| {
                 let tls = native_tls::TlsConnector::new().map_err(|error| error.to_string())?;
                 let agent = ureq::AgentBuilder::new()
                     .timeout(timeout)
@@ -54,7 +68,8 @@ impl RegeoNamer {
                 response.into_string().map_err(|error| error.to_string())
             }),
             key_provider,
-        )
+            cache,
+        }
     }
 
     /// 为面几何补名：仅 Polygon（点位只作证据，不做 regeo 扩面/补名主体）。
@@ -62,18 +77,152 @@ impl RegeoNamer {
     pub fn name_for_geometry(&self, geometry: &SourceGeometry) -> Option<String> {
         let (lon, lat) = polygon_centroid(geometry)?;
         let cache_key = format!("{lon:.5},{lat:.5}");
-        if let Some(cached) = self.cache.lock().ok()?.get(&cache_key).cloned() {
+        if let Ok(Some(cached)) = self.cache.get_regeo_name(&cache_key) {
             return cached;
         }
+        self.lookup_uncached(&cache_key, lon, lat)
+    }
+
+    /// 单次网络调用（5s 超时；失败降级为不补名）
+    fn lookup_uncached(&self, cache_key: &str, lon: f64, lat: f64) -> Option<String> {
         let key = (self.key_provider)()?;
+        self.lookup_uncached_with_key(&key, cache_key, lon, lat)
+    }
+
+    /// 用已知 Key 执行一次网络调用并写缓存
+    fn lookup_uncached_with_key(
+        &self,
+        key: &str,
+        cache_key: &str,
+        lon: f64,
+        lat: f64,
+    ) -> Option<String> {
         let url =
             format!("{REGEO_ENDPOINT}?key={key}&location={lon},{lat}&radius=200&extensions=base");
-        let body = (self.transport)(&url, Duration::from_secs(10)).ok()?;
+        let body = (self.transport)(&url, REGEO_HTTP_TIMEOUT).ok()?;
         let name = parse_regeo_name(&body);
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(cache_key, name.clone());
-        }
+        let _ = self.cache.put_regeo_name(cache_key, name.as_deref());
         name
+    }
+}
+
+/// 内存版缓存接口实现（测试与降级；语义与 SQLite 持久化版一致）
+#[derive(Default)]
+struct InMemoryRegeoCache {
+    inner: Mutex<std::collections::HashMap<String, Option<String>>>,
+}
+
+impl RegeoNameCacheApi for InMemoryRegeoCache {
+    fn get_regeo_name(&self, cache_key: &str) -> data_persistence::Result<Option<Option<String>>> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("in-memory regeo cache lock")
+            .get(cache_key)
+            .cloned())
+    }
+
+    fn put_regeo_name(&self, cache_key: &str, name: Option<&str>) -> data_persistence::Result<()> {
+        self.inner
+            .lock()
+            .expect("in-memory regeo cache lock")
+            .insert(cache_key.to_owned(), name.map(str::to_owned));
+        Ok(())
+    }
+}
+
+impl NameEnricher for RegeoNamer {
+    /// 有界并发批量补名：
+    /// - 8 路 worker 共享派发游标，不串行阻塞；
+    /// - 派发前检查 `deadline` 与调用上限，超限立即停止并标记 partial；
+    /// - 单次调用 5s 超时，失败降级为不补名（名称保持 #id）；
+    /// - 命中持久化缓存的坐标不再调用。
+    fn enrich_batch(&self, entities: &[RawEntity], deadline: Instant) -> BatchEnrichment {
+        let mut names: Vec<Option<String>> = vec![None; entities.len()];
+        let mut misses: Vec<(usize, String, f64, f64)> = Vec::new();
+        for (index, entity) in entities.iter().enumerate() {
+            let Some((lon, lat)) = entity.source_geometry.as_ref().and_then(polygon_centroid)
+            else {
+                continue;
+            };
+            let cache_key = format!("{lon:.5},{lat:.5}");
+            match self.cache.get_regeo_name(&cache_key) {
+                Ok(Some(cached)) => {
+                    names[index] = cached;
+                }
+                Ok(None) | Err(_) => misses.push((index, cache_key, lon, lat)),
+            }
+        }
+        let key = match (self.key_provider)() {
+            Some(key) => key,
+            None => {
+                return BatchEnrichment {
+                    names,
+                    partial: false,
+                    attempted: 0,
+                };
+            }
+        };
+        if misses.is_empty() {
+            return BatchEnrichment {
+                names,
+                partial: false,
+                attempted: 0,
+            };
+        }
+        let missed_total = misses.len();
+        let next = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let limit_hit = Arc::new(AtomicBool::new(false));
+        let results = Arc::new(Mutex::new(Vec::<(usize, Option<String>)>::new()));
+        let workers = REGEO_CONCURRENCY.min(missed_total.max(1));
+        let key_ref = &key;
+        let misses_ref = &misses;
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let next = Arc::clone(&next);
+                let calls = Arc::clone(&calls);
+                let limit_hit = Arc::clone(&limit_hit);
+                let results = Arc::clone(&results);
+                scope.spawn(move || loop {
+                    if Instant::now() >= deadline {
+                        limit_hit.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    let position = next.fetch_add(1, Ordering::SeqCst);
+                    if position >= missed_total {
+                        return;
+                    }
+                    if calls.fetch_add(1, Ordering::SeqCst) >= REGEO_MAX_CALLS_PER_RUN {
+                        limit_hit.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    let (index, cache_key, lon, lat) = &misses_ref[position];
+                    let name = self.lookup_uncached_with_key(key_ref, cache_key, *lon, *lat);
+                    results
+                        .lock()
+                        .expect("regeo batch results lock")
+                        .push((*index, name));
+                });
+            }
+        });
+        let mut named = 0usize;
+        let mut attempted = 0usize;
+        {
+            let mut results = results.lock().expect("regeo batch results lock");
+            for (index, name) in results.drain(..) {
+                attempted += 1;
+                if name.is_some() {
+                    named += 1;
+                    names[index] = name;
+                }
+            }
+        }
+        BatchEnrichment {
+            names,
+            partial: limit_hit.load(Ordering::SeqCst) || attempted > named,
+            attempted,
+        }
     }
 }
 
@@ -205,5 +354,137 @@ mod tests {
         assert!(namer
             .name_for_geometry(&SourceGeometry::Point((121.4, 31.2)))
             .is_none());
+    }
+
+    fn building_entity(id: &str, lon: f64, lat: f64) -> RawEntity {
+        RawEntity::with_geometry(
+            id,
+            id.to_owned(),
+            data_transformers::TagMap::new(),
+            serde_json::json!({"id": id}),
+            Some(SourceGeometry::Polygon(vec![
+                (lon, lat),
+                (lon + 0.001, lat),
+                (lon + 0.001, lat + 0.001),
+                (lon, lat),
+            ])),
+            "polygon",
+        )
+    }
+
+    #[test]
+    fn production_limits_are_bounded() {
+        // 工单硬约束：单次 5s 超时、8 路并发、总体 60s 由 A1 传参、调用上限 256
+        assert_eq!(REGEO_HTTP_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(REGEO_CONCURRENCY, 8);
+        assert_eq!(REGEO_MAX_CALLS_PER_RUN, 256);
+    }
+
+    #[test]
+    fn batch_enrichment_stops_at_deadline_and_marks_partial() {
+        // 注入“慢/挂起 regeo transport”：每次调用睡满超时后失败。
+        // 8 路并发下第一波 5s 后到达截止，超限立即结束并如实标注“部分建筑未命名”。
+        let transport = Box::new(|_: &str, timeout: Duration| {
+            // 无卡顿铁律禁用 std::thread::sleep；用 recv_timeout 等满超时
+            let (_tx, rx) = std::sync::mpsc::channel::<()>();
+            let _ = rx.recv_timeout(timeout);
+            Err("模拟 regeo 超时".to_owned())
+        });
+        let namer = RegeoNamer::new(transport, Box::new(|| Some("web-key".to_owned())));
+        let entities: Vec<RawEntity> = (0..20)
+            .map(|i| building_entity(&format!("b{i}"), 121.40 + i as f64 * 0.01, 31.20))
+            .collect();
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(6);
+        let batch = namer.enrich_batch(&entities, deadline);
+        let elapsed = started.elapsed();
+
+        assert!(batch.partial, "截止前未补完必须标记“部分建筑未命名”");
+        assert!(
+            batch.attempted < entities.len(),
+            "截止后不得继续派发：attempted={} total={}",
+            batch.attempted,
+            entities.len()
+        );
+        assert!(
+            elapsed
+                < deadline.duration_since(started) + REGEO_HTTP_TIMEOUT + Duration::from_secs(1),
+            "含在飞波次的最坏耗时受单波 5s 上界约束：{elapsed:?}"
+        );
+        assert!(
+            batch.names.iter().all(Option::is_none),
+            "失败降级为不补名（名称保持 #id）"
+        );
+    }
+
+    #[test]
+    fn persistent_cache_avoids_repeated_calls_across_sessions() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let cache: Arc<dyn RegeoNameCacheApi> =
+            Arc::new(data_persistence::RegeoNameCache::open_in_memory().unwrap());
+        let entities: Vec<RawEntity> = vec![
+            building_entity("a", 121.41, 31.21),
+            building_entity("b", 121.42, 31.22),
+        ];
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first_calls = Arc::clone(&calls);
+        let first = RegeoNamer {
+            transport: Box::new(move |_: &str, _: Duration| {
+                first_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(
+                    r#"{"status":"1","info":"OK","regeocode":{"pois":[{"name":"教学楼"}]}}"#
+                        .to_owned(),
+                )
+            }),
+            key_provider: Box::new(|| Some("web-key".to_owned())),
+            cache: Arc::clone(&cache),
+        };
+        let first_batch = first.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
+        assert_eq!(first_batch.attempted, 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // 第二次“会话”共享同一持久化缓存：不再调用 regeo
+        let second = RegeoNamer {
+            transport: Box::new(|_: &str, _: Duration| {
+                panic!("持久化缓存命中后不得再次调用 regeo");
+            }),
+            key_provider: Box::new(|| Some("web-key".to_owned())),
+            cache: Arc::clone(&cache),
+        };
+        let second_batch = second.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
+        assert_eq!(second_batch.attempted, 0, "重复采集不再重复调用");
+        assert_eq!(second_batch.names[0].as_deref(), Some("教学楼"));
+        assert_eq!(second_batch.names[1].as_deref(), Some("教学楼"));
+        assert!(!second_batch.partial);
+    }
+
+    #[test]
+    fn cached_miss_does_not_call_network_again() {
+        let cache: Arc<dyn RegeoNameCacheApi> =
+            Arc::new(data_persistence::RegeoNameCache::open_in_memory().unwrap());
+        let entities = vec![building_entity("a", 121.41, 31.21)];
+        let first = RegeoNamer {
+            transport: Box::new(|_: &str, _: Duration| {
+                Ok(r#"{"status":"0","info":"NO_DATA"}"#.to_owned())
+            }),
+            key_provider: Box::new(|| Some("web-key".to_owned())),
+            cache: Arc::clone(&cache),
+        };
+        let first_batch = first.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
+        assert!(first_batch.names[0].is_none());
+
+        let second = RegeoNamer {
+            transport: Box::new(|_: &str, _: Duration| {
+                panic!("已查无名称也必须缓存，不得再次调用");
+            }),
+            key_provider: Box::new(|| Some("web-key".to_owned())),
+            cache: Arc::clone(&cache),
+        };
+        let second_batch = second.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
+        assert_eq!(second_batch.attempted, 0);
+        assert!(second_batch.names[0].is_none());
     }
 }

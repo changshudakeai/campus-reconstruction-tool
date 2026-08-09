@@ -37,6 +37,8 @@ ureq = { workspace = true }
 native-tls = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）
 thiserror = { workspace = true }
+# T36: Overpass 每端点耗时日志（端点回退可观测性）
+log = { workspace = true }
 
 [lints]
 workspace = true
@@ -46,3 +48,5 @@ workspace = true
 localization = { workspace = true }
 # public-api snapshot testing
 public-api.workspace = true
+# rustdoc JSON 构建（仅 public-api 快照测试用；主工具链由 rust-toolchain.toml 固定）
+rustdoc-json.workspace = true

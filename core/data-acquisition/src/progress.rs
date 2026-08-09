@@ -8,6 +8,32 @@ use shared_domain_types::{CandidateCategory, CollectionJobStatus};
 
 use crate::pipeline::CollectionReport;
 
+/// 采集处理中阶段（T36：S1 抽屉显示“拉取数据 / 补名 / 写库”）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionStage {
+    /// 从数据源拉取原始对象（Overpass 等）
+    FetchingData,
+    /// 缺名关键建筑补名（regeo 有界并发）
+    Naming,
+    /// 原始观察落库 / 候选投影发布
+    Writing,
+    /// 采集完成
+    Finished,
+}
+
+/// 阶段 → B6 文本键（zh-CN.json collection 段）
+pub fn stage_text_key(stage: CollectionStage) -> &'static str {
+    match stage {
+        CollectionStage::FetchingData => "collection.stage_fetching",
+        CollectionStage::Naming => "collection.stage_naming",
+        CollectionStage::Writing => "collection.stage_writing",
+        CollectionStage::Finished => "collection.stage_finished",
+    }
+}
+
+/// 阶段上报监听器（A1 注册后把阶段事实写入自己的 Fetching 状态）。
+pub type StageListener = Box<dyn Fn(CollectionStage) + Send + Sync>;
+
 /// 本 crate 产出的全部 B6 文本键（zh-CN.json collection 段）
 pub mod text_keys {
     /// 进度面板标题
@@ -70,6 +96,12 @@ pub struct CollectionProgressView {
     pub title_key: &'static str,
     /// 当前状态文案键（拉取中 / 完成）
     pub status_key: &'static str,
+    /// 当前阶段（T36：拉取数据 / 补名 / 写库 / 完成）
+    pub stage: CollectionStage,
+    /// 已用时长（秒；处理中实时更新）
+    pub elapsed_secs: u64,
+    /// 本次是否“部分建筑未命名”（补名截止 / 上限 / 调用失败导致）
+    pub naming_partial: bool,
     /// 总进度（0~100，占位实现：开始 0、完成 100）
     pub percent: u8,
     /// 已采集对象总数（完成文案的 {count} 实参）
@@ -84,6 +116,9 @@ impl CollectionProgressView {
         Self {
             title_key: text_keys::PROGRESS_TITLE,
             status_key: text_keys::PROGRESS_FETCHING,
+            stage: CollectionStage::FetchingData,
+            elapsed_secs: 0,
+            naming_partial: false,
             percent: 0,
             collected_total: 0,
             categories: ALL_CATEGORIES
@@ -98,11 +133,23 @@ impl CollectionProgressView {
         }
     }
 
+    /// 处理中视图（阶段 + 已用时长由 A1 实时填充）
+    pub fn fetching_at(stage: CollectionStage, elapsed_secs: u64) -> Self {
+        Self {
+            stage,
+            elapsed_secs,
+            ..Self::fetching()
+        }
+    }
+
     /// 采集完成后的视图（进度 100%，按报告填充各类别对象数）
     pub fn completed(report: &CollectionReport) -> Self {
         Self {
             title_key: text_keys::PROGRESS_TITLE,
             status_key: text_keys::PROGRESS_DONE,
+            stage: CollectionStage::Finished,
+            elapsed_secs: 0,
+            naming_partial: report.naming_partial,
             percent: 100,
             collected_total: report.total,
             categories: ALL_CATEGORIES
@@ -149,6 +196,7 @@ mod tests {
             category_counts,
             fallback_count: 0,
             diff: RefreshDiff::new(Vec::new()),
+            naming_partial: false,
         };
 
         let view = CollectionProgressView::completed(&report);

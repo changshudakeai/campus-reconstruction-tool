@@ -6,12 +6,14 @@
 //! `RawObservationsApi`（数据粮仓铁律：只写不删，重复采集按指纹刷新）。
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use data_persistence::{Database, RawObservation, RawObservationsApi};
 use data_transformers::ClassifyEngine;
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 
 use crate::error::{AcquisitionError, Result};
+use crate::progress::{CollectionStage, StageListener};
 use crate::refresh::{DiffEntry, DiffKind, RefreshDiff};
 use crate::source::{DataSource, SourceGeometry};
 
@@ -32,6 +34,8 @@ pub struct CollectionReport {
     pub fallback_count: usize,
     /// 相对上次采集的增量差异（新增/更新/未变）
     pub diff: RefreshDiff,
+    /// 本次是否“部分建筑未命名”（补名截止 / 上限 / 调用失败导致）
+    pub naming_partial: bool,
 }
 
 /// F4 交给 A1 的完整、尚未发布候选投影的采集批次。
@@ -47,6 +51,7 @@ pub struct AcquisitionBatch {
     pub total_source_object_count: usize,
     pub geometry_object_count: usize,
     pub missing_geometry_object_count: usize,
+    pub naming_partial: bool,
 }
 
 /// 采集来源派生的候选草稿；资格与验证结论留给 A1/B14。
@@ -72,14 +77,15 @@ impl AcquisitionBatch {
             category_counts: self.category_counts.clone(),
             fallback_count: self.fallback_count,
             diff: self.diff.clone(),
+            naming_partial: self.naming_partial,
         }
     }
 }
 
 /// 采集流水线：持有 B13 归类引擎，对任意 [`DataSource`] 执行缝 3 走线
-#[derive(Debug, Clone)]
 pub struct AcquisitionPipeline {
     engine: ClassifyEngine,
+    stage_listener: Option<StageListener>,
 }
 
 impl AcquisitionPipeline {
@@ -87,12 +93,22 @@ impl AcquisitionPipeline {
     pub fn new() -> Result<Self> {
         Ok(Self {
             engine: ClassifyEngine::with_default_mapping()?,
+            stage_listener: None,
         })
     }
 
     /// 用外部构建的归类引擎创建（映射表已由 B13 校验）
     pub fn with_engine(engine: ClassifyEngine) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            stage_listener: None,
+        }
+    }
+
+    /// 注册阶段上报监听器（T36：拉取数据 / 补名 / 写库）
+    pub fn with_stage_listener(mut self, listener: Option<StageListener>) -> Self {
+        self.stage_listener = listener;
+        self
     }
 
     /// 当前使用的归类引擎（只读）
@@ -111,8 +127,10 @@ impl AcquisitionPipeline {
         plan_id: &PlanId,
         boundary: &Boundary,
         source: &dyn DataSource,
+        deadline: Instant,
     ) -> Result<CollectionReport> {
-        let batch = self.acquire_batch(db, plan_id, boundary, source)?;
+        let batch = self.acquire_batch(db, plan_id, boundary, source, deadline)?;
+        self.emit_stage(CollectionStage::Writing);
         let written = db.write_raw_observations(&batch.raw_observations)?;
         Ok(batch.report(written))
     }
@@ -124,11 +142,16 @@ impl AcquisitionPipeline {
         plan_id: &PlanId,
         boundary: &Boundary,
         source: &dyn DataSource,
+        deadline: Instant,
     ) -> Result<AcquisitionBatch> {
         if boundary.is_empty() {
             return Err(AcquisitionError::EmptyBoundary);
         }
+        self.emit_stage(CollectionStage::FetchingData);
         let entities = source.fetch_raw_entities(boundary)?;
+        self.emit_stage(CollectionStage::Naming);
+        let enriched = source.enrich(entities, deadline)?;
+        let entities = enriched.entities;
         let plan_key = plan_id.to_string();
         let mut raw_observations = Vec::new();
         let mut candidate_drafts = Vec::new();
@@ -187,12 +210,19 @@ impl AcquisitionPipeline {
             total_source_object_count: entities.len(),
             missing_geometry_object_count: entities.len() - geometry_object_count,
             geometry_object_count,
+            naming_partial: enriched.partial,
             raw_observations,
             candidate_drafts,
             category_counts,
             fallback_count,
             diff: RefreshDiff::new(diff_entries),
         })
+    }
+
+    fn emit_stage(&self, stage: CollectionStage) {
+        if let Some(listener) = &self.stage_listener {
+            listener(stage);
+        }
     }
 }
 
@@ -201,6 +231,11 @@ mod tests {
     use super::*;
     use crate::source::RawEntity;
     use data_transformers::TagMap;
+    use std::time::Duration;
+
+    fn run_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
 
     /// 罐头数据源：固定返回预置对象（离线测试替身）
     struct FakeSource {
@@ -243,7 +278,13 @@ mod tests {
             entities: Vec::new(),
         };
         let err = pipeline
-            .collect(&mut db, &PlanId::generate(), &Boundary::empty(), &source)
+            .collect(
+                &mut db,
+                &PlanId::generate(),
+                &Boundary::empty(),
+                &source,
+                run_deadline(),
+            )
             .unwrap_err();
         assert!(matches!(err, AcquisitionError::EmptyBoundary));
     }
@@ -259,7 +300,13 @@ mod tests {
             ],
         };
         let report = pipeline
-            .collect(&mut db, &PlanId::generate(), &boundary(), &source)
+            .collect(
+                &mut db,
+                &PlanId::generate(),
+                &boundary(),
+                &source,
+                run_deadline(),
+            )
             .unwrap();
         assert_eq!(report.total, 2);
         assert_eq!(report.fallback_count, 1);

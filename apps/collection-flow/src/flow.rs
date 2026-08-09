@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use coverage_audit::{AuditOutcome, QuietSentinel, ALL_CATEGORIES};
 use data_acquisition::{
     AcquisitionBatch, AcquisitionPipeline, CandidateDraft, CollectionProgressView,
-    CollectionReport, DataSource, SourceGeometry,
+    CollectionReport, CollectionStage, DataSource, SourceGeometry,
 };
 use data_persistence::{
     CandidateBatchSummary, CandidateDisplay, CandidateEligibility, CandidateProjection,
@@ -34,6 +35,24 @@ use crate::view::{
     PlanCollectionStateKind,
 };
 
+/// 单次采集运行的时间预算（T36：总体截止 + 本地收尾余量）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollectionRunLimits {
+    /// 单次采集运行总体截止（默认 60s；超限立即结束并如实标注部分未命名）
+    pub overall_deadline: Duration,
+    /// 为本地写库/发布预留的尾部余量（默认 10s；补名必须在其前停止派发）
+    pub local_tail_margin: Duration,
+}
+
+impl Default for CollectionRunLimits {
+    fn default() -> Self {
+        Self {
+            overall_deadline: Duration::from_secs(60),
+            local_tail_margin: Duration::from_secs(10),
+        }
+    }
+}
+
 /// A1 采集流程：候选采集完整用例入口（深模块，非 S1）。
 #[derive(Clone)]
 pub struct CollectionFlow {
@@ -46,6 +65,7 @@ pub struct CollectionFlow {
     states: Arc<Mutex<HashMap<String, PlanCollectionState>>>,
     lifecycle: Arc<AtomicU64>,
     active: Arc<AtomicBool>,
+    limits: CollectionRunLimits,
 }
 
 impl CollectionFlow {
@@ -59,6 +79,16 @@ impl CollectionFlow {
         source: Arc<dyn DataSource + Send + Sync>,
         l10n: Arc<Localization>,
     ) -> Self {
+        Self::new_with_limits(db, source, l10n, CollectionRunLimits::default())
+    }
+
+    /// 构造采集入口并显式指定运行时间预算（生产用默认 60s；验收测试可收紧）。
+    pub fn new_with_limits(
+        db: Arc<Mutex<Database>>,
+        source: Arc<dyn DataSource + Send + Sync>,
+        l10n: Arc<Localization>,
+        limits: CollectionRunLimits,
+    ) -> Self {
         Self {
             db,
             source,
@@ -69,6 +99,7 @@ impl CollectionFlow {
             states: Arc::new(Mutex::new(HashMap::new())),
             lifecycle: Arc::new(AtomicU64::new(0)),
             active: Arc::new(AtomicBool::new(false)),
+            limits,
         }
     }
 
@@ -109,6 +140,7 @@ impl CollectionFlow {
             states: Arc::clone(&self.states),
             lifecycle: Arc::clone(&self.lifecycle),
             generation,
+            limits: self.limits,
         };
         let active = Arc::clone(&self.active);
         let spawn_result = std::thread::Builder::new().spawn(move || {
@@ -145,7 +177,10 @@ impl CollectionFlow {
         };
         let states = self.states.lock().expect("collection states lock");
         match states.get(&plan_id).map(|state| &state.state) {
-            Some(PlanCollectionStateKind::Fetching) => self.fetching_page(),
+            Some(PlanCollectionStateKind::Fetching {
+                stage,
+                started_at_millis,
+            }) => self.fetching_page(*stage, *started_at_millis),
             Some(PlanCollectionStateKind::Outcome(outcome)) => match outcome.as_ref() {
                 CollectionOutcome::Succeeded(summary) => summary.page.clone(),
                 CollectionOutcome::Failed(failure) => failure.page.clone(),
@@ -188,7 +223,10 @@ impl CollectionFlow {
         self.states.lock().expect("collection states lock").insert(
             plan_id,
             PlanCollectionState {
-                state: PlanCollectionStateKind::Fetching,
+                state: PlanCollectionStateKind::Fetching {
+                    stage: CollectionStage::FetchingData,
+                    started_at_millis: Self::now_millis(),
+                },
             },
         );
     }
@@ -216,15 +254,23 @@ impl CollectionFlow {
         }
     }
 
-    fn fetching_page(&self) -> CollectionPageView {
+    fn fetching_page(&self, stage: CollectionStage, started_at_millis: u64) -> CollectionPageView {
+        let elapsed_secs = Self::now_millis().saturating_sub(started_at_millis) / 1000;
         CollectionPageView {
             status: CollectionStatus::Fetching,
-            progress: CollectionProgressView::fetching(),
+            progress: CollectionProgressView::fetching_at(stage, elapsed_secs),
             diff_summary: None,
             report: None,
             review_unlocked: false,
             failure: None,
         }
+    }
+
+    fn now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0)
     }
 }
 
@@ -239,6 +285,7 @@ struct CollectionWorker {
     states: Arc<Mutex<HashMap<String, PlanCollectionState>>>,
     lifecycle: Arc<AtomicU64>,
     generation: u64,
+    limits: CollectionRunLimits,
 }
 
 impl CollectionWorker {
@@ -306,7 +353,31 @@ impl CollectionWorker {
     /// 完整采集链：F4 采集批次 → B2 原始观测落库 → B14 点线面验证 →
     /// B2 候选投影原子发布 → F7 覆盖体检 → 组装报告并解锁评审。
     fn run_inner(&self) -> Result<CollectionSummary> {
-        let pipeline = AcquisitionPipeline::new().map_err(CollectionError::Acquisition)?;
+        // T36：总体截止与阶段上报（拉取数据 / 补名 / 写库）。
+        let overall_deadline = Instant::now() + self.limits.overall_deadline;
+        let enrich_deadline = overall_deadline
+            .checked_sub(self.limits.local_tail_margin)
+            .unwrap_or(overall_deadline);
+        let states = Arc::clone(&self.states);
+        let plan_id = self.request.plan_id.to_string();
+        let notify_stage: Arc<dyn Fn(CollectionStage) + Send + Sync> =
+            Arc::new(move |stage: CollectionStage| {
+                if let Ok(mut states) = states.lock() {
+                    if let Some(state) = states.get_mut(&plan_id) {
+                        if let PlanCollectionStateKind::Fetching { stage: current, .. } =
+                            &mut state.state
+                        {
+                            *current = stage;
+                        }
+                    }
+                }
+            });
+        let pipeline_notify = Arc::clone(&notify_stage);
+        let pipeline = AcquisitionPipeline::new()
+            .map_err(CollectionError::Acquisition)?
+            .with_stage_listener(Some(Box::new(move |stage: CollectionStage| {
+                pipeline_notify(stage)
+            })));
         let mut db = self.db.lock().expect("collection database lock");
 
         // 1. F4：采集批次（拉取 + 归类 + 增量比对，不发布投影）。
@@ -316,10 +387,12 @@ impl CollectionWorker {
                 &self.request.plan_id,
                 &self.request.boundary,
                 self.source.as_ref(),
+                enrich_deadline,
             )
             .map_err(CollectionError::Acquisition)?;
 
         // 2. B2：原始观测落库（数据粮仓，只写不删）。
+        notify_stage(CollectionStage::Writing);
         let written = db
             .write_raw_observations(&batch.raw_observations)
             .map_err(CollectionError::Persistence)?;
@@ -372,6 +445,7 @@ impl CollectionWorker {
             category_counts: batch.category_counts.clone(),
             fallback_count: batch.fallback_count,
             diff: batch.diff.clone(),
+            naming_partial: batch.naming_partial,
         };
         let progress = CollectionProgressView::completed(&report);
         let diff_summary = self.l10n.t_with_args(

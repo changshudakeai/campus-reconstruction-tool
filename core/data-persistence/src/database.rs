@@ -68,6 +68,7 @@ mod tests {
             "candidate_batches",
             "candidate_projections",
             "current_candidate_batches",
+            "regeo_name_cache",
         ] {
             let exists: bool = db
                 .conn

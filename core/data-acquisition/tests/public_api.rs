@@ -5,10 +5,11 @@
 //! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
 
 use data_acquisition::{
-    category_text_key, text_keys, AcquisitionError, AcquisitionPipeline, CategoryProgress,
-    CollectionProgressView, DataSource, DiffEntry, DiffKind, GaodeDataSource, RawEntity,
-    RefreshDiff, SourceGeometry, ALL_CATEGORIES,
+    category_text_key, stage_text_key, text_keys, AcquisitionError, AcquisitionPipeline,
+    CategoryProgress, CollectionProgressView, CollectionStage, DataSource, DiffEntry, DiffKind,
+    GaodeDataSource, RawEntity, RefreshDiff, SourceGeometry, ALL_CATEGORIES,
 };
+use std::time::{Duration, Instant};
 
 #[test]
 fn source_geometry_keeps_a_point_as_source_evidence() {
@@ -47,6 +48,7 @@ fn acquisition_batch_returns_raw_evidence_and_geometry_drafts_without_publishing
                 ]]),
             },
             &source,
+            Instant::now() + Duration::from_secs(60),
         )
         .unwrap();
     assert_eq!(batch.raw_observations.len(), 1);
@@ -117,6 +119,15 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
         text_keys::SOURCE_GAODE,
     ];
     keys.extend(ALL_CATEGORIES.map(category_text_key));
+    keys.extend(
+        [
+            CollectionStage::FetchingData,
+            CollectionStage::Naming,
+            CollectionStage::Writing,
+            CollectionStage::Finished,
+        ]
+        .map(stage_text_key),
+    );
 
     for key in keys {
         assert_ne!(l10n.t(key), key, "文本键 {key} 必须在 zh-CN.json 中有条目");
@@ -130,4 +141,17 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
         serde_json::json!({ "added": 1, "updated": 2, "unchanged": 3 }),
     );
     assert!(summary.contains('1') && summary.contains('2') && summary.contains('3'));
+}
+
+/// B1 快照比对：公开 API 增删改必须显式再生成快照（`UPDATE_SNAPSHOTS=yes`）。
+#[test]
+fn public_api_snapshot() {
+    let rustdoc_json = rustdoc_json::Builder::default()
+        .toolchain(public_api::MINIMUM_NIGHTLY_RUST_VERSION)
+        .build()
+        .unwrap();
+    let api = public_api::Builder::from_rustdoc_json(rustdoc_json)
+        .build()
+        .unwrap();
+    api.assert_eq_or_update("tests/snapshots/public-api.txt");
 }

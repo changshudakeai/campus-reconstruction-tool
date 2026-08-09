@@ -232,8 +232,14 @@ export component AppWindow inherits Window {
     in property <string> collection-diff-summary;
     in property <string> collection-report-entry-label;
     in property <string> collection-report-body;
+    in property <string> collection-stage-label;
+    in property <string> collection-elapsed-label;
+    in property <string> collection-cancel-label;
+    in property <bool> collection-cancel-visible;
+    in property <string> collection-partial-naming-label;
     callback collection-start-clicked();
     callback collection-report-clicked();
+    callback collection-cancel-clicked();
     // M3 评审页（F5 呈现层）
     in property <string> review-title;
     in property <string> review-empty-text;
@@ -281,6 +287,8 @@ export component AppWindow inherits Window {
     in property <bool> error-dialog-diagnostic-action-visible;
     in property <string> error-dialog-notification-id;
     in property <string> error-dialog-diagnostic-action-label;
+    in property <bool> error-dialog-retry-visible;
+    in property <string> error-dialog-retry-label;
 
     // ── 通用确认窗（T19B-5A 对话框基建）──────────────────────
     in-out property <bool> confirm-dialog-visible;
@@ -352,6 +360,7 @@ export component AppWindow inherits Window {
     callback settings-back-clicked();
     callback error-dialog-dismissed();
     callback error-dialog-diagnostic-action-clicked(notification-id: string);
+    callback error-dialog-retry-clicked();
     callback diagnostic-actions-completed();
     callback settings-clicked();
     // ── T19B-9: 右上角工具栏回调 ─────────────────────
@@ -646,6 +655,13 @@ export component AppWindow inherits Window {
                         text: root.error-dialog-diagnostic-action-label;
                         clicked => {
                             root.error-dialog-diagnostic-action-clicked(root.error-dialog-notification-id);
+                        }
+                    }
+
+                    if root.error-dialog-retry-visible: Button {
+                        text: root.error-dialog-retry-label;
+                        clicked => {
+                            root.error-dialog-retry-clicked();
                         }
                     }
 
@@ -973,8 +989,14 @@ export component AppWindow inherits Window {
                     collection-diff-summary: root.collection-diff-summary;
                     collection-report-entry-label: root.collection-report-entry-label;
                     collection-report-body: root.collection-report-body;
+                    collection-stage-label: root.collection-stage-label;
+                    collection-elapsed-label: root.collection-elapsed-label;
+                    collection-cancel-label: root.collection-cancel-label;
+                    collection-cancel-visible: root.collection-cancel-visible;
+                    collection-partial-naming-label: root.collection-partial-naming-label;
                     collection-start-clicked => { root.collection-start-clicked(); }
                     collection-report-clicked => { root.collection-report-clicked(); }
+                    collection-cancel-clicked => { root.collection-cancel-clicked(); }
                     export-start-label: root.workspace-export-start-label;
                     export-status-title: root.workspace-placeholder-title;
                     export-status-body: root.workspace-placeholder-subtitle;

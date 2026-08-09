@@ -9,9 +9,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use collection_flow::{
-    CollectionError, CollectionFlow, CollectionOperation, CollectionOutcome, CollectionStatus,
+    CollectionError, CollectionFlow, CollectionOperation, CollectionOutcome, CollectionRunLimits,
+    CollectionStatus,
 };
-use data_acquisition::{DataSource, RawEntity, SourceGeometry};
+use data_acquisition::{
+    overpass::{boundary_bbox, buildings_query, OverpassClient},
+    DataSource, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
+};
 use data_persistence::{CandidateProjectionsApi, Database, RawObservationsApi};
 use data_transformers::TagMap;
 use export_flow::{BoundaryExportFlow, StdExportFileSystem};
@@ -152,6 +156,15 @@ fn water_polygon(id: &str) -> RawEntity {
 fn flow(db: Arc<Mutex<Database>>, source: Arc<dyn DataSource + Send + Sync>) -> CollectionFlow {
     let l10n = Arc::new(Localization::new(Language::ZhCn).expect("zh-CN 资源"));
     CollectionFlow::new(db, source, l10n)
+}
+
+fn flow_with_limits(
+    db: Arc<Mutex<Database>>,
+    source: Arc<dyn DataSource + Send + Sync>,
+    limits: CollectionRunLimits,
+) -> CollectionFlow {
+    let l10n = Arc::new(Localization::new(Language::ZhCn).expect("zh-CN 资源"));
+    CollectionFlow::new_with_limits(db, source, l10n, limits)
 }
 
 fn seed_plan(flow: &CollectionFlow, plan_id: &PlanId) {
@@ -684,4 +697,118 @@ fn operation_is_send_usable_across_threads() {
     });
     handle.join().expect("轮询线程");
     assert!(done.load(Ordering::SeqCst));
+}
+
+fn unnamed_polygons_payload(count: usize) -> String {
+    let elements: Vec<serde_json::Value> = (0..count)
+        .map(|index| {
+            let base_lon = 121.40 + index as f64 * 0.001;
+            serde_json::json!({
+                "type": "way",
+                "id": 10_000 + index as i64,
+                "tags": {"building": "yes"},
+                "geometry": [
+                    {"lat": 31.200, "lon": base_lon},
+                    {"lat": 31.201, "lon": base_lon},
+                    {"lat": 31.201, "lon": base_lon + 0.001},
+                    {"lat": 31.200, "lon": base_lon + 0.001},
+                    {"lat": 31.200, "lon": base_lon}
+                ]
+            })
+        })
+        .collect();
+    serde_json::json!({ "elements": elements }).to_string()
+}
+
+#[test]
+fn slow_regeo_enrichment_respects_overall_deadline_with_partial_feedback() {
+    // T36 验收 1：注入“慢/挂起 regeo transport（每次 5s 超时）”，
+    // 断言整次采集 ≤ 总体截止时间，且降级路径如实标注“部分建筑未命名”。
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let payload = unnamed_polygons_payload(20);
+    let overpass_transport = Box::new(move |_boundary: &Boundary| Ok(payload.clone()));
+    let regeo_transport = Box::new(|_: &str, timeout: Duration| {
+        let (_tx, rx) = std::sync::mpsc::channel::<()>();
+        let _ = rx.recv_timeout(timeout);
+        Err("模拟 regeo 挂起".to_owned())
+    });
+    let namer = Arc::new(RegeoNamer::new(
+        regeo_transport,
+        Box::new(|| Some("web-key".to_owned())),
+    ));
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(overpass_transport).with_name_enricher(Some(namer)));
+    let limits = CollectionRunLimits {
+        overall_deadline: Duration::from_secs(10),
+        local_tail_margin: Duration::from_secs(5),
+    };
+    let flow = flow_with_limits(Arc::clone(&db), source, limits);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+
+    let started = Instant::now();
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(10))
+        .expect("后台采集必须在截止时间内到达终态");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "整次采集必须 ≤ 总体截止时间（10s），实际 {elapsed:?}"
+    );
+    let CollectionOutcome::Succeeded(summary) = outcome else {
+        panic!("补名降级后采集仍应成功落库，不得静默假失败");
+    };
+    assert!(
+        summary.page.progress.naming_partial,
+        "补名截止/失败必须如实标注“部分建筑未命名”"
+    );
+    assert_eq!(summary.page.status, CollectionStatus::Completed);
+}
+
+#[test]
+fn three_endpoint_hang_overpass_fails_within_overall_deadline() {
+    // T36 验收 2：注入“三端点全挂 Overpass transport”（每端点 5s 超时），
+    // 断言 ≤ 整体查询截止（15s，远小于运行总体截止 60s）并结构化失败。
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let client = OverpassClient::with_transport(Box::new(|_: &str, timeout: Duration| {
+        let (_tx, rx) = std::sync::mpsc::channel::<()>();
+        let _ = rx.recv_timeout(timeout);
+        Err("模拟 Overpass 端点挂起".to_owned())
+    }));
+    let overpass_transport = Box::new(move |boundary: &Boundary| {
+        let bbox = boundary_bbox(boundary, 0.01).ok_or_else(|| "边界包围盒失败".to_owned())?;
+        client
+            .query_with_fallback(&buildings_query(bbox))
+            .map_err(|message| format!("Overpass 采集查询失败：{message}"))
+    });
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(overpass_transport));
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+
+    let started = Instant::now();
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(20))
+        .expect("三端点全挂必须在运行截止前结构化失败");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "整体查询不得超过整体截止（验收 ≤15s + 余量），实际 {elapsed:?}"
+    );
+    let CollectionOutcome::Failed(failure) = outcome else {
+        panic!("三端点全挂必须结构化失败，不得出现假成功产物");
+    };
+    assert_eq!(failure.page.status, CollectionStatus::Failed);
+    assert!(
+        failure.notification.is_some(),
+        "失败必须携带 B7 错误弹窗事实"
+    );
+    assert!(
+        failure.diagnostic.contains("端点"),
+        "诊断必须保留端点回退事实：{}",
+        failure.diagnostic
+    );
 }

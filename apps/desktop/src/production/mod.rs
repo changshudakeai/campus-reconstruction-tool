@@ -141,6 +141,8 @@ pub(crate) struct ProductionEntries {
     boundary_fetch_poll_timer: slint::Timer,
     campus_search_ipc: std::sync::mpsc::Sender<String>,
     campus_search_poll_timer: slint::Timer,
+    /// T36：采集失败弹窗“重试”按钮文案（B6 文本键解析后注入）
+    collection_retry_label: String,
 }
 
 impl ProductionEntries {
@@ -150,6 +152,7 @@ impl ProductionEntries {
         center: Arc<NotificationCenter>,
     ) -> Self {
         let labels = NotificationLabels::new(injector.borrow().l10n());
+        let collection_retry_label = injector.borrow().l10n().t("collection.retry_button");
         let diagnostic_failure = {
             let injector = injector.borrow();
             DiagnosticFailureLabels {
@@ -225,6 +228,7 @@ impl ProductionEntries {
             boundary_fetch_poll_timer: slint::Timer::default(),
             campus_search_ipc,
             campus_search_poll_timer: slint::Timer::default(),
+            collection_retry_label,
         }
     }
 
@@ -232,6 +236,8 @@ impl ProductionEntries {
         self.action_runner.invalidate();
         window.set_diagnostic_operation_state(crate::OperationPresentationState::Ready);
         window.set_diagnostic_operation_progress(0);
+        // T36：任何新操作接管时隐藏采集失败弹窗的“重试”按钮
+        window.set_error_dialog_retry_visible(false);
     }
 
     pub(crate) fn show_startup(&mut self, window: &AppWindow) {
@@ -453,6 +459,13 @@ impl ProductionEntries {
         matches!(presentation.operation(), OperationState::Processing { .. })
     }
 
+    /// T36：取消采集（抽屉按钮 → A1 CollectionFlow::cancel；停轮询并回到待定）。
+    pub(crate) fn cancel_collection(&mut self, window: &AppWindow) {
+        self.collection_poll_timer.stop();
+        self.collection
+            .show(window, &self.center, CollectionRequest::Cancel);
+    }
+
     pub(crate) fn show_collection_report(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.collection
@@ -550,6 +563,10 @@ impl ProductionEntries {
         let presentation = self
             .collection
             .show(window, &self.center, CollectionRequest::Poll);
+        // T36：采集失败必须弹错误对话框并给“重试”
+        let failed = matches!(presentation.operation(), OperationState::Failed);
+        window.set_error_dialog_retry_visible(failed);
+        window.set_error_dialog_retry_label(self.collection_retry_label.clone().into());
         !matches!(presentation.operation(), OperationState::Processing { .. })
     }
 
@@ -1211,6 +1228,29 @@ impl ProductionEntries {
         window.on_collection_report_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().show_collection_report(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_collection_cancel_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().cancel_collection(&window);
+            }
+        });
+
+        // T36：采集失败错误弹窗点“重试”→ 隐藏弹窗并重新发起同一开始意图
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_error_dialog_retry_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_error_dialog_visible(false);
+                window.set_error_dialog_retry_visible(false);
+                crate::map_webview::restore_after_modal(window.as_weak());
+                let started = shared.borrow_mut().start_collection(&window);
+                if started {
+                    ProductionEntries::start_collection_polling(&shared, &window);
+                }
             }
         });
 

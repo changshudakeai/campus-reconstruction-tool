@@ -240,6 +240,7 @@ pub fn collection_flow::CollectionFlow::failure_view(&self, error: &collection_f
 pub fn collection_flow::CollectionFlow::is_review_unlocked(&self, plan_id: &str) -> bool
 pub fn collection_flow::CollectionFlow::leave(&self)
 pub fn collection_flow::CollectionFlow::new(db: alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>, source: alloc::sync::Arc<(dyn data_acquisition::source::DataSource + core::marker::Send + core::marker::Sync)>, l10n: alloc::sync::Arc<localization::Localization>) -> Self
+pub fn collection_flow::CollectionFlow::new_with_limits(db: alloc::sync::Arc<std::sync::poison::mutex::Mutex<data_persistence::database::Database>>, source: alloc::sync::Arc<(dyn data_acquisition::source::DataSource + core::marker::Send + core::marker::Sync)>, l10n: alloc::sync::Arc<localization::Localization>, limits: collection_flow::CollectionRunLimits) -> Self
 pub fn collection_flow::CollectionFlow::page_view(&self) -> collection_flow::CollectionPageView
 pub fn collection_flow::CollectionFlow::report_view(&self) -> core::option::Option<collection_flow::CollectionReportView>
 pub fn collection_flow::CollectionFlow::reset_boundary(&self)
@@ -408,6 +409,55 @@ pub fn collection_flow::CollectionReportView::from(t: T) -> T
 impl<T> typenum::type_operators::Same for collection_flow::CollectionReportView
 pub type collection_flow::CollectionReportView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionReportView where T: ?core::marker::Sized
+pub struct collection_flow::CollectionRunLimits
+pub collection_flow::CollectionRunLimits::local_tail_margin: core::time::Duration
+pub collection_flow::CollectionRunLimits::overall_deadline: core::time::Duration
+impl core::clone::Clone for collection_flow::CollectionRunLimits
+pub fn collection_flow::CollectionRunLimits::clone(&self) -> collection_flow::CollectionRunLimits
+impl core::cmp::Eq for collection_flow::CollectionRunLimits
+impl core::cmp::PartialEq for collection_flow::CollectionRunLimits
+pub fn collection_flow::CollectionRunLimits::eq(&self, other: &collection_flow::CollectionRunLimits) -> bool
+impl core::default::Default for collection_flow::CollectionRunLimits
+pub fn collection_flow::CollectionRunLimits::default() -> Self
+impl core::fmt::Debug for collection_flow::CollectionRunLimits
+pub fn collection_flow::CollectionRunLimits::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for collection_flow::CollectionRunLimits
+impl core::marker::StructuralPartialEq for collection_flow::CollectionRunLimits
+impl core::marker::Freeze for collection_flow::CollectionRunLimits
+impl core::marker::Send for collection_flow::CollectionRunLimits
+impl core::marker::Sync for collection_flow::CollectionRunLimits
+impl core::marker::Unpin for collection_flow::CollectionRunLimits
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionRunLimits
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionRunLimits
+impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionRunLimits where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn collection_flow::CollectionRunLimits::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionRunLimits where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionRunLimits where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::CollectionRunLimits where U: core::convert::From<T>
+pub fn collection_flow::CollectionRunLimits::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::CollectionRunLimits where U: core::convert::Into<T>
+pub type collection_flow::CollectionRunLimits::Error = core::convert::Infallible
+pub fn collection_flow::CollectionRunLimits::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::CollectionRunLimits where U: core::convert::TryFrom<T>
+pub type collection_flow::CollectionRunLimits::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::CollectionRunLimits::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::CollectionRunLimits where T: core::clone::Clone
+pub type collection_flow::CollectionRunLimits::Owned = T
+pub fn collection_flow::CollectionRunLimits::clone_into(&self, target: &mut T)
+pub fn collection_flow::CollectionRunLimits::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::CollectionRunLimits where T: 'static + ?core::marker::Sized
+pub fn collection_flow::CollectionRunLimits::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::CollectionRunLimits where T: ?core::marker::Sized
+pub fn collection_flow::CollectionRunLimits::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionRunLimits where T: ?core::marker::Sized
+pub fn collection_flow::CollectionRunLimits::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::CollectionRunLimits where T: core::clone::Clone
+pub unsafe fn collection_flow::CollectionRunLimits::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::CollectionRunLimits
+pub fn collection_flow::CollectionRunLimits::from(t: T) -> T
+impl<T> typenum::type_operators::Same for collection_flow::CollectionRunLimits
+pub type collection_flow::CollectionRunLimits::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionRunLimits where T: ?core::marker::Sized
 pub struct collection_flow::CollectionSummary
 pub collection_flow::CollectionSummary::notification: core::option::Option<notification_center::message::Notification>
 pub collection_flow::CollectionSummary::page: collection_flow::CollectionPageView

@@ -255,7 +255,15 @@
     "error_persistence": "采集数据保存失败，请重试",
     "error_audit": "采集体检失败",
     "error_expired": "本次采集已被取消",
-    "error_background": "采集后台任务异常中止"
+    "error_background": "采集后台任务异常中止",
+    "stage_fetching": "拉取数据",
+    "stage_naming": "补名",
+    "stage_writing": "写库",
+    "stage_finished": "完成",
+    "elapsed": "已用 {seconds} 秒",
+    "cancel_button": "取消采集",
+    "partial_naming": "部分建筑未命名，已按原始编号保存；可稍后重新采集补全名称",
+    "retry_button": "重试"
   },
   "audit": {
     "source_tag": "采集体检",

@@ -16,7 +16,7 @@
 //! 再失败回退 `landuse=education`；均无数据 → 人工圈画兜底（由调用方决定）。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gaode_client::{convert_coords_wgs84_to_gcj02, BoundarySorter, OsmElement, OsmMember};
 use shared_domain_types::Boundary;
@@ -28,8 +28,11 @@ pub const OVERPASS_ENDPOINTS: [&str; 3] = [
     "https://maps.mail.ru/osm/tools/overpass",
 ];
 
-/// 每端点 HTTP 超时（工单：10–15 秒）
-pub const OVERPASS_HTTP_TIMEOUT: Duration = Duration::from_secs(12);
+/// 每端点 HTTP 超时（工单：12s → 5s）
+pub const OVERPASS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 整体查询截止（工单：≤15s；三端点 5s × 3 恰好封顶）
+pub const OVERPASS_QUERY_DEADLINE: Duration = Duration::from_secs(15);
 
 /// Overpass 服务端超时（秒；比客户端超时小，避免公共端点长期占用）
 pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 25;
@@ -114,20 +117,46 @@ impl OverpassClient {
     }
 
     /// 按端点回退执行查询：de → kumi → mail.ru；
-    /// 错误页（parse error / Runtime error / HTML）视为失败，换下一端点。
+    /// 错误页（parse error / Runtime error / HTML / 504）视为失败，换下一端点；
+    /// 整体查询不得超过 [`OVERPASS_QUERY_DEADLINE`]，并记录每端点耗时。
     pub fn query_with_fallback(&self, query: &str) -> std::result::Result<String, String> {
         let mut errors: Vec<String> = Vec::new();
+        let overall_deadline = Instant::now() + OVERPASS_QUERY_DEADLINE;
         for endpoint in OVERPASS_ENDPOINTS {
+            let remaining = overall_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                errors.push(format!(
+                    "端点 {endpoint} 跳过：整体查询已到 {OVERPASS_QUERY_DEADLINE:?} 截止"
+                ));
+                break;
+            }
+            let timeout = OVERPASS_HTTP_TIMEOUT.min(remaining);
             let url = format!("{endpoint}/api/interpreter?data={}", encode_query(query));
-            match (self.transport)(&url, OVERPASS_HTTP_TIMEOUT) {
+            let started = Instant::now();
+            match (self.transport)(&url, timeout) {
                 Ok(body) if is_error_body(&body) => {
+                    log::info!(
+                        "Overpass 端点 {endpoint} 返回错误页，耗时 {:?}: {}",
+                        started.elapsed(),
+                        first_error_line(&body)
+                    );
                     errors.push(format!(
                         "端点 {endpoint} 返回错误页: {}",
                         first_error_line(&body)
                     ));
                 }
-                Ok(body) => return Ok(body),
+                Ok(body) => {
+                    log::info!(
+                        "Overpass 端点 {endpoint} 成功，耗时 {:?}",
+                        started.elapsed()
+                    );
+                    return Ok(body);
+                }
                 Err(message) => {
+                    log::info!(
+                        "Overpass 端点 {endpoint} 不可达，耗时 {:?}: {message}",
+                        started.elapsed()
+                    );
                     errors.push(format!("端点 {endpoint} 不可达: {message}"));
                 }
             }

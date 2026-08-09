@@ -10,6 +10,11 @@ use data_acquisition::{
 };
 use data_persistence::{Database, RawObservationsApi};
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
+use std::time::{Duration, Instant};
+
+fn run_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}
 
 /// 一小块校园边界（GCJ-02 多边形）
 fn small_boundary() -> Boundary {
@@ -51,7 +56,13 @@ fn collect_small_boundary_lands_in_granary() {
     let source = gaode_source_with(FIRST_SWEEP);
 
     let report = pipeline
-        .collect(&mut db, &plan_id, &small_boundary(), &source)
+        .collect(
+            &mut db,
+            &plan_id,
+            &small_boundary(),
+            &source,
+            run_deadline(),
+        )
         .unwrap();
 
     // 采集回来的对象数 ≥1
@@ -94,6 +105,7 @@ fn second_collect_reports_incremental_diff() {
             &plan_id,
             &small_boundary(),
             &gaode_source_with(FIRST_SWEEP),
+            run_deadline(),
         )
         .unwrap();
     let second = pipeline
@@ -102,6 +114,7 @@ fn second_collect_reports_incremental_diff() {
             &plan_id,
             &small_boundary(),
             &gaode_source_with(SECOND_SWEEP),
+            run_deadline(),
         )
         .unwrap();
 
@@ -147,6 +160,7 @@ fn identical_recollect_is_all_unchanged() {
                 &plan_id,
                 &small_boundary(),
                 &gaode_source_with(FIRST_SWEEP),
+                run_deadline(),
             )
             .unwrap();
     }
@@ -156,6 +170,7 @@ fn identical_recollect_is_all_unchanged() {
             &plan_id,
             &small_boundary(),
             &gaode_source_with(FIRST_SWEEP),
+            run_deadline(),
         )
         .unwrap();
     assert!(!third.diff.has_changes());
@@ -174,6 +189,7 @@ fn progress_view_reflects_collection_report() {
             &plan_id,
             &small_boundary(),
             &gaode_source_with(FIRST_SWEEP),
+            run_deadline(),
         )
         .unwrap();
 
@@ -215,7 +231,13 @@ fn pipeline_accepts_any_data_source() {
     let mut db = Database::open_in_memory().unwrap();
     let plan_id = PlanId::generate();
     let report = pipeline
-        .collect(&mut db, &plan_id, &small_boundary(), &OtherSource)
+        .collect(
+            &mut db,
+            &plan_id,
+            &small_boundary(),
+            &OtherSource,
+            run_deadline(),
+        )
         .unwrap();
     assert_eq!(report.source_tag, "other-source");
     let observations = db
