@@ -767,11 +767,23 @@ impl WorkspaceProductionAdapter {
             IpcMessage::OrientationClear => self.orientation_clear(),
             IpcMessage::Error { message } => {
                 let l10n = self.l10n();
-                Presentation::ready(self.context.page()).with_notification(info_fact(
-                    &l10n,
-                    "boundary.map_notice_title",
-                    &message,
-                ))
+                // T36：页面 onerror / 5s SDK 超时（及 Rust 侧 10s 加载超时）→
+                // 明确错误对话框，不静默；隐藏损坏地图并如实上报不可用，用户
+                // 可退回左侧抽屉"方位角手动输入"完成朝向。超时标记由
+                // map_webview 在 Rust 侧兜底超时时回传，这里本地化。
+                let body = if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
+                    l10n.t("map.load_timeout_body")
+                } else {
+                    l10n.t_with_array("map.load_failed_body", &[&message])
+                };
+                crate::map_webview::mark_map_failed();
+                crate::map_webview::hide();
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_processing = false;
+                    session.map_available = false;
+                }
+                Presentation::ready(self.context.page()).with_notification(error_fact(&l10n, &body))
             }
         }
     }

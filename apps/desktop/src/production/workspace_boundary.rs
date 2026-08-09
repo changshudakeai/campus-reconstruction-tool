@@ -222,6 +222,9 @@ impl WorkspaceProductionContext {
             export_step_label: l10n.t("export.start_button"),
             drawer_open: session.drawer_open,
             map_available: session.map_available,
+            map_loading: session.map_processing,
+            map_loading_label: l10n.t("map.loading"),
+            map_failed_label: l10n.t("map.load_failed"),
             boundary_points_label: l10n
                 .t_with_array("boundary.point_count", &[&boundary.point_count.to_string()]),
             orientation_current_angle_label: l10n.t("orientation.current_angle_label"),

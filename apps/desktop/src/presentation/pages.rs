@@ -436,6 +436,12 @@ pub struct WorkspacePageState {
     pub drawer_open: bool,
     /// T34: 地图 WebView 是否可用（不可用时边界步骤显示 Slint 兜底画布）
     pub map_available: bool,
+    /// T36: 地图是否仍在加载（步骤②地图不可用且加载中时显示"地图加载中…"）
+    pub map_loading: bool,
+    /// T36: 地图加载中文案（map.loading）
+    pub map_loading_label: String,
+    /// T36: 地图加载失败占位文案（map.load_failed，提示可退回手动输入）
+    pub map_failed_label: String,
     /// T34: 抽屉① 当前点数文案（已格式化：当前点数：{n}）
     pub boundary_points_label: String,
     /// T34: 抽屉② 当前角度标签
@@ -478,6 +484,9 @@ impl WorkspacePageState {
         window.set_workspace_export_start_label(self.export_step_label.clone().into());
         window.set_workspace_drawer_open(self.drawer_open);
         window.set_workspace_map_available(self.map_available);
+        window.set_workspace_map_loading(self.map_loading);
+        window.set_workspace_map_loading_label(self.map_loading_label.clone().into());
+        window.set_workspace_map_failed_label(self.map_failed_label.clone().into());
         window.set_workspace_boundary_points_label(self.boundary_points_label.clone().into());
         window.set_workspace_orientation_current_angle_label(
             self.orientation_current_angle_label.clone().into(),
