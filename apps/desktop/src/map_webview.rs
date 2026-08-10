@@ -38,6 +38,12 @@
 //!   创建过期、经错误 IPC 弹明确错误对话框，用户可退回"方位角手动输入"。
 //!   T39：评审地图页不挂该超时（候选不再内嵌 HTML；千级候选在 map_ready
 //!   后分批上屏，属于创建超时之外的绘制阶段，不应被 10s 兜底误杀）。
+//!
+//! ## T40：朝向页创建成功即激活两点选择（不依赖 map_ready）
+//! 朝向步 WebView 创建成功后立即 `evaluate_script("activateOrientationWhenReady();")`
+//! （页面脚本在 SDK/地图未就绪时静默等待，由 onMapReadyForMode 自动激活兜底）；
+//! 朝向页同时在 onMapReadyForMode 之外发送 map_ready，启用 T37 的
+//! `map_ready_for_active_step` 兜底——两个独立激活通道保证页面就绪后两点点击挂接。
 // ignore-tidy-filelength: T38 评审地图页生命周期（种类路由/show_review/弹窗恢复）并入本文件
 // 后短暂超限；失效里程碑：v2.1.0（2026-12-31），届时按页种类拆出 WebView 生命周期助手后消除
 
@@ -615,12 +621,22 @@ fn spawn_creation(
     let _ = slint::spawn_local(async move {
         let Some(app_window) = window_weak.upgrade() else {
             log::debug!("map_webview: 窗口已失效，放弃创建（generation={generation}）");
-            finish_creation(generation, Err(wry::Error::NotMainThread), window_weak);
+            finish_creation(
+                generation,
+                Err(wry::Error::NotMainThread),
+                window_weak,
+                page_kind,
+            );
             return;
         };
         let Ok(winit_win) = app_window.window().winit_window().await else {
             log::debug!("map_webview: 拿不到 winit 窗口，放弃创建（generation={generation}）");
-            finish_creation(generation, Err(wry::Error::NotMainThread), window_weak);
+            finish_creation(
+                generation,
+                Err(wry::Error::NotMainThread),
+                window_weak,
+                page_kind,
+            );
             return;
         };
 
@@ -647,8 +663,17 @@ fn spawn_creation(
             })
             .build_as_child(&*winit_win);
 
-        finish_creation(generation, result, window_weak);
+        finish_creation(generation, result, window_weak, page_kind);
     });
+}
+
+/// T40：WebView 创建成功后的页面激活脚本（按页种类；朝向页在创建成功
+/// 回调里立即激活两点选择，不依赖 map_ready 是否到达）。
+fn creation_activation_script(page_kind: MapPageKind) -> Option<&'static str> {
+    match page_kind {
+        MapPageKind::Orientation => Some("activateOrientationWhenReady();"),
+        MapPageKind::Boundary | MapPageKind::CampusSearch | MapPageKind::Review => None,
+    }
 }
 
 /// 一次创建尝试的收口：当前代生效（设置活跃/上报），过期代转入延迟销毁。
@@ -656,6 +681,7 @@ fn finish_creation(
     generation: u64,
     result: std::result::Result<wry::WebView, wry::Error>,
     window_weak: Weak<crate::AppWindow>,
+    page_kind: MapPageKind,
 ) {
     enum Outcome {
         Active,
@@ -693,6 +719,12 @@ fn finish_creation(
         Outcome::Active => {
             start_resize_timer(window_weak);
             notify_status(true);
+            // T40：朝向页创建成功即经可靠通道激活（不依赖 map_ready）；页面
+            // 脚本在 SDK/地图未就绪时静默等待自动激活兜底。
+            if let Some(script) = creation_activation_script(page_kind) {
+                log::debug!("map_webview: 朝向页创建成功，执行激活脚本（创建成功通道）: {script}");
+                evaluate_script(script);
+            }
         }
         Outcome::Failed => notify_status(false),
         Outcome::Stale => {}
@@ -1043,6 +1075,19 @@ mod tests {
             assert_eq!(state.last_slot_scale, None);
         });
         assert!(!is_visible());
+    }
+
+    #[test]
+    fn orientation_page_creation_success_has_activation_channel() {
+        // T40：朝向页创建成功必须走"创建成功回调激活"通道（不依赖
+        // map_ready）；其他页种类不得误触发朝向激活。
+        assert_eq!(
+            creation_activation_script(MapPageKind::Orientation),
+            Some("activateOrientationWhenReady();")
+        );
+        assert_eq!(creation_activation_script(MapPageKind::Boundary), None);
+        assert_eq!(creation_activation_script(MapPageKind::CampusSearch), None);
+        assert_eq!(creation_activation_script(MapPageKind::Review), None);
     }
 
     #[test]

@@ -304,7 +304,9 @@ pub struct OrientationViewState {
     pub bearing_angle_hint: String,
     pub angle_input_placeholder: String,
     pub angle_display: String,
-    pub input_text: String,
+    /// T40：一次性"清空朝向输入框"请求（重置/清除/切换方案时由功能入口置位，
+    /// 渲染只在此请求下写空串；正常渲染绝不回写输入文本，避免覆盖用户键入值）。
+    pub clear_input: bool,
     pub submit_label: String,
     pub reset_label: String,
     pub status: String,
@@ -324,7 +326,12 @@ impl OrientationViewState {
             self.angle_input_placeholder.clone().into(),
         );
         window.set_workspace_orientation_angle_display(self.angle_display.clone().into());
-        window.set_workspace_orientation_input_text(self.input_text.clone().into());
+        // T40：输入值只活在窗口（提交时读取），渲染不得回写——任意呈现
+        // （map_status / orientation_points IPC / 切步）都不重置输入框；
+        // 只有显式的清空请求（重置/清除/切换方案）才写一次空串。
+        if self.clear_input {
+            window.set_workspace_orientation_input_text("".into());
+        }
         window.set_workspace_orientation_submit_label(self.submit_label.clone().into());
         window.set_workspace_orientation_reset_label(self.reset_label.clone().into());
         window.set_workspace_orientation_status(self.status.clone().into());

@@ -164,6 +164,21 @@ const ORIENTATION_SCRIPT: &str = r#"
     map.on('click', handleOrientationClick);
   };
 
+  // T40: Rust 侧"WebView 创建成功"回调调用的可靠激活通道（不依赖
+  // map_ready 是否到达）：SDK/地图尚未就绪时静默等待，由
+  // onMapReadyForMode 的自动激活兜底；就绪后立即挂接两点点击。
+  window.activateOrientationWhenReady = function() {
+    if (!(window.__orientationConfig__ && window.__orientationConfig__.orientationMode)) {
+      return;
+    }
+    if (typeof map === 'undefined' || !map) {
+      return;
+    }
+    if (typeof window.initOrientationMode === 'function') {
+      window.initOrientationMode();
+    }
+  };
+
   // T34: 抽屉"确认"按钮 → 提交两点朝向（沿用 confirm_orientation IPC）
   window.submitOrientationFromDrawer = function() {
     if (orientationPoints.length >= 2) {
@@ -199,6 +214,12 @@ const ORIENTATION_SCRIPT: &str = r#"
         } else {
           setStatus('朝向模式脚本未加载', 'error');
         }
+        // T40: 朝向页在 onMapReadyForMode 之外同样发送 map_ready，启用
+        // Rust 侧 T37 兜底（map_ready_for_active_step 按当前步骤显式激活
+        // initOrientationMode）；与页面自动激活双保险，重复调用幂等无害。
+        if (window.ipc && window.ipc.postMessage) {
+          window.ipc.postMessage(JSON.stringify({ type: 'map_ready' }));
+        }
       }, 500);
     } else {
       // T31：非朝向模式由主脚本 initWithAnchor 发送 map_ready，Rust 侧直连 OSM
@@ -224,7 +245,10 @@ const ORIENTATION_SCRIPT: &str = r#"
 /// 6. T25: 朝向模式扩展（两点参考线 + 已确认边界半透明参照）
 /// 7. T34: 无 HTML 工具栏；撤销/清空/确认经左侧抽屉桥接命令完成
 /// 8. IPC 协议扩展:
-///    - `map_ready`: 地图就绪（T31 触发 Rust 侧 OSM 自动获取）
+///    - `map_ready`: 地图就绪（T31 触发 Rust 侧 OSM 自动获取；T40 起朝向页
+///      在 onMapReadyForMode 自动激活之外同样发送，启用 Rust 侧 T37 兜底）
+///    - `activateOrientationWhenReady`: Rust 侧创建成功回调调用的激活通道
+///      （T40，不依赖 map_ready；SDK 未就绪时静默等待页面自动激活）
 ///    - `boundary_update`: 编辑后的多边形坐标 `{type:"boundary_update", coords:[lng,lat,...]}`
 ///    - `manual_point`: 人工圈画落点 `"lng,lat"`（含 total 供抽屉显示点数）
 ///    - `manual_cancel`: 撤销最后一点 `{type:"manual_cancel"}`
@@ -834,6 +858,18 @@ mod tests {
         assert!(html.contains("confirm_orientation"));
         assert!(html.contains("orientation_points"));
         assert!(html.contains("orientationMode: true"));
+        assert!(
+            html.contains("activateOrientationWhenReady"),
+            "T40：Rust 侧创建成功激活通道需要页面激活函数"
+        );
+        assert!(
+            html.contains("__orientationConfig__.orientationMode"),
+            "T40：激活函数必须只作用于朝向模式页面"
+        );
+        assert!(
+            html.matches("type: 'map_ready'").count() >= 2,
+            "T40：朝向页在 onMapReadyForMode 之外也必须发送 map_ready 启用 Rust 侧兜底"
+        );
         assert!(
             html.contains("submitOrientationFromDrawer"),
             "朝向抽屉确认需要 JS 桥接命令"

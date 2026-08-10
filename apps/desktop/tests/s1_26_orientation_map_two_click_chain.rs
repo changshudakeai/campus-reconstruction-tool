@@ -91,6 +91,8 @@ impl Driver {
                 }
                 DriverStep::StubAndInit => {
                     // 桩 AMap/地图：页面自己的点击回调经 map.on('click', ...) 注册。
+                    // T40：经 Rust 侧"创建成功回调"同款入口 activateOrientationWhenReady
+                    // 激活（不直接调用 initOrientationMode），锁死新激活通道本身。
                     let script = r#"
                         window.map = {
                           on: function(type, fn) { if (type === 'click') { this._clickHandler = fn; } },
@@ -107,7 +109,7 @@ impl Driver {
                           Marker: function() { return { addTo: function() {} }; },
                           Pixel: function() { return {}; }
                         };
-                        window.initOrientationMode();
+                        window.activateOrientationWhenReady();
                     "#;
                     let _ = webview.evaluate_script(script);
                     self.advance();

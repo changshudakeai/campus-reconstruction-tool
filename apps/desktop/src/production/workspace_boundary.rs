@@ -48,7 +48,6 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) drawer: BoundaryDrawer,
     pub(super) orientation_points: Vec<(f64, f64)>,
     pub(super) orientation_angle: Option<f32>,
-    pub(super) orientation_input_text: String,
     pub(super) pending_orientation_angle: Option<f32>,
     pub(super) active_step: i32,
     /// 迁移期兼容：无已打开方案时按窗口当前呈现的已完成步数判定（旧行为基线）。
@@ -387,7 +386,7 @@ impl WorkspaceProductionContext {
             bearing_angle_hint: l10n.t("orientation.bearing_angle_hint"),
             angle_input_placeholder: l10n.t("orientation.angle_input_placeholder"),
             angle_display,
-            input_text: session.orientation_input_text.clone(),
+            clear_input: false,
             submit_label: l10n.t("orientation.submit_button"),
             reset_label: l10n.t("orientation.reset_button"),
             status,

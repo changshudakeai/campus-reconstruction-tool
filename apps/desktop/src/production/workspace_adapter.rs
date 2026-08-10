@@ -106,7 +106,6 @@ impl WorkspaceProductionAdapter {
             session.orientation_points.clear();
             session.orientation_angle = None;
             session.pending_orientation_angle = None;
-            session.orientation_input_text.clear();
             session.adopted_completed_steps = None;
             session.active_step = 0;
             let injector = self.context.injector.borrow();
@@ -136,7 +135,11 @@ impl WorkspaceProductionAdapter {
         }
         let Some((keys, anchor)) = self.context.map_credentials() else {
             let l10n = self.l10n();
-            return Presentation::ready(self.context.page())
+            let mut page = self.context.page();
+            // T40：切换方案是输入框显式清空入口（一次性请求，随本次呈现消费；
+            // 渲染不再回写输入文本）。
+            page.orientation.clear_input = true;
+            return Presentation::ready(page)
                 .with_notification(info_fact(
                     &l10n,
                     "boundary.map_notice_title",
@@ -144,12 +147,13 @@ impl WorkspaceProductionAdapter {
                 ))
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         };
-        let page = self.context.page();
         // T34：打开方案必须落在边界页——若残留其他页 WebView（如朝向页），
         // 先重建为边界页，避免"恢复错页"。
         let map_is_boundary =
             crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
         let presentation = if keys.0.is_empty() || map_is_boundary {
+            let mut page = self.context.page();
+            page.orientation.clear_input = true;
             Presentation::ready(page)
         } else {
             crate::map_webview::hide();
@@ -162,7 +166,9 @@ impl WorkspaceProductionAdapter {
             );
             self.context.session.borrow_mut().map_available = true;
             self.context.mark_map_loading();
-            Presentation::processing(self.context.page(), Progress::ZERO)
+            let mut page = self.context.page();
+            page.orientation.clear_input = true;
+            Presentation::processing(page, Progress::ZERO)
         };
         presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
@@ -456,7 +462,6 @@ impl WorkspaceProductionAdapter {
         mode: &str,
         angle_text: &str,
     ) -> Presentation<WorkspacePageState> {
-        self.context.session.borrow_mut().orientation_input_text = angle_text.to_string();
         if mode == "bearing-angle" {
             let angle: f32 = match angle_text.trim().parse() {
                 Ok(angle) => angle,
@@ -601,7 +606,10 @@ impl WorkspaceProductionAdapter {
     /// 正式状态。
     fn orientation_clear(&mut self) -> Presentation<WorkspacePageState> {
         self.clear_orientation_draft();
-        Presentation::ready(self.context.page())
+        let mut page = self.context.page();
+        // T40：地图"清除重来"是输入框显式清空入口（一次性请求，随本次呈现消费）。
+        page.orientation.clear_input = true;
+        Presentation::ready(page)
     }
 
     /// 只清朝向草稿（点/计算角度/待定角度），不清方案正式状态。
@@ -652,7 +660,6 @@ impl WorkspaceProductionAdapter {
             session.orientation_points.clear();
             session.orientation_angle = None;
             session.pending_orientation_angle = None;
-            session.orientation_input_text.clear();
             if let Some(plan_id) = session.active_plan_id.clone() {
                 let state = session.plans.entry(plan_id).or_default();
                 state.has_orientation = false;
@@ -664,7 +671,10 @@ impl WorkspaceProductionAdapter {
             crate::map_webview::evaluate_script("clearOrientationFromDrawer();");
         }
         self.context.export_flow.set_orientation(None);
-        Presentation::ready(self.context.page())
+        let mut page = self.context.page();
+        // T40：抽屉"重置"是输入框显式清空入口（一次性请求，随本次呈现消费）。
+        page.orientation.clear_input = true;
+        Presentation::ready(page)
     }
 
     /// T34：左侧抽屉开合（做法 A：展开时地图右移让位，收起时恢复原宽）。
