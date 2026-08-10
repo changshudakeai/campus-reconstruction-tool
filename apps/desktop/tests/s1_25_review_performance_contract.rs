@@ -1,0 +1,409 @@
+//! S1-25 / T39 契约测试：评审工作台卡顿 + 评审地图加载 P0 修复验收。
+//!
+//! 真实 1026 候选（建筑 1000 + 道路 26，贴近 T32 走查）进入评审工作台，
+//! 只验证呈现/地图推送层，不触碰 F5 评审/封账业务：
+//! 1. 卡片分页（每页 60）：模型行数 ≤ 页大小；翻页/切分类才重建模型，
+//!    三态/高亮/复选变更走单卡更新（模型实例指针不变，非整表重建）；
+//! 2. "分类切换 + 三态点击 10 次"计时：单次操作 ≤ 500ms（不再成秒级冻结）；
+//! 3. 评审地图回推计数（T39 计数器注入）：map_ready 全量只推 21 批一次；
+//!    一次高亮/三态/定位只产生 1 条回推，分类切换 0 条——不是每次交互
+//!    clear + 21 批全量；
+//! 4. 慢速注入/推送阶段不被误杀：全量推送与增量回推后地图仍可用、无错误
+//!    弹窗（评审页不挂 Rust 侧 10s 加载超时的策略由 map_webview 单测
+//!    `review_page_skips_rust_load_timeout` 锁定）。
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use data_persistence::{
+    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
+    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
+    RawObservationsApi,
+};
+use desktop_shell::{
+    assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
+};
+use global_settings::{FirstRunSetup, SettingsManager};
+use notification_center::{NotificationCenter, PresenterRegistry};
+use shared_domain_types::{CampusId, CandidateCategory};
+use slint::Model;
+
+/// 种子：1000 栋建筑 + 26 条道路 = 1026 个可评审候选（贴近 T32 走查的 1026）。
+fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
+    let mut observations = Vec::new();
+    for index in 0..1000 {
+        observations.push(RawObservation::new(
+            plan_id,
+            CandidateCategory::Building,
+            format!("way/b{index}"),
+            serde_json::json!({ "tags": { "name": format!("教学楼{index}") } }),
+            "overpass",
+        ));
+    }
+    for index in 0..26 {
+        observations.push(RawObservation::new(
+            plan_id,
+            CandidateCategory::Road,
+            format!("way/r{index}"),
+            serde_json::json!({ "tags": { "highway": "footway" } }),
+            "overpass",
+        ));
+    }
+    database
+        .write_raw_observations(&observations)
+        .expect("写入原始观测");
+    let batch = database
+        .prepare_candidate_batch(plan_id)
+        .expect("准备候选批次");
+    let mut projections = Vec::new();
+    let mut reviewable = Vec::new();
+    for observation in &observations {
+        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
+        let display = CandidateDisplay::new(
+            observation.source_data["tags"]["name"]
+                .as_str()
+                .unwrap_or(&observation.entity_id),
+            vec![("source".to_owned(), observation.data_source_tag.clone())],
+        );
+        projections.push(CandidateProjection::new(
+            &candidate_id,
+            plan_id,
+            &observation.id,
+            &observation.data_source_tag,
+            &observation.entity_id,
+            "default",
+            observation.entity_type,
+            display,
+            CandidateShape::polygon(serde_json::json!([
+                [121.4, 31.2],
+                [121.5, 31.2],
+                [121.4, 31.3],
+                [121.4, 31.2]
+            ])),
+            CandidateValidation::Retained,
+            CandidateEligibility::Reviewable,
+        ));
+        reviewable.push(candidate_id);
+    }
+    database
+        .write_candidate_projections(&batch.id, &projections)
+        .expect("写入候选投影");
+    database
+        .publish_candidate_batch(&batch.id)
+        .expect("发布候选批次");
+    reviewable
+}
+
+fn open_plan_and_review(
+    window: &AppWindow,
+    center: &Arc<NotificationCenter>,
+    injector: ViewModelInjector,
+    plan_id: &str,
+) {
+    let _runtime = assemble_application(window, injector, Arc::clone(center));
+    window.invoke_plan_list_card_clicked(plan_id.into());
+    window.invoke_workspace_tutorial_dismiss_clicked();
+    window.invoke_workspace_map_status_changed(true);
+    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
+        window.invoke_workspace_boundary_canvas_clicked(x, y);
+    }
+    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_step_clicked(3);
+}
+
+/// 在当前页切片中按候选 ID 找行号（数据库返回顺序不保证，不能假设行号）。
+fn card_row(window: &AppWindow, candidate_id: &str) -> usize {
+    (0..window.get_review_cards().row_count())
+        .find(|index| {
+            window
+                .get_review_cards()
+                .row_data(*index)
+                .expect("卡片存在")
+                .candidate_id
+                .as_str()
+                == candidate_id
+        })
+        .unwrap_or_else(|| panic!("候选 {candidate_id} 不在当前页切片中"))
+}
+
+#[test]
+fn review_performance_pagination_single_card_update_and_incremental_map_push() {
+    let window = AppWindow::new().expect("创建 AppWindow");
+    let center = NotificationCenter::init(PresenterRegistry::new());
+    center
+        .registry()
+        .set_presenter(ShellPresenter::install(&window));
+
+    let directory = tempfile::tempdir().expect("临时目录");
+    let database_path = directory.path().join("s1-25-review-performance.db");
+    let mut injector =
+        ViewModelInjector::new(ShellDatabases::open(&database_path).expect("连接数据库"))
+            .expect("创建注入器");
+    injector
+        .settings_mut()
+        .complete_first_run(&FirstRunSetup {
+            language: "zh-CN".into(),
+            minecraft_version: "26.1.2".into(),
+            acknowledged: true,
+        })
+        .expect("完成首次设置");
+    let campus = injector
+        .projects_mut()
+        .database()
+        .create_campus("验收校区")
+        .expect("创建校区");
+    let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");
+    let plan_id = injector
+        .projects_mut()
+        .create_plan(&campus_id, "验收方案")
+        .expect("创建方案");
+    injector
+        .settings_mut()
+        .remember_campus(&campus_id)
+        .expect("记录最近校区");
+    // 配置密钥：navigate(3) 因此会请求评审地图（is_review_page 生效，IPC 可路由）
+    let mut settings =
+        SettingsManager::new(data_persistence::Database::open(&database_path).expect("重开设置库"));
+    settings
+        .set_gaode_api_key("testapikey1234567890")
+        .expect("保存 API Key");
+    settings
+        .set_gaode_security_key("testsecuritykey1234567890")
+        .expect("保存安全密钥");
+    let reviewable = {
+        let mut database = injector.projects().database();
+        seed_candidates(&mut database, &plan_id.to_string())
+    };
+    assert_eq!(reviewable.len(), 1026);
+    open_plan_and_review(&window, &center, injector, &plan_id.to_string());
+    assert_eq!(window.get_workspace_active_step(), 3);
+    assert_eq!(
+        window.get_review_candidate_count(),
+        1026,
+        "候选必须全部进入评审页"
+    );
+    window.invoke_workspace_drawer_toggle_clicked();
+    assert!(window.get_workspace_drawer_open(), "评审抽屉必须可展开");
+
+    // ── 验收 1a：卡片分页（每页 60；Slint 无虚拟化 → 不一次实例化千级卡片）──
+    assert_eq!(window.get_review_page_size(), 60, "页大小必须在 50–100 内");
+    assert_eq!(
+        window.get_review_page_total(),
+        17,
+        "建筑 1000 → ceil(1000/60)=17 页"
+    );
+    assert_eq!(window.get_review_page_index(), 0);
+    assert!(window.get_review_page_label().contains("1/17"));
+    assert!(
+        window.get_review_cards().row_count() <= 60,
+        "模型只含当前页切片（实际 {}）",
+        window.get_review_cards().row_count()
+    );
+    let page_one_first = window
+        .get_review_cards()
+        .row_data(0)
+        .expect("第一页必须有卡片")
+        .candidate_id
+        .to_string();
+    let page_one_ids: Vec<String> = (0..window.get_review_cards().row_count())
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .expect("第一页卡片存在")
+                .candidate_id
+                .to_string()
+        })
+        .collect();
+    assert_eq!(page_one_ids.len(), 60, "第一页必须满页 60 张卡");
+
+    // 翻页：下一页 → 模型重建（新页切片），上一页复位
+    let model_page_one = window.get_review_cards();
+    window.invoke_review_page_next_clicked();
+    assert_eq!(window.get_review_page_index(), 1);
+    assert_ne!(
+        window.get_review_cards(),
+        model_page_one,
+        "翻页必须重建模型（新页切片）"
+    );
+    assert_eq!(window.get_review_cards().row_count(), 60, "第 2 页必须满页");
+    let page_two_first = window
+        .get_review_cards()
+        .row_data(0)
+        .expect("第 2 页必须有卡片")
+        .candidate_id
+        .to_string();
+    assert!(
+        !page_one_ids.contains(&page_two_first),
+        "第 2 页必须与第 1 页切片不同（页 1 首卡 {page_one_first}，页 2 首卡 {page_two_first}）"
+    );
+    window.invoke_review_page_prev_clicked();
+    assert_eq!(window.get_review_page_index(), 0);
+    assert_eq!(
+        window
+            .get_review_cards()
+            .row_data(0)
+            .expect("回到第 1 页必须有卡片")
+            .candidate_id
+            .as_str(),
+        page_one_first.as_str(),
+        "上一页必须回到第 1 页切片"
+    );
+
+    // 分类切换复位到第一页（道路 26 → 1 页）
+    window.invoke_review_category_clicked(1);
+    assert_eq!(window.get_review_active_category(), 1);
+    assert_eq!(window.get_review_page_index(), 0);
+    assert_eq!(window.get_review_page_total(), 1, "道路 26 → 1 页");
+    window.invoke_review_category_clicked(0);
+    assert_eq!(window.get_review_active_category(), 0);
+    assert_eq!(window.get_review_page_index(), 0);
+
+    // ── 验收 3：评审地图回推计数（计数器注入；全量只推一次，之后增量）──
+    // 后续操作全部使用当前页切片内真实存在的候选（数据库返回顺序不保证）。
+    let page_ids: Vec<String> = (0..window.get_review_cards().row_count())
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .expect("当前页卡片存在")
+                .candidate_id
+                .to_string()
+        })
+        .collect();
+    assert_eq!(page_ids.len(), 60, "当前页必须满页 60 张卡");
+    desktop_shell::set_review_push_probe_visible(true);
+    desktop_shell::reset_review_push_count();
+    window.invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
+    // 无事件循环环境下用一次不改变地图的交互触发内联冲刷（生产由下一拍
+    // 事件循环 Timer 执行；这里验证同一全量推送路径只发生一次）。
+    window.invoke_review_category_clicked(1);
+    window.invoke_review_category_clicked(0);
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        21,
+        "map_ready 全量只推一次：1026/50 = 21 批 addReviewCandidate，无 clear 循环"
+    );
+
+    // 一次高亮操作 → 只产生 1 条回推（不是 21 批全量）
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_card_highlight_clicked(page_ids[0].clone().into());
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        1,
+        "高亮操作只推 1 条 highlightReviewCandidate"
+    );
+    let highlighted_row = card_row(&window, &page_ids[0]);
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(highlighted_row)
+            .expect("高亮卡片存在")
+            .highlighted
+    );
+
+    // 一次三态操作 → 只推对应候选 1 条 updateReviewCandidate
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_card_state_clicked(page_ids[1].clone().into(), "remove".into());
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        1,
+        "三态操作只推 1 条 updateReviewCandidate"
+    );
+
+    // 分类切换不改变地图对象 → 0 条回推
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_category_clicked(1);
+    window.invoke_review_category_clicked(0);
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        0,
+        "分类切换不产生地图回推"
+    );
+
+    // 定位 → 只推 1 条 locateReviewCandidate（JS 已自高亮，不重复推高亮）
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_locate_clicked(page_ids[2].clone().into());
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        1,
+        "定位只推 1 条 locateReviewCandidate"
+    );
+
+    // 验收 2/4：推送阶段（慢速注入场景）不得被误杀——地图仍可用、无错误弹窗
+    assert!(
+        !window.get_error_dialog_visible(),
+        "全量推送与增量回推阶段不得被加载超时误杀弹错"
+    );
+    assert_eq!(window.get_review_candidate_count(), 1026);
+    window.invoke_review_card_state_clicked(page_ids[3].clone().into(), "keep".into());
+    let kept_row = card_row(&window, &page_ids[3]);
+    assert_eq!(
+        window
+            .get_review_cards()
+            .row_data(kept_row)
+            .expect("卡片存在")
+            .state_key
+            .as_str(),
+        "keep",
+        "推送后评审操作仍可继续"
+    );
+    desktop_shell::set_review_push_probe_visible(false);
+
+    // ── 验收 1b：三态/高亮变更走单卡更新（模型实例指针不变，非整表重建）──
+    let model = window.get_review_cards();
+    let target_row = card_row(&window, &page_ids[0]);
+    let before_state = model.row_data(target_row).unwrap().state_key.to_string();
+    window.invoke_review_card_state_clicked(page_ids[0].clone().into(), "keep".into());
+    assert_eq!(
+        window.get_review_cards(),
+        model,
+        "三态变更必须走单卡更新，不得重建整表模型"
+    );
+    assert_eq!(
+        window
+            .get_review_cards()
+            .row_data(target_row)
+            .unwrap()
+            .state_key
+            .as_str(),
+        "keep",
+        "单卡更新后状态必须生效（before={before_state}）"
+    );
+    window.invoke_review_card_highlight_clicked(page_ids[0].clone().into());
+    assert_eq!(
+        window.get_review_cards(),
+        model,
+        "高亮变更必须走单卡更新，不得重建整表模型"
+    );
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(target_row)
+            .unwrap()
+            .highlighted
+    );
+
+    // ── 验收 1c：分类切换 + 三态点击 10 次计时（单次 ≤ 500ms）──
+    let mut worst = Duration::ZERO;
+    for index in 0..5_i32 {
+        let started = Instant::now();
+        window.invoke_review_category_clicked(index % 2);
+        let elapsed = started.elapsed();
+        worst = worst.max(elapsed);
+        assert!(
+            elapsed <= Duration::from_millis(500),
+            "分类切换 {index} 次耗时 {elapsed:?} 超过 500ms"
+        );
+    }
+    for candidate in page_ids.iter().take(5) {
+        let started = Instant::now();
+        window.invoke_review_card_state_clicked(candidate.clone().into(), "keep".into());
+        let elapsed = started.elapsed();
+        worst = worst.max(elapsed);
+        assert!(
+            elapsed <= Duration::from_millis(500),
+            "三态点击 {candidate} 耗时 {elapsed:?} 超过 500ms"
+        );
+    }
+}

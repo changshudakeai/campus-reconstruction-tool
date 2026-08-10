@@ -252,6 +252,13 @@ export component AppWindow inherits Window {
     in property <[int]> review-category-counts;
     in property <int> review-active-category;
     in property <[ReviewCandidateData]> review-cards;
+    // T39 分页：当前页切片 + 页码/翻页按钮（Slint 无虚拟化，50–100/页）。
+    in property <int> review-page-size;
+    in property <int> review-page-index;
+    in property <int> review-page-total;
+    in property <string> review-page-label;
+    in property <string> review-page-prev-label;
+    in property <string> review-page-next-label;
     in property <string> review-selected-count-label;
     in property <bool> review-bulk-buttons-visible;
     in property <string> review-set-keep-label;
@@ -283,6 +290,8 @@ export component AppWindow inherits Window {
     // 不参与评审/封账逻辑；由 ReviewView 内部几何经双向绑定上联。
     in-out property <length> review-list-viewport-y;
     callback review-category-clicked(index: int);
+    callback review-page-prev-clicked();
+    callback review-page-next-clicked();
     callback review-card-highlight-clicked(candidate-id: string);
     callback review-card-state-clicked(candidate-id: string, state: string);
     callback review-card-selection-toggled(candidate-id: string);
@@ -979,6 +988,12 @@ export component AppWindow inherits Window {
                     category-counts: root.review-category-counts;
                     active-category: root.review-active-category;
                     cards: root.review-cards;
+                    page-size: root.review-page-size;
+                    page-index: root.review-page-index;
+                    page-total: root.review-page-total;
+                    page-label: root.review-page-label;
+                    page-prev-label: root.review-page-prev-label;
+                    page-next-label: root.review-page-next-label;
                     selected-count-label: root.review-selected-count-label;
                     bulk-buttons-visible: root.review-bulk-buttons-visible;
                     detail-visible: root.review-detail-visible;
@@ -1006,6 +1021,8 @@ export component AppWindow inherits Window {
                     summary-text: root.review-summary-text;
                     list-viewport-y <=> root.review-list-viewport-y;
                     category-clicked(index) => { root.review-category-clicked(index); }
+                    page-prev-clicked => { root.review-page-prev-clicked(); }
+                    page-next-clicked => { root.review-page-next-clicked(); }
                     card-highlight-clicked(candidate-id) => { root.review-card-highlight-clicked(candidate-id); }
                     card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
                     card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }

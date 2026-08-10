@@ -11,6 +11,9 @@ use localization::Localization;
 use notification_center::Notification;
 use review_workbench::{CandidateKey, CommandOutcome, ExportSummary, ReviewWorkbench, StateChange};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 #[cfg(test)]
 use super::record_entry_call;
@@ -29,12 +32,46 @@ const REVIEW_CATEGORY_ORDER: [CandidateCategory; 6] = [
 ///
 /// 每次进入评审台（Open）都从 B2 一次性装载当前方案的 Reviewable 候选并恢复上一轮
 /// 封账终态；Isolated 与原始观测由 B2 资格接口排除，S1 不做业务编排。
-pub(crate) struct ReviewProductionAdapter(pub(crate) WorkspaceProductionContext);
+pub(crate) struct ReviewProductionAdapter {
+    pub(crate) context: WorkspaceProductionContext,
+    /// T39：评审地图回推同步状态（全量只推一次，之后增量只推对应候选）。
+    map_sync: Rc<RefCell<ReviewMapSync>>,
+}
+
+/// T39：评审地图回推同步状态。
+#[derive(Default)]
+struct ReviewMapSync {
+    /// 已推送到 JS 的三态（candidate_id -> state 标识符；增量 diff 基准）。
+    pushed_states: HashMap<String, String>,
+    /// 已推送的高亮候选（None = 无高亮）。
+    pushed_highlight: Option<String>,
+    /// 待执行的 map_ready 全量推送（IPC 回调栈内只排定，事件循环安全上下文执行）。
+    pending_full_push: Option<PendingFullPush>,
+    /// 全量推送是否已排定（幂等，防止多次 map_ready 重复排定）。
+    full_push_scheduled: bool,
+}
+
+/// 一次 map_ready 全量推送的载荷（脚本 + 推送后应记录的基准状态）。
+struct PendingFullPush {
+    scripts: Vec<String>,
+    states: HashMap<String, String>,
+    highlight: Option<String>,
+}
+
+/// T39：评审候选列表分页页大小（Slint 无虚拟化；50–100 内取 60）。
+const REVIEW_PAGE_SIZE: usize = 60;
 
 impl ReviewProductionAdapter {
+    pub(crate) fn new(context: WorkspaceProductionContext) -> Self {
+        Self {
+            context,
+            map_sync: Rc::new(RefCell::new(ReviewMapSync::default())),
+        }
+    }
+
     fn empty_page(&self) -> ReviewPageState {
-        let workspace = self.0.page();
-        let injector = self.0.injector();
+        let workspace = self.context.page();
+        let injector = self.context.injector();
         let injector = injector.borrow();
         let l10n = injector.l10n();
         let page = ReviewPageState {
@@ -46,6 +83,15 @@ impl ReviewProductionAdapter {
             category_counts: Vec::new(),
             active_category: 0,
             cards: Vec::new(),
+            page_size: REVIEW_PAGE_SIZE as i32,
+            page_index: 0,
+            page_total: 1,
+            page_label: l10n.t_with_args(
+                "review.page_label",
+                serde_json::json!({ "current": 1, "total": 1 }),
+            ),
+            page_prev_label: l10n.t("review.page_prev"),
+            page_next_label: l10n.t("review.page_next"),
             selected_count_label: String::new(),
             bulk_buttons_visible: false,
             set_keep_label: l10n.t("review.set_keep"),
@@ -86,8 +132,8 @@ impl ReviewProductionAdapter {
     /// 回调栈内不再执行 WebView2 脚本调用，避免 COM 通道时序竞争；标注由
     /// 用户操作后的安全上下文（`page_state` 尾部）统一推送）。
     fn page_state_quiet(&self) -> ReviewPageState {
-        let workspace = self.0.page();
-        let injector = self.0.injector();
+        let workspace = self.context.page();
+        let injector = self.context.injector();
         let injector = injector.borrow();
         let l10n = injector.l10n();
         let Some(workbench) = injector.review() else {
@@ -110,7 +156,7 @@ impl ReviewProductionAdapter {
             .iter()
             .position(|tab| tab.active)
             .unwrap_or(0) as i32;
-        let cards: Vec<ReviewCandidateData> = view
+        let mut cards: Vec<ReviewCandidateData> = view
             .cards
             .iter()
             .map(|card| ReviewCandidateData {
@@ -123,6 +169,22 @@ impl ReviewProductionAdapter {
                 highlighted: card.highlighted,
             })
             .collect();
+        // T39：Slint 无虚拟化 → 卡片分页（每页 60，50–100 内）。全量卡片只在
+        // 切分类/翻页时重建；三态/高亮变更由呈现层单卡更新（set_row_data）。
+        let page_total = cards.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
+        let page_index = {
+            let mut session = self.context.session.borrow_mut();
+            let index = session.review_page_index.min(page_total - 1);
+            session.review_page_index = index;
+            index
+        };
+        let start = page_index * REVIEW_PAGE_SIZE;
+        let end = (start + REVIEW_PAGE_SIZE).min(cards.len());
+        cards = cards[start..end].to_vec();
+        let page_label = l10n.t_with_args(
+            "review.page_label",
+            serde_json::json!({ "current": page_index + 1, "total": page_total }),
+        );
         let (
             detail_visible,
             detail_title,
@@ -186,6 +248,12 @@ impl ReviewProductionAdapter {
             category_counts,
             active_category,
             cards,
+            page_size: REVIEW_PAGE_SIZE as i32,
+            page_index: page_index as i32,
+            page_total: page_total as i32,
+            page_label,
+            page_prev_label: l10n.t("review.page_prev"),
+            page_next_label: l10n.t("review.page_next"),
             selected_count_label,
             bulk_buttons_visible: view.bulk_buttons_visible,
             set_keep_label: l10n.t("review.set_keep"),
@@ -228,61 +296,146 @@ impl ReviewProductionAdapter {
         }
     }
 
-    /// 把 F5 当前候选标注（待定虚线/保留实线/剔除隐藏）与高亮状态同步到评审地图。
+    /// 把 F5 当前候选标注（待定虚线/保留实线/剔除隐藏）与高亮状态**增量**
+    /// 同步到评审地图（T39）。
     ///
-    /// 地图不可用或非评审页时为空操作；剔除候选由 JS 侧跳过（卡片保留可改回）。
-    /// 分批推送（清空 + 每批多条 addReviewCandidate）：真实 OSM 几何使全量
-    /// JSON 可达数百 KB，拆分小载荷降低 WebView2 ExecuteScript 通道压力
-    /// （JS 侧再以 50/150ms 分批上屏，避免一次创建上千多边形过载）。
+    /// 全量推送只在 Open/MapReady 发生一次（[`Self::schedule_review_map_full_push`]）；
+    /// 之后的 state/highlight/locate 变更只推对应候选：state 变化 → 单条
+    /// `updateReviewCandidate`；高亮变化 → 单条 `highlightReviewCandidate` /
+    /// `clearReviewHighlight`。禁止每次交互 clear + 全量重推（21 批）。
+    /// 地图不可用或非评审页时为空操作。map_ready 排定的全量推送若尚未被
+    /// 事件循环执行（生产下一拍；测试无事件循环），这里在用户操作的安全
+    /// 上下文内联冲刷一次，避免候选状态与地图失配。
     fn sync_review_map(&self) {
-        if !crate::map_webview::is_review_page() || !crate::map_webview::is_visible() {
+        if !crate::map_webview::is_review_page() || !crate::map_webview::review_push_visible() {
             return;
         }
-        let injector = self.0.injector();
+        let mut sync = self.map_sync.borrow_mut();
+        let mut scripts = Vec::new();
+        if let Some(pending) = sync.pending_full_push.take() {
+            // 全量推送尚未执行（timer 未触发）：在安全上下文内联执行并记录
+            // 基准状态，随后继续本交互的增量 diff（同一候选不会被重复推送）。
+            log::debug!(
+                "sync_review_map: 内联冲刷 map_ready 全量推送 {} 条脚本",
+                pending.scripts.len()
+            );
+            for script in &pending.scripts {
+                push_review_script(script);
+            }
+            sync.pushed_states = pending.states;
+            sync.pushed_highlight = pending.highlight;
+        }
+        let injector = self.context.injector();
         let injector = injector.borrow();
         let Some(workbench) = injector.review() else {
             return;
         };
         let view = workbench.view();
-        let objects: Vec<serde_json::Value> = view
+        for object in &view.map_objects {
+            let state = object.state.to_identifier().to_string();
+            if sync.pushed_states.get(&object.candidate_id) != Some(&state) {
+                let json = serde_json::to_string(&map_object_json(object))
+                    .unwrap_or_else(|_| "{}".to_string());
+                scripts.push(format!("window.updateReviewCandidate({json});"));
+                sync.pushed_states
+                    .insert(object.candidate_id.clone(), state);
+            }
+        }
+        let highlighted = workbench.highlighted().map(|key| key.candidate_id.clone());
+        if sync.pushed_highlight != highlighted {
+            match &highlighted {
+                Some(key) => {
+                    let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
+                    scripts.push(format!("window.highlightReviewCandidate({id});"));
+                }
+                None => scripts.push("window.clearReviewHighlight();".to_string()),
+            }
+            sync.pushed_highlight = highlighted;
+        }
+        drop(sync);
+        for script in scripts {
+            push_review_script(&script);
+        }
+    }
+
+    /// map_ready 后的全量推送：在事件循环安全上下文分批推送一次。
+    ///
+    /// 在 WebView2 IPC 回调栈内只计算脚本并排定执行（T35/T38 纪律：回调栈内
+    /// 不执行 WebView2 脚本调用，避免 COM 通道时序竞争）；实际 evaluate_script
+    /// 由下一拍事件循环回调执行。全量采用"无清空 + 分批 addReviewCandidate"
+    /// ——评审地图页每次创建都是空画布，无需 clear + 全量重推循环。
+    fn schedule_review_map_full_push(&self) {
+        let injector = self.context.injector();
+        let injector = injector.borrow();
+        let Some(workbench) = injector.review() else {
+            return;
+        };
+        let view = workbench.view();
+        let objects: Vec<serde_json::Value> =
+            view.map_objects.iter().map(map_object_json).collect();
+        let states: HashMap<String, String> = view
             .map_objects
             .iter()
             .map(|object| {
-                serde_json::json!({
-                    "candidate_id": object.candidate_id,
-                    "kind": object.shape_kind,
-                    "coordinates": object.shape_coordinates,
-                    "state": object.state.to_identifier(),
-                })
+                (
+                    object.candidate_id.clone(),
+                    object.state.to_identifier().to_string(),
+                )
             })
             .collect();
-        log::debug!(
-            "sync_review_map: 推送 {} 个候选标注（分批 {}）",
-            objects.len(),
-            objects.len().div_ceil(CHUNK_SIZE)
+        let highlight = workbench.highlighted().map(|key| key.candidate_id.clone());
+        let scripts = full_push_scripts(&objects, highlight.as_ref());
+        drop(injector);
+        let mut sync = self.map_sync.borrow_mut();
+        if sync.pending_full_push.is_some() {
+            return;
+        }
+        sync.pending_full_push = Some(PendingFullPush {
+            scripts,
+            states,
+            highlight,
+        });
+        if sync.full_push_scheduled {
+            return;
+        }
+        sync.full_push_scheduled = true;
+        let map_sync = Rc::clone(&self.map_sync);
+        // 用 UI 线程一次性 Timer 把全量推送排到 IPC 回调栈之外（Timer 回调
+        // 无 Send 约束，Rc<RefCell> 可安全捕获；invoke_from_event_loop 要求
+        // Send，不适合持有 Rc 的同步状态）。
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
+            let mut sync = map_sync.borrow_mut();
+            if let Some(pending) = sync.pending_full_push.take() {
+                log::debug!(
+                    "sync_review_map: map_ready 全量推送 {} 条脚本",
+                    pending.scripts.len()
+                );
+                for script in &pending.scripts {
+                    push_review_script(script);
+                }
+                sync.pushed_states = pending.states;
+                sync.pushed_highlight = pending.highlight;
+            }
+            sync.full_push_scheduled = false;
+        });
+    }
+
+    /// 创建评审地图（候选不再内嵌 HTML；无密钥/锚点时跳过，抽屉仍可操作）。
+    /// 候选标注在页面 map_ready 后由 Rust 分批推送。
+    fn show_review_map(&self) {
+        let Some((keys, anchor)) = self.context.map_credentials() else {
+            return;
+        };
+        if keys.0.is_empty() {
+            return;
+        }
+        crate::map_webview::show_review(
+            self.context.window.clone(),
+            keys.0,
+            keys.1,
+            anchor.0,
+            anchor.1,
         );
-        const CHUNK_SIZE: usize = 50;
-        let mut scripts = vec!["window.clearReviewOverlays();".to_string()];
-        for chunk in objects.chunks(CHUNK_SIZE) {
-            let mut script = String::new();
-            for object in chunk {
-                let json = serde_json::to_string(object).unwrap_or_else(|_| "{}".to_string());
-                script.push_str("window.addReviewCandidate(");
-                script.push_str(&json);
-                script.push_str(");");
-            }
-            scripts.push(script);
-        }
-        match workbench.highlighted() {
-            Some(key) => {
-                let id = serde_json::to_string(&key.candidate_id).unwrap_or_else(|_| "\"\"".into());
-                scripts.push(format!("window.highlightReviewCandidate({id});"));
-            }
-            None => scripts.push("window.clearReviewHighlight();".to_string()),
-        }
-        for script in scripts {
-            crate::map_webview::evaluate_script(&script);
-        }
     }
 
     /// 封账后的导出摘要文案（保留/待定/剔除计数 + 按类别保留明细）。
@@ -322,7 +475,7 @@ impl ReviewProductionAdapter {
 
     /// 简单变更（无需确认）：应用后呈现最新页面状态。
     fn mutate_simple(&self, f: impl FnOnce(&mut ReviewWorkbench)) -> Presentation<ReviewPageState> {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let mut injector = injector.borrow_mut();
         if let Some(workbench) = injector.review_mut() {
             f(workbench);
@@ -337,7 +490,7 @@ impl ReviewProductionAdapter {
         &self,
         f: impl FnOnce(&mut ReviewWorkbench) -> review_workbench::Result<()>,
     ) -> std::result::Result<Option<()>, review_workbench::Error> {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let mut injector = injector.borrow_mut();
         match injector.review_mut() {
             Some(workbench) => f(workbench).map(Some),
@@ -350,7 +503,7 @@ impl ReviewProductionAdapter {
         &self,
         f: impl FnOnce(&mut ReviewWorkbench) -> review_workbench::Result<CommandOutcome>,
     ) -> std::result::Result<Option<CommandOutcome>, review_workbench::Error> {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let mut injector = injector.borrow_mut();
         match injector.review_mut() {
             Some(workbench) => f(workbench).map(Some),
@@ -363,7 +516,7 @@ impl ReviewProductionAdapter {
             CommandOutcome::Applied { .. } => Presentation::ready(self.page_state())
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             CommandOutcome::NeedsConfirmation(request) => {
-                let injector = self.0.injector();
+                let injector = self.context.injector();
                 let injector = injector.borrow();
                 let l10n = injector.l10n();
                 let confirmation = ConfirmationPresentation::new(
@@ -430,7 +583,7 @@ impl ReviewProductionAdapter {
         &self,
         error: &review_workbench::Error,
     ) -> Presentation<ReviewPageState> {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let injector = injector.borrow();
         let l10n = injector.l10n();
         let (title, body) = match error {
@@ -458,7 +611,7 @@ impl ReviewProductionAdapter {
 
     /// 评审台装载失败：B7 呈现结构化失败，页面回退到空态。
     fn enter_failure_presentation(&self) -> Presentation<ReviewPageState> {
-        let injector = self.0.injector();
+        let injector = self.context.injector();
         let injector = injector.borrow();
         let l10n = injector.l10n();
         let notification = Notification::error(
@@ -472,22 +625,22 @@ impl ReviewProductionAdapter {
     }
 
     fn open(&self) -> Presentation<ReviewPageState> {
-        let Some(plan_id) = self.0.active_plan_id() else {
+        let Some(plan_id) = self.context.active_plan_id() else {
             return Presentation::ready(self.empty_page())
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         };
         let result = PlanId::parse(&plan_id)
             .map_err(|_| anyhow::anyhow!("invalid plan id"))
             .and_then(|plan_id| {
-                let injector = self.0.injector();
+                let injector = self.context.injector();
                 let mut injector = injector.borrow_mut();
                 injector.enter_review(&plan_id)
             });
         match result {
             Ok(()) => {
-                // T38：评审地图在候选装载后创建——候选标注内嵌 HTML、页面加载后
-                // 自绘并发送 map_ready，Rust 侧无需在 IPC 回调栈内回推脚本
-                // （回调栈内不再执行 WebView2 脚本调用，避免 COM 通道时序竞争）。
+                // T38/T39：评审地图在候选装载后创建——候选不再内嵌 HTML；
+                // 页面加载后发送 map_ready，Rust 在事件循环安全上下文全量
+                // 推送一次（回调栈内不执行 WebView2 脚本调用，T35 同纪律）。
                 self.show_review_map();
                 Presentation::ready(self.page_state())
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
@@ -497,43 +650,45 @@ impl ReviewProductionAdapter {
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
         }
     }
+}
 
-    /// 创建评审地图（候选标注内嵌 HTML；无密钥/锚点时跳过，抽屉仍可操作）。
-    fn show_review_map(&self) {
-        let Some((keys, anchor)) = self.0.map_credentials() else {
-            return;
-        };
-        if keys.0.is_empty() {
-            return;
+/// 评审地图对象 → JS 载荷（与 B3 回推协议同构）。
+fn map_object_json(object: &review_workbench::MapObjectView) -> serde_json::Value {
+    serde_json::json!({
+        "candidate_id": object.candidate_id,
+        "kind": object.shape_kind,
+        "coordinates": object.shape_coordinates,
+        "state": object.state.to_identifier(),
+    })
+}
+
+/// 全量推送脚本：每批 50 条 `addReviewCandidate` + 高亮命令（如有）。
+/// 真实 OSM 几何使全量 JSON 可达数百 KB，拆分小载荷降低 WebView2
+/// ExecuteScript 通道压力（JS 侧再以 50/150ms 分批上屏）。
+fn full_push_scripts(objects: &[serde_json::Value], highlight: Option<&String>) -> Vec<String> {
+    const CHUNK_SIZE: usize = 50;
+    let mut scripts = Vec::new();
+    for chunk in objects.chunks(CHUNK_SIZE) {
+        let mut script = String::new();
+        for object in chunk {
+            let json = serde_json::to_string(object).unwrap_or_else(|_| "{}".to_string());
+            script.push_str("window.addReviewCandidate(");
+            script.push_str(&json);
+            script.push_str(");");
         }
-        let injector = self.0.injector();
-        let injector = injector.borrow();
-        let Some(workbench) = injector.review() else {
-            return;
-        };
-        let objects: Vec<serde_json::Value> = workbench
-            .view()
-            .map_objects
-            .iter()
-            .map(|object| {
-                serde_json::json!({
-                    "candidate_id": object.candidate_id,
-                    "kind": object.shape_kind,
-                    "coordinates": object.shape_coordinates,
-                    "state": object.state.to_identifier(),
-                })
-            })
-            .collect();
-        drop(injector);
-        crate::map_webview::show_review(
-            self.0.window.clone(),
-            keys.0,
-            keys.1,
-            anchor.0,
-            anchor.1,
-            objects,
-        );
+        scripts.push(script);
     }
+    if let Some(key) = highlight {
+        let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
+        scripts.push(format!("window.highlightReviewCandidate({id});"));
+    }
+    scripts
+}
+
+/// 评审地图回推命令：先计数（T39 验收观察），再执行（无 WebView 时为空操作）。
+fn push_review_script(script: &str) {
+    crate::map_webview::note_review_push();
+    crate::map_webview::evaluate_script(script);
 }
 
 impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAdapter {
@@ -547,7 +702,22 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     return Presentation::ready(self.page_state())
                         .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
+                // T39：切分类复位分页到第一页（新分类从第一张卡开始浏览）。
+                self.context.session.borrow_mut().review_page_index = 0;
                 self.mutate_simple(|workbench| workbench.set_active_category(category))
+            }
+            ReviewRequest::PagePrev => {
+                let mut session = self.context.session.borrow_mut();
+                session.review_page_index = session.review_page_index.saturating_sub(1);
+                drop(session);
+                self.mutate_simple(|_| {})
+            }
+            ReviewRequest::PageNext => {
+                // 上限由 page_state_quiet 按当前分类总页数钳制回写。
+                let mut session = self.context.session.borrow_mut();
+                session.review_page_index += 1;
+                drop(session);
+                self.mutate_simple(|_| {})
             }
             ReviewRequest::SetState {
                 candidate_id,
@@ -578,20 +748,25 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 // 地图中心跳转 + 高亮（JS 侧；无 WebView/非评审页时为空操作）
                 if result.is_ok() && crate::map_webview::is_review_page() {
                     let id = serde_json::to_string(&candidate_id).unwrap_or_else(|_| "\"\"".into());
-                    crate::map_webview::evaluate_script(&format!(
-                        "window.locateReviewCandidate({id});"
-                    ));
+                    push_review_script(&format!("window.locateReviewCandidate({id});"));
+                    // locate 的 JS 已自高亮：记录已推送高亮，避免 page_state
+                    // 尾部的 sync_review_map 再补一条重复高亮命令（一次定位
+                    // 只产生 1 条回推）。
+                    self.map_sync.borrow_mut().pushed_highlight = Some(candidate_id);
                 }
                 self.present_apply(result)
             }
             ReviewRequest::MapReady => {
-                // 评审地图就绪：仅呈现页面（候选标注已内嵌 HTML 自绘；后续
-                // 状态变更由 page_state 尾部的 sync_review_map 统一同步）。
+                // T39：评审地图就绪——候选不再内嵌 HTML，这里排定一次全量
+                // 推送（事件循环安全上下文执行，不在 IPC 回调栈内
+                // evaluate_script）；后续 state/highlight/locate 变更由
+                // page_state 尾部的 sync_review_map 增量只推对应候选。
+                self.schedule_review_map_full_push();
                 Presentation::ready(self.page_state_quiet())
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             ReviewRequest::MapFailed { message } => {
-                let injector = self.0.injector();
+                let injector = self.context.injector();
                 let injector = injector.borrow();
                 let l10n = injector.l10n();
                 let body = if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
@@ -636,10 +811,10 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 self.present_apply(self.apply(|workbench| workbench.cancel_pending()))
             }
             ReviewRequest::Pause => {
-                let plan_id = self.0.active_plan_id().unwrap_or_default();
+                let plan_id = self.context.active_plan_id().unwrap_or_default();
                 let path = self.session_path(&plan_id);
                 let result = {
-                    let injector = self.0.injector();
+                    let injector = self.context.injector();
                     let injector = injector.borrow();
                     injector
                         .review()
@@ -647,7 +822,7 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 };
                 match result {
                     Some(Ok(())) => {
-                        let injector = self.0.injector();
+                        let injector = self.context.injector();
                         let injector = injector.borrow();
                         let l10n = injector.l10n();
                         let notification = Notification::info(
@@ -668,12 +843,12 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 }
             }
             ReviewRequest::Resume => {
-                let plan_id = self.0.active_plan_id().unwrap_or_default();
+                let plan_id = self.context.active_plan_id().unwrap_or_default();
                 let path = self.session_path(&plan_id);
                 let result = self.apply(|workbench| workbench.restore_session(&path));
                 match result {
                     Ok(Some(())) => {
-                        let injector = self.0.injector();
+                        let injector = self.context.injector();
                         let injector = injector.borrow();
                         let l10n = injector.l10n();
                         let notification = Notification::info(
@@ -695,7 +870,7 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             }
             ReviewRequest::Seal => {
                 let result = {
-                    let injector = self.0.injector();
+                    let injector = self.context.injector();
                     let mut injector = injector.borrow_mut();
                     injector.seal_review()
                 };

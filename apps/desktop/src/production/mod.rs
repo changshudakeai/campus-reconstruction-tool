@@ -205,7 +205,7 @@ impl ProductionEntries {
             workspace: WorkspacePresentationEntry::new(WorkspaceProductionAdapter {
                 context: workspace.clone(),
             }),
-            review: ReviewPresentationEntry::new(ReviewProductionAdapter(workspace.clone())),
+            review: ReviewPresentationEntry::new(ReviewProductionAdapter::new(workspace.clone())),
             export: ExportPresentationEntry::new(ExportProductionAdapter {
                 context: workspace.clone(),
                 flow: export_flow,
@@ -493,6 +493,16 @@ impl ProductionEntries {
                 index: index as usize,
             },
         );
+    }
+
+    /// T39：评审候选列表上一页（分页；翻页时才重建当前页切片）。
+    pub(crate) fn review_page_prev(&mut self, window: &AppWindow) {
+        self.submit_review(window, ReviewRequest::PagePrev);
+    }
+
+    /// T39：评审候选列表下一页（分页）。
+    pub(crate) fn review_page_next(&mut self, window: &AppWindow) {
+        self.submit_review(window, ReviewRequest::PageNext);
     }
 
     pub(crate) fn review_set_state(
@@ -820,9 +830,9 @@ impl ProductionEntries {
         if crate::map_webview::is_review_page() {
             match gaode_client::parse_ipc_message(message) {
                 Ok(IpcMessage::MapReady) => {
-                    // 评审地图就绪：仅呈现页面——候选标注已内嵌 HTML 由页面
-                    // 自绘，不再回推 evaluate_script（回调栈内不再执行
-                    // WebView2 脚本调用，避免 COM 通道时序竞争）。
+                    // T39：评审地图就绪——候选不再内嵌 HTML；评审入口排定
+                    // 一次全量推送，由事件循环安全上下文执行（回调栈内不再
+                    // 执行 WebView2 脚本调用，T35/T38 同纪律）。
                     self.submit_review(window, ReviewRequest::MapReady);
                 }
                 Ok(IpcMessage::ReviewObjectClicked { candidate_id }) => {
@@ -1304,6 +1314,20 @@ impl ProductionEntries {
         window.on_review_category_clicked(move |index| {
             let Some(window) = weak.upgrade() else { return };
             shared.borrow_mut().review_set_category(&window, index);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_page_prev_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            shared.borrow_mut().review_page_prev(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_page_next_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            shared.borrow_mut().review_page_next(&window);
         });
 
         let weak = window.as_weak();

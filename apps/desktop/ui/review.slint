@@ -33,6 +33,13 @@ export component ReviewDrawer inherits Rectangle {
     in property <[int]> category-counts;
     in property <int> active-category;
     in property <[ReviewCandidateData]> cards;
+    // T39 分页（Slint 无虚拟化）：当前页切片 + 页码/翻页按钮。
+    in property <int> page-size;
+    in property <int> page-index;
+    in property <int> page-total;
+    in property <string> page-label;
+    in property <string> page-prev-label;
+    in property <string> page-next-label;
     in property <string> selected-count-label;
     in property <bool> bulk-buttons-visible;
     // 选中候选详情（名称/类别/标签与属性/来源/状态）。
@@ -66,6 +73,8 @@ export component ReviewDrawer inherits Rectangle {
     in-out property <length> list-viewport-y;
 
     callback category-clicked(index: int);
+    callback page-prev-clicked();
+    callback page-next-clicked();
     callback card-highlight-clicked(candidate-id: string);
     callback card-state-clicked(candidate-id: string, state: string);
     callback card-selection-toggled(candidate-id: string);
@@ -275,6 +284,29 @@ export component ReviewDrawer inherits Rectangle {
             Text {
                 text: root.selected-count-label;
                 color: Theme.text-secondary;
+            }
+
+            // T39 分页：每页 60 张候选卡（50–100 内）；翻页时才重建当前页切片，
+            // 避免 Slint 一次实例化千级卡片控件导致交互冻结。
+            if root.page-total > 1: HorizontalLayout {
+                spacing: 6px;
+                Button {
+                    text: root.page-prev-label;
+                    enabled: root.page-index > 0;
+                    clicked => { root.page-prev-clicked(); }
+                }
+                Text {
+                    text: root.page-label;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Button {
+                    text: root.page-next-label;
+                    enabled: root.page-index < root.page-total - 1;
+                    clicked => { root.page-next-clicked(); }
+                }
             }
 
             // 批量操作：勾选 >=2 时浮现（ADR-0016 交互规则）。

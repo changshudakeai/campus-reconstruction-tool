@@ -3,7 +3,7 @@
 //! 页面状态只描述“一次请求后应显示什么”：适配器返回完整状态，`super` 的呈现
 //! 机制负责渲染。状态不持有正式业务数据，也不协调功能模块内部步骤。
 
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 
 use super::{Screen, WindowPageState};
 use crate::{
@@ -588,8 +588,20 @@ pub struct ReviewPageState {
     pub category_counts: Vec<i32>,
     /// 当前激活类别索引。
     pub active_category: i32,
-    /// 当前类别候选卡片。
+    /// 当前类别候选卡片（T39 分页：只含当前页切片，页大小 50–100）。
     pub cards: Vec<ReviewCandidateData>,
+    /// 每页候选卡片数（分页常量；Slint 无虚拟化，避免一次实例化千级控件）。
+    pub page_size: i32,
+    /// 当前页码（0 起）。
+    pub page_index: i32,
+    /// 总页数（至少 1）。
+    pub page_total: i32,
+    /// 页码文案（如"第 1/17 页"）。
+    pub page_label: String,
+    /// 上一页按钮文案。
+    pub page_prev_label: String,
+    /// 下一页按钮文案。
+    pub page_next_label: String,
     /// 已选数量文案。
     pub selected_count_label: String,
     /// 勾选 >=2 时显示批量操作按钮。
@@ -644,7 +656,28 @@ impl WindowPageState for ReviewPageState {
         window
             .set_review_category_counts(ModelRc::new(VecModel::from(self.category_counts.clone())));
         window.set_review_active_category(self.active_category);
-        window.set_review_cards(ModelRc::new(VecModel::from(self.cards.clone())));
+        // T39：三态/高亮/复选变更走单卡更新（set_row_data），不得整表重建；
+        // 仅当行身份变化（切分类/翻页）时才整体替换模型。
+        let current = window.get_review_cards();
+        let same_identity = current.row_count() == self.cards.len()
+            && current
+                .row_data(0)
+                .is_some_and(|first| first.candidate_id == self.cards[0].candidate_id);
+        if same_identity && !self.cards.is_empty() {
+            for (index, card) in self.cards.iter().enumerate() {
+                if current.row_data(index).as_ref() != Some(card) {
+                    current.set_row_data(index, card.clone());
+                }
+            }
+        } else {
+            window.set_review_cards(ModelRc::new(VecModel::from(self.cards.clone())));
+        }
+        window.set_review_page_size(self.page_size);
+        window.set_review_page_index(self.page_index);
+        window.set_review_page_total(self.page_total);
+        window.set_review_page_label(self.page_label.clone().into());
+        window.set_review_page_prev_label(self.page_prev_label.clone().into());
+        window.set_review_page_next_label(self.page_next_label.clone().into());
         window.set_review_selected_count_label(self.selected_count_label.clone().into());
         window.set_review_bulk_buttons_visible(self.bulk_buttons_visible);
         window.set_review_set_keep_label(self.set_keep_label.clone().into());
@@ -680,6 +713,10 @@ pub enum ReviewRequest {
     Open,
     /// 切换六类标签页。
     SetCategory { index: usize },
+    /// 候选列表上一页（T39 分页；翻页时才重建当前页卡片切片）。
+    PagePrev,
+    /// 候选列表下一页（T39 分页）。
+    PageNext,
     /// 逐项判定三态（state: pending/keep/remove）。
     SetState { candidate_id: String, state: String },
     /// 高亮一个候选（点卡片或地图对象；双向联动共用同一份高亮）。
@@ -689,7 +726,8 @@ pub enum ReviewRequest {
     MapObjectHighlight { candidate_id: String },
     /// 卡片"定位到地图"：地图中心跳转并高亮该候选。
     Locate { candidate_id: String },
-    /// 评审地图就绪（map_ready IPC）：仅呈现页面，不推送标注。
+    /// 评审地图就绪（map_ready IPC）：排定一次全量候选推送（事件循环安全
+    /// 上下文执行，不在 IPC 回调栈内 evaluate_script）。
     MapReady,
     /// 评审地图加载失败（页面 onerror / SDK 超时 / Rust 侧加载超时）。
     MapFailed { message: String },

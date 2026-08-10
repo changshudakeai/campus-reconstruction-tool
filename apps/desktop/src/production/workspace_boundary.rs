@@ -67,6 +67,8 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) tutorial_text: String,
     pub(super) tutorial_dismiss_label: String,
     pub(super) tutorial_skip_all_label: String,
+    /// T39：评审候选列表当前页索引（S1 呈现层分页状态；切分类时复位到 0）。
+    pub(super) review_page_index: usize,
 }
 
 /// T34: 地图侧边界绘制状态（纯呈现；几何真相仍在地图 JS/B5 侧）

@@ -3,8 +3,11 @@
 //! 本页是高德 JS API 的"评审画布"：
 //! 1) 只发 `map_ready` 就绪信号，不发起任何网络业务查询（候选已在 Rust 侧）；
 //! 2) 接收 Rust 下行绘制命令：
-//!    - `drawReviewCandidates(candidatesJson)`：按候选三态标注（待定虚线 /
-//!      保留实线 / 剔除隐藏），剔除候选在地图隐藏但卡片保留；
+//!    - `setReviewCandidates(candidatesJson)`：全量候选标注（T39：进入评审/
+//!      map_ready 后只推一次；JS 缓冲 + 定时分批上屏，避免一次创建上千
+//!      多边形过载）；剔除候选在地图隐藏但卡片保留；
+//!    - `updateReviewCandidate(candidateJson)`：单候选增量更新（T39：之后
+//!      state/highlight/locate 只推对应候选，不再 clear + 全量重推）；
 //!    - `locateReviewCandidate(candidateId)`：地图中心跳转到该候选并高亮；
 //!    - `highlightReviewCandidate(candidateId)` / `clearReviewHighlight()`：
 //!      地图↔卡片双向联动高亮（共用 F5 同一份高亮状态）。
@@ -31,42 +34,22 @@ pub struct ReviewMapPageConfig {
     /// 校区锚点坐标 (GCJ-02；来自高德 POI)
     pub anchor_lon: f64,
     pub anchor_lat: f64,
-    /// 地图容器高度 (像素)
-    pub height_px: u32,
-    /// 内嵌候选标注（初始三态：待定/保留/剔除；剔除不绘制——地图隐藏）。
-    /// 页面加载完成后自行绘制并发送 `map_ready`，Rust 侧无需在 IPC 回调栈内
-    /// 回推 evaluate_script（回调栈内不再执行 WebView2 脚本调用，避免 COM
-    /// 通道时序竞争）。
-    pub candidates: Vec<serde_json::Value>,
 }
 
 impl ReviewMapPageConfig {
-    /// 新建配置（高度取最小值 300px）
+    /// 新建配置（地图容器高度随 WebView 视口填满，T37 同纪律）。
     pub fn new(api_key: impl Into<String>, security_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
             security_key: security_key.into(),
             anchor_lon: f64::NAN,
             anchor_lat: f64::NAN,
-            height_px: 300,
-            candidates: Vec::new(),
         }
     }
 
     pub fn with_anchor(mut self, lon: f64, lat: f64) -> Self {
         self.anchor_lon = lon;
         self.anchor_lat = lat;
-        self
-    }
-
-    pub fn effective_height_px(&self) -> u32 {
-        self.height_px.max(300)
-    }
-
-    /// 设置初始候选标注（与壳层回推协议同一结构：
-    /// `{candidate_id, kind, coordinates, state}`）。
-    pub fn with_candidates(mut self, candidates: Vec<serde_json::Value>) -> Self {
-        self.candidates = candidates;
         self
     }
 }
@@ -172,9 +155,6 @@ const REVIEW_SCRIPT: &str = r#"
     startChunkedDrawing();
   };
 
-  // 内嵌初始候选（由 Rust 在 HTML 构建时注入；页面加载后自行绘制）
-  var embeddedCandidates = {__embedded_candidates__};
-
   // 单个候选标注：待定=虚线、保留=实线、剔除=跳过（地图隐藏，卡片保留可改回）
   function addReviewCandidateInner(c) {
     if (!c || c.state === 'remove') return; // 剔除候选在地图隐藏，卡片仍保留
@@ -247,6 +227,43 @@ const REVIEW_SCRIPT: &str = r#"
     }
   };
 
+  // T39：单候选增量更新（state 变更只推对应候选）——剔除=地图隐藏、
+  // 改回保留/待定=按状态改样式；已在图只改样式，不在图按入缓冲上屏。
+  window.updateReviewCandidate = function(candidateJson) {
+    var c = null;
+    try { c = JSON.parse(candidateJson) || null; } catch (e) { c = null; }
+    if (!c || !c.candidate_id) return;
+    var existing = reviewObjects[c.candidate_id];
+    if (c.state === 'remove') {
+      if (existing) {
+        map.remove(existing);
+        delete reviewObjects[c.candidate_id];
+        delete reviewBaseStyle[c.candidate_id];
+        delete reviewCentroids[c.candidate_id];
+      }
+      if (reviewHighlightId === c.candidate_id) {
+        reviewHighlightId = null;
+      }
+      return;
+    }
+    var baseColor = c.state === 'pending' ? '#95a5a6' : '#3498db';
+    var dash = c.state === 'pending' ? [6, 4] : null;
+    if (existing && existing.setOptions) {
+      existing.setOptions({
+        strokeColor: baseColor,
+        strokeWeight: 3,
+        lineDash: dash,
+        fillColor: baseColor
+      });
+      reviewBaseStyle[c.candidate_id] = { strokeColor: baseColor, strokeWeight: 3 };
+      if (reviewHighlightId === c.candidate_id) {
+        existing.setOptions({ strokeColor: '#e74c3c', strokeWeight: 5 });
+      }
+      return;
+    }
+    addReviewCandidateInner(c);
+  };
+
   // 按候选三态全量重绘（兼容入口：缓冲 + 分批绘制）
   window.drawReviewCandidates = function(candidatesJson) {
     var candidates = [];
@@ -282,12 +299,9 @@ const REVIEW_SCRIPT: &str = r#"
   };
 
   window.initReviewMap = function() {
-    // 内嵌候选先绘制（待定虚线/保留实线/剔除隐藏），再通知 Rust 就绪——
-    // Rust 侧不再需要在 IPC 回调栈内回推 evaluate_script。
-    if (embeddedCandidates && embeddedCandidates.length > 0) {
-      embeddedCandidates.forEach(function(c) { pendingCandidates.push(c); });
-      startChunkedDrawing();
-    }
+    // T39：候选不再内嵌 HTML——Rust 侧收到 map_ready 后在事件循环安全
+    // 上下文分批推送 setReviewCandidates（不在 WebView2 IPC 回调栈内
+    // evaluate_script，T35/T38 同纪律），JS 缓冲 + 定时分批上屏。
     if (window.ipc && window.ipc.postMessage) {
       window.ipc.postMessage(JSON.stringify({ type: 'map_ready' }));
     }
@@ -299,12 +313,13 @@ const REVIEW_SCRIPT: &str = r#"
 /// 生成评审地图页 HTML
 ///
 /// **功能清单**:
-/// 1. 地图加载（高德 JS API；锚点 GCJ-02 直接作为中心）
-/// 2. `map_ready` IPC：Rust 侧收到后回传候选标注（`drawReviewCandidates`）
+/// 1. 地图加载（高德 JS API；锚点 GCJ-02 直接作为中心；容器高度随视口填满）
+/// 2. `map_ready` IPC：Rust 侧收到后分批回传候选标注（`setReviewCandidates`）
 /// 3. 候选标注：待定虚线 / 保留实线 / 剔除隐藏
-/// 4. 定位跳转 + 双向高亮（`locateReviewCandidate` /
+/// 4. 增量更新：`updateReviewCandidate`（state 变更只推对应候选）
+/// 5. 定位跳转 + 双向高亮（`locateReviewCandidate` /
 ///    `highlightReviewCandidate` / `clearReviewHighlight`）
-/// 5. 点击地图对象 → `review_object_clicked` IPC（高亮对应卡片）
+/// 6. 点击地图对象 → `review_object_clicked` IPC（高亮对应卡片）
 pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String> {
     if config.api_key.is_empty() || !config.api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(Error::MalformedResponse(
@@ -328,9 +343,6 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
     }
 
     let cdn_url = REVIEW_MAP_CDN_URL_TEMPLATE.replace("{key}", &config.api_key);
-    let height = config.effective_height_px();
-    let embedded_candidates =
-        serde_json::to_string(&config.candidates).unwrap_or_else(|_| "[]".to_string());
 
     Ok(format!(
         r#"<!DOCTYPE html>
@@ -340,7 +352,9 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
 <title>评审地图</title>
 <style>
   html, body {{ margin: 0; padding: 0; height: 100%; overflow-x: hidden; }}
-  #map-container {{ width: 100%; max-width: 100%; box-sizing: border-box; height: {height}px; min-height: 300px; }}
+  /* T39：评审地图容器应用 T37 高度填满（html/body 100% + innerHeight）——
+     WebView 槽位已按 Slint 布局填满窗口，固定高度会在下方留白。 */
+  #map-container {{ width: 100%; max-width: 100%; box-sizing: border-box; height: 100%; min-height: 300px; }}
   #status-panel {{
     position: absolute; top: 10px; left: 10px; z-index: 1000;
     background: white; padding: 12px; border-radius: 6px;
@@ -391,39 +405,39 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
   var map;
   var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};
 
+  // T37/T39：把地图容器同步到 WebView 视口尺寸（html/body 100% + 显式
+  // innerHeight），再 map.resize()；窗口 resize 与抽屉开合让位（WebView
+  // bounds 变化）均依赖此机制，保证地图上下填满可用区域。
+  function syncContainerSize() {{
+    var container = document.getElementById('map-container');
+    var viewportW = Math.max(document.documentElement.clientWidth || 1, 1);
+    var viewportH = Math.max(window.innerHeight || document.documentElement.clientHeight || 1, 1);
+    if (container) {{
+      container.style.width = '100%';
+      container.style.maxWidth = '100%';
+      if (container.offsetWidth > viewportW) {{
+        container.style.width = viewportW + 'px';
+      }}
+      container.style.height = viewportH + 'px';
+    }}
+    if (map && typeof map.resize === 'function') {{
+      map.resize();
+    }}
+  }}
+
   function initWithAnchor() {{
     try {{
-      var container = document.getElementById('map-container');
-      var viewportW = Math.max(document.documentElement.clientWidth || 1, 1);
-      if (container) {{
-        container.style.width = '100%';
-        container.style.maxWidth = '100%';
-        if (container.offsetWidth > viewportW) {{
-          container.style.width = viewportW + 'px';
-        }}
-      }}
+      // T37/T39：AMap 初始化前把容器宽高钳制到当前 WebView 视口
+      syncContainerSize();
       map = new AMap.Map('map-container', {{
         zoom: 16,
         center: [anchorPoint.lng, anchorPoint.lat],
         viewMode: '3D'
       }});
-      if (typeof map.resize === 'function') {{
-        map.resize();
-      }}
-      window.addEventListener('resize', function() {{
-        var c = document.getElementById('map-container');
-        var vw = document.documentElement.clientWidth || 1;
-        if (c) {{
-          c.style.width = '100%';
-          c.style.maxWidth = '100%';
-          if (c.offsetWidth > vw) {{
-            c.style.width = vw + 'px';
-          }}
-        }}
-        if (map && typeof map.resize === 'function') {{
-          map.resize();
-        }}
-      }});
+      // T37/T39：布局完成后同步一次画布尺寸（含 map.resize()）
+      syncContainerSize();
+      // WebView bounds 变化（窗口 resize 或抽屉开合让位）时同步容器尺寸
+      window.addEventListener('resize', syncContainerSize);
       if (typeof window.initReviewMap === 'function') {{
         window.initReviewMap();
       }}
@@ -451,14 +465,12 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
 {review_script}
 </body>
 </html>"#,
-        height = height,
         cdn_url = cdn_url,
         security_js_code = config.security_key,
         anchor_lon = config.anchor_lon,
         anchor_lat = config.anchor_lat,
         review_script = REVIEW_SCRIPT,
     ))
-    .map(|html| html.replace("{__embedded_candidates__}", &embedded_candidates))
 }
 
 #[cfg(test)]
@@ -475,6 +487,10 @@ mod tests {
         assert!(html.contains("drawReviewCandidates"));
         assert!(html.contains("clearReviewOverlays"));
         assert!(html.contains("addReviewCandidate"));
+        assert!(
+            html.contains("window.updateReviewCandidate = function"),
+            "T39：单候选增量更新命令必须存在（state 变更只推对应候选）"
+        );
         assert!(html.contains("setReviewCandidates"));
         assert!(html.contains("startChunkedDrawing"));
         assert!(html.contains("locateReviewCandidate"));
@@ -482,6 +498,10 @@ mod tests {
         assert!(html.contains("clearReviewHighlight"));
         assert!(html.contains("review_object_clicked"));
         assert!(html.contains("map_ready"));
+        assert!(
+            !html.contains("__embedded_candidates__"),
+            "T39：候选不得再内嵌进 HTML（map_ready 后由 Rust 分批推送）"
+        );
     }
 
     #[test]
@@ -511,10 +531,31 @@ mod tests {
     }
 
     #[test]
-    fn html_forbids_horizontal_overflow() {
+    fn html_forbids_horizontal_overflow_and_fills_viewport_height() {
         let html = build_review_map_page_html(&config()).unwrap();
         assert!(html.contains("overflow-x: hidden"));
         assert!(html.contains("window.addEventListener('load', boot)"));
+        // T37/T39：评审地图容器必须随 WebView 视口填满（不再固定高度留白）
+        assert!(
+            html.contains("#map-container { width: 100%; max-width: 100%; box-sizing: border-box; height: 100%;"),
+            "地图容器高度必须随视口填满（height: 100%）"
+        );
+        assert!(
+            !html.contains("border-box; height: 300px") && !html.contains("height: {height}px"),
+            "地图容器不得再固定像素高度"
+        );
+        assert!(
+            html.contains("container.style.height = viewportH + 'px'"),
+            "初始化与 resize 必须把容器高度显式同步到 WebView 视口高"
+        );
+        assert!(
+            html.contains("window.addEventListener('resize', syncContainerSize)"),
+            "resize/抽屉开合必须经同一函数同步宽高并 map.resize()"
+        );
+        assert!(
+            html.contains("syncContainerSize();"),
+            "AMap 初始化前后必须调用尺寸同步（含 map.resize()）"
+        );
     }
 
     #[test]
