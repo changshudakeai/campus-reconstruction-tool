@@ -1,6 +1,5 @@
-//! M1 regression: the two leave-workspace paths must expire background export
-//! identically (ADR-0042 §6), and cancelling the leave dialog must keep the
-//! workspace, the unsaved boundary draft, and the in-flight operation.
+//! 工作区返回方案列表回归：空闲时五步均能返回当前校区方案列表；运行中操作
+//! 复用离开确认，并在确认/取消两条路径保持 ADR-0042 §6 的过期语义。
 
 use data_persistence::CampusCrudApi;
 use std::io;
@@ -16,7 +15,7 @@ use export_flow::{ExportFileKind, ExportFileSystem, StdExportFileSystem};
 use global_settings::FirstRunSetup;
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 /// 后台导出被阻断在 manifest staging：测试可以在 worker 运行期间做离开操作。
 #[derive(Clone)]
@@ -155,12 +154,6 @@ impl TestApp {
         assert!(self.window.get_workspace_boundary_is_determined());
     }
 
-    fn draw_draft(&self) {
-        for (x, y) in [(0.0, 0.0), (60.0, 0.0), (60.0, 60.0), (0.0, 60.0)] {
-            self.window.invoke_workspace_boundary_canvas_clicked(x, y);
-        }
-    }
-
     fn schematic_path(&self) -> PathBuf {
         self.export_dir.join(format!("{}.schem", self.plan_id))
     }
@@ -168,6 +161,45 @@ impl TestApp {
     fn manifest_path(&self) -> PathBuf {
         self.export_dir
             .join(format!("{}.foundation_manifest.json", self.plan_id))
+    }
+}
+
+fn assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan_state() {
+    for step in 0..5 {
+        let file_system = Arc::new(BlockingFileSystem::new());
+        let app = TestApp::new(file_system);
+
+        app.confirm_boundary();
+        app.window
+            .set_workspace_orientation_input_text("135".into());
+        app.window.invoke_workspace_orientation_submit_clicked();
+        assert!(app.window.get_workspace_orientation_is_determined());
+
+        // 五步共享同一个标题区入口；这里注入功能入口已决定的当前步骤，
+        // 返回动作本身仍从真实 Slint callback 贯穿到最终 Screen。
+        app.window.set_workspace_active_step(step);
+        assert_eq!(app.window.get_workspace_active_step(), step);
+        assert_eq!(
+            app.window.get_workspace_back_to_plan_list_label().as_str(),
+            "← 返回方案列表"
+        );
+
+        app.window.invoke_workspace_back_to_plan_list_clicked();
+
+        assert_eq!(
+            app.window.get_active_screen(),
+            2,
+            "步骤 {step} 必须返回方案列表"
+        );
+        assert_eq!(app.window.get_plan_list_model().row_count(), 1);
+
+        // 再次打开同一方案：已确认边界和已保存朝向仍在，返回不能清空方案状态。
+        app.window
+            .invoke_plan_list_card_clicked(app.plan_id.clone().into());
+        assert_eq!(app.window.get_active_screen(), 4);
+        assert!(app.window.get_workspace_boundary_is_determined());
+        assert!(app.window.get_workspace_orientation_is_determined());
+        assert_eq!(app.window.get_workspace_orientation_angle(), 135.0);
     }
 }
 
@@ -215,7 +247,9 @@ fn wait_for_file(path: &Path, deadline: Duration) {
 
 #[test]
 fn leave_confirmation_paths_expire_or_preserve_background_export() {
-    // ── 阶段一：确认后离开 → 过期后台导出并停留离开后的页面 ──
+    assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan_state();
+
+    // ── 阶段一：运行中确认离开 → 返回方案列表并过期后台导出 ──
     let file_system = Arc::new(BlockingFileSystem::new());
     let app = TestApp::new(Arc::clone(&file_system));
 
@@ -228,19 +262,17 @@ fn leave_confirmation_paths_expire_or_preserve_background_export() {
     );
     file_system.wait_for_manifest_block();
 
-    // 已确认边界 + 后台导出进行中 → 重置边界并绘制新草稿 → 离开需要确认。
-    app.window.invoke_workspace_boundary_reset_clicked();
-    app.draw_draft();
-    assert_eq!(app.window.get_workspace_boundary_point_count(), 4);
-    app.window.invoke_switch_campus_toolbar_button_clicked();
+    app.window.invoke_workspace_back_to_plan_list_clicked();
     assert!(
         app.window.get_confirm_dialog_visible(),
-        "存在未确认边界绘制时离开必须请求确认"
+        "存在运行中操作时返回方案列表必须请求确认"
     );
+    assert_eq!(app.window.get_active_screen(), 4);
+    assert_eq!(app.window.get_workspace_active_step(), 4);
 
-    // 确认离开：与直接离开等价，过期当前 generation、停轮询并导航。
+    // 确认离开：过期当前 generation、停轮询并进入当前校区方案列表。
     app.window.invoke_confirm_dialog_confirmed();
-    assert_ne!(app.window.get_active_screen(), 4, "确认后必须离开工作区");
+    assert_eq!(app.window.get_active_screen(), 2, "确认后必须进入方案列表");
 
     file_system.release_manifest_block();
     // CI 冷缓存/负载下 worker 可能超过 5 秒才落盘；用 30 秒宽松兜底。
@@ -263,7 +295,7 @@ fn leave_confirmation_paths_expire_or_preserve_background_export() {
     assert!(!app.window.get_error_dialog_visible());
     drop(app);
 
-    // ── 阶段二：取消离开 → 停留工作区、草稿保留、后台导出继续成功 ──
+    // ── 阶段二：取消离开 → 停留原步骤、后台导出继续成功 ──
     let file_system = Arc::new(BlockingFileSystem::new());
     let app = TestApp::new(Arc::clone(&file_system));
 
@@ -276,19 +308,13 @@ fn leave_confirmation_paths_expire_or_preserve_background_export() {
     );
     file_system.wait_for_manifest_block();
 
-    app.window.invoke_workspace_boundary_reset_clicked();
-    app.draw_draft();
-    app.window.invoke_switch_campus_toolbar_button_clicked();
+    app.window.invoke_workspace_back_to_plan_list_clicked();
     assert!(app.window.get_confirm_dialog_visible());
 
-    // 取消：停留工作区，草稿保留，后台导出继续有效。
+    // 取消：停留工作区原步骤，后台导出继续有效。
     app.window.invoke_confirm_dialog_cancelled();
     assert_eq!(app.window.get_active_screen(), 4);
-    assert_eq!(
-        app.window.get_workspace_boundary_point_count(),
-        4,
-        "取消离开必须保留未确认草稿"
-    );
+    assert_eq!(app.window.get_workspace_active_step(), 4);
     let still_processing = pump_until(
         &app.window,
         |window| window.get_operation_state() == OperationPresentationState::Processing,

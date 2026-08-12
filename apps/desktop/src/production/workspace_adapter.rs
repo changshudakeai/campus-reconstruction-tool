@@ -46,7 +46,10 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
         match request {
             WorkspaceRequest::OpenPlan { plan_id } => self.open_plan(&plan_id),
             WorkspaceRequest::Navigate { step } => self.navigate(step),
-            WorkspaceRequest::Leave { target } => self.leave(target),
+            WorkspaceRequest::Leave {
+                target,
+                operation_running,
+            } => self.leave(target, operation_running),
             WorkspaceRequest::BoundaryCanvasClick { x, y } => self.boundary_canvas_click(x, y),
             WorkspaceRequest::BoundaryUndo => self.boundary_undo(),
             WorkspaceRequest::BoundaryConfirm => self.boundary_confirm(),
@@ -319,7 +322,11 @@ impl WorkspaceProductionAdapter {
             .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
 
-    fn leave(&mut self, target: Screen) -> Presentation<WorkspacePageState> {
+    fn leave(
+        &mut self,
+        target: Screen,
+        operation_running: bool,
+    ) -> Presentation<WorkspacePageState> {
         let session = self.context.session.borrow();
         // 地图加载中离开边界页：必须停留（ADR-0037 用户故事 18）
         if session.map_processing && session.active_step == 0 {
@@ -334,6 +341,18 @@ impl WorkspaceProductionAdapter {
                 ConfirmationPresentation::new(
                     l10n.t("workspace.leave_discard_title"),
                     l10n.t("workspace.leave_discard_body"),
+                    l10n.t("dialog.confirm_button"),
+                    l10n.t("dialog.cancel_button"),
+                ),
+            );
+        }
+        if operation_running {
+            let l10n = self.l10n();
+            return Presentation::needs_confirmation(
+                self.context.page(),
+                ConfirmationPresentation::new(
+                    l10n.t("workspace.leave_running_title"),
+                    l10n.t("workspace.leave_running_body"),
                     l10n.t("dialog.confirm_button"),
                     l10n.t("dialog.cancel_button"),
                 ),

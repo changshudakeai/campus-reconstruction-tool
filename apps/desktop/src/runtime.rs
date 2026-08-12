@@ -327,6 +327,7 @@ impl ViewModelInjector {
         window.set_workspace_stepper_collection_label(l10n.t("collection.collect_button").into());
         window.set_workspace_stepper_review_label(l10n.t("review.workbench_title").into());
         window.set_workspace_stepper_export_label(l10n.t("export.confirm_title").into());
+        window.set_workspace_back_to_plan_list_label(l10n.t("workspace.back_to_plan_list").into());
 
         // 屏 4：步骤条教程气泡（F2，ADR-0028）——初始隐藏，进屏 4 时由入口索泡
         window.set_workspace_tutorial_visible(false);

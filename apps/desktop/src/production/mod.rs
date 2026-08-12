@@ -445,6 +445,13 @@ impl ProductionEntries {
             .show(window, &self.center, CampusPlanRequest::CampusSelect);
     }
 
+    pub(crate) fn show_plan_list(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        crate::map_webview::hide();
+        self.campus_plan
+            .show(window, &self.center, CampusPlanRequest::PlanList);
+    }
+
     pub(crate) fn show_collection(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.collection
@@ -881,9 +888,16 @@ impl ProductionEntries {
             self.navigate_to(window, target);
             return;
         }
-        let presentation =
-            self.workspace
-                .show(window, &self.center, WorkspaceRequest::Leave { target });
+        let operation_running =
+            self.export_poll_timer.running() || self.collection_poll_timer.running();
+        let presentation = self.workspace.show(
+            window,
+            &self.center,
+            WorkspaceRequest::Leave {
+                target,
+                operation_running,
+            },
+        );
         match presentation.navigation() {
             NavigationDecision::Show(screen) => {
                 self.export_poll_timer.stop();
@@ -912,6 +926,7 @@ impl ProductionEntries {
             Screen::CampusSelect => self.show_campus_select(window),
             Screen::Trash => self.show_trash(window),
             Screen::Notifications => self.show_notifications(window),
+            Screen::PlanList => self.show_plan_list(window),
             _ => {}
         }
     }
@@ -1195,6 +1210,16 @@ impl ProductionEntries {
                 shared
                     .borrow_mut()
                     .handle_workspace_step_clicked(&window, step);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_back_to_plan_list_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared
+                    .borrow_mut()
+                    .leave_workspace_then(&window, Screen::PlanList);
             }
         });
 

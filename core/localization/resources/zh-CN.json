@@ -346,6 +346,9 @@
     "date_display": "{0}"
   },
   "workspace": {
+    "back_to_plan_list": "← 返回方案列表",
+    "leave_running_title": "离开方案工作区",
+    "leave_running_body": "当前操作仍在运行。离开后将不再等待本次操作结果，确定离开吗？",
     "drawer_expand_tooltip": "展开操作抽屉",
     "drawer_collapse_tooltip": "收起操作抽屉",
     "context_campus_plan": "{0} / {1}",

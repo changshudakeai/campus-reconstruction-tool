@@ -31,6 +31,8 @@ use crate::production::record_entry_call;
 pub(crate) enum CampusPlanRequest {
     /// 读取并显示校区选择页（搜索框 + 最近使用记录）。
     CampusSelect,
+    /// 读取并显示当前校区的方案列表。
+    PlanList,
     /// 用户点击"搜索"或按回车后执行高德在线校区搜索（输入期间不自动搜索）。
     SearchCampus { query: String },
     /// S1 内部轮询后台校区搜索的真实终态（D-3，镜像采集轮询模式）。
@@ -76,6 +78,7 @@ impl PresentationAdapter<CampusPlanRequest, CampusPlanPageState> for CampusPlanP
             CampusPlanRequest::CampusSelect => {
                 present_campus_select(&self.injector, &self.workspace)
             }
+            CampusPlanRequest::PlanList => present_plan_list(&self.injector, &self.workspace),
 
             CampusPlanRequest::SearchCampus { query } => self.present_search(&query),
             CampusPlanRequest::PollSearch => self.present_poll_search(),
@@ -131,6 +134,21 @@ fn present_campus_select(
             .with_navigation(NavigationDecision::Show(Screen::CampusSelect)),
         Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
             .with_notification(campus_error_fact(l10n, &error.to_string())),
+    }
+}
+
+fn present_plan_list(
+    injector: &Rc<RefCell<ViewModelInjector>>,
+    workspace: &WorkspaceProductionContext,
+) -> Presentation<CampusPlanPageState> {
+    let injector = injector.borrow();
+    let l10n = injector.l10n();
+    match plan_list_page(&injector, workspace) {
+        Ok(page) => {
+            Presentation::ready(page).with_navigation(NavigationDecision::Show(Screen::PlanList))
+        }
+        Err(error) => Presentation::failed(campus_page_fallback(&injector, workspace))
+            .with_notification(plan_error_fact(l10n, &error.to_string())),
     }
 }
 
