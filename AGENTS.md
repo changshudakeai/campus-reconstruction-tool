@@ -40,27 +40,32 @@
 
 ## 本地验证流程（提交前必跑）
 
+Windows 本地所有 Cargo 命令使用 `scripts/cargo-managed.ps1`，由它隔离各
+worktree 的 target，并在总缓存达到 24 GiB 时自动回收到 16 GiB。30 GiB 是
+容量预算，不是人为报错门禁。完整规则见
+`docs/developer-guide/cargo-cache-discipline.md`。
+
 ### 全套门禁命令（按顺序执行）
 
 ```powershell
 # 1. 依赖分析（第一道门，检测未使用依赖）
-cargo machete
+.\scripts\cargo-managed.ps1 -- machete
 
 # 2. 单元测试 + 执法测试（含 tidy/arch 内嵌测试）
-cargo test --workspace
+.\scripts\cargo-managed.ps1 -- test --workspace
 
 # 3. 格式检查（本地格式化，CI 用 --check 阻断）
-cargo fmt --all --check
+.\scripts\cargo-managed.ps1 -- fmt --all --check
 
 # 4. 代码规范检查（本地 warn 档；CI 提为 deny）
-cargo clippy --workspace --all-targets -- -D warnings
+.\scripts\cargo-managed.ps1 -- clippy --workspace --all-targets -- -D warnings
 
 # 5. 许可证与漏洞扫描
-cargo deny check advisories bans licenses sources
+.\scripts\cargo-managed.ps1 -- deny check advisories bans licenses sources
 
 # 6. xtask 独立检查（单独运行特定子命令）
-cargo xtask ci          # tidy + arch 组合
-cargo xtask timings     # 编译时间预算报告
+.\scripts\cargo-managed.ps1 -- xtask ci          # tidy + arch 组合
+.\scripts\cargo-managed.ps1 -- xtask timings     # 编译时间预算报告
 ```
 
 ### 验证流程说明

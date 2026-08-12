@@ -176,11 +176,17 @@ allow_attributes_without_reason = "deny"
 [profile.dev]
 incremental = true
 
-# 测试构建：保留源码行号与基本回溯，同时避免 MSVC 为每个测试目标生成
-# 完整级别调试信息并积累大体积 PDB；测试增量缓存收益低于重复代际成本。
+# 日常测试不生成 MSVC 调试信息。桌面集成测试每个目标都会单独链接，哪怕
+# `debug = 1` 也会为每一代目标保留大体积 PDB，难以维持 30 GiB 缓存预算。
 [profile.test]
-debug = 1
+debug = 0
 incremental = false
+
+# 只有确实需要源码行号定位时才显式使用：
+# `cargo test --profile test-debug ...`。
+[profile.test-debug]
+inherits = "test"
+debug = 1
 
 # 发布构建：优先体积与运行效率（"轻便高效"目标）
 [profile.release]

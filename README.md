@@ -155,16 +155,18 @@ cargo run -p desktop-shell --bin campus-tool-dev
 
 ## 验证与质量门禁
 
-提交前按顺序运行：
+Windows 本地通过自动缓存治理入口按顺序运行；它会隔离各 worktree 的 target，
+并自动回收旧缓存，详见
+[`docs/developer-guide/cargo-cache-discipline.md`](docs/developer-guide/cargo-cache-discipline.md)：
 
 ```powershell
-cargo machete
-cargo test --workspace
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check advisories bans licenses sources
-cargo xtask ci
-cargo xtask timings
+.\scripts\cargo-managed.ps1 -- machete
+.\scripts\cargo-managed.ps1 -- test --workspace
+.\scripts\cargo-managed.ps1 -- fmt --all --check
+.\scripts\cargo-managed.ps1 -- clippy --workspace --all-targets -- -D warnings
+.\scripts\cargo-managed.ps1 -- deny check advisories bans licenses sources
+.\scripts\cargo-managed.ps1 -- xtask ci
+.\scripts\cargo-managed.ps1 -- xtask timings
 ```
 
 GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask`、`timings`、`machete` 和 `dependencies`，最后由 `conclusion` 聚合为唯一 required check。

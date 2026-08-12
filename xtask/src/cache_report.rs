@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const GIB: u64 = 1024 * 1024 * 1024;
-const TARGET_WARNING_BYTES: u64 = 30 * GIB;
-const TARGET_SEVERE_BYTES: u64 = 60 * GIB;
+const TARGET_WARNING_BYTES: u64 = 20 * GIB;
+const TARGET_SEVERE_BYTES: u64 = 30 * GIB;
 const FREE_SPACE_SEVERE_BYTES: u64 = 50 * GIB;
 const TOP_LIMIT: usize = 20;
 
@@ -94,9 +94,9 @@ fn normalize_cargo_artifact(file_name: &str) -> (&str, Option<&str>) {
 }
 
 fn target_severity(bytes: u64) -> Severity {
-    if bytes > TARGET_SEVERE_BYTES {
+    if bytes >= TARGET_SEVERE_BYTES {
         Severity::Severe
-    } else if bytes > TARGET_WARNING_BYTES {
+    } else if bytes >= TARGET_WARNING_BYTES {
         Severity::Warning
     } else {
         Severity::Normal
@@ -351,10 +351,13 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
         format_bytes(free_bytes),
         free_space_severity(free_bytes).label()
     );
-    if target_severity(result.total.bytes) == Severity::Severe
-        || free_space_severity(free_bytes) == Severity::Severe
-    {
-        println!("action: 仅告警；未自动清理任何 Cargo 缓存");
+    if target_severity(result.total.bytes) == Severity::Severe {
+        println!("action: 已超过 30 GiB；请运行自动缓存回收入口，不阻断只读报告");
+    } else if target_severity(result.total.bytes) == Severity::Warning {
+        println!("action: 已达到 20 GiB 自动回收水位，不阻断只读报告");
+    }
+    if free_space_severity(free_bytes) == Severity::Severe {
+        println!("action: 磁盘剩余空间低于 50 GiB，请运行自动缓存回收入口");
     }
     Ok(())
 }
@@ -385,10 +388,10 @@ mod tests {
 
     #[test]
     fn target_thresholds_match_the_cache_policy() {
-        assert_eq!(target_severity(30 * GIB), Severity::Normal);
-        assert_eq!(target_severity(30 * GIB + 1), Severity::Warning);
-        assert_eq!(target_severity(60 * GIB), Severity::Warning);
-        assert_eq!(target_severity(60 * GIB + 1), Severity::Severe);
+        assert_eq!(target_severity(20 * GIB - 1), Severity::Normal);
+        assert_eq!(target_severity(20 * GIB), Severity::Warning);
+        assert_eq!(target_severity(30 * GIB - 1), Severity::Warning);
+        assert_eq!(target_severity(30 * GIB), Severity::Severe);
     }
 
     #[test]
