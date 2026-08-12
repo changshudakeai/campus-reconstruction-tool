@@ -5,6 +5,7 @@
 //! - `arch`：架构测试（依赖 DAG 断言 + public-api 快照存在性）；
 //! - `ci`：tidy + arch 一次跑完（CI 的 xtask job 用）；
 //! - `timings`：编译时间预算（单编译单元 >2 分钟告警）；
+//! - `cache-report`：只读报告 Cargo 产物体积、类型与重复哈希代际；
 //! - `dev-shortcut`：构建并更新桌面"校园复刻工具 - 开发版"快捷方式（ADR-0014）。
 //!
 //! 检查逻辑同时以 `#[test]` 形式存在（`cargo test -p xtask` 即执法）。
@@ -15,6 +16,7 @@
 )]
 
 mod arch;
+mod cache_report;
 mod shortcut;
 mod tidy;
 mod timings;
@@ -44,6 +46,7 @@ const USAGE: &str = "\
   arch          架构测试（ADR-0017 依赖 DAG + public-api 快照存在性）
   ci            tidy + arch（CI 聚合入口）
   timings       编译时间预算（单编译单元 >2 分钟发 CI 告警）
+  cache-report  只读报告 Cargo target 体积、产物类型与重复哈希代际
   dev-shortcut  构建并更新桌面\"校园复刻工具 - 开发版\"快捷方式（ADR-0014）";
 
 fn main() -> anyhow::Result<()> {
@@ -57,6 +60,7 @@ fn main() -> anyhow::Result<()> {
             arch::run(&root)
         }
         "timings" => timings::run(&root),
+        "cache-report" => cache_report::run(&root),
         "dev-shortcut" => shortcut::run(&root),
         _ => {
             println!("{USAGE}");
