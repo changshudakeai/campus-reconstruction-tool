@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use data_acquisition::{DataSource, RawEntity};
 use desktop_shell::{
     assemble_application, AppWindow, ApplicationRuntime, OperationPresentationState,
     ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -17,33 +18,124 @@ use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
 use slint::{ComponentHandle, Model};
 
+#[test]
+fn s1_forwards_leave_intent_without_combining_poll_timers() {
+    let production_source = include_str!("../src/production/mod.rs");
+    let zh_cn: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../core/localization/resources/zh-CN.json"
+    ))
+    .expect("parse zh-CN resource");
+
+    assert!(
+        !production_source.contains("export_poll_timer.running()"),
+        "S1 不得读取导出轮询 timer 来判断能否离开工作区"
+    );
+    assert!(
+        !production_source.contains("collection_poll_timer.running()"),
+        "S1 不得读取采集轮询 timer 来判断能否离开工作区"
+    );
+    assert_eq!(
+        zh_cn["workspace"]["back_to_plan_list"], "← 返回方案列表",
+        "返回入口可见文字必须由 zh-CN 资源提供"
+    );
+}
+
 /// 后台导出被阻断在 manifest staging：测试可以在 worker 运行期间做离开操作。
 #[derive(Clone)]
 struct BlockingFileSystem {
     standard: Arc<StdExportFileSystem>,
-    manifest_gate: Arc<(Mutex<bool>, Condvar)>,
+    manifest_gate: Arc<(Mutex<FileGateState>, Condvar)>,
+}
+
+#[derive(Default)]
+struct FileGateState {
+    started: bool,
+    released: bool,
+}
+
+#[derive(Default)]
+struct ImmediateCollectionSource;
+
+impl DataSource for ImmediateCollectionSource {
+    fn source_tag(&self) -> &str {
+        "s1-13-immediate"
+    }
+
+    fn fetch_raw_entities(
+        &self,
+        _boundary: &shared_domain_types::Boundary,
+    ) -> data_acquisition::Result<Vec<RawEntity>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Default)]
+struct CollectionGateState {
+    started: bool,
+    released: bool,
+}
+
+#[derive(Clone, Default)]
+struct BlockingCollectionSource {
+    gate: Arc<(Mutex<CollectionGateState>, Condvar)>,
+}
+
+impl BlockingCollectionSource {
+    fn wait_until_started(&self) {
+        let (lock, signal) = &*self.gate;
+        let mut state = lock.lock().expect("collection gate lock");
+        while !state.started {
+            state = signal.wait(state).expect("collection gate wait");
+        }
+    }
+
+    fn release(&self) {
+        let (lock, signal) = &*self.gate;
+        lock.lock().expect("collection gate lock").released = true;
+        signal.notify_all();
+    }
+}
+
+impl DataSource for BlockingCollectionSource {
+    fn source_tag(&self) -> &str {
+        "s1-13-blocking"
+    }
+
+    fn fetch_raw_entities(
+        &self,
+        _boundary: &shared_domain_types::Boundary,
+    ) -> data_acquisition::Result<Vec<RawEntity>> {
+        let (lock, signal) = &*self.gate;
+        let mut state = lock.lock().expect("collection gate lock");
+        state.started = true;
+        signal.notify_all();
+        while !state.released {
+            state = signal.wait(state).expect("collection gate wait");
+        }
+        Ok(Vec::new())
+    }
 }
 
 impl BlockingFileSystem {
     fn new() -> Self {
         Self {
             standard: Arc::new(StdExportFileSystem),
-            manifest_gate: Arc::new((Mutex::new(false), Condvar::new())),
+            manifest_gate: Arc::new((Mutex::new(FileGateState::default()), Condvar::new())),
         }
     }
 
     fn wait_for_manifest_block(&self) {
         let (lock, signal) = &*self.manifest_gate;
-        let mut started = lock.lock().expect("manifest block lock");
-        while !*started {
-            started = signal.wait(started).expect("manifest block wait");
+        let mut state = lock.lock().expect("manifest block lock");
+        while !state.started {
+            state = signal.wait(state).expect("manifest block wait");
         }
     }
 
     fn release_manifest_block(&self) {
         let (lock, signal) = &*self.manifest_gate;
-        *lock.lock().expect("manifest release lock") = true;
-        signal.notify_one();
+        lock.lock().expect("manifest release lock").released = true;
+        signal.notify_all();
     }
 
     fn is_manifest_staging(path: &Path) -> bool {
@@ -61,11 +153,11 @@ impl ExportFileSystem for BlockingFileSystem {
     fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
         if Self::is_manifest_staging(path) {
             let (lock, signal) = &*self.manifest_gate;
-            *lock.lock().expect("manifest block lock") = true;
+            lock.lock().expect("manifest block lock").started = true;
             signal.notify_one();
-            let mut released = lock.lock().expect("manifest release lock");
-            while !*released {
-                released = signal.wait(released).expect("manifest release wait");
+            let mut state = lock.lock().expect("manifest release lock");
+            while !state.released {
+                state = signal.wait(state).expect("manifest release wait");
             }
         }
         self.standard.write(path, contents)
@@ -94,6 +186,13 @@ struct TestApp {
 
 impl TestApp {
     fn new(file_system: Arc<BlockingFileSystem>) -> Self {
+        Self::new_with_collection_source(file_system, Arc::new(ImmediateCollectionSource))
+    }
+
+    fn new_with_collection_source(
+        file_system: Arc<BlockingFileSystem>,
+        collection_source: Arc<dyn DataSource + Send + Sync>,
+    ) -> Self {
         let window = AppWindow::new().expect("create AppWindow");
         let center = NotificationCenter::init(PresenterRegistry::new());
         center
@@ -103,9 +202,10 @@ impl TestApp {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database_path = directory.path().join("m1-leave-confirm.db");
         let export_dir = directory.path().join("exports");
-        let mut injector = ViewModelInjector::new_with_export_file_system(
+        let mut injector = ViewModelInjector::new_with_collection_source(
             ShellDatabases::open(&database_path).expect("open databases"),
             Arc::clone(&file_system) as Arc<dyn ExportFileSystem>,
+            collection_source,
         )
         .expect("construct injector");
         injector
@@ -164,6 +264,31 @@ impl TestApp {
     }
 }
 
+fn assert_collection_operation_uses_business_leave_confirmation_and_cancel_stays_on_step() {
+    let file_system = Arc::new(BlockingFileSystem::new());
+    let source = Arc::new(BlockingCollectionSource::default());
+    let app = TestApp::new_with_collection_source(file_system, source.clone());
+
+    app.confirm_boundary();
+    app.window.invoke_workspace_step_clicked(2);
+    app.window.invoke_collection_start_clicked();
+    source.wait_until_started();
+
+    app.window.invoke_workspace_back_to_plan_list_clicked();
+    assert!(
+        app.window.get_confirm_dialog_visible(),
+        "采集操作运行时必须由离开工作区用例请求确认"
+    );
+    assert_eq!(app.window.get_active_screen(), 4);
+    assert_eq!(app.window.get_workspace_active_step(), 2);
+
+    app.window.invoke_confirm_dialog_cancelled();
+    assert_eq!(app.window.get_active_screen(), 4);
+    assert_eq!(app.window.get_workspace_active_step(), 2);
+
+    source.release();
+}
+
 fn assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan_state() {
     for step in 0..5 {
         let file_system = Arc::new(BlockingFileSystem::new());
@@ -179,10 +304,10 @@ fn assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan
         // 返回动作本身仍从真实 Slint callback 贯穿到最终 Screen。
         app.window.set_workspace_active_step(step);
         assert_eq!(app.window.get_workspace_active_step(), step);
-        assert_eq!(
-            app.window.get_workspace_back_to_plan_list_label().as_str(),
-            "← 返回方案列表"
-        );
+        assert!(!app
+            .window
+            .get_workspace_back_to_plan_list_label()
+            .is_empty());
 
         app.window.invoke_workspace_back_to_plan_list_clicked();
 
@@ -248,6 +373,7 @@ fn wait_for_file(path: &Path, deadline: Duration) {
 #[test]
 fn leave_confirmation_paths_expire_or_preserve_background_export() {
     assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan_state();
+    assert_collection_operation_uses_business_leave_confirmation_and_cancel_stays_on_step();
 
     // ── 阶段一：运行中确认离开 → 返回方案列表并过期后台导出 ──
     let file_system = Arc::new(BlockingFileSystem::new());

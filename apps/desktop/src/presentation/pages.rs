@@ -349,11 +349,8 @@ pub enum WorkspaceRequest {
     OpenPlan { plan_id: String },
     /// 点击步骤（或“下一步”）：功能入口返回允许进入 / 条件不足 / 需要确认。
     Navigate { step: i32 },
-    /// 离开工作区：功能入口结合运行状态判断可以离开、需要确认或必须停留。
-    Leave {
-        target: Screen,
-        operation_running: bool,
-    },
+    /// 离开工作区：S1 只提交目标；功能入口判断可以离开、需要确认或必须停留。
+    Leave { target: Screen },
     /// 边界画布原始绘制动作转交（S1 不掺入边界规则）。
     BoundaryCanvasClick { x: f32, y: f32 },
     /// 撤销最后一个绘制点。

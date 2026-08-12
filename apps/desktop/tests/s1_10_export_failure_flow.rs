@@ -487,6 +487,12 @@ fn desktop_export_failures_are_localized_async_and_pair_safe() {
     app.window.invoke_workspace_export_start_clicked();
     file_system.wait_for_manifest_block();
     app.window.invoke_switch_campus_toolbar_button_clicked();
+    assert!(
+        app.window.get_confirm_dialog_visible(),
+        "running export must ask the business leave entry for confirmation"
+    );
+    assert_eq!(app.window.get_active_screen(), 4);
+    app.window.invoke_confirm_dialog_confirmed();
     assert_ne!(
         app.window.get_active_screen(),
         4,

@@ -33,6 +33,7 @@ mod review;
 mod startup_settings;
 mod workspace_adapter;
 mod workspace_boundary;
+mod workspace_leave;
 
 use campus_plan_trash::{CampusPlanProductionAdapter, CampusPlanRequest, TrashProductionAdapter};
 use campus_search::CampusSearchController;
@@ -888,16 +889,9 @@ impl ProductionEntries {
             self.navigate_to(window, target);
             return;
         }
-        let operation_running =
-            self.export_poll_timer.running() || self.collection_poll_timer.running();
-        let presentation = self.workspace.show(
-            window,
-            &self.center,
-            WorkspaceRequest::Leave {
-                target,
-                operation_running,
-            },
-        );
+        let presentation =
+            self.workspace
+                .show(window, &self.center, WorkspaceRequest::Leave { target });
         match presentation.navigation() {
             NavigationDecision::Show(screen) => {
                 self.export_poll_timer.stop();

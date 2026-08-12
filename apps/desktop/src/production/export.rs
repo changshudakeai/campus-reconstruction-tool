@@ -7,6 +7,7 @@ use notification_center::{Notification, NotificationActionOutcome, OpaqueNotific
 use shared_domain_types::CandidateCategory;
 
 use super::workspace_boundary::WorkspaceProductionContext;
+use super::workspace_leave::WorkspaceOperation;
 use crate::presentation::{
     ExportPageState, ExportPresentationRequest, NavigationDecision, NotificationFact, Presentation,
     PresentationAdapter, Progress, Screen,
@@ -107,6 +108,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
             .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             ExportPresentationRequest::Start => match self.flow.start() {
                 Ok(operation) => {
+                    self.context.operation_started(WorkspaceOperation::Export);
                     let progress = operation.progress_view();
                     self.operation = Some(operation);
                     Presentation::processing(
@@ -126,6 +128,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                 };
                 if let Some(result) = operation.try_complete() {
                     self.operation = None;
+                    self.context.operation_finished(WorkspaceOperation::Export);
                     match result {
                         Ok(result) => {
                             let injector = self.context.injector();
@@ -181,6 +184,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
             ExportPresentationRequest::Abandon => {
                 self.flow.leave();
                 self.operation = None;
+                self.context.operation_finished(WorkspaceOperation::Export);
                 Presentation::ready(
                     self.page_with_status("export.confirm_title", self.export_subtitle()),
                 )

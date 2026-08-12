@@ -33,6 +33,7 @@ use super::workspace_boundary::{
     orientation_recalc_body, plane_vertices_to_gcj02, polygon_coordinates, validation_detail,
     MapDrawState, MapDrawStatus, WorkspaceProductionContext,
 };
+use super::workspace_leave::{LeaveConfirmationReason, LeaveWorkspaceDecision};
 
 /// 工作区生产适配器：一次请求一次完整呈现（导航决定、边界动作、离开判定）。
 pub(crate) struct WorkspaceProductionAdapter {
@@ -46,10 +47,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
         match request {
             WorkspaceRequest::OpenPlan { plan_id } => self.open_plan(&plan_id),
             WorkspaceRequest::Navigate { step } => self.navigate(step),
-            WorkspaceRequest::Leave {
-                target,
-                operation_running,
-            } => self.leave(target, operation_running),
+            WorkspaceRequest::Leave { target } => self.leave(target),
             WorkspaceRequest::BoundaryCanvasClick { x, y } => self.boundary_canvas_click(x, y),
             WorkspaceRequest::BoundaryUndo => self.boundary_undo(),
             WorkspaceRequest::BoundaryConfirm => self.boundary_confirm(),
@@ -322,43 +320,35 @@ impl WorkspaceProductionAdapter {
             .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
 
-    fn leave(
-        &mut self,
-        target: Screen,
-        operation_running: bool,
-    ) -> Presentation<WorkspacePageState> {
-        let session = self.context.session.borrow();
-        // 地图加载中离开边界页：必须停留（ADR-0037 用户故事 18）
-        if session.map_processing && session.active_step == 0 {
-            return Presentation::ready(self.context.page())
-                .with_navigation(NavigationDecision::Blocked);
+    fn leave(&mut self, target: Screen) -> Presentation<WorkspacePageState> {
+        match self.context.decide_leave(target) {
+            LeaveWorkspaceDecision::Allow { target } => Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Show(target)),
+            LeaveWorkspaceDecision::Blocked(_) => Presentation::ready(self.context.page())
+                .with_navigation(NavigationDecision::Blocked),
+            LeaveWorkspaceDecision::NeedsConfirmation(reason) => {
+                let l10n = self.l10n();
+                let (title_key, body_key) = match reason {
+                    LeaveConfirmationReason::UnsavedBoundary => (
+                        "workspace.leave_discard_title",
+                        "workspace.leave_discard_body",
+                    ),
+                    LeaveConfirmationReason::OperationRunning => (
+                        "workspace.leave_running_title",
+                        "workspace.leave_running_body",
+                    ),
+                };
+                Presentation::needs_confirmation(
+                    self.context.page(),
+                    ConfirmationPresentation::new(
+                        l10n.t(title_key),
+                        l10n.t(body_key),
+                        l10n.t("dialog.confirm_button"),
+                        l10n.t("dialog.cancel_button"),
+                    ),
+                )
+            }
         }
-        // 存在未确认的边界绘制：需要确认后再离开
-        if session.boundary_unsaved() {
-            let l10n = self.l10n();
-            return Presentation::needs_confirmation(
-                self.context.page(),
-                ConfirmationPresentation::new(
-                    l10n.t("workspace.leave_discard_title"),
-                    l10n.t("workspace.leave_discard_body"),
-                    l10n.t("dialog.confirm_button"),
-                    l10n.t("dialog.cancel_button"),
-                ),
-            );
-        }
-        if operation_running {
-            let l10n = self.l10n();
-            return Presentation::needs_confirmation(
-                self.context.page(),
-                ConfirmationPresentation::new(
-                    l10n.t("workspace.leave_running_title"),
-                    l10n.t("workspace.leave_running_body"),
-                    l10n.t("dialog.confirm_button"),
-                    l10n.t("dialog.cancel_button"),
-                ),
-            );
-        }
-        Presentation::ready(self.context.page()).with_navigation(NavigationDecision::Show(target))
     }
 
     fn boundary_canvas_click(&mut self, x: f32, y: f32) -> Presentation<WorkspacePageState> {

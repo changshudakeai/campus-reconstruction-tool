@@ -5,6 +5,7 @@ use std::sync::Arc;
 use data_acquisition::{stage_text_key, CollectionStage};
 
 use super::workspace_boundary::WorkspaceProductionContext;
+use super::workspace_leave::WorkspaceOperation;
 use crate::presentation::{
     CollectionPageState, CollectionRequest, NavigationDecision, NotificationFact, Presentation,
     PresentationAdapter, Progress, Screen,
@@ -142,6 +143,8 @@ impl PresentationAdapter<CollectionRequest, CollectionPageState> for CollectionP
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             CollectionRequest::Start => match self.flow.start() {
                 Ok(operation) => {
+                    self.context
+                        .operation_started(WorkspaceOperation::Collection);
                     self.operation = Some(operation);
                     Presentation::processing(
                         self.page_state(&self.flow.page_view()),
@@ -157,6 +160,8 @@ impl PresentationAdapter<CollectionRequest, CollectionPageState> for CollectionP
             CollectionRequest::Cancel => {
                 self.flow.cancel();
                 self.operation = None;
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
                 Presentation::ready(self.page_state(&self.flow.page_view()))
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
@@ -171,6 +176,8 @@ impl PresentationAdapter<CollectionRequest, CollectionPageState> for CollectionP
             CollectionRequest::Abandon => {
                 self.flow.leave();
                 self.operation = None;
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
                 Presentation::ready(self.page_state(&self.flow.page_view()))
             }
         }
@@ -185,6 +192,8 @@ impl CollectionProductionAdapter {
         };
         match operation.try_complete() {
             Some(Ok(collection_flow::CollectionOutcome::Succeeded(summary))) => {
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
                 let mut presentation = Presentation::succeeded(self.page_state(&summary.page));
                 if let Some(notification) = summary.notification {
                     presentation =
@@ -193,6 +202,8 @@ impl CollectionProductionAdapter {
                 presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             Some(Ok(collection_flow::CollectionOutcome::Failed(failure))) => {
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
                 let mut presentation = Presentation::failed(self.page_state(&failure.page));
                 if let Some(notification) = failure.notification {
                     presentation =
@@ -201,13 +212,18 @@ impl CollectionProductionAdapter {
                 presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             Some(Err(collection_flow::CollectionError::Expired)) => {
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
                 // 取消/切换方案后旧结果不得拉回：回到当前页面状态。
                 Presentation::ready(self.page_state(&self.flow.page_view()))
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
-            Some(Err(error)) => self
-                .start_failure(&error)
-                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            Some(Err(error)) => {
+                self.context
+                    .operation_finished(WorkspaceOperation::Collection);
+                self.start_failure(&error)
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
             None => {
                 self.operation = Some(operation);
                 Presentation::processing(self.page_state(&self.flow.page_view()), Progress::ZERO)

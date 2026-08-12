@@ -26,6 +26,10 @@ use crate::presentation::{
 };
 use crate::ViewModelInjector;
 
+use super::workspace_leave::{
+    LeaveWorkspaceDecision, LeaveWorkspaceIntent, LeaveWorkspaceUseCase, WorkspaceOperation,
+};
+
 /// 单方案进度状态（工作区功能入口持有；正式持久化归后续数据工单）。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlanProgressState {
@@ -134,6 +138,7 @@ pub(crate) struct WorkspaceProductionContext {
     pub(super) session: Rc<RefCell<WorkspaceSessionState>>,
     pub(super) export_flow: Arc<BoundaryExportFlow>,
     pub(super) collection_flow: Arc<CollectionFlow>,
+    leave_workspace: LeaveWorkspaceUseCase,
 }
 
 impl WorkspaceProductionContext {
@@ -153,7 +158,29 @@ impl WorkspaceProductionContext {
             })),
             export_flow,
             collection_flow,
+            leave_workspace: LeaveWorkspaceUseCase::default(),
         }
+    }
+
+    pub(super) fn operation_started(&self, operation: WorkspaceOperation) {
+        self.leave_workspace.operation_started(operation);
+    }
+
+    pub(super) fn operation_finished(&self, operation: WorkspaceOperation) {
+        self.leave_workspace.operation_finished(operation);
+    }
+
+    pub(super) fn decide_leave(
+        &self,
+        target: crate::presentation::Screen,
+    ) -> LeaveWorkspaceDecision {
+        let session = self.session.borrow();
+        self.leave_workspace.decide(LeaveWorkspaceIntent {
+            target,
+            map_processing: session.map_processing,
+            active_step: session.active_step,
+            boundary_unsaved: session.boundary_unsaved(),
+        })
     }
 
     pub(super) fn injector(&self) -> Rc<RefCell<ViewModelInjector>> {
