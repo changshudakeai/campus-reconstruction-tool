@@ -40,6 +40,8 @@ export-flow = { workspace = true }
 global-settings = { workspace = true }
 # 测试替身数据源用标签映射表（与 F4 测试同源）
 data-transformers = { workspace = true }
+# Putuo 代表性夹具：独立构造 GCJ-02 确认边界以验收 WGS→GCJ→资格顺序。
+gaode-client = { workspace = true }
 # 导出资格验收用 PlanContextView（F9 输入模板）
 project-management = { workspace = true }
 # 临时导出目录

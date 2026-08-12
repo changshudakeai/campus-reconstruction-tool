@@ -1,0 +1,98 @@
+{
+  "description": "华东师大普陀校区附近的脱敏代表性 OSM 夹具；坐标为 WGS-84，方案边界在测试中转换为 GCJ-02。",
+  "elements": [
+    {
+      "type": "way",
+      "id": 101,
+      "tags": { "building": "school", "name": "教学楼" },
+      "geometry": [
+        { "lon": 121.4000, "lat": 31.2280 },
+        { "lon": 121.4004, "lat": 31.2280 },
+        { "lon": 121.4004, "lat": 31.2284 },
+        { "lon": 121.4000, "lat": 31.2280 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 102,
+      "tags": { "highway": "service", "name": "校内路" },
+      "geometry": [
+        { "lon": 121.4002, "lat": 31.2290 },
+        { "lon": 121.4015, "lat": 31.2290 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 103,
+      "tags": { "natural": "water", "name": "水面" },
+      "geometry": [
+        { "lon": 121.4010, "lat": 31.2300 },
+        { "lon": 121.4014, "lat": 31.2300 },
+        { "lon": 121.4014, "lat": 31.2304 },
+        { "lon": 121.4010, "lat": 31.2300 }
+      ]
+    },
+    {
+      "type": "node",
+      "id": 104,
+      "tags": { "natural": "tree", "name": "古树" },
+      "lon": 121.4020,
+      "lat": 31.2295
+    },
+    {
+      "type": "way",
+      "id": 105,
+      "tags": { "leisure": "pitch", "name": "球场" },
+      "geometry": [
+        { "lon": 121.4025, "lat": 31.2280 },
+        { "lon": 121.4030, "lat": 31.2280 },
+        { "lon": 121.4030, "lat": 31.2285 },
+        { "lon": 121.4025, "lat": 31.2280 }
+      ]
+    },
+    {
+      "type": "node",
+      "id": 106,
+      "tags": { "barrier": "gate", "name": "校门" },
+      "lon": 121.4035,
+      "lat": 31.2290
+    },
+    {
+      "type": "way",
+      "id": 107,
+      "tags": { "building": "yes", "name": "边界外建筑" },
+      "geometry": [
+        { "lon": 121.4100, "lat": 31.2400 },
+        { "lon": 121.4104, "lat": 31.2400 },
+        { "lon": 121.4104, "lat": 31.2404 },
+        { "lon": 121.4100, "lat": 31.2400 }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 108,
+      "tags": { "highway": "footway", "name": "跨界步道" },
+      "geometry": [
+        { "lon": 121.4030, "lat": 31.2300 },
+        { "lon": 121.4100, "lat": 31.2400 }
+      ]
+    },
+    {
+      "type": "relation",
+      "id": 109,
+      "tags": { "type": "multipolygon", "building": "university" },
+      "members": [
+        {
+          "type": "way",
+          "ref": 1091,
+          "role": "outer",
+          "geometry": [
+            { "lon": 121.4010, "lat": 31.2310 },
+            { "lon": 121.4015, "lat": 31.2310 },
+            { "lon": 121.4015, "lat": 31.2315 }
+          ]
+        }
+      ]
+    }
+  ]
+}

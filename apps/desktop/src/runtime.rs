@@ -10,7 +10,7 @@ use std::sync::{mpsc, Arc};
 
 use anyhow::Result;
 use collection_flow::CollectionFlow;
-use data_acquisition::overpass::{boundary_bbox, buildings_query, OverpassClient};
+use data_acquisition::overpass::{boundary_bbox, campus_objects_query, OverpassClient};
 use data_acquisition::RegeoNamer;
 use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport};
 use data_persistence::Database;
@@ -593,7 +593,8 @@ fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send
         // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
         let bbox =
             boundary_bbox(boundary, 0.01).ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
-        let query = buildings_query(bbox);
+        let query = campus_objects_query(bbox)
+            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
         OverpassClient::production()
             .query_with_fallback(&query)
             .map_err(|message| format!("Overpass 采集查询失败：{message}"))

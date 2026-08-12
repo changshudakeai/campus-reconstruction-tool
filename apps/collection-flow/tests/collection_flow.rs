@@ -13,7 +13,7 @@ use collection_flow::{
     CollectionStatus,
 };
 use data_acquisition::{
-    overpass::{boundary_bbox, buildings_query, OverpassClient},
+    overpass::{boundary_bbox, campus_objects_query, OverpassClient},
     DataSource, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
 };
 use data_persistence::{CandidateProjectionsApi, Database, RawObservationsApi};
@@ -28,6 +28,153 @@ use shared_domain_types::{Boundary, PlanId};
 #[derive(Debug, Clone)]
 struct FakeSource {
     entities: Vec<RawEntity>,
+}
+
+fn putuo_boundary_gcj02() -> Boundary {
+    let convert = |lon: f64, lat: f64| {
+        let (lon, lat) = gaode_client::wgs84_to_gcj02(lon, lat);
+        serde_json::json!([lon, lat])
+    };
+    Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            convert(121.3990, 31.2270),
+            convert(121.4050, 31.2270),
+            convert(121.4050, 31.2330),
+            convert(121.3990, 31.2330),
+            convert(121.3990, 31.2270)
+        ]]),
+    }
+}
+
+#[test]
+fn putuo_collection_persists_all_sources_but_only_inside_six_categories_are_reviewable() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let payload = include_str!(
+        "../../../core/data-acquisition/tests/fixtures/putuo-boundary-eligibility.json"
+    )
+    .to_owned();
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(Box::new(move |_| {
+            Ok(payload.clone())
+        })));
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    flow.set_plan(&plan_id);
+    flow.confirm_boundary(putuo_boundary_gcj02());
+
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(5)).expect("采集终态");
+    let CollectionOutcome::Succeeded(summary) = outcome else {
+        panic!("单项隔离不得拖垮整批");
+    };
+    let database = db.lock().expect("database lock");
+    assert_eq!(
+        database
+            .list_raw_observations(&plan_id.to_string())
+            .expect("原始观测 API")
+            .len(),
+        9,
+        "边界外、相交和无效 relation 仍保留来源证据"
+    );
+    let reviewable = database
+        .list_reviewable_candidate_projections(&plan_id.to_string())
+        .expect("Reviewable API");
+    assert_eq!(reviewable.len(), 6, "只有完整位于边界内的六类对象可评审");
+    assert_eq!(
+        reviewable
+            .iter()
+            .map(|candidate| candidate.category)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            shared_domain_types::CandidateCategory::Building,
+            shared_domain_types::CandidateCategory::Road,
+            shared_domain_types::CandidateCategory::Water,
+            shared_domain_types::CandidateCategory::Vegetation,
+            shared_domain_types::CandidateCategory::Sports,
+            shared_domain_types::CandidateCategory::Other,
+        ]
+        .into_iter()
+        .collect()
+    );
+    let report = summary.page.report.expect("采集报告");
+    for expected in [
+        "来源对象 9 项",
+        "边界内 6 项",
+        "与边界相交 1 项",
+        "边界外 1 项",
+        "无效几何 1 项",
+        "最终可评审 6 项",
+    ] {
+        assert!(
+            report.candidate_lines.iter().any(|line| line == expected),
+            "报告缺少 {expected}: {:?}",
+            report.candidate_lines
+        );
+    }
+}
+
+#[test]
+fn expanded_bbox_with_twelve_thousand_outside_buildings_does_not_expand_reviewable_scope() {
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../core/data-acquisition/tests/fixtures/putuo-boundary-eligibility.json"
+    ))
+    .expect("Putuo fixture JSON");
+    let elements = payload["elements"].as_array_mut().expect("elements");
+    for index in 0..12_050_u64 {
+        let lon = 121.4100 + (index % 100) as f64 * 0.00001;
+        let lat = 31.2400 + (index / 100) as f64 * 0.00001;
+        elements.push(serde_json::json!({
+            "type": "way",
+            "id": 1_000_000 + index,
+            "tags": {"building": "yes"},
+            "geometry": [
+                {"lon": lon, "lat": lat},
+                {"lon": lon + 0.000005, "lat": lat},
+                {"lon": lon + 0.000005, "lat": lat + 0.000005},
+                {"lon": lon, "lat": lat}
+            ]
+        }));
+    }
+    let payload = payload.to_string();
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(Box::new(move |_| {
+            Ok(payload.clone())
+        })));
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    flow.set_plan(&plan_id);
+    flow.confirm_boundary(putuo_boundary_gcj02());
+
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(30)).expect("大批次终态");
+    let CollectionOutcome::Succeeded(summary) = outcome else {
+        panic!("大量边界外对象应被隔离而不是拖垮采集");
+    };
+    let database = db.lock().expect("database lock");
+    assert_eq!(
+        database
+            .list_raw_observations(&plan_id.to_string())
+            .expect("原始观测")
+            .len(),
+        12_059
+    );
+    assert_eq!(
+        database
+            .list_reviewable_candidate_projections(&plan_id.to_string())
+            .expect("Reviewable API")
+            .len(),
+        6,
+        "bbox 传输窗口中的 12,000+ 边界外建筑不得形成 Reviewable"
+    );
+    assert!(summary
+        .page
+        .report
+        .expect("报告")
+        .candidate_lines
+        .iter()
+        .any(|line| line == "边界外 12051 项"));
 }
 
 impl DataSource for FakeSource {
@@ -244,24 +391,21 @@ fn start_success_persists_raw_and_publishes_candidates_and_unlocks_review() {
 #[test]
 fn invalid_geometry_is_isolated_but_raw_observation_is_kept() {
     let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
-    // 自相交多边形（无效）→ 隔离；有效点与线 → 可评审。
-    let invalid_polygon = RawEntity::with_geometry(
-        "P_BAD",
-        "自相交建筑",
+    // 精确位于边界内的退化线由 B14 隔离；有效点与线 → 可评审。
+    let invalid_line = RawEntity::with_geometry(
+        "L_BAD",
+        "退化建筑线",
         tags(&[("building", "school")]),
-        serde_json::json!({"id": "P_BAD"}),
-        Some(SourceGeometry::Polygon(vec![
-            (116.4000, 39.9000),
-            (116.4010, 39.9010),
-            (116.4000, 39.9010),
-            (116.4010, 39.9000),
-            (116.4000, 39.9000),
+        serde_json::json!({"id": "L_BAD"}),
+        Some(SourceGeometry::LineString(vec![
+            (116.4005, 39.9005),
+            (116.4005, 39.9005),
         ])),
-        "polygon",
+        "line",
     );
     let source = Arc::new(FakeSource {
         entities: vec![
-            invalid_polygon,
+            invalid_line,
             building_point("B01", 116.4003, 39.9003),
             road_line("R01"),
         ],
@@ -297,6 +441,13 @@ fn invalid_geometry_is_isolated_but_raw_observation_is_kept() {
     assert_eq!(reviewable.len(), 2, "只有有效点/线进入候选池");
 
     let report = summary.page.report.expect("报告存在");
+    for expected in ["边界内 3 项", "无效几何 0 项", "最终可评审 2 项"] {
+        assert!(
+            report.candidate_lines.iter().any(|line| line == expected),
+            "边界阶段计数必须独立于 B14 隔离和最终可评审计数；缺少 {expected}: {:?}",
+            report.candidate_lines
+        );
+    }
     assert!(
         report
             .candidate_lines
@@ -744,7 +895,21 @@ fn slow_regeo_enrichment_respects_overall_deadline_with_partial_feedback() {
     };
     let flow = flow_with_limits(Arc::clone(&db), source, limits);
     let plan_id = PlanId::generate();
-    seed_plan(&flow, &plan_id);
+    flow.set_plan(&plan_id);
+    let convert = |lon: f64, lat: f64| {
+        let (lon, lat) = gaode_client::wgs84_to_gcj02(lon, lat);
+        serde_json::json!([lon, lat])
+    };
+    flow.confirm_boundary(Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            convert(121.399, 31.199),
+            convert(121.425, 31.199),
+            convert(121.425, 31.202),
+            convert(121.399, 31.202),
+            convert(121.399, 31.199)
+        ]]),
+    });
 
     let started = Instant::now();
     let mut operation = flow.start().expect("Start");
@@ -778,8 +943,10 @@ fn three_endpoint_hang_overpass_fails_within_overall_deadline() {
     }));
     let overpass_transport = Box::new(move |boundary: &Boundary| {
         let bbox = boundary_bbox(boundary, 0.01).ok_or_else(|| "边界包围盒失败".to_owned())?;
+        let query = campus_objects_query(bbox)
+            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
         client
-            .query_with_fallback(&buildings_query(bbox))
+            .query_with_fallback(&query)
             .map_err(|message| format!("Overpass 采集查询失败：{message}"))
     });
     let source: Arc<dyn DataSource + Send + Sync> =

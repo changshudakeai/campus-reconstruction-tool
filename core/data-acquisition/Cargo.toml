@@ -29,6 +29,8 @@ data-persistence = { workspace = true }
 gaode-client = { workspace = true }
 # B13 数据转换器（缝 3：标签映射归类引擎复用，不重定义归类逻辑）
 data-transformers = { workspace = true }
+# 精确方案边界资格：bbox 只缩小 Overpass 传输范围，候选按 GCJ-02 点/线/面判断。
+geo = { workspace = true }
 # 原始对象 source_data JSON 的承载
 serde_json = { workspace = true }
 # T31: OSM/Overpass/Nominatim Rust 侧直连传输（端点回退 + 超时）

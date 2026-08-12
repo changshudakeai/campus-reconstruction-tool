@@ -307,20 +307,15 @@ fn overpass_entity(value: serde_json::Value) -> Option<RawEntity> {
         .cloned()
         .unwrap_or_else(|| entity_id.clone());
     let geometry = match kind {
-        "node" => Some(SourceGeometry::Point((
-            value.get("lon")?.as_f64()?,
-            value.get("lat")?.as_f64()?,
-        ))),
+        "node" => parse_overpass_coordinate(&value).map(SourceGeometry::Point),
         "way" => value
             .get("geometry")
             .and_then(serde_json::Value::as_array)
-            .map(|points| {
+            .and_then(|points| {
                 points
                     .iter()
-                    .filter_map(|point| {
-                        Some((point.get("lon")?.as_f64()?, point.get("lat")?.as_f64()?))
-                    })
-                    .collect::<Vec<_>>()
+                    .map(parse_overpass_coordinate)
+                    .collect::<Option<Vec<(f64, f64)>>>()
             })
             .filter(|points| !points.is_empty())
             .map(|points| {
@@ -335,6 +330,16 @@ fn overpass_entity(value: serde_json::Value) -> Option<RawEntity> {
     Some(RawEntity::with_geometry(
         entity_id, name, tags, value, geometry, "default",
     ))
+}
+
+fn parse_overpass_coordinate(value: &serde_json::Value) -> Option<(f64, f64)> {
+    let lon = value.get("lon")?.as_f64()?;
+    let lat = value.get("lat")?.as_f64()?;
+    (lon.is_finite()
+        && lat.is_finite()
+        && (-180.0..=180.0).contains(&lon)
+        && (-90.0..=90.0).contains(&lat))
+    .then_some((lon, lat))
 }
 
 /// 高德 typecode 前缀 → 标签的翻译词典（适配器方言转换，非归类逻辑）。

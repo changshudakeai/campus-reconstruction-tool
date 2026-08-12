@@ -1,4 +1,4 @@
-﻿//! OSM/Overpass/Nominatim Rust 侧直连（T31）。
+//! OSM/Overpass/Nominatim Rust 侧直连（T31）。
 //!
 //! 调研根因（`docs/research/candidate-data-sources-and-naming.md` §4.2）：
 //! 1. 请求 URL 缺 `data=` 参数 → 服务器把参数名当查询体，必报 parse error；
@@ -15,9 +15,11 @@
 //! 失败回退 Overpass `amenity=university|college|school` 锚点近域查询；
 //! 再失败回退 `landuse=education`；均无数据 → 人工圈画兜底（由调用方决定）。
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use data_transformers::{ClassifyEngine, TransformError};
 use gaode_client::{convert_coords_wgs84_to_gcj02, BoundarySorter, OsmElement, OsmMember};
 use shared_domain_types::Boundary;
 
@@ -554,17 +556,74 @@ pub fn landuse_education_query(bbox: (f64, f64, f64, f64)) -> String {
     )
 }
 
-/// 候选建筑查询：`building=*`（面几何 + name/building:levels 标签；union 写法）
-pub fn buildings_query(bbox: (f64, f64, f64, f64)) -> String {
+/// 六类校园对象粗查询：selector 由 B13 集中标签规则生成。
+///
+/// 查询规划只决定某条集中规则适合请求 node / way / relation 中的哪些几何载体，
+/// 不复制类别归属。`historic=*`、`power=*`、`man_made=*` 这类无形态约束的宽规则
+/// 不直接进入在线粗查询；若对象因其它受支持 selector 被拉回，最终分类仍由 B13
+/// 唯一裁决。bbox 只缩小传输范围，不提供候选资格。
+pub fn campus_objects_query(
+    bbox: (f64, f64, f64, f64),
+) -> std::result::Result<String, TransformError> {
+    let engine = ClassifyEngine::with_default_mapping()?;
     let (south, west, north, east) = bbox;
-    format!(
-        "[out:json][timeout:{t}];(way[\"building\"]({s},{w},{n},{e});relation[\"building\"]({s},{w},{n},{e}););out geom;",
-        t = OVERPASS_SERVER_TIMEOUT_SECS,
-        s = south,
-        w = west,
-        n = north,
-        e = east
-    )
+    let mut clauses = BTreeSet::new();
+    for rule in &engine.config().rules {
+        // OSM 对 building=* 明确定义为建筑/构筑物粗族；用集中“建筑”规则条目
+        // 识别该族，避免只枚举当前已知 value 而漏掉新值。最终互斥类别仍由
+        // 同一个 ClassifyEngine 裁决，不在查询层另建分类表。
+        if rule.category_tkey == "collection.category_building" {
+            let selector = "[\"building\"]";
+            for element_kind in ["way", "relation"] {
+                clauses.insert(format!(
+                    "{element_kind}{selector}({south},{west},{north},{east});"
+                ));
+            }
+        }
+        for pattern in &rule.tags {
+            let Some((key, value)) = pattern.as_str().split_once('=') else {
+                continue;
+            };
+            let selector = overpass_tag_selector(key, value);
+            for element_kind in overpass_element_kinds(key, value) {
+                clauses.insert(format!(
+                    "{element_kind}{selector}({south},{west},{north},{east});"
+                ));
+            }
+        }
+    }
+    Ok(format!(
+        "[out:json][timeout:{OVERPASS_SERVER_TIMEOUT_SECS}];({});out geom;",
+        clauses.into_iter().collect::<String>()
+    ))
+}
+
+fn overpass_tag_selector(key: &str, value: &str) -> String {
+    if value == "*" {
+        format!("[\"{key}\"]")
+    } else if let Some(prefix) = value.strip_suffix('*') {
+        format!("[\"{key}\"~\"^{prefix}\"]")
+    } else {
+        format!("[\"{key}\"=\"{value}\"]")
+    }
+}
+
+fn overpass_element_kinds(key: &str, value: &str) -> &'static [&'static str] {
+    match (key, value) {
+        // 点对象：只有标签语义本身明确落在点上时才请求 node。
+        ("natural", "tree") | ("barrier", "gate") => &["node"],
+        // 喷泉既可能是点，也可能有真实面轮廓。
+        ("amenity", "fountain") => &["node", "way", "relation"],
+        // 线对象：路线 relation 不是可直接验证的道路/铁路/水路线形。
+        ("highway" | "railway" | "waterway", _) => &["way"],
+        ("barrier", "wall" | "fence") | ("natural", "tree_row") => &["way"],
+        // 面对象：不为明显面对象生成无意义 node selector。
+        ("building" | "landuse" | "leisure" | "sport" | "water", _) => &["way", "relation"],
+        ("natural", "water" | "wood" | "scrub") => &["way", "relation"],
+        // 形态过宽，缺少进一步过滤；保持集中分类规则不变但不拉取全域噪声。
+        ("historic" | "power" | "man_made", _) => &[],
+        _ => &[],
+    }
 }
 
 /// 以锚点为中心、给定半径（米）的 WGS-84 包围盒（south, west, north, east）

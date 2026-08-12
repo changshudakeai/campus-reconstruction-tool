@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use coverage_audit::{AuditOutcome, QuietSentinel, ALL_CATEGORIES};
 use data_acquisition::{
-    AcquisitionBatch, AcquisitionPipeline, CandidateDraft, CollectionProgressView,
-    CollectionReport, CollectionStage, DataSource, SourceGeometry,
+    AcquisitionBatch, AcquisitionPipeline, BoundaryDisposition, CandidateDraft,
+    CollectionProgressView, CollectionReport, CollectionStage, DataSource, SourceGeometry,
 };
 use data_persistence::{
     CandidateBatchSummary, CandidateDisplay, CandidateEligibility, CandidateProjection,
@@ -441,6 +441,10 @@ impl CollectionWorker {
             plan_id: batch.plan_id.clone(),
             source_tag: batch.source_tag.clone(),
             total: batch.total_source_object_count,
+            boundary_inside: batch.boundary_inside,
+            boundary_crossing: batch.boundary_crossing,
+            boundary_outside: batch.boundary_outside,
+            invalid_geometry: batch.invalid_geometry,
             written,
             category_counts: batch.category_counts.clone(),
             fallback_count: batch.fallback_count,
@@ -456,7 +460,7 @@ impl CollectionWorker {
                 "unchanged": batch.diff.unchanged_count(),
             }),
         );
-        let report_view = self.build_report_view(&audit, &batch_summary);
+        let report_view = self.build_report_view(&audit, &batch, &batch_summary);
         let notification = audit.popup.as_ref().map(|popup| {
             Notification::error(
                 self.l10n.t("audit.source_tag"),
@@ -480,12 +484,33 @@ impl CollectionWorker {
     fn build_report_view(
         &self,
         audit: &AuditOutcome,
+        batch: &AcquisitionBatch,
         batch_summary: &CandidateBatchSummary,
     ) -> CollectionReportView {
         let audit_view = self.sentinel.report_view(&audit.result, self.l10n.as_ref());
         let candidate_lines = vec![
             self.l10n.t_with_args(
-                "collection.report_reviewable",
+                "collection.report_source_total",
+                serde_json::json!({ "count": batch.total_source_object_count }),
+            ),
+            self.l10n.t_with_args(
+                "collection.report_boundary_inside",
+                serde_json::json!({ "count": batch.boundary_inside }),
+            ),
+            self.l10n.t_with_args(
+                "collection.report_boundary_crossing",
+                serde_json::json!({ "count": batch.boundary_crossing }),
+            ),
+            self.l10n.t_with_args(
+                "collection.report_boundary_outside",
+                serde_json::json!({ "count": batch.boundary_outside }),
+            ),
+            self.l10n.t_with_args(
+                "collection.report_invalid_geometry",
+                serde_json::json!({ "count": batch.invalid_geometry }),
+            ),
+            self.l10n.t_with_args(
+                "collection.report_reviewable_final",
                 serde_json::json!({ "count": batch_summary.reviewable_count }),
             ),
             self.l10n.t_with_args(
@@ -538,6 +563,9 @@ fn failure_view(l10n: &Localization, error: &CollectionError) -> CollectionFailu
 
 /// 候选草稿 → B14 待验证几何（无来源几何的对象不伪造形状，交隔离）。
 fn candidate_geometry(draft: &CandidateDraft) -> Option<CandidateGeometry> {
+    if draft.boundary_disposition != BoundaryDisposition::Inside {
+        return None;
+    }
     let geometry = draft.source_geometry.as_ref()?;
     match geometry {
         SourceGeometry::Point(point) => Some(CandidateGeometry::with_shape(
@@ -599,6 +627,33 @@ fn projection_for(
             eligibility,
         )
     };
+    match draft.boundary_disposition {
+        BoundaryDisposition::Outside => {
+            return common(
+                shape_from_source(draft.source_geometry.as_ref()),
+                CandidateValidation::Rejected,
+                CandidateEligibility::Isolated,
+            )
+            .isolated_reason("outside_confirmed_plan_boundary");
+        }
+        BoundaryDisposition::Crosses => {
+            return common(
+                shape_from_source(draft.source_geometry.as_ref()),
+                CandidateValidation::Rejected,
+                CandidateEligibility::Isolated,
+            )
+            .isolated_reason("crosses_confirmed_plan_boundary");
+        }
+        BoundaryDisposition::Invalid => {
+            return common(
+                no_shape(),
+                CandidateValidation::Rejected,
+                CandidateEligibility::Isolated,
+            )
+            .isolated_reason("invalid_source_geometry");
+        }
+        BoundaryDisposition::Inside => {}
+    }
     match outcome.map(|item| &item.disposition) {
         Some(ValidationDisposition::Retained) | Some(ValidationDisposition::Repaired) => {
             let geometry = outcome
