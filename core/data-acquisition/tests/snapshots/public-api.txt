@@ -2,6 +2,7 @@ pub mod data_acquisition
 pub mod data_acquisition::error
 #[non_exhaustive] pub enum data_acquisition::error::AcquisitionError
 pub data_acquisition::error::AcquisitionError::EmptyBoundary
+pub data_acquisition::error::AcquisitionError::InvalidBoundary
 pub data_acquisition::error::AcquisitionError::Persistence(data_persistence::error::Error)
 pub data_acquisition::error::AcquisitionError::Source(gaode_client::error::Error)
 pub data_acquisition::error::AcquisitionError::SourceUnreachable
@@ -26,6 +27,8 @@ impl core::marker::Sync for data_acquisition::error::AcquisitionError
 impl core::marker::Unpin for data_acquisition::error::AcquisitionError
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::error::AcquisitionError
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::error::AcquisitionError
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::error::AcquisitionError where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::error::AcquisitionError::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::error::AcquisitionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::error::AcquisitionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::error::AcquisitionError where U: core::convert::From<T>
@@ -46,6 +49,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::error::AcquisitionError
 pub fn data_acquisition::error::AcquisitionError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::error::AcquisitionError
 pub fn data_acquisition::error::AcquisitionError::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::error::AcquisitionError
 impl<T> typenum::type_operators::Same for data_acquisition::error::AcquisitionError
 pub type data_acquisition::error::AcquisitionError::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::error::AcquisitionError where T: ?core::marker::Sized
@@ -72,6 +76,8 @@ impl core::marker::Sync for data_acquisition::overpass::BoundarySourceKind
 impl core::marker::Unpin for data_acquisition::overpass::BoundarySourceKind
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::BoundarySourceKind
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::BoundarySourceKind
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::BoundarySourceKind where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::BoundarySourceKind::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::overpass::BoundarySourceKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::overpass::BoundarySourceKind::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::BoundarySourceKind where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -100,6 +106,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::overpass::BoundarySourc
 pub unsafe fn data_acquisition::overpass::BoundarySourceKind::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::overpass::BoundarySourceKind
 pub fn data_acquisition::overpass::BoundarySourceKind::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::BoundarySourceKind
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::BoundarySourceKind
 pub type data_acquisition::overpass::BoundarySourceKind::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::BoundarySourceKind where T: ?core::marker::Sized
@@ -125,6 +132,8 @@ impl core::marker::Sync for data_acquisition::overpass::CampusBoundaryResult
 impl core::marker::Unpin for data_acquisition::overpass::CampusBoundaryResult
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::CampusBoundaryResult
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::CampusBoundaryResult
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::CampusBoundaryResult where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::CampusBoundaryResult::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::CampusBoundaryResult where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::CampusBoundaryResult where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::overpass::CampusBoundaryResult where U: core::convert::From<T>
@@ -149,6 +158,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::overpass::CampusBoundar
 pub unsafe fn data_acquisition::overpass::CampusBoundaryResult::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::overpass::CampusBoundaryResult
 pub fn data_acquisition::overpass::CampusBoundaryResult::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::CampusBoundaryResult
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::CampusBoundaryResult
 pub type data_acquisition::overpass::CampusBoundaryResult::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::CampusBoundaryResult where T: ?core::marker::Sized
@@ -163,6 +173,8 @@ impl core::marker::Sync for data_acquisition::overpass::CampusBoundaryFetcher
 impl core::marker::Unpin for data_acquisition::overpass::CampusBoundaryFetcher
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::CampusBoundaryFetcher
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::CampusBoundaryFetcher
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::CampusBoundaryFetcher where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::CampusBoundaryFetcher::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::CampusBoundaryFetcher where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::CampusBoundaryFetcher where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::overpass::CampusBoundaryFetcher where U: core::convert::From<T>
@@ -181,6 +193,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::overpass::CampusBoundar
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::overpass::CampusBoundaryFetcher
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::CampusBoundaryFetcher
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::CampusBoundaryFetcher
 pub type data_acquisition::overpass::CampusBoundaryFetcher::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::CampusBoundaryFetcher where T: ?core::marker::Sized
@@ -195,6 +208,8 @@ impl core::marker::Sync for data_acquisition::overpass::NominatimClient
 impl core::marker::Unpin for data_acquisition::overpass::NominatimClient
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::NominatimClient
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::NominatimClient
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::NominatimClient where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::NominatimClient::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::NominatimClient where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::NominatimClient where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::overpass::NominatimClient where U: core::convert::From<T>
@@ -213,6 +228,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::overpass::NominatimClie
 pub fn data_acquisition::overpass::NominatimClient::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::overpass::NominatimClient
 pub fn data_acquisition::overpass::NominatimClient::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::NominatimClient
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::NominatimClient
 pub type data_acquisition::overpass::NominatimClient::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::NominatimClient where T: ?core::marker::Sized
@@ -235,6 +251,8 @@ impl core::marker::Sync for data_acquisition::overpass::NominatimMatch
 impl core::marker::Unpin for data_acquisition::overpass::NominatimMatch
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::NominatimMatch
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::NominatimMatch
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::NominatimMatch where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::NominatimMatch::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::NominatimMatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::NominatimMatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::overpass::NominatimMatch where U: core::convert::From<T>
@@ -259,6 +277,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::overpass::NominatimMatc
 pub unsafe fn data_acquisition::overpass::NominatimMatch::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::overpass::NominatimMatch
 pub fn data_acquisition::overpass::NominatimMatch::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::NominatimMatch
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::NominatimMatch
 pub type data_acquisition::overpass::NominatimMatch::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::NominatimMatch where T: ?core::marker::Sized
@@ -273,6 +292,8 @@ impl core::marker::Sync for data_acquisition::overpass::OverpassClient
 impl core::marker::Unpin for data_acquisition::overpass::OverpassClient
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::OverpassClient
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::OverpassClient
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::OverpassClient where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::OverpassClient::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::OverpassClient where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::OverpassClient where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::overpass::OverpassClient where U: core::convert::From<T>
@@ -291,6 +312,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::overpass::OverpassClien
 pub fn data_acquisition::overpass::OverpassClient::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::overpass::OverpassClient
 pub fn data_acquisition::overpass::OverpassClient::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::OverpassClient
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::OverpassClient
 pub type data_acquisition::overpass::OverpassClient::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::OverpassClient where T: ?core::marker::Sized
@@ -302,8 +324,8 @@ pub const data_acquisition::overpass::OVERPASS_SERVER_TIMEOUT_SECS: u32
 pub const data_acquisition::overpass::USER_AGENT: &str
 pub fn data_acquisition::overpass::bbox_around(lon: f64, lat: f64, radius_m: f64) -> (f64, f64, f64, f64)
 pub fn data_acquisition::overpass::boundary_bbox(boundary: &shared_domain_types::boundary::Boundary, margin_deg: f64) -> core::option::Option<(f64, f64, f64, f64)>
-pub fn data_acquisition::overpass::buildings_query(bbox: (f64, f64, f64, f64)) -> alloc::string::String
 pub fn data_acquisition::overpass::campus_name_candidates(name: &str) -> alloc::vec::Vec<alloc::string::String>
+pub fn data_acquisition::overpass::campus_objects_query(bbox: (f64, f64, f64, f64)) -> core::result::Result<alloc::string::String, data_transformers::error::TransformError>
 pub fn data_acquisition::overpass::element_by_id_query(osm_type: &str, osm_id: i64) -> alloc::string::String
 pub fn data_acquisition::overpass::elements_to_gcj02(elements: alloc::vec::Vec<gaode_client::poi::OsmElement>) -> alloc::vec::Vec<gaode_client::poi::OsmElement>
 pub fn data_acquisition::overpass::encode_query(value: &str) -> alloc::string::String
@@ -313,12 +335,68 @@ pub fn data_acquisition::overpass::parse_nominatim_results(json: &str) -> alloc:
 pub fn data_acquisition::overpass::university_query(bbox: (f64, f64, f64, f64)) -> alloc::string::String
 pub type data_acquisition::overpass::HttpTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&str, core::time::Duration) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
 pub mod data_acquisition::pipeline
+pub enum data_acquisition::pipeline::BoundaryDisposition
+pub data_acquisition::pipeline::BoundaryDisposition::Crosses
+pub data_acquisition::pipeline::BoundaryDisposition::Inside
+pub data_acquisition::pipeline::BoundaryDisposition::Invalid
+pub data_acquisition::pipeline::BoundaryDisposition::Outside
+impl core::clone::Clone for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::clone(&self) -> data_acquisition::pipeline::BoundaryDisposition
+impl core::cmp::Eq for data_acquisition::pipeline::BoundaryDisposition
+impl core::cmp::PartialEq for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::eq(&self, other: &data_acquisition::pipeline::BoundaryDisposition) -> bool
+impl core::fmt::Debug for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::StructuralPartialEq for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Freeze for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Send for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Sync for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Unpin for data_acquisition::pipeline::BoundaryDisposition
+impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::BoundaryDisposition
+impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::BoundaryDisposition
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::BoundaryDisposition where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::BoundaryDisposition::is_within(&self, b: &G2) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::pipeline::BoundaryDisposition where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::BoundaryDisposition where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::BoundaryDisposition where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::From<T>
+pub fn data_acquisition::pipeline::BoundaryDisposition::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::Into<T>
+pub type data_acquisition::pipeline::BoundaryDisposition::Error = core::convert::Infallible
+pub fn data_acquisition::pipeline::BoundaryDisposition::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::TryFrom<T>
+pub type data_acquisition::pipeline::BoundaryDisposition::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_acquisition::pipeline::BoundaryDisposition::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_acquisition::pipeline::BoundaryDisposition where T: core::clone::Clone
+pub type data_acquisition::pipeline::BoundaryDisposition::Owned = T
+pub fn data_acquisition::pipeline::BoundaryDisposition::clone_into(&self, target: &mut T)
+pub fn data_acquisition::pipeline::BoundaryDisposition::to_owned(&self) -> T
+impl<T> core::any::Any for data_acquisition::pipeline::BoundaryDisposition where T: 'static + ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::BoundaryDisposition where T: core::clone::Clone
+pub unsafe fn data_acquisition::pipeline::BoundaryDisposition::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::BoundaryDisposition
+impl<T> typenum::type_operators::Same for data_acquisition::pipeline::BoundaryDisposition
+pub type data_acquisition::pipeline::BoundaryDisposition::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
 pub struct data_acquisition::pipeline::AcquisitionBatch
+pub data_acquisition::pipeline::AcquisitionBatch::boundary_crossing: usize
+pub data_acquisition::pipeline::AcquisitionBatch::boundary_inside: usize
+pub data_acquisition::pipeline::AcquisitionBatch::boundary_outside: usize
 pub data_acquisition::pipeline::AcquisitionBatch::candidate_drafts: alloc::vec::Vec<data_acquisition::pipeline::CandidateDraft>
 pub data_acquisition::pipeline::AcquisitionBatch::category_counts: alloc::collections::btree::map::BTreeMap<shared_domain_types::category::CandidateCategory, usize>
 pub data_acquisition::pipeline::AcquisitionBatch::diff: data_acquisition::refresh::RefreshDiff
 pub data_acquisition::pipeline::AcquisitionBatch::fallback_count: usize
 pub data_acquisition::pipeline::AcquisitionBatch::geometry_object_count: usize
+pub data_acquisition::pipeline::AcquisitionBatch::invalid_geometry: usize
 pub data_acquisition::pipeline::AcquisitionBatch::missing_geometry_object_count: usize
 pub data_acquisition::pipeline::AcquisitionBatch::naming_partial: bool
 pub data_acquisition::pipeline::AcquisitionBatch::plan_id: alloc::string::String
@@ -338,6 +416,8 @@ impl core::marker::Sync for data_acquisition::pipeline::AcquisitionBatch
 impl core::marker::Unpin for data_acquisition::pipeline::AcquisitionBatch
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::AcquisitionBatch
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::AcquisitionBatch
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::AcquisitionBatch where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::AcquisitionBatch::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::AcquisitionBatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::AcquisitionBatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::AcquisitionBatch where U: core::convert::From<T>
@@ -362,6 +442,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::AcquisitionBa
 pub unsafe fn data_acquisition::pipeline::AcquisitionBatch::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::AcquisitionBatch
 pub fn data_acquisition::pipeline::AcquisitionBatch::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::AcquisitionBatch
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::AcquisitionBatch
 pub type data_acquisition::pipeline::AcquisitionBatch::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::AcquisitionBatch where T: ?core::marker::Sized
@@ -379,6 +460,8 @@ impl core::marker::Sync for data_acquisition::pipeline::AcquisitionPipeline
 impl core::marker::Unpin for data_acquisition::pipeline::AcquisitionPipeline
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::AcquisitionPipeline
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::AcquisitionPipeline
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::AcquisitionPipeline where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::AcquisitionPipeline::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::AcquisitionPipeline where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::AcquisitionPipeline where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::AcquisitionPipeline where U: core::convert::From<T>
@@ -397,10 +480,12 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::pipeline::AcquisitionPi
 pub fn data_acquisition::pipeline::AcquisitionPipeline::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::pipeline::AcquisitionPipeline
 pub fn data_acquisition::pipeline::AcquisitionPipeline::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::AcquisitionPipeline
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::AcquisitionPipeline
 pub type data_acquisition::pipeline::AcquisitionPipeline::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::AcquisitionPipeline where T: ?core::marker::Sized
 pub struct data_acquisition::pipeline::CandidateDraft
+pub data_acquisition::pipeline::CandidateDraft::boundary_disposition: data_acquisition::pipeline::BoundaryDisposition
 pub data_acquisition::pipeline::CandidateDraft::category: shared_domain_types::category::CandidateCategory
 pub data_acquisition::pipeline::CandidateDraft::data_source_tag: alloc::string::String
 pub data_acquisition::pipeline::CandidateDraft::geometry_part_id: alloc::string::String
@@ -422,6 +507,8 @@ impl core::marker::Sync for data_acquisition::pipeline::CandidateDraft
 impl core::marker::Unpin for data_acquisition::pipeline::CandidateDraft
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::CandidateDraft
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::CandidateDraft
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::CandidateDraft where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::CandidateDraft::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::CandidateDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::CandidateDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::CandidateDraft where U: core::convert::From<T>
@@ -446,13 +533,18 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::CandidateDraf
 pub unsafe fn data_acquisition::pipeline::CandidateDraft::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::CandidateDraft
 pub fn data_acquisition::pipeline::CandidateDraft::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::CandidateDraft
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::CandidateDraft
 pub type data_acquisition::pipeline::CandidateDraft::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::CandidateDraft where T: ?core::marker::Sized
 pub struct data_acquisition::pipeline::CollectionReport
+pub data_acquisition::pipeline::CollectionReport::boundary_crossing: usize
+pub data_acquisition::pipeline::CollectionReport::boundary_inside: usize
+pub data_acquisition::pipeline::CollectionReport::boundary_outside: usize
 pub data_acquisition::pipeline::CollectionReport::category_counts: alloc::collections::btree::map::BTreeMap<shared_domain_types::category::CandidateCategory, usize>
 pub data_acquisition::pipeline::CollectionReport::diff: data_acquisition::refresh::RefreshDiff
 pub data_acquisition::pipeline::CollectionReport::fallback_count: usize
+pub data_acquisition::pipeline::CollectionReport::invalid_geometry: usize
 pub data_acquisition::pipeline::CollectionReport::naming_partial: bool
 pub data_acquisition::pipeline::CollectionReport::plan_id: alloc::string::String
 pub data_acquisition::pipeline::CollectionReport::source_tag: alloc::string::String
@@ -471,6 +563,8 @@ impl core::marker::Sync for data_acquisition::pipeline::CollectionReport
 impl core::marker::Unpin for data_acquisition::pipeline::CollectionReport
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::CollectionReport
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::CollectionReport
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::CollectionReport where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::CollectionReport::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::CollectionReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::CollectionReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::CollectionReport where U: core::convert::From<T>
@@ -495,6 +589,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::CollectionRep
 pub unsafe fn data_acquisition::pipeline::CollectionReport::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::CollectionReport
 pub fn data_acquisition::pipeline::CollectionReport::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::CollectionReport
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::CollectionReport
 pub type data_acquisition::pipeline::CollectionReport::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::CollectionReport where T: ?core::marker::Sized
@@ -528,6 +623,8 @@ impl core::marker::Sync for data_acquisition::progress::CollectionStage
 impl core::marker::Unpin for data_acquisition::progress::CollectionStage
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CollectionStage
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CollectionStage
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CollectionStage where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CollectionStage::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CollectionStage where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CollectionStage::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CollectionStage where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -554,6 +651,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CollectionSta
 pub unsafe fn data_acquisition::progress::CollectionStage::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CollectionStage
 pub fn data_acquisition::progress::CollectionStage::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CollectionStage
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CollectionStage
 pub type data_acquisition::progress::CollectionStage::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CollectionStage where T: ?core::marker::Sized
@@ -576,6 +674,8 @@ impl core::marker::Sync for data_acquisition::progress::CategoryProgress
 impl core::marker::Unpin for data_acquisition::progress::CategoryProgress
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CategoryProgress
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CategoryProgress
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CategoryProgress where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CategoryProgress::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CategoryProgress where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CategoryProgress::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CategoryProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -602,6 +702,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CategoryProgr
 pub unsafe fn data_acquisition::progress::CategoryProgress::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CategoryProgress
 pub fn data_acquisition::progress::CategoryProgress::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CategoryProgress
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CategoryProgress
 pub type data_acquisition::progress::CategoryProgress::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CategoryProgress where T: ?core::marker::Sized
@@ -632,6 +733,8 @@ impl core::marker::Sync for data_acquisition::progress::CollectionProgressView
 impl core::marker::Unpin for data_acquisition::progress::CollectionProgressView
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CollectionProgressView
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CollectionProgressView
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CollectionProgressView where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CollectionProgressView::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CollectionProgressView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CollectionProgressView::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CollectionProgressView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -658,6 +761,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CollectionPro
 pub unsafe fn data_acquisition::progress::CollectionProgressView::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CollectionProgressView
 pub fn data_acquisition::progress::CollectionProgressView::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CollectionProgressView
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CollectionProgressView
 pub type data_acquisition::progress::CollectionProgressView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CollectionProgressView where T: ?core::marker::Sized
@@ -687,6 +791,8 @@ impl core::marker::Sync for data_acquisition::refresh::DiffKind
 impl core::marker::Unpin for data_acquisition::refresh::DiffKind
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::DiffKind
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::DiffKind
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::DiffKind where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::DiffKind::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::DiffKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::DiffKind::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::DiffKind where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -713,6 +819,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::DiffKind where
 pub unsafe fn data_acquisition::refresh::DiffKind::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::DiffKind
 pub fn data_acquisition::refresh::DiffKind::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::DiffKind
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::DiffKind
 pub type data_acquisition::refresh::DiffKind::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::DiffKind where T: ?core::marker::Sized
@@ -734,6 +841,8 @@ impl core::marker::Sync for data_acquisition::refresh::DiffEntry
 impl core::marker::Unpin for data_acquisition::refresh::DiffEntry
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::DiffEntry
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::DiffEntry
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::DiffEntry where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::DiffEntry::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::DiffEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::DiffEntry::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::DiffEntry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -760,6 +869,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::DiffEntry wher
 pub unsafe fn data_acquisition::refresh::DiffEntry::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::DiffEntry
 pub fn data_acquisition::refresh::DiffEntry::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::DiffEntry
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::DiffEntry
 pub type data_acquisition::refresh::DiffEntry::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::DiffEntry where T: ?core::marker::Sized
@@ -787,6 +897,8 @@ impl core::marker::Sync for data_acquisition::refresh::RefreshDiff
 impl core::marker::Unpin for data_acquisition::refresh::RefreshDiff
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::RefreshDiff
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::RefreshDiff
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::RefreshDiff where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::RefreshDiff::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::RefreshDiff where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::RefreshDiff::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::RefreshDiff where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -813,6 +925,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::RefreshDiff wh
 pub unsafe fn data_acquisition::refresh::RefreshDiff::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::RefreshDiff
 pub fn data_acquisition::refresh::RefreshDiff::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::RefreshDiff
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::RefreshDiff
 pub type data_acquisition::refresh::RefreshDiff::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::RefreshDiff where T: ?core::marker::Sized
@@ -830,6 +943,8 @@ impl core::marker::Sync for data_acquisition::regeo::RegeoNamer
 impl core::marker::Unpin for data_acquisition::regeo::RegeoNamer
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::regeo::RegeoNamer
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::regeo::RegeoNamer
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::regeo::RegeoNamer where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::regeo::RegeoNamer::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::regeo::RegeoNamer where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::regeo::RegeoNamer where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::regeo::RegeoNamer where U: core::convert::From<T>
@@ -848,6 +963,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::regeo::RegeoNamer where
 pub fn data_acquisition::regeo::RegeoNamer::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::regeo::RegeoNamer
 pub fn data_acquisition::regeo::RegeoNamer::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::regeo::RegeoNamer
 impl<T> typenum::type_operators::Same for data_acquisition::regeo::RegeoNamer
 pub type data_acquisition::regeo::RegeoNamer::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::regeo::RegeoNamer where T: ?core::marker::Sized
@@ -877,6 +993,8 @@ impl core::marker::Sync for data_acquisition::source::SourceGeometry
 impl core::marker::Unpin for data_acquisition::source::SourceGeometry
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::SourceGeometry
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::SourceGeometry
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::SourceGeometry where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::SourceGeometry::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::SourceGeometry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::SourceGeometry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::SourceGeometry where U: core::convert::From<T>
@@ -901,6 +1019,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::SourceGeometry 
 pub unsafe fn data_acquisition::source::SourceGeometry::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::SourceGeometry
 pub fn data_acquisition::source::SourceGeometry::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::SourceGeometry
 impl<T> typenum::type_operators::Same for data_acquisition::source::SourceGeometry
 pub type data_acquisition::source::SourceGeometry::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::SourceGeometry where T: ?core::marker::Sized
@@ -922,6 +1041,8 @@ impl core::marker::Sync for data_acquisition::source::BatchEnrichment
 impl core::marker::Unpin for data_acquisition::source::BatchEnrichment
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::BatchEnrichment
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::BatchEnrichment
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::BatchEnrichment where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::BatchEnrichment::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::source::BatchEnrichment where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::source::BatchEnrichment::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::BatchEnrichment where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -948,6 +1069,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::BatchEnrichment
 pub unsafe fn data_acquisition::source::BatchEnrichment::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::BatchEnrichment
 pub fn data_acquisition::source::BatchEnrichment::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::BatchEnrichment
 impl<T> typenum::type_operators::Same for data_acquisition::source::BatchEnrichment
 pub type data_acquisition::source::BatchEnrichment::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::BatchEnrichment where T: ?core::marker::Sized
@@ -968,6 +1090,8 @@ impl core::marker::Sync for data_acquisition::source::EnrichedEntities
 impl core::marker::Unpin for data_acquisition::source::EnrichedEntities
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::EnrichedEntities
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::EnrichedEntities
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::EnrichedEntities where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::EnrichedEntities::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::EnrichedEntities where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::EnrichedEntities where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::EnrichedEntities where U: core::convert::From<T>
@@ -992,6 +1116,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::EnrichedEntitie
 pub unsafe fn data_acquisition::source::EnrichedEntities::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::EnrichedEntities
 pub fn data_acquisition::source::EnrichedEntities::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::EnrichedEntities
 impl<T> typenum::type_operators::Same for data_acquisition::source::EnrichedEntities
 pub type data_acquisition::source::EnrichedEntities::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::EnrichedEntities where T: ?core::marker::Sized
@@ -1010,6 +1135,8 @@ impl core::marker::Sync for data_acquisition::source::GaodeDataSource
 impl core::marker::Unpin for data_acquisition::source::GaodeDataSource
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::GaodeDataSource
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::source::GaodeDataSource
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::GaodeDataSource where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::GaodeDataSource::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::GaodeDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::GaodeDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::GaodeDataSource where U: core::convert::From<T>
@@ -1028,6 +1155,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::GaodeDataSource
 impl<T> typenum::type_operators::Same for data_acquisition::source::GaodeDataSource
 pub type data_acquisition::source::GaodeDataSource::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::GaodeDataSource where T: ?core::marker::Sized
@@ -1047,6 +1175,8 @@ impl core::marker::Sync for data_acquisition::source::OverpassDataSource
 impl core::marker::Unpin for data_acquisition::source::OverpassDataSource
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::OverpassDataSource
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::source::OverpassDataSource
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::OverpassDataSource where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::OverpassDataSource::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::OverpassDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::OverpassDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::OverpassDataSource where U: core::convert::From<T>
@@ -1065,6 +1195,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::source::OverpassDataSou
 pub fn data_acquisition::source::OverpassDataSource::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::source::OverpassDataSource
 pub fn data_acquisition::source::OverpassDataSource::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::OverpassDataSource
 impl<T> typenum::type_operators::Same for data_acquisition::source::OverpassDataSource
 pub type data_acquisition::source::OverpassDataSource::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::OverpassDataSource where T: ?core::marker::Sized
@@ -1092,6 +1223,8 @@ impl core::marker::Sync for data_acquisition::source::RawEntity
 impl core::marker::Unpin for data_acquisition::source::RawEntity
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::RawEntity
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::RawEntity
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::RawEntity where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::RawEntity::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::RawEntity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::RawEntity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::RawEntity where U: core::convert::From<T>
@@ -1116,6 +1249,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::RawEntity where
 pub unsafe fn data_acquisition::source::RawEntity::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::RawEntity
 pub fn data_acquisition::source::RawEntity::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::RawEntity
 impl<T> typenum::type_operators::Same for data_acquisition::source::RawEntity
 pub type data_acquisition::source::RawEntity::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::RawEntity where T: ?core::marker::Sized
@@ -1149,6 +1283,7 @@ pub const data_acquisition::text_keys::PROGRESS_TITLE: &str
 pub const data_acquisition::text_keys::SOURCE_GAODE: &str
 #[non_exhaustive] pub enum data_acquisition::AcquisitionError
 pub data_acquisition::AcquisitionError::EmptyBoundary
+pub data_acquisition::AcquisitionError::InvalidBoundary
 pub data_acquisition::AcquisitionError::Persistence(data_persistence::error::Error)
 pub data_acquisition::AcquisitionError::Source(gaode_client::error::Error)
 pub data_acquisition::AcquisitionError::SourceUnreachable
@@ -1173,6 +1308,8 @@ impl core::marker::Sync for data_acquisition::error::AcquisitionError
 impl core::marker::Unpin for data_acquisition::error::AcquisitionError
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::error::AcquisitionError
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::error::AcquisitionError
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::error::AcquisitionError where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::error::AcquisitionError::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::error::AcquisitionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::error::AcquisitionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::error::AcquisitionError where U: core::convert::From<T>
@@ -1193,9 +1330,62 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::error::AcquisitionError
 pub fn data_acquisition::error::AcquisitionError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::error::AcquisitionError
 pub fn data_acquisition::error::AcquisitionError::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::error::AcquisitionError
 impl<T> typenum::type_operators::Same for data_acquisition::error::AcquisitionError
 pub type data_acquisition::error::AcquisitionError::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::error::AcquisitionError where T: ?core::marker::Sized
+pub enum data_acquisition::BoundaryDisposition
+pub data_acquisition::BoundaryDisposition::Crosses
+pub data_acquisition::BoundaryDisposition::Inside
+pub data_acquisition::BoundaryDisposition::Invalid
+pub data_acquisition::BoundaryDisposition::Outside
+impl core::clone::Clone for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::clone(&self) -> data_acquisition::pipeline::BoundaryDisposition
+impl core::cmp::Eq for data_acquisition::pipeline::BoundaryDisposition
+impl core::cmp::PartialEq for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::eq(&self, other: &data_acquisition::pipeline::BoundaryDisposition) -> bool
+impl core::fmt::Debug for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::StructuralPartialEq for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Freeze for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Send for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Sync for data_acquisition::pipeline::BoundaryDisposition
+impl core::marker::Unpin for data_acquisition::pipeline::BoundaryDisposition
+impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::BoundaryDisposition
+impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::BoundaryDisposition
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::BoundaryDisposition where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::BoundaryDisposition::is_within(&self, b: &G2) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::pipeline::BoundaryDisposition where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::BoundaryDisposition where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::BoundaryDisposition where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::From<T>
+pub fn data_acquisition::pipeline::BoundaryDisposition::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::Into<T>
+pub type data_acquisition::pipeline::BoundaryDisposition::Error = core::convert::Infallible
+pub fn data_acquisition::pipeline::BoundaryDisposition::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_acquisition::pipeline::BoundaryDisposition where U: core::convert::TryFrom<T>
+pub type data_acquisition::pipeline::BoundaryDisposition::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_acquisition::pipeline::BoundaryDisposition::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_acquisition::pipeline::BoundaryDisposition where T: core::clone::Clone
+pub type data_acquisition::pipeline::BoundaryDisposition::Owned = T
+pub fn data_acquisition::pipeline::BoundaryDisposition::clone_into(&self, target: &mut T)
+pub fn data_acquisition::pipeline::BoundaryDisposition::to_owned(&self) -> T
+impl<T> core::any::Any for data_acquisition::pipeline::BoundaryDisposition where T: 'static + ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
+pub fn data_acquisition::pipeline::BoundaryDisposition::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::BoundaryDisposition where T: core::clone::Clone
+pub unsafe fn data_acquisition::pipeline::BoundaryDisposition::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::BoundaryDisposition::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::BoundaryDisposition
+impl<T> typenum::type_operators::Same for data_acquisition::pipeline::BoundaryDisposition
+pub type data_acquisition::pipeline::BoundaryDisposition::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::BoundaryDisposition where T: ?core::marker::Sized
 pub enum data_acquisition::CollectionStage
 pub data_acquisition::CollectionStage::FetchingData
 pub data_acquisition::CollectionStage::Finished
@@ -1216,6 +1406,8 @@ impl core::marker::Sync for data_acquisition::progress::CollectionStage
 impl core::marker::Unpin for data_acquisition::progress::CollectionStage
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CollectionStage
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CollectionStage
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CollectionStage where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CollectionStage::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CollectionStage where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CollectionStage::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CollectionStage where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1242,6 +1434,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CollectionSta
 pub unsafe fn data_acquisition::progress::CollectionStage::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CollectionStage
 pub fn data_acquisition::progress::CollectionStage::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CollectionStage
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CollectionStage
 pub type data_acquisition::progress::CollectionStage::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CollectionStage where T: ?core::marker::Sized
@@ -1266,6 +1459,8 @@ impl core::marker::Sync for data_acquisition::refresh::DiffKind
 impl core::marker::Unpin for data_acquisition::refresh::DiffKind
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::DiffKind
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::DiffKind
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::DiffKind where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::DiffKind::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::DiffKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::DiffKind::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::DiffKind where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1292,6 +1487,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::DiffKind where
 pub unsafe fn data_acquisition::refresh::DiffKind::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::DiffKind
 pub fn data_acquisition::refresh::DiffKind::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::DiffKind
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::DiffKind
 pub type data_acquisition::refresh::DiffKind::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::DiffKind where T: ?core::marker::Sized
@@ -1312,6 +1508,8 @@ impl core::marker::Sync for data_acquisition::source::SourceGeometry
 impl core::marker::Unpin for data_acquisition::source::SourceGeometry
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::SourceGeometry
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::SourceGeometry
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::SourceGeometry where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::SourceGeometry::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::SourceGeometry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::SourceGeometry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::SourceGeometry where U: core::convert::From<T>
@@ -1336,15 +1534,20 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::SourceGeometry 
 pub unsafe fn data_acquisition::source::SourceGeometry::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::SourceGeometry
 pub fn data_acquisition::source::SourceGeometry::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::SourceGeometry
 impl<T> typenum::type_operators::Same for data_acquisition::source::SourceGeometry
 pub type data_acquisition::source::SourceGeometry::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::SourceGeometry where T: ?core::marker::Sized
 pub struct data_acquisition::AcquisitionBatch
+pub data_acquisition::AcquisitionBatch::boundary_crossing: usize
+pub data_acquisition::AcquisitionBatch::boundary_inside: usize
+pub data_acquisition::AcquisitionBatch::boundary_outside: usize
 pub data_acquisition::AcquisitionBatch::candidate_drafts: alloc::vec::Vec<data_acquisition::pipeline::CandidateDraft>
 pub data_acquisition::AcquisitionBatch::category_counts: alloc::collections::btree::map::BTreeMap<shared_domain_types::category::CandidateCategory, usize>
 pub data_acquisition::AcquisitionBatch::diff: data_acquisition::refresh::RefreshDiff
 pub data_acquisition::AcquisitionBatch::fallback_count: usize
 pub data_acquisition::AcquisitionBatch::geometry_object_count: usize
+pub data_acquisition::AcquisitionBatch::invalid_geometry: usize
 pub data_acquisition::AcquisitionBatch::missing_geometry_object_count: usize
 pub data_acquisition::AcquisitionBatch::naming_partial: bool
 pub data_acquisition::AcquisitionBatch::plan_id: alloc::string::String
@@ -1364,6 +1567,8 @@ impl core::marker::Sync for data_acquisition::pipeline::AcquisitionBatch
 impl core::marker::Unpin for data_acquisition::pipeline::AcquisitionBatch
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::AcquisitionBatch
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::AcquisitionBatch
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::AcquisitionBatch where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::AcquisitionBatch::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::AcquisitionBatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::AcquisitionBatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::AcquisitionBatch where U: core::convert::From<T>
@@ -1388,6 +1593,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::AcquisitionBa
 pub unsafe fn data_acquisition::pipeline::AcquisitionBatch::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::AcquisitionBatch
 pub fn data_acquisition::pipeline::AcquisitionBatch::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::AcquisitionBatch
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::AcquisitionBatch
 pub type data_acquisition::pipeline::AcquisitionBatch::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::AcquisitionBatch where T: ?core::marker::Sized
@@ -1405,6 +1611,8 @@ impl core::marker::Sync for data_acquisition::pipeline::AcquisitionPipeline
 impl core::marker::Unpin for data_acquisition::pipeline::AcquisitionPipeline
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::AcquisitionPipeline
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::AcquisitionPipeline
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::AcquisitionPipeline where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::AcquisitionPipeline::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::AcquisitionPipeline where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::AcquisitionPipeline where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::AcquisitionPipeline where U: core::convert::From<T>
@@ -1423,6 +1631,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::pipeline::AcquisitionPi
 pub fn data_acquisition::pipeline::AcquisitionPipeline::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::pipeline::AcquisitionPipeline
 pub fn data_acquisition::pipeline::AcquisitionPipeline::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::AcquisitionPipeline
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::AcquisitionPipeline
 pub type data_acquisition::pipeline::AcquisitionPipeline::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::AcquisitionPipeline where T: ?core::marker::Sized
@@ -1444,6 +1653,8 @@ impl core::marker::Sync for data_acquisition::source::BatchEnrichment
 impl core::marker::Unpin for data_acquisition::source::BatchEnrichment
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::BatchEnrichment
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::BatchEnrichment
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::BatchEnrichment where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::BatchEnrichment::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::source::BatchEnrichment where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::source::BatchEnrichment::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::BatchEnrichment where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1470,10 +1681,12 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::BatchEnrichment
 pub unsafe fn data_acquisition::source::BatchEnrichment::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::BatchEnrichment
 pub fn data_acquisition::source::BatchEnrichment::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::BatchEnrichment
 impl<T> typenum::type_operators::Same for data_acquisition::source::BatchEnrichment
 pub type data_acquisition::source::BatchEnrichment::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::BatchEnrichment where T: ?core::marker::Sized
 pub struct data_acquisition::CandidateDraft
+pub data_acquisition::CandidateDraft::boundary_disposition: data_acquisition::pipeline::BoundaryDisposition
 pub data_acquisition::CandidateDraft::category: shared_domain_types::category::CandidateCategory
 pub data_acquisition::CandidateDraft::data_source_tag: alloc::string::String
 pub data_acquisition::CandidateDraft::geometry_part_id: alloc::string::String
@@ -1495,6 +1708,8 @@ impl core::marker::Sync for data_acquisition::pipeline::CandidateDraft
 impl core::marker::Unpin for data_acquisition::pipeline::CandidateDraft
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::CandidateDraft
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::CandidateDraft
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::CandidateDraft where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::CandidateDraft::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::CandidateDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::CandidateDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::CandidateDraft where U: core::convert::From<T>
@@ -1519,6 +1734,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::CandidateDraf
 pub unsafe fn data_acquisition::pipeline::CandidateDraft::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::CandidateDraft
 pub fn data_acquisition::pipeline::CandidateDraft::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::CandidateDraft
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::CandidateDraft
 pub type data_acquisition::pipeline::CandidateDraft::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::CandidateDraft where T: ?core::marker::Sized
@@ -1541,6 +1757,8 @@ impl core::marker::Sync for data_acquisition::progress::CategoryProgress
 impl core::marker::Unpin for data_acquisition::progress::CategoryProgress
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CategoryProgress
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CategoryProgress
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CategoryProgress where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CategoryProgress::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CategoryProgress where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CategoryProgress::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CategoryProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1567,6 +1785,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CategoryProgr
 pub unsafe fn data_acquisition::progress::CategoryProgress::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CategoryProgress
 pub fn data_acquisition::progress::CategoryProgress::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CategoryProgress
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CategoryProgress
 pub type data_acquisition::progress::CategoryProgress::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CategoryProgress where T: ?core::marker::Sized
@@ -1597,6 +1816,8 @@ impl core::marker::Sync for data_acquisition::progress::CollectionProgressView
 impl core::marker::Unpin for data_acquisition::progress::CollectionProgressView
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::progress::CollectionProgressView
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::progress::CollectionProgressView
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::progress::CollectionProgressView where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::progress::CollectionProgressView::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::progress::CollectionProgressView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::progress::CollectionProgressView::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::progress::CollectionProgressView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1623,13 +1844,18 @@ impl<T> core::clone::CloneToUninit for data_acquisition::progress::CollectionPro
 pub unsafe fn data_acquisition::progress::CollectionProgressView::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::progress::CollectionProgressView
 pub fn data_acquisition::progress::CollectionProgressView::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::progress::CollectionProgressView
 impl<T> typenum::type_operators::Same for data_acquisition::progress::CollectionProgressView
 pub type data_acquisition::progress::CollectionProgressView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::progress::CollectionProgressView where T: ?core::marker::Sized
 pub struct data_acquisition::CollectionReport
+pub data_acquisition::CollectionReport::boundary_crossing: usize
+pub data_acquisition::CollectionReport::boundary_inside: usize
+pub data_acquisition::CollectionReport::boundary_outside: usize
 pub data_acquisition::CollectionReport::category_counts: alloc::collections::btree::map::BTreeMap<shared_domain_types::category::CandidateCategory, usize>
 pub data_acquisition::CollectionReport::diff: data_acquisition::refresh::RefreshDiff
 pub data_acquisition::CollectionReport::fallback_count: usize
+pub data_acquisition::CollectionReport::invalid_geometry: usize
 pub data_acquisition::CollectionReport::naming_partial: bool
 pub data_acquisition::CollectionReport::plan_id: alloc::string::String
 pub data_acquisition::CollectionReport::source_tag: alloc::string::String
@@ -1648,6 +1874,8 @@ impl core::marker::Sync for data_acquisition::pipeline::CollectionReport
 impl core::marker::Unpin for data_acquisition::pipeline::CollectionReport
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::pipeline::CollectionReport
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::pipeline::CollectionReport
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::pipeline::CollectionReport where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::pipeline::CollectionReport::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::pipeline::CollectionReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::pipeline::CollectionReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::pipeline::CollectionReport where U: core::convert::From<T>
@@ -1672,6 +1900,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::pipeline::CollectionRep
 pub unsafe fn data_acquisition::pipeline::CollectionReport::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::pipeline::CollectionReport
 pub fn data_acquisition::pipeline::CollectionReport::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::pipeline::CollectionReport
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::CollectionReport
 pub type data_acquisition::pipeline::CollectionReport::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::CollectionReport where T: ?core::marker::Sized
@@ -1693,6 +1922,8 @@ impl core::marker::Sync for data_acquisition::refresh::DiffEntry
 impl core::marker::Unpin for data_acquisition::refresh::DiffEntry
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::DiffEntry
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::DiffEntry
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::DiffEntry where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::DiffEntry::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::DiffEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::DiffEntry::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::DiffEntry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1719,6 +1950,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::DiffEntry wher
 pub unsafe fn data_acquisition::refresh::DiffEntry::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::DiffEntry
 pub fn data_acquisition::refresh::DiffEntry::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::DiffEntry
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::DiffEntry
 pub type data_acquisition::refresh::DiffEntry::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::DiffEntry where T: ?core::marker::Sized
@@ -1739,6 +1971,8 @@ impl core::marker::Sync for data_acquisition::source::EnrichedEntities
 impl core::marker::Unpin for data_acquisition::source::EnrichedEntities
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::EnrichedEntities
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::EnrichedEntities
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::EnrichedEntities where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::EnrichedEntities::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::EnrichedEntities where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::EnrichedEntities where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::EnrichedEntities where U: core::convert::From<T>
@@ -1763,6 +1997,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::EnrichedEntitie
 pub unsafe fn data_acquisition::source::EnrichedEntities::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::EnrichedEntities
 pub fn data_acquisition::source::EnrichedEntities::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::EnrichedEntities
 impl<T> typenum::type_operators::Same for data_acquisition::source::EnrichedEntities
 pub type data_acquisition::source::EnrichedEntities::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::EnrichedEntities where T: ?core::marker::Sized
@@ -1781,6 +2016,8 @@ impl core::marker::Sync for data_acquisition::source::GaodeDataSource
 impl core::marker::Unpin for data_acquisition::source::GaodeDataSource
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::GaodeDataSource
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::source::GaodeDataSource
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::GaodeDataSource where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::GaodeDataSource::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::GaodeDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::GaodeDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::GaodeDataSource where U: core::convert::From<T>
@@ -1799,6 +2036,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::GaodeDataSource
 impl<T> typenum::type_operators::Same for data_acquisition::source::GaodeDataSource
 pub type data_acquisition::source::GaodeDataSource::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::GaodeDataSource where T: ?core::marker::Sized
@@ -1818,6 +2056,8 @@ impl core::marker::Sync for data_acquisition::source::OverpassDataSource
 impl core::marker::Unpin for data_acquisition::source::OverpassDataSource
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::OverpassDataSource
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::source::OverpassDataSource
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::OverpassDataSource where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::OverpassDataSource::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::OverpassDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::OverpassDataSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::OverpassDataSource where U: core::convert::From<T>
@@ -1836,6 +2076,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::source::OverpassDataSou
 pub fn data_acquisition::source::OverpassDataSource::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::source::OverpassDataSource
 pub fn data_acquisition::source::OverpassDataSource::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::OverpassDataSource
 impl<T> typenum::type_operators::Same for data_acquisition::source::OverpassDataSource
 pub type data_acquisition::source::OverpassDataSource::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::OverpassDataSource where T: ?core::marker::Sized
@@ -1863,6 +2104,8 @@ impl core::marker::Sync for data_acquisition::source::RawEntity
 impl core::marker::Unpin for data_acquisition::source::RawEntity
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::source::RawEntity
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::source::RawEntity
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::source::RawEntity where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::source::RawEntity::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::source::RawEntity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::source::RawEntity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::source::RawEntity where U: core::convert::From<T>
@@ -1887,6 +2130,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::source::RawEntity where
 pub unsafe fn data_acquisition::source::RawEntity::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::source::RawEntity
 pub fn data_acquisition::source::RawEntity::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::source::RawEntity
 impl<T> typenum::type_operators::Same for data_acquisition::source::RawEntity
 pub type data_acquisition::source::RawEntity::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::RawEntity where T: ?core::marker::Sized
@@ -1914,6 +2158,8 @@ impl core::marker::Sync for data_acquisition::refresh::RefreshDiff
 impl core::marker::Unpin for data_acquisition::refresh::RefreshDiff
 impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::refresh::RefreshDiff
 impl core::panic::unwind_safe::UnwindSafe for data_acquisition::refresh::RefreshDiff
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::refresh::RefreshDiff where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::refresh::RefreshDiff::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::refresh::RefreshDiff where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn data_acquisition::refresh::RefreshDiff::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::refresh::RefreshDiff where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -1940,6 +2186,7 @@ impl<T> core::clone::CloneToUninit for data_acquisition::refresh::RefreshDiff wh
 pub unsafe fn data_acquisition::refresh::RefreshDiff::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for data_acquisition::refresh::RefreshDiff
 pub fn data_acquisition::refresh::RefreshDiff::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::refresh::RefreshDiff
 impl<T> typenum::type_operators::Same for data_acquisition::refresh::RefreshDiff
 pub type data_acquisition::refresh::RefreshDiff::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::RefreshDiff where T: ?core::marker::Sized
@@ -1956,6 +2203,8 @@ impl core::marker::Sync for data_acquisition::regeo::RegeoNamer
 impl core::marker::Unpin for data_acquisition::regeo::RegeoNamer
 impl !core::panic::unwind_safe::RefUnwindSafe for data_acquisition::regeo::RegeoNamer
 impl !core::panic::unwind_safe::UnwindSafe for data_acquisition::regeo::RegeoNamer
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::regeo::RegeoNamer where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::regeo::RegeoNamer::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::regeo::RegeoNamer where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::regeo::RegeoNamer where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for data_acquisition::regeo::RegeoNamer where U: core::convert::From<T>
@@ -1974,6 +2223,7 @@ impl<T> core::borrow::BorrowMut<T> for data_acquisition::regeo::RegeoNamer where
 pub fn data_acquisition::regeo::RegeoNamer::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for data_acquisition::regeo::RegeoNamer
 pub fn data_acquisition::regeo::RegeoNamer::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::regeo::RegeoNamer
 impl<T> typenum::type_operators::Same for data_acquisition::regeo::RegeoNamer
 pub type data_acquisition::regeo::RegeoNamer::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::regeo::RegeoNamer where T: ?core::marker::Sized

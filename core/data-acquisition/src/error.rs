@@ -15,6 +15,10 @@ pub enum AcquisitionError {
     #[error("边界为空：请先在地图上圈画边界再采集")]
     EmptyBoundary,
 
+    /// 已确认方案边界无法安全解析为 Polygon/MultiPolygon。
+    #[error("已确认方案边界无法解析，候选采集已停止")]
+    InvalidBoundary,
+
     /// 数据源传输层不可达（网络、桥接失败等）
     #[error("数据源 {source_tag} 不可达：{message}")]
     SourceUnreachable {

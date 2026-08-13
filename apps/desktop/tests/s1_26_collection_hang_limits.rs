@@ -105,10 +105,17 @@ fn setup_window(source: Arc<dyn DataSource + Send + Sync>) -> (AppWindow, Locali
             acknowledged: true,
         })
         .expect("完成首次设置");
+    let (anchor_lng, anchor_lat) = gaode_client::wgs84_to_gcj02(121.399, 31.199);
     let campus = injector
         .projects_mut()
         .database()
-        .create_campus("验收校区")
+        .create_campus_with_anchor(
+            "验收校区",
+            "fixture-putuo",
+            "上海离线夹具",
+            anchor_lng,
+            anchor_lat,
+        )
         .expect("创建校区");
     let campus_id = CampusId::parse(&campus.id).expect("解析校区 ID");
     let plan_id = injector
@@ -124,7 +131,7 @@ fn setup_window(source: Arc<dyn DataSource + Send + Sync>) -> (AppWindow, Locali
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
+    for (x, y) in [(0.0, 0.0), (3000.0, 0.0), (3000.0, 500.0), (0.0, 500.0)] {
         window.invoke_workspace_boundary_canvas_clicked(x, y);
     }
     window.invoke_workspace_boundary_confirm_clicked();

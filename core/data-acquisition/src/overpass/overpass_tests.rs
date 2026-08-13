@@ -55,11 +55,44 @@ mod tests {
     }
 
     #[test]
-    fn buildings_query_uses_union_and_keeps_labels() {
-        let query = buildings_query(bbox());
-        assert!(!query.contains('|'));
-        assert!(query.contains("way[\"building\"]"));
-        assert!(query.contains("relation[\"building\"]"));
+    fn campus_objects_query_uses_central_rules_with_geometry_aware_selectors() {
+        let query = campus_objects_query(bbox()).expect("集中标签规则必须能生成查询");
+
+        for selector in [
+            "way[\"building\"=\"school\"]",
+            "way[\"highway\"]",
+            "way[\"natural\"=\"water\"]",
+            "way[\"landuse\"=\"grass\"]",
+            "way[\"leisure\"=\"pitch\"]",
+            "way[\"barrier\"=\"wall\"]",
+        ] {
+            assert!(
+                query.contains(selector),
+                "六类集中规则生成的查询缺少 {selector}: {query}"
+            );
+        }
+        assert!(
+            query.contains("node[\"natural\"=\"tree\"]"),
+            "树点是合理的 node selector"
+        );
+        assert!(
+            query.contains("node[\"barrier\"=\"gate\"]"),
+            "校门点是合理的 node selector"
+        );
+        assert!(
+            !query.contains("node[\"building\""),
+            "明显面状的建筑不得无意义查询 node"
+        );
+        assert!(
+            !query.contains("relation[\"highway\"]"),
+            "道路粗查询只取实际几何 way，不取路线 relation"
+        );
+        for rejected_broad_key in ["historic", "power", "man_made"] {
+            assert!(
+                !query.contains(&format!("[\"{rejected_broad_key}\"]")),
+                "宽规则 {rejected_broad_key}=* 缺少后续形态过滤，禁止直接拉全量"
+            );
+        }
         assert!(query.contains("out geom"));
     }
 
@@ -388,8 +421,10 @@ mod tests {
         };
         let transport = Box::new(move |b: &Boundary| {
             let bbox = boundary_bbox(b, 0.01).ok_or_else(|| "无包围盒".to_owned())?;
+            let query = campus_objects_query(bbox)
+                .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
             OverpassClient::production()
-                .query_with_fallback(&buildings_query(bbox))
+                .query_with_fallback(&query)
                 .map_err(|message| format!("采集查询失败：{message}"))
         });
         let source = OverpassDataSource::new(transport);

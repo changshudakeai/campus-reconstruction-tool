@@ -6,10 +6,12 @@
 //! 3. 负责人验收点：体育馆归体育、校门归其他。
 
 use data_acquisition::{
-    AcquisitionPipeline, CollectionProgressView, DataSource, DiffKind, GaodeDataSource,
+    AcquisitionError, AcquisitionPipeline, BoundaryDisposition, CollectionProgressView, DataSource,
+    DiffKind, EnrichedEntities, GaodeDataSource, OverpassDataSource, RawEntity, SourceGeometry,
 };
 use data_persistence::{Database, RawObservationsApi};
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 fn run_deadline() -> Instant {
@@ -24,6 +26,7 @@ fn small_boundary() -> Boundary {
             [121.40, 31.20],
             [121.41, 31.20],
             [121.41, 31.21],
+            [121.40, 31.21],
             [121.40, 31.20]
         ]]),
     }
@@ -179,6 +182,120 @@ fn identical_recollect_is_all_unchanged() {
 }
 
 #[test]
+fn changing_plan_boundary_does_not_change_raw_osm_payload_or_digest() {
+    #[derive(Clone)]
+    struct OsmFixtureSource {
+        entity: RawEntity,
+    }
+
+    impl DataSource for OsmFixtureSource {
+        fn source_tag(&self) -> &str {
+            "overpass-fixture"
+        }
+
+        fn fetch_raw_entities(
+            &self,
+            _boundary: &Boundary,
+        ) -> data_acquisition::Result<Vec<RawEntity>> {
+            Ok(vec![self.entity.clone()])
+        }
+
+        fn enrich(
+            &self,
+            mut entities: Vec<RawEntity>,
+            _deadline: Instant,
+        ) -> data_acquisition::Result<EnrichedEntities> {
+            for entity in &mut entities {
+                entity.name = "方案派生补名".to_owned();
+            }
+            Ok(EnrichedEntities {
+                entities,
+                partial: false,
+                attempted: 1,
+            })
+        }
+    }
+
+    let source_payload = serde_json::json!({
+        "type": "node",
+        "id": 88001,
+        "lon": 121.405,
+        "lat": 31.205,
+        "tags": {"natural": "tree"}
+    });
+    let source = OsmFixtureSource {
+        entity: RawEntity::with_geometry(
+            "node/88001",
+            "OSM 原始名称",
+            data_transformers::TagMap::from([("natural".to_owned(), "tree".to_owned())]),
+            source_payload.clone(),
+            Some(SourceGeometry::Point((121.405, 31.205))),
+            "node",
+        ),
+    };
+    let outside_boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [121.50, 31.30],
+            [121.51, 31.30],
+            [121.51, 31.31],
+            [121.50, 31.31],
+            [121.50, 31.30]
+        ]]),
+    };
+    let pipeline = AcquisitionPipeline::new().expect("pipeline");
+    let mut db = Database::open_in_memory().expect("内存库");
+    let plan_id = PlanId::generate();
+
+    let inside = pipeline
+        .acquire_batch(
+            &mut db,
+            &plan_id,
+            &small_boundary(),
+            &source,
+            run_deadline(),
+        )
+        .expect("校内批次");
+    pipeline
+        .collect(
+            &mut db,
+            &plan_id,
+            &small_boundary(),
+            &source,
+            run_deadline(),
+        )
+        .expect("先持久化相同来源证据");
+    let outside = pipeline
+        .acquire_batch(
+            &mut db,
+            &plan_id,
+            &outside_boundary,
+            &source,
+            run_deadline(),
+        )
+        .expect("校外批次");
+
+    let inside_raw = &inside.raw_observations[0];
+    let outside_raw = &outside.raw_observations[0];
+    assert_eq!(inside_raw.source_data, outside_raw.source_data);
+    assert_eq!(inside_raw.digest, outside_raw.digest);
+    assert_eq!(inside_raw.source_data["payload"], source_payload);
+    assert!(
+        inside_raw.source_data.get("boundary_disposition").is_none(),
+        "方案相关资格不得污染原始来源载荷"
+    );
+    assert_eq!(
+        inside.candidate_drafts[0].boundary_disposition,
+        BoundaryDisposition::Inside
+    );
+    assert_eq!(
+        outside.candidate_drafts[0].boundary_disposition,
+        BoundaryDisposition::Outside
+    );
+    assert_eq!(outside.diff.entries()[0].kind, DiffKind::Unchanged);
+}
+
+#[test]
 fn progress_view_reflects_collection_report() {
     let pipeline = AcquisitionPipeline::new().unwrap();
     let mut db = Database::open_in_memory().unwrap();
@@ -245,4 +362,243 @@ fn pipeline_accepts_any_data_source() {
         .unwrap();
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].data_source_tag, "other-source");
+}
+
+fn putuo_boundary_gcj02() -> Boundary {
+    let convert = |lon: f64, lat: f64| {
+        let (lon, lat) = gaode_client::wgs84_to_gcj02(lon, lat);
+        serde_json::json!([lon, lat])
+    };
+    Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            convert(121.3990, 31.2270),
+            convert(121.4050, 31.2270),
+            convert(121.4050, 31.2330),
+            convert(121.3990, 31.2330),
+            convert(121.3990, 31.2270)
+        ]]),
+    }
+}
+
+#[test]
+fn putuo_fixture_is_filtered_after_wgs84_to_gcj02_with_conserved_boundary_counts() {
+    let payload = include_str!("fixtures/putuo-boundary-eligibility.json").to_owned();
+    let source = OverpassDataSource::new(Box::new(move |_| Ok(payload.clone())));
+    let pipeline = AcquisitionPipeline::new().expect("默认映射表可用");
+    let mut db = Database::open_in_memory().expect("内存库");
+    let plan_id = PlanId::generate();
+
+    let report = pipeline
+        .collect(
+            &mut db,
+            &plan_id,
+            &putuo_boundary_gcj02(),
+            &source,
+            run_deadline(),
+        )
+        .expect("边界外或坏 relation 不得拖垮整批");
+
+    assert_eq!(report.total, 9, "来源数必须如实");
+    assert_eq!(report.boundary_inside, 6);
+    assert_eq!(report.boundary_crossing, 1);
+    assert_eq!(report.boundary_outside, 1);
+    assert_eq!(report.invalid_geometry, 1);
+    assert_eq!(
+        report.total,
+        report.boundary_inside
+            + report.boundary_crossing
+            + report.boundary_outside
+            + report.invalid_geometry,
+        "来源数必须由边界内、相交、边界外、无效四类守恒"
+    );
+    assert_eq!(
+        report.category_counts.values().sum::<usize>(),
+        6,
+        "六类覆盖统计只计算真实方案边界内对象"
+    );
+    assert_eq!(
+        db.list_raw_observations(&plan_id.to_string())
+            .expect("原始证据 API")
+            .len(),
+        9,
+        "边界外和无法安全解析的 relation 仍保留来源证据"
+    );
+}
+
+#[test]
+fn malformed_overpass_coordinates_keep_source_evidence_and_count_as_invalid() {
+    let payload = serde_json::json!({"elements": [
+        {"type":"node","id":201,"tags":{"natural":"tree"},"lon":121.4},
+        {"type":"way","id":202,"tags":{"highway":"service"},"geometry":[
+            {"lon":121.4,"lat":31.228},{"lon":"bad","lat":31.229}
+        ]}
+    ]})
+    .to_string();
+    let source = OverpassDataSource::new(Box::new(move |_| Ok(payload.clone())));
+    let pipeline = AcquisitionPipeline::new().expect("默认映射表可用");
+    let mut db = Database::open_in_memory().expect("内存库");
+    let plan_id = PlanId::generate();
+
+    let report = pipeline
+        .collect(
+            &mut db,
+            &plan_id,
+            &putuo_boundary_gcj02(),
+            &source,
+            run_deadline(),
+        )
+        .expect("单个坏坐标不拖垮批次");
+
+    assert_eq!(report.total, 2);
+    assert_eq!(report.invalid_geometry, 2);
+    assert_eq!(
+        db.list_raw_observations(&plan_id.to_string())
+            .expect("原始证据 API")
+            .len(),
+        2,
+        "可识别来源 ID 的坏几何不得在解析阶段静默消失"
+    );
+}
+
+#[test]
+fn boundary_eligibility_is_decided_before_optional_naming() {
+    struct NamingProbe {
+        named_targets: AtomicUsize,
+    }
+    impl DataSource for NamingProbe {
+        fn source_tag(&self) -> &str {
+            "naming-probe"
+        }
+
+        fn fetch_raw_entities(
+            &self,
+            _boundary: &Boundary,
+        ) -> data_acquisition::Result<Vec<data_acquisition::RawEntity>> {
+            let tags =
+                data_transformers::TagMap::from([("building".to_owned(), "school".to_owned())]);
+            Ok(vec![
+                data_acquisition::RawEntity::with_geometry(
+                    "inside",
+                    "inside",
+                    tags.clone(),
+                    serde_json::json!({"id":"inside"}),
+                    Some(data_acquisition::SourceGeometry::Point((121.405, 31.230))),
+                    "point",
+                ),
+                data_acquisition::RawEntity::with_geometry(
+                    "outside",
+                    "outside",
+                    tags,
+                    serde_json::json!({"id":"outside"}),
+                    Some(data_acquisition::SourceGeometry::Point((121.500, 31.300))),
+                    "point",
+                ),
+            ])
+        }
+
+        fn enrich(
+            &self,
+            entities: Vec<data_acquisition::RawEntity>,
+            _deadline: Instant,
+        ) -> data_acquisition::Result<data_acquisition::EnrichedEntities> {
+            self.named_targets.store(entities.len(), Ordering::SeqCst);
+            assert_eq!(entities[0].entity_id, "inside");
+            Ok(data_acquisition::EnrichedEntities {
+                entities,
+                partial: false,
+                attempted: 1,
+            })
+        }
+    }
+
+    let source = NamingProbe {
+        named_targets: AtomicUsize::new(0),
+    };
+    let mut db = Database::open_in_memory().expect("内存库");
+    AcquisitionPipeline::new()
+        .expect("pipeline")
+        .collect(
+            &mut db,
+            &PlanId::generate(),
+            &putuo_boundary_gcj02(),
+            &source,
+            run_deadline(),
+        )
+        .expect("采集");
+    assert_eq!(source.named_targets.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn invalid_confirmed_boundary_stops_before_fetching_source_data() {
+    struct FetchProbe {
+        fetches: AtomicUsize,
+    }
+
+    impl DataSource for FetchProbe {
+        fn source_tag(&self) -> &str {
+            "fetch-probe"
+        }
+
+        fn fetch_raw_entities(
+            &self,
+            _boundary: &Boundary,
+        ) -> data_acquisition::Result<Vec<data_acquisition::RawEntity>> {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+
+    let source = FetchProbe {
+        fetches: AtomicUsize::new(0),
+    };
+    let invalid_boundary = Boundary {
+        r#type: "LineString".to_owned(),
+        coordinates: serde_json::json!([[121.40, 31.20], [121.41, 31.21]]),
+    };
+    let mut db = Database::open_in_memory().expect("内存库");
+
+    let error = AcquisitionPipeline::new()
+        .expect("pipeline")
+        .collect(
+            &mut db,
+            &PlanId::generate(),
+            &invalid_boundary,
+            &source,
+            run_deadline(),
+        )
+        .expect_err("非方案面边界必须失败关闭");
+
+    assert!(matches!(error, AcquisitionError::InvalidBoundary));
+    assert_eq!(source.fetches.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn confirmed_polygon_without_repeated_first_point_is_safely_closed() {
+    let open_ring_boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [121.40, 31.20],
+            [121.41, 31.20],
+            [121.41, 31.21],
+            [121.40, 31.21]
+        ]]),
+    };
+    let source = OverpassDataSource::new(Box::new(|_| {
+        Ok(serde_json::json!({"elements": []}).to_string())
+    }));
+    let mut db = Database::open_in_memory().expect("内存库");
+
+    let report = AcquisitionPipeline::new()
+        .expect("pipeline")
+        .collect(
+            &mut db,
+            &PlanId::generate(),
+            &open_ring_boundary,
+            &source,
+            run_deadline(),
+        )
+        .expect("方案画布的未重复首点 Polygon 应按闭环解释");
+
+    assert_eq!(report.total, 0);
 }

@@ -27,6 +27,8 @@ impl core::marker::Sync for collection_flow::CollectionError
 impl core::marker::Unpin for collection_flow::CollectionError
 impl !core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionError
 impl !core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionError
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionError where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionError::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionError where U: core::convert::From<T>
@@ -47,6 +49,7 @@ impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionError where T:
 pub fn collection_flow::CollectionError::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for collection_flow::CollectionError
 pub fn collection_flow::CollectionError::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionError
 impl<T> typenum::type_operators::Same for collection_flow::CollectionError
 pub type collection_flow::CollectionError::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionError where T: ?core::marker::Sized
@@ -66,6 +69,8 @@ impl core::marker::Sync for collection_flow::CollectionOutcome
 impl core::marker::Unpin for collection_flow::CollectionOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionOutcome
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionOutcome
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionOutcome where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionOutcome::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionOutcome where U: core::convert::From<T>
@@ -90,6 +95,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionOutcome where 
 pub unsafe fn collection_flow::CollectionOutcome::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionOutcome
 pub fn collection_flow::CollectionOutcome::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionOutcome
 impl<T> typenum::type_operators::Same for collection_flow::CollectionOutcome
 pub type collection_flow::CollectionOutcome::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionOutcome where T: ?core::marker::Sized
@@ -113,6 +119,8 @@ impl core::marker::Sync for collection_flow::CollectionStatus
 impl core::marker::Unpin for collection_flow::CollectionStatus
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionStatus
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionStatus
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionStatus where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionStatus::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionStatus where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn collection_flow::CollectionStatus::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionStatus where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -139,6 +147,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionStatus where T
 pub unsafe fn collection_flow::CollectionStatus::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionStatus
 pub fn collection_flow::CollectionStatus::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionStatus
 impl<T> typenum::type_operators::Same for collection_flow::CollectionStatus
 pub type collection_flow::CollectionStatus::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionStatus where T: ?core::marker::Sized
@@ -159,6 +168,8 @@ impl core::marker::Sync for collection_flow::CollectionFailure
 impl core::marker::Unpin for collection_flow::CollectionFailure
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFailure
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFailure
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionFailure where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionFailure::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFailure where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionFailure where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionFailure where U: core::convert::From<T>
@@ -183,6 +194,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionFailure where 
 pub unsafe fn collection_flow::CollectionFailure::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionFailure
 pub fn collection_flow::CollectionFailure::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionFailure
 impl<T> typenum::type_operators::Same for collection_flow::CollectionFailure
 pub type collection_flow::CollectionFailure::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFailure where T: ?core::marker::Sized
@@ -203,6 +215,8 @@ impl core::marker::Sync for collection_flow::CollectionFailureView
 impl core::marker::Unpin for collection_flow::CollectionFailureView
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFailureView
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFailureView
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionFailureView where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionFailureView::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionFailureView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn collection_flow::CollectionFailureView::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFailureView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -229,6 +243,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionFailureView wh
 pub unsafe fn collection_flow::CollectionFailureView::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionFailureView
 pub fn collection_flow::CollectionFailureView::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionFailureView
 impl<T> typenum::type_operators::Same for collection_flow::CollectionFailureView
 pub type collection_flow::CollectionFailureView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFailureView where T: ?core::marker::Sized
@@ -254,6 +269,8 @@ impl core::marker::Sync for collection_flow::CollectionFlow
 impl core::marker::Unpin for collection_flow::CollectionFlow
 impl !core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionFlow
 impl !core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionFlow
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionFlow where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionFlow::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionFlow where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionFlow where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionFlow where U: core::convert::From<T>
@@ -278,6 +295,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionFlow where T: 
 pub unsafe fn collection_flow::CollectionFlow::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionFlow
 pub fn collection_flow::CollectionFlow::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionFlow
 impl<T> typenum::type_operators::Same for collection_flow::CollectionFlow
 pub type collection_flow::CollectionFlow::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionFlow where T: ?core::marker::Sized
@@ -291,6 +309,8 @@ impl !core::marker::Sync for collection_flow::CollectionOperation
 impl core::marker::Unpin for collection_flow::CollectionOperation
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionOperation
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionOperation
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionOperation where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionOperation::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionOperation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionOperation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionOperation where U: core::convert::From<T>
@@ -309,6 +329,7 @@ impl<T> core::borrow::BorrowMut<T> for collection_flow::CollectionOperation wher
 pub fn collection_flow::CollectionOperation::borrow_mut(&mut self) -> &mut T
 impl<T> core::convert::From<T> for collection_flow::CollectionOperation
 pub fn collection_flow::CollectionOperation::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionOperation
 impl<T> typenum::type_operators::Same for collection_flow::CollectionOperation
 pub type collection_flow::CollectionOperation::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionOperation where T: ?core::marker::Sized
@@ -332,6 +353,8 @@ impl core::marker::Sync for collection_flow::CollectionPageView
 impl core::marker::Unpin for collection_flow::CollectionPageView
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionPageView
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionPageView
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionPageView where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionPageView::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionPageView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionPageView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionPageView where U: core::convert::From<T>
@@ -356,6 +379,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionPageView where
 pub unsafe fn collection_flow::CollectionPageView::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionPageView
 pub fn collection_flow::CollectionPageView::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionPageView
 impl<T> typenum::type_operators::Same for collection_flow::CollectionPageView
 pub type collection_flow::CollectionPageView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionPageView where T: ?core::marker::Sized
@@ -380,6 +404,8 @@ impl core::marker::Sync for collection_flow::CollectionReportView
 impl core::marker::Unpin for collection_flow::CollectionReportView
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionReportView
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionReportView
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionReportView where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionReportView::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionReportView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn collection_flow::CollectionReportView::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionReportView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -406,6 +432,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionReportView whe
 pub unsafe fn collection_flow::CollectionReportView::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionReportView
 pub fn collection_flow::CollectionReportView::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionReportView
 impl<T> typenum::type_operators::Same for collection_flow::CollectionReportView
 pub type collection_flow::CollectionReportView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionReportView where T: ?core::marker::Sized
@@ -429,6 +456,8 @@ impl core::marker::Sync for collection_flow::CollectionRunLimits
 impl core::marker::Unpin for collection_flow::CollectionRunLimits
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionRunLimits
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionRunLimits
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionRunLimits where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionRunLimits::is_within(&self, b: &G2) -> bool
 impl<Q, K> hashbrown::Equivalent<K> for collection_flow::CollectionRunLimits where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 pub fn collection_flow::CollectionRunLimits::equivalent(&self, key: &K) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionRunLimits where ST: ?core::marker::Sized, DT: ?core::marker::Sized
@@ -455,6 +484,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionRunLimits wher
 pub unsafe fn collection_flow::CollectionRunLimits::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionRunLimits
 pub fn collection_flow::CollectionRunLimits::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionRunLimits
 impl<T> typenum::type_operators::Same for collection_flow::CollectionRunLimits
 pub type collection_flow::CollectionRunLimits::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionRunLimits where T: ?core::marker::Sized
@@ -474,6 +504,8 @@ impl core::marker::Sync for collection_flow::CollectionSummary
 impl core::marker::Unpin for collection_flow::CollectionSummary
 impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::CollectionSummary
 impl core::panic::unwind_safe::UnwindSafe for collection_flow::CollectionSummary
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::CollectionSummary where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::CollectionSummary::is_within(&self, b: &G2) -> bool
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::CollectionSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::CollectionSummary where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 impl<T, U> core::convert::Into<U> for collection_flow::CollectionSummary where U: core::convert::From<T>
@@ -498,6 +530,7 @@ impl<T> core::clone::CloneToUninit for collection_flow::CollectionSummary where 
 pub unsafe fn collection_flow::CollectionSummary::clone_to_uninit(&self, dest: *mut u8)
 impl<T> core::convert::From<T> for collection_flow::CollectionSummary
 pub fn collection_flow::CollectionSummary::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::CollectionSummary
 impl<T> typenum::type_operators::Same for collection_flow::CollectionSummary
 pub type collection_flow::CollectionSummary::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionSummary where T: ?core::marker::Sized

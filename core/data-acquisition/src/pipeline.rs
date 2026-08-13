@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use data_persistence::{Database, RawObservation, RawObservationsApi};
 use data_transformers::ClassifyEngine;
+use geo::{Contains, Intersects, Line, LineString, MultiPolygon, Point, Polygon};
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
 
 use crate::error::{AcquisitionError, Result};
@@ -26,6 +27,14 @@ pub struct CollectionReport {
     pub source_tag: String,
     /// 本次拉回的对象总数
     pub total: usize,
+    /// 坐标转换后完整位于已确认方案边界内的来源对象数。
+    pub boundary_inside: usize,
+    /// 与已确认方案边界相交但不完整位于其中的来源对象数。
+    pub boundary_crossing: usize,
+    /// 完整位于已确认方案边界外的来源对象数。
+    pub boundary_outside: usize,
+    /// 缺少或无法安全解析来源几何的对象数。
+    pub invalid_geometry: usize,
     /// 实际写库行数（新增 + 更新；未变的被 B2 原样保留不计入）
     pub written: usize,
     /// 各类别对象数（"完成了 N 个对象"的分类明细）
@@ -49,6 +58,10 @@ pub struct AcquisitionBatch {
     pub fallback_count: usize,
     pub diff: RefreshDiff,
     pub total_source_object_count: usize,
+    pub boundary_inside: usize,
+    pub boundary_crossing: usize,
+    pub boundary_outside: usize,
+    pub invalid_geometry: usize,
     pub geometry_object_count: usize,
     pub missing_geometry_object_count: usize,
     pub naming_partial: bool,
@@ -65,6 +78,17 @@ pub struct CandidateDraft {
     pub name: String,
     pub source_data: serde_json::Value,
     pub source_geometry: Option<SourceGeometry>,
+    /// bbox 粗查询之后、命名前完成的精确方案边界资格结论。
+    pub boundary_disposition: BoundaryDisposition,
+}
+
+/// 来源几何相对已确认方案边界的互斥结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryDisposition {
+    Inside,
+    Crosses,
+    Outside,
+    Invalid,
 }
 
 impl AcquisitionBatch {
@@ -73,6 +97,10 @@ impl AcquisitionBatch {
             plan_id: self.plan_id.clone(),
             source_tag: self.source_tag.clone(),
             total: self.total_source_object_count,
+            boundary_inside: self.boundary_inside,
+            boundary_crossing: self.boundary_crossing,
+            boundary_outside: self.boundary_outside,
+            invalid_geometry: self.invalid_geometry,
             written,
             category_counts: self.category_counts.clone(),
             fallback_count: self.fallback_count,
@@ -147,21 +175,56 @@ impl AcquisitionPipeline {
         if boundary.is_empty() {
             return Err(AcquisitionError::EmptyBoundary);
         }
+        let confirmed_boundary =
+            parse_boundary(boundary).ok_or(AcquisitionError::InvalidBoundary)?;
         self.emit_stage(CollectionStage::FetchingData);
         let entities = source.fetch_raw_entities(boundary)?;
+        let dispositions = entities
+            .iter()
+            .map(|entity| {
+                boundary_disposition(entity.source_geometry.as_ref(), &confirmed_boundary)
+            })
+            .collect::<Vec<_>>();
+        // 边界资格先于命名：边界外、跨界和无效几何不消耗补名额度。
+        let naming_targets = entities
+            .iter()
+            .zip(&dispositions)
+            .filter(|(_, disposition)| **disposition == BoundaryDisposition::Inside)
+            .map(|(entity, _)| entity.clone())
+            .collect();
         self.emit_stage(CollectionStage::Naming);
-        let enriched = source.enrich(entities, deadline)?;
-        let entities = enriched.entities;
+        let enriched = source.enrich(naming_targets, deadline)?;
+        let mut enriched_by_identity = enriched
+            .entities
+            .into_iter()
+            .map(|entity| {
+                (
+                    (entity.entity_id.clone(), entity.geometry_part_id.clone()),
+                    entity,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let plan_key = plan_id.to_string();
         let mut raw_observations = Vec::new();
         let mut candidate_drafts = Vec::new();
         let mut diff_entries = Vec::new();
         let mut category_counts = BTreeMap::new();
         let mut fallback_count = 0;
-        for entity in &entities {
+        for (source_entity, disposition) in entities.iter().zip(&dispositions) {
+            let entity = enriched_by_identity
+                .remove(&(
+                    source_entity.entity_id.clone(),
+                    source_entity.geometry_part_id.clone(),
+                ))
+                .unwrap_or_else(|| source_entity.clone());
             let classification = self.engine.classify(&entity.tags);
-            fallback_count += usize::from(classification.is_fallback);
-            let source_data = entity.to_source_data();
+            if *disposition == BoundaryDisposition::Inside {
+                fallback_count += usize::from(classification.is_fallback);
+                *category_counts.entry(classification.category).or_insert(0) += 1;
+            }
+            // RawObservation 只封存来源返回的证据。补名与当前方案边界资格都是
+            // 派生事实，分别留在 CandidateDraft.name 和 typed disposition 中。
+            let source_data = source_entity.to_source_data();
             let kind = match db.find_raw_observation(
                 &plan_key,
                 classification.category,
@@ -180,7 +243,6 @@ impl AcquisitionPipeline {
                 entity_id: entity.entity_id.clone(),
                 kind,
             });
-            *category_counts.entry(classification.category).or_insert(0) += 1;
             let observation = RawObservation::new(
                 &plan_key,
                 classification.category,
@@ -196,7 +258,8 @@ impl AcquisitionPipeline {
                 category: classification.category,
                 name: entity.name.clone(),
                 source_data,
-                source_geometry: entity.source_geometry.clone(),
+                source_geometry: source_entity.source_geometry.clone(),
+                boundary_disposition: *disposition,
             });
             raw_observations.push(observation);
         }
@@ -208,6 +271,22 @@ impl AcquisitionPipeline {
             plan_id: plan_key,
             source_tag: source.source_tag().to_owned(),
             total_source_object_count: entities.len(),
+            boundary_inside: dispositions
+                .iter()
+                .filter(|item| **item == BoundaryDisposition::Inside)
+                .count(),
+            boundary_crossing: dispositions
+                .iter()
+                .filter(|item| **item == BoundaryDisposition::Crosses)
+                .count(),
+            boundary_outside: dispositions
+                .iter()
+                .filter(|item| **item == BoundaryDisposition::Outside)
+                .count(),
+            invalid_geometry: dispositions
+                .iter()
+                .filter(|item| **item == BoundaryDisposition::Invalid)
+                .count(),
             missing_geometry_object_count: entities.len() - geometry_object_count,
             geometry_object_count,
             naming_partial: enriched.partial,
@@ -224,6 +303,111 @@ impl AcquisitionPipeline {
             listener(stage);
         }
     }
+}
+
+fn boundary_disposition(
+    geometry: Option<&SourceGeometry>,
+    boundary: &MultiPolygon<f64>,
+) -> BoundaryDisposition {
+    match geometry {
+        Some(SourceGeometry::Point((lon, lat))) if finite_coordinate(*lon, *lat) => {
+            let point = Point::new(*lon, *lat);
+            if boundary.contains(&point) || boundary.intersects(&point) {
+                BoundaryDisposition::Inside
+            } else {
+                BoundaryDisposition::Outside
+            }
+        }
+        Some(SourceGeometry::LineString(points))
+            if points.len() >= 2
+                && points
+                    .iter()
+                    .all(|(lon, lat)| finite_coordinate(*lon, *lat)) =>
+        {
+            let line = LineString::from(points.clone());
+            if boundary.contains(&line) {
+                BoundaryDisposition::Inside
+            } else if boundary.intersects(&line) {
+                BoundaryDisposition::Crosses
+            } else {
+                BoundaryDisposition::Outside
+            }
+        }
+        Some(SourceGeometry::Polygon(points))
+            if points.len() >= 4
+                && points.first() == points.last()
+                && points
+                    .iter()
+                    .all(|(lon, lat)| finite_coordinate(*lon, *lat)) =>
+        {
+            let polygon = Polygon::new(LineString::from(points.clone()), Vec::new());
+            if points
+                .windows(2)
+                .all(|pair| boundary.contains(&Line::new(pair[0], pair[1])))
+            {
+                BoundaryDisposition::Inside
+            } else if boundary.intersects(&polygon) {
+                BoundaryDisposition::Crosses
+            } else {
+                BoundaryDisposition::Outside
+            }
+        }
+        _ => BoundaryDisposition::Invalid,
+    }
+}
+
+fn parse_boundary(boundary: &Boundary) -> Option<MultiPolygon<f64>> {
+    let polygons = match boundary.r#type.as_str() {
+        "Polygon" => vec![parse_polygon(&boundary.coordinates)?],
+        "MultiPolygon" => boundary
+            .coordinates
+            .as_array()?
+            .iter()
+            .map(parse_polygon)
+            .collect::<Option<Vec<_>>>()?,
+        _ => return None,
+    };
+    (!polygons.is_empty()).then(|| MultiPolygon::new(polygons))
+}
+
+fn parse_polygon(value: &serde_json::Value) -> Option<Polygon<f64>> {
+    let mut rings = value.as_array()?.iter();
+    let exterior = parse_ring(rings.next()?)?;
+    let interiors = rings.map(parse_ring).collect::<Option<Vec<_>>>()?;
+    Some(Polygon::new(exterior, interiors))
+}
+
+fn parse_ring(value: &serde_json::Value) -> Option<LineString<f64>> {
+    let mut points = value
+        .as_array()?
+        .iter()
+        .map(|point| {
+            let pair = point.as_array()?;
+            let lon = pair.first()?.as_f64()?;
+            let lat = pair.get(1)?.as_f64()?;
+            finite_coordinate(lon, lat).then_some((lon, lat))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let mut distinct = Vec::new();
+    for point in &points {
+        if !distinct.contains(point) {
+            distinct.push(*point);
+        }
+    }
+    if distinct.len() < 3 {
+        return None;
+    }
+    if points.first() != points.last() {
+        points.push(*points.first()?);
+    }
+    Some(LineString::from(points))
+}
+
+fn finite_coordinate(lon: f64, lat: f64) -> bool {
+    lon.is_finite()
+        && lat.is_finite()
+        && (-180.0..=180.0).contains(&lon)
+        && (-90.0..=90.0).contains(&lat)
 }
 
 #[cfg(test)]
@@ -255,7 +439,14 @@ mod tests {
     fn entity(id: &str, key: &str, value: &str) -> RawEntity {
         let mut tags = TagMap::new();
         tags.insert(key.to_owned(), value.to_owned());
-        RawEntity::new(id, format!("对象{id}"), tags, serde_json::json!({"id": id}))
+        RawEntity::with_geometry(
+            id,
+            format!("对象{id}"),
+            tags,
+            serde_json::json!({"id": id}),
+            Some(SourceGeometry::Point((121.405, 31.205))),
+            "point",
+        )
     }
 
     fn boundary() -> Boundary {

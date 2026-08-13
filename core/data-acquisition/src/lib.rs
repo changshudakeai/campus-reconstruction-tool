@@ -37,7 +37,9 @@ pub mod source;
 
 // 重新导出公共类型，方便 crate 外使用
 pub use error::{AcquisitionError, Result};
-pub use pipeline::{AcquisitionBatch, AcquisitionPipeline, CandidateDraft, CollectionReport};
+pub use pipeline::{
+    AcquisitionBatch, AcquisitionPipeline, BoundaryDisposition, CandidateDraft, CollectionReport,
+};
 pub use progress::{
     category_text_key, stage_text_key, text_keys, CategoryProgress, CollectionProgressView,
     CollectionStage, StageListener, ALL_CATEGORIES,
