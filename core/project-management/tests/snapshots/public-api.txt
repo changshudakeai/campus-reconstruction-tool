@@ -1,4 +1,143 @@
 pub mod project_management
+pub enum project_management::BoundaryFetchOutcome
+pub project_management::BoundaryFetchOutcome::AutoSelected
+pub project_management::BoundaryFetchOutcome::AutoSelected::candidate_count: usize
+pub project_management::BoundaryFetchOutcome::AutoSelected::gcj02: alloc::vec::Vec<[f64; 2]>
+pub project_management::BoundaryFetchOutcome::AutoSelected::name: alloc::string::String
+pub project_management::BoundaryFetchOutcome::AutoSelected::source: alloc::string::String
+pub project_management::BoundaryFetchOutcome::NotFound
+pub project_management::BoundaryFetchOutcome::Unreachable
+pub project_management::BoundaryFetchOutcome::Unreachable::message: alloc::string::String
+impl core::clone::Clone for project_management::BoundaryFetchOutcome
+pub fn project_management::BoundaryFetchOutcome::clone(&self) -> project_management::BoundaryFetchOutcome
+impl core::cmp::PartialEq for project_management::BoundaryFetchOutcome
+pub fn project_management::BoundaryFetchOutcome::eq(&self, other: &project_management::BoundaryFetchOutcome) -> bool
+impl core::fmt::Debug for project_management::BoundaryFetchOutcome
+pub fn project_management::BoundaryFetchOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::BoundaryFetchOutcome
+impl core::marker::Freeze for project_management::BoundaryFetchOutcome
+impl core::marker::Send for project_management::BoundaryFetchOutcome
+impl core::marker::Sync for project_management::BoundaryFetchOutcome
+impl core::marker::Unpin for project_management::BoundaryFetchOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::BoundaryFetchOutcome
+impl core::panic::unwind_safe::UnwindSafe for project_management::BoundaryFetchOutcome
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::BoundaryFetchOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::BoundaryFetchOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::BoundaryFetchOutcome where U: core::convert::From<T>
+pub fn project_management::BoundaryFetchOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::BoundaryFetchOutcome where U: core::convert::Into<T>
+pub type project_management::BoundaryFetchOutcome::Error = core::convert::Infallible
+pub fn project_management::BoundaryFetchOutcome::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::BoundaryFetchOutcome where U: core::convert::TryFrom<T>
+pub type project_management::BoundaryFetchOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::BoundaryFetchOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::BoundaryFetchOutcome where T: core::clone::Clone
+pub type project_management::BoundaryFetchOutcome::Owned = T
+pub fn project_management::BoundaryFetchOutcome::clone_into(&self, target: &mut T)
+pub fn project_management::BoundaryFetchOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::BoundaryFetchOutcome where T: 'static + ?core::marker::Sized
+pub fn project_management::BoundaryFetchOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::BoundaryFetchOutcome where T: ?core::marker::Sized
+pub fn project_management::BoundaryFetchOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::BoundaryFetchOutcome where T: ?core::marker::Sized
+pub fn project_management::BoundaryFetchOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::BoundaryFetchOutcome where T: core::clone::Clone
+pub unsafe fn project_management::BoundaryFetchOutcome::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::BoundaryFetchOutcome
+pub fn project_management::BoundaryFetchOutcome::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::BoundaryFetchOutcome
+pub type project_management::BoundaryFetchOutcome::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::BoundaryFetchOutcome where T: ?core::marker::Sized
+pub enum project_management::BoundaryPoll
+pub project_management::BoundaryPoll::Idle
+pub project_management::BoundaryPoll::Loading
+pub project_management::BoundaryPoll::Ready(project_management::BoundaryFetchOutcome)
+pub project_management::BoundaryPoll::Stale
+impl core::clone::Clone for project_management::BoundaryPoll
+pub fn project_management::BoundaryPoll::clone(&self) -> project_management::BoundaryPoll
+impl core::cmp::PartialEq for project_management::BoundaryPoll
+pub fn project_management::BoundaryPoll::eq(&self, other: &project_management::BoundaryPoll) -> bool
+impl core::fmt::Debug for project_management::BoundaryPoll
+pub fn project_management::BoundaryPoll::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::BoundaryPoll
+impl core::marker::Freeze for project_management::BoundaryPoll
+impl core::marker::Send for project_management::BoundaryPoll
+impl core::marker::Sync for project_management::BoundaryPoll
+impl core::marker::Unpin for project_management::BoundaryPoll
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::BoundaryPoll
+impl core::panic::unwind_safe::UnwindSafe for project_management::BoundaryPoll
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::BoundaryPoll where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::BoundaryPoll where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::BoundaryPoll where U: core::convert::From<T>
+pub fn project_management::BoundaryPoll::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::BoundaryPoll where U: core::convert::Into<T>
+pub type project_management::BoundaryPoll::Error = core::convert::Infallible
+pub fn project_management::BoundaryPoll::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::BoundaryPoll where U: core::convert::TryFrom<T>
+pub type project_management::BoundaryPoll::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::BoundaryPoll::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::BoundaryPoll where T: core::clone::Clone
+pub type project_management::BoundaryPoll::Owned = T
+pub fn project_management::BoundaryPoll::clone_into(&self, target: &mut T)
+pub fn project_management::BoundaryPoll::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::BoundaryPoll where T: 'static + ?core::marker::Sized
+pub fn project_management::BoundaryPoll::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::BoundaryPoll where T: ?core::marker::Sized
+pub fn project_management::BoundaryPoll::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::BoundaryPoll where T: ?core::marker::Sized
+pub fn project_management::BoundaryPoll::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::BoundaryPoll where T: core::clone::Clone
+pub unsafe fn project_management::BoundaryPoll::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::BoundaryPoll
+pub fn project_management::BoundaryPoll::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::BoundaryPoll
+pub type project_management::BoundaryPoll::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::BoundaryPoll where T: ?core::marker::Sized
+pub enum project_management::BoundaryRequest
+pub project_management::BoundaryRequest::Loading
+pub project_management::BoundaryRequest::MissingContext
+pub project_management::BoundaryRequest::Ready(project_management::PlanBoundaryView)
+pub project_management::BoundaryRequest::Started
+impl core::clone::Clone for project_management::BoundaryRequest
+pub fn project_management::BoundaryRequest::clone(&self) -> project_management::BoundaryRequest
+impl core::cmp::PartialEq for project_management::BoundaryRequest
+pub fn project_management::BoundaryRequest::eq(&self, other: &project_management::BoundaryRequest) -> bool
+impl core::fmt::Debug for project_management::BoundaryRequest
+pub fn project_management::BoundaryRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::BoundaryRequest
+impl core::marker::Freeze for project_management::BoundaryRequest
+impl core::marker::Send for project_management::BoundaryRequest
+impl core::marker::Sync for project_management::BoundaryRequest
+impl core::marker::Unpin for project_management::BoundaryRequest
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::BoundaryRequest
+impl core::panic::unwind_safe::UnwindSafe for project_management::BoundaryRequest
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::BoundaryRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::BoundaryRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::BoundaryRequest where U: core::convert::From<T>
+pub fn project_management::BoundaryRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::BoundaryRequest where U: core::convert::Into<T>
+pub type project_management::BoundaryRequest::Error = core::convert::Infallible
+pub fn project_management::BoundaryRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::BoundaryRequest where U: core::convert::TryFrom<T>
+pub type project_management::BoundaryRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::BoundaryRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::BoundaryRequest where T: core::clone::Clone
+pub type project_management::BoundaryRequest::Owned = T
+pub fn project_management::BoundaryRequest::clone_into(&self, target: &mut T)
+pub fn project_management::BoundaryRequest::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::BoundaryRequest where T: 'static + ?core::marker::Sized
+pub fn project_management::BoundaryRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::BoundaryRequest where T: ?core::marker::Sized
+pub fn project_management::BoundaryRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::BoundaryRequest where T: ?core::marker::Sized
+pub fn project_management::BoundaryRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::BoundaryRequest where T: core::clone::Clone
+pub unsafe fn project_management::BoundaryRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::BoundaryRequest
+pub fn project_management::BoundaryRequest::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::BoundaryRequest
+pub type project_management::BoundaryRequest::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::BoundaryRequest where T: ?core::marker::Sized
 #[non_exhaustive] pub enum project_management::Error
 pub project_management::Error::DuplicateNameExhausted(alloc::string::String)
 pub project_management::Error::InvalidId(alloc::string::String)
@@ -185,6 +324,86 @@ pub fn project_management::CampusView::from(t: T) -> T
 impl<T> typenum::type_operators::Same for project_management::CampusView
 pub type project_management::CampusView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::CampusView where T: ?core::marker::Sized
+pub struct project_management::PlanBoundarySession
+impl project_management::PlanBoundarySession
+pub fn project_management::PlanBoundarySession::clear_active(&mut self)
+pub fn project_management::PlanBoundarySession::confirm(&mut self, gcj02: alloc::vec::Vec<[f64; 2]>)
+pub fn project_management::PlanBoundarySession::new(source: project_management::BoundarySource) -> Self
+pub fn project_management::PlanBoundarySession::open_plan(&mut self, plan_id: shared_domain_types::id::PlanId, campus_name: alloc::string::String, anchor_lon: f64, anchor_lat: f64) -> core::option::Option<project_management::PlanBoundaryView>
+pub fn project_management::PlanBoundarySession::poll(&mut self) -> project_management::BoundaryPoll
+pub fn project_management::PlanBoundarySession::refresh(&mut self) -> project_management::BoundaryRequest
+pub fn project_management::PlanBoundarySession::request(&mut self) -> project_management::BoundaryRequest
+impl core::marker::Freeze for project_management::PlanBoundarySession
+impl core::marker::Send for project_management::PlanBoundarySession
+impl !core::marker::Sync for project_management::PlanBoundarySession
+impl core::marker::Unpin for project_management::PlanBoundarySession
+impl !core::panic::unwind_safe::RefUnwindSafe for project_management::PlanBoundarySession
+impl !core::panic::unwind_safe::UnwindSafe for project_management::PlanBoundarySession
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::PlanBoundarySession where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::PlanBoundarySession where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::PlanBoundarySession where U: core::convert::From<T>
+pub fn project_management::PlanBoundarySession::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::PlanBoundarySession where U: core::convert::Into<T>
+pub type project_management::PlanBoundarySession::Error = core::convert::Infallible
+pub fn project_management::PlanBoundarySession::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::PlanBoundarySession where U: core::convert::TryFrom<T>
+pub type project_management::PlanBoundarySession::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::PlanBoundarySession::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for project_management::PlanBoundarySession where T: 'static + ?core::marker::Sized
+pub fn project_management::PlanBoundarySession::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::PlanBoundarySession where T: ?core::marker::Sized
+pub fn project_management::PlanBoundarySession::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::PlanBoundarySession where T: ?core::marker::Sized
+pub fn project_management::PlanBoundarySession::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for project_management::PlanBoundarySession
+pub fn project_management::PlanBoundarySession::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::PlanBoundarySession
+pub type project_management::PlanBoundarySession::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::PlanBoundarySession where T: ?core::marker::Sized
+pub struct project_management::PlanBoundaryView
+pub project_management::PlanBoundaryView::confirmed: bool
+pub project_management::PlanBoundaryView::gcj02: alloc::vec::Vec<[f64; 2]>
+pub project_management::PlanBoundaryView::name: alloc::string::String
+impl core::clone::Clone for project_management::PlanBoundaryView
+pub fn project_management::PlanBoundaryView::clone(&self) -> project_management::PlanBoundaryView
+impl core::cmp::PartialEq for project_management::PlanBoundaryView
+pub fn project_management::PlanBoundaryView::eq(&self, other: &project_management::PlanBoundaryView) -> bool
+impl core::fmt::Debug for project_management::PlanBoundaryView
+pub fn project_management::PlanBoundaryView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for project_management::PlanBoundaryView
+impl core::marker::Freeze for project_management::PlanBoundaryView
+impl core::marker::Send for project_management::PlanBoundaryView
+impl core::marker::Sync for project_management::PlanBoundaryView
+impl core::marker::Unpin for project_management::PlanBoundaryView
+impl core::panic::unwind_safe::RefUnwindSafe for project_management::PlanBoundaryView
+impl core::panic::unwind_safe::UnwindSafe for project_management::PlanBoundaryView
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for project_management::PlanBoundaryView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for project_management::PlanBoundaryView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for project_management::PlanBoundaryView where U: core::convert::From<T>
+pub fn project_management::PlanBoundaryView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for project_management::PlanBoundaryView where U: core::convert::Into<T>
+pub type project_management::PlanBoundaryView::Error = core::convert::Infallible
+pub fn project_management::PlanBoundaryView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for project_management::PlanBoundaryView where U: core::convert::TryFrom<T>
+pub type project_management::PlanBoundaryView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn project_management::PlanBoundaryView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for project_management::PlanBoundaryView where T: core::clone::Clone
+pub type project_management::PlanBoundaryView::Owned = T
+pub fn project_management::PlanBoundaryView::clone_into(&self, target: &mut T)
+pub fn project_management::PlanBoundaryView::to_owned(&self) -> T
+impl<T> core::any::Any for project_management::PlanBoundaryView where T: 'static + ?core::marker::Sized
+pub fn project_management::PlanBoundaryView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for project_management::PlanBoundaryView where T: ?core::marker::Sized
+pub fn project_management::PlanBoundaryView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for project_management::PlanBoundaryView where T: ?core::marker::Sized
+pub fn project_management::PlanBoundaryView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for project_management::PlanBoundaryView where T: core::clone::Clone
+pub unsafe fn project_management::PlanBoundaryView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for project_management::PlanBoundaryView
+pub fn project_management::PlanBoundaryView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for project_management::PlanBoundaryView
+pub type project_management::PlanBoundaryView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::PlanBoundaryView where T: ?core::marker::Sized
 pub struct project_management::PlanCardView
 pub project_management::PlanCardView::last_modified_at: alloc::string::String
 pub project_management::PlanCardView::name: alloc::string::String
@@ -428,4 +647,5 @@ pub type project_management::TrashItemView::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for project_management::TrashItemView where T: ?core::marker::Sized
 pub const project_management::DUPLICATE_SUFFIX_KEY: &str
 pub const project_management::RESTORE_NAME_TEMPLATE_KEY: &str
+pub type project_management::BoundarySource = alloc::sync::Arc<(dyn core::ops::function::Fn(&str, f64, f64) -> project_management::BoundaryFetchOutcome + core::marker::Send + core::marker::Sync)>
 pub type project_management::Result<T> = core::result::Result<T, project_management::Error>

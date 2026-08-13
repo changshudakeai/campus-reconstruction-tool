@@ -25,9 +25,11 @@ export component WorkspaceDrawer inherits Rectangle {
     in property <bool> boundary-is-determined;
     in property <string> boundary-undo-label;
     in property <string> boundary-reset-label;
+    in property <string> boundary-refresh-label;
     in property <string> boundary-confirm-label;
     callback boundary-undo-clicked();
     callback boundary-reset-clicked();
+    callback boundary-refresh-clicked();
     callback boundary-confirm-clicked();
 
     // ── ② 定朝向 ──────────────────────────────
@@ -112,6 +114,10 @@ export component WorkspaceDrawer inherits Rectangle {
                     text: root.boundary-reset-label;
                     enabled: root.boundary-point-count > 0;
                     clicked => { root.boundary-reset-clicked(); }
+                }
+                Button {
+                    text: root.boundary-refresh-label;
+                    clicked => { root.boundary-refresh-clicked(); }
                 }
                 Button {
                     text: root.boundary-confirm-label;

@@ -63,9 +63,6 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) drawer_open: bool,
     /// T34: 地图侧边界绘制状态（供抽屉 ① 显示点数/状态）
     pub(super) map_draw: MapDrawState,
-    /// T31：Rust 侧 OSM 边界自动获取后台结果通道（None = 无进行中的获取）
-    pub(super) pending_boundary_fetch:
-        Option<std::sync::mpsc::Receiver<data_acquisition::overpass::CampusBoundaryResult>>,
     pub(super) tutorial_visible: bool,
     pub(super) tutorial_text: String,
     pub(super) tutorial_dismiss_label: String,
@@ -342,6 +339,7 @@ impl WorkspaceProductionContext {
             undo_label: l10n.t("boundary.undo_button"),
             confirm_label: l10n.t("boundary.confirm_button"),
             reset_label: l10n.t("boundary.reset_button"),
+            refresh_label: l10n.t("boundary.refresh_button"),
             status,
             map_placeholder: l10n.t("boundary.map_placeholder"),
             is_determined: is_closed,

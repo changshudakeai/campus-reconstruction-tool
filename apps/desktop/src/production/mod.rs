@@ -33,6 +33,7 @@ mod review;
 mod startup_settings;
 mod workspace_adapter;
 mod workspace_boundary;
+mod workspace_boundary_fetch;
 mod workspace_leave;
 
 use campus_plan_trash::{CampusPlanProductionAdapter, CampusPlanRequest, TrashProductionAdapter};
@@ -763,6 +764,14 @@ impl ProductionEntries {
             .show(window, &self.center, WorkspaceRequest::BoundaryReset);
     }
 
+    pub(crate) fn handle_boundary_refresh(&mut self, window: &AppWindow) -> bool {
+        self.supersede_diagnostic(window);
+        let presentation =
+            self.workspace
+                .show(window, &self.center, WorkspaceRequest::BoundaryRefresh);
+        matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
     pub(crate) fn handle_orientation_submit(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         let presentation = self.workspace.show(
@@ -852,13 +861,24 @@ impl ProductionEntries {
             return;
         }
         let _ = self.campus_search_ipc.send(message.to_owned());
-        let presentation = self.workspace.show(
+        let map_ready = matches!(
+            gaode_client::parse_ipc_message(message),
+            Ok(IpcMessage::MapReady)
+        );
+        let mut presentation = self.workspace.show(
             window,
             &self.center,
             WorkspaceRequest::MapIpc {
                 message: message.to_string(),
             },
         );
+        // 重复 map_ready 在请求仍进行时既不能新开请求，也不能只等待下一次
+        // 计时器采样：顺手非阻塞轮询一次，若后台结果已经完成则立即命中。
+        if map_ready && matches!(presentation.operation(), OperationState::Processing { .. }) {
+            presentation =
+                self.workspace
+                    .show(window, &self.center, WorkspaceRequest::PollBoundaryFetch);
+        }
         if presentation.operation() == &OperationState::NeedsConfirmation {
             // 地图确认朝向覆盖既有朝向：与方位角输入提交走同一确认路径
             self.pending_confirmation = Some(PendingConfirmation::OrientationRecalc);
@@ -1248,6 +1268,17 @@ impl ProductionEntries {
         window.on_workspace_boundary_reset_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_boundary_reset(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_boundary_refresh_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                let processing = shared.borrow_mut().handle_boundary_refresh(&window);
+                if processing {
+                    ProductionEntries::start_boundary_fetch_polling(&shared, &window);
+                }
             }
         });
 

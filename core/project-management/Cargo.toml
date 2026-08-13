@@ -14,7 +14,7 @@ name = "project-management"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "F3 项目方案管理：校区/方案 CRUD、卡片三件套、复制方案、回收站集成"
+description = "F3 项目方案管理：校区/方案 CRUD、方案边界会话、复制方案与回收站"
 
 [dependencies]
 # B1 共享领域类型（基础层唯一合法内部依赖）

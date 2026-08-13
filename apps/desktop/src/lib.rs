@@ -4,6 +4,7 @@
 //! 转发给一个功能模块。当前 `runtime` 的着陆组合以及 [`ViewModelInjector`] 对全部
 //! F 模块的持有与接线属于迁移期遗留，只为工单 01 的行为基线保留，不构成新增
 //! S1 业务协调的授权。Slint 绑定、B6 文案与 B7 Presenter 仍是呈现层能力。
+mod boundary_source;
 mod diagnostic_log;
 mod map_webview;
 mod presentation;
@@ -11,6 +12,7 @@ mod presenter;
 mod production;
 mod runtime;
 
+pub use boundary_source::BoundaryFetchSource;
 pub use map_webview::MAP_LOAD_TIMEOUT_MARKER;
 #[doc(hidden)]
 pub use map_webview::{reset_review_push_count, review_push_count, set_review_push_probe_visible};

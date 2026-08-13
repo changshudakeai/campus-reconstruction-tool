@@ -102,6 +102,7 @@ fn workspace(suffix: &str) -> WorkspacePageState {
         drawer_expand_tooltip: format!("展开-{suffix}"),
         drawer_collapse_tooltip: format!("收起-{suffix}"),
         boundary: BoundaryViewState {
+            refresh_label: format!("refresh-{suffix}"),
             points: Vec::new(),
             path_commands: String::new(),
             title: format!("边界页-{suffix}"),

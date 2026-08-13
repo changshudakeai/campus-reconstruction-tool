@@ -4,13 +4,8 @@
 //! B5 foundation-mode 完成；朝向校验与保存经 F5 OrientationCalculator / B1
 //! Orientation；地图通道只负责显示与转交原始动作。状态与上下文见
 //! `super::workspace_boundary`（会话状态 / 共享上下文 / 几何与通知辅助）。
-// ignore-tidy-filelength: T38 评审步地图让位（评审地图 + 返回采集/导出重建边界页）并入导航
-// 后短暂超限；失效里程碑：v2.1.0（2026-12-31），届时按职责拆出地图导航决策助手后消除
-
 use std::collections::HashMap;
-use std::sync::mpsc;
 
-use data_acquisition::overpass::{CampusBoundaryFetcher, CampusBoundaryResult};
 use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryUiEvent,
     CoordinateConverter, EventResult, MercatorCoord, Orientation, OrientationCalculator, Vertex,
@@ -52,6 +47,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
             WorkspaceRequest::BoundaryUndo => self.boundary_undo(),
             WorkspaceRequest::BoundaryConfirm => self.boundary_confirm(),
             WorkspaceRequest::BoundaryReset => self.boundary_reset(),
+            WorkspaceRequest::BoundaryRefresh => self.boundary_refresh(),
             WorkspaceRequest::OrientationSubmit { mode, angle_text } => {
                 self.orientation_submit(&mode, &angle_text)
             }
@@ -103,12 +99,16 @@ impl WorkspaceProductionAdapter {
         {
             let mut session = self.context.session.borrow_mut();
             session.active_plan_id = Some(plan_id.to_string());
-            session.active_context = Some(context);
+            session.active_context = Some(context.clone());
             session.orientation_points.clear();
             session.orientation_angle = None;
             session.pending_orientation_angle = None;
             session.adopted_completed_steps = None;
             session.active_step = 0;
+            // 切换方案立即作废旧画布；F3 会话入口负责旧请求过期与按方案恢复。
+            session.map_processing = false;
+            session.drawer.reset();
+            session.map_draw = MapDrawState::default();
             let injector = self.context.injector.borrow();
             match injector
                 .tutorial()
@@ -128,11 +128,21 @@ impl WorkspaceProductionAdapter {
                 }
             }
         }
-        if let Some(context) = self.context.session.borrow().active_context.clone() {
-            self.context.export_flow.set_plan(&context);
-            if let Ok(plan_id) = shared_domain_types::PlanId::parse(&context.plan_id) {
-                self.context.collection_flow.set_plan(&plan_id);
-            }
+        self.context.export_flow.set_plan(&context);
+        self.context.collection_flow.set_plan(&parsed);
+        let cached = self
+            .context
+            .injector
+            .borrow_mut()
+            .boundary_session_mut()
+            .open_plan(
+                parsed,
+                context.campus_name.clone(),
+                context.anchor_lng,
+                context.anchor_lat,
+            );
+        if let Some(cached) = cached.as_ref() {
+            self.restore_cached_drawer_state(cached);
         }
         let Some((keys, anchor)) = self.context.map_credentials() else {
             let l10n = self.l10n();
@@ -427,17 +437,19 @@ impl WorkspaceProductionAdapter {
             return Presentation::failed(self.context.page())
                 .with_notification(error_fact(&l10n, &message));
         }
-        let coordinates = {
+        let gcj02 = {
             let session = self.context.session.borrow();
             let Some(context) = session.active_context.as_ref() else {
                 return Presentation::failed(self.context.page());
             };
-            serde_json::json!([plane_vertices_to_gcj02(
+            plane_vertices_to_gcj02(
                 session.drawer.vertices(),
                 context.anchor_lng,
                 context.anchor_lat,
-            )])
+            )
         };
+        let coordinates = serde_json::json!([gcj02.clone()]);
+        self.cache_confirmed_boundary(&gcj02);
         self.context
             .collection_flow
             .confirm_boundary(shared_domain_types::Boundary {
@@ -460,7 +472,13 @@ impl WorkspaceProductionAdapter {
             }
             session.drawer.reset();
             session.map_draw = MapDrawState::default();
+            session.map_processing = false;
         }
+        self.context
+            .injector
+            .borrow_mut()
+            .boundary_session_mut()
+            .clear_active();
         self.context.export_flow.reset_boundary();
         self.context.collection_flow.reset_boundary();
         Presentation::ready(self.context.page())
@@ -809,7 +827,13 @@ impl WorkspaceProductionAdapter {
                 {
                     let mut session = self.context.session.borrow_mut();
                     session.map_draw = MapDrawState::default();
+                    session.map_processing = false;
                 }
+                self.context
+                    .injector
+                    .borrow_mut()
+                    .boundary_session_mut()
+                    .clear_active();
                 Presentation::ready(self.context.page())
             }
             IpcMessage::Coordinate { .. } => Presentation::ready(self.context.page()),
@@ -858,167 +882,6 @@ impl WorkspaceProductionAdapter {
         } else {
             self.start_boundary_fetch()
         }
-    }
-
-    /// T31：地图就绪 → 后台线程执行 OSM 边界自动获取（Nominatim → Overpass
-    /// 端点回退 → WGS→GCJ → ADR-0029 排序），不阻塞 UI 线程；结果经
-    /// [`WorkspaceRequest::PollBoundaryFetch`] 轮询取回。
-    fn start_boundary_fetch(&mut self) -> Presentation<WorkspacePageState> {
-        let Some((campus_name, anchor_lon, anchor_lat)) = ({
-            let session = self.context.session.borrow();
-            session
-                .active_context
-                .as_ref()
-                .map(|context| {
-                    (
-                        context.campus_name.clone(),
-                        context.anchor_lng,
-                        context.anchor_lat,
-                    )
-                })
-                .or_else(|| {
-                    self.context
-                        .injector
-                        .borrow()
-                        .projects()
-                        .landing_campus()
-                        .ok()
-                        .flatten()
-                        .map(|campus| (campus.name, campus.anchor_lng, campus.anchor_lat))
-                })
-        }) else {
-            // 没有真实校区上下文时不得用固定坐标参与 OSM 查询：直接人工圈画。
-            crate::map_webview::evaluate_script("enableManualMode();");
-            let l10n = self.l10n();
-            return Presentation::ready(self.context.page()).with_notification(info_fact(
-                &l10n,
-                "boundary.osm_not_found_title",
-                &l10n.t("boundary.osm_not_found_body"),
-            ));
-        };
-        {
-            let session = self.context.session.borrow();
-            if session.pending_boundary_fetch.is_some() {
-                // 已有进行中的获取：保持处理态，不重复发起。
-                return Presentation::processing(self.context.page(), Progress::ZERO);
-            }
-        }
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let fetcher = CampusBoundaryFetcher::production();
-            let outcome = fetcher.fetch_campus(&campus_name, anchor_lon, anchor_lat);
-            let _ = tx.send(outcome);
-        });
-        {
-            let mut session = self.context.session.borrow_mut();
-            session.pending_boundary_fetch = Some(rx);
-            session.map_processing = true;
-        }
-        Presentation::processing(self.context.page(), Progress::ZERO)
-    }
-
-    /// 轮询后台边界获取结果：终态到达即应用（绘制/人工圈画兜底），未到保持处理态。
-    fn poll_boundary_fetch(&mut self) -> Presentation<WorkspacePageState> {
-        // T38 根因：无待处理的后台获取（评审步等非边界场景误触发轮询）时，
-        // 必须先释放 session 借用再呈现页面——旧实现直接在
-        // `session.borrow_mut()` 存活期间调用 `self.context.page()`，触发
-        // RefCell already mutably borrowed → 主线程 panic → 进程退出时
-        // TLS 析构 drop WebView → Close() → combase.dll 0xc0000005 崩溃。
-        if self
-            .context
-            .session
-            .borrow()
-            .pending_boundary_fetch
-            .is_none()
-        {
-            return Presentation::ready(self.context.page());
-        }
-        let outcome = {
-            let mut session = self.context.session.borrow_mut();
-            match session.pending_boundary_fetch.as_mut() {
-                // 双检兜底（主线程无并发，理论不可达）：复位处理态并让
-                // 借用在块尾释放，绝不在此处调用 page()。
-                None => {
-                    session.map_processing = false;
-                    None
-                }
-                Some(receiver) => match receiver.try_recv() {
-                    Ok(outcome) => {
-                        session.pending_boundary_fetch = None;
-                        session.map_processing = false;
-                        Some(outcome)
-                    }
-                    Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        session.pending_boundary_fetch = None;
-                        session.map_processing = false;
-                        None
-                    }
-                },
-            }
-        };
-        let Some(outcome) = outcome else {
-            return Presentation::processing(self.context.page(), Progress::ZERO);
-        };
-        self.apply_boundary_fetch_outcome(outcome)
-    }
-
-    /// 应用边界获取结果：自动绘制（来源标注）或人工圈画兜底（明确提示）。
-    fn apply_boundary_fetch_outcome(
-        &mut self,
-        outcome: CampusBoundaryResult,
-    ) -> Presentation<WorkspacePageState> {
-        let l10n = self.l10n();
-        let mut presentation = Presentation::ready(self.context.page());
-        match outcome {
-            CampusBoundaryResult::AutoSelected {
-                name,
-                gcj02,
-                source,
-                candidate_count,
-            } => {
-                let coords_json =
-                    serde_json::to_string(&gcj02).unwrap_or_else(|_| "[]".to_string());
-                let name_json =
-                    serde_json::to_string(&name).unwrap_or_else(|_| "\"未知校区\"".to_string());
-                crate::map_webview::evaluate_script(&format!(
-                    "drawBoundaryGcj({coords_json}, {name_json});"
-                ));
-                // T34：抽屉 ① 点数/状态跟随 OSM 自动绘制（编辑模式）
-                {
-                    let mut session = self.context.session.borrow_mut();
-                    session.map_draw.point_count = gcj02.len() as i32;
-                    session.map_draw.status = MapDrawStatus::Editing;
-                }
-                let body = l10n.t_with_array(
-                    "boundary.osm_auto_selected_body",
-                    &[&name, &candidate_count.to_string(), &source.to_string()],
-                );
-                presentation = presentation.with_notification(info_fact(
-                    &l10n,
-                    "boundary.osm_auto_selected_title",
-                    &body,
-                ));
-            }
-            CampusBoundaryResult::NotFound => {
-                crate::map_webview::evaluate_script("enableManualMode();");
-                presentation = presentation.with_notification(info_fact(
-                    &l10n,
-                    "boundary.osm_not_found_title",
-                    &l10n.t("boundary.osm_not_found_body"),
-                ));
-            }
-            CampusBoundaryResult::Unreachable { message } => {
-                log::warn!("OSM 边界自动获取失败（人工圈画兜底）: {message}");
-                crate::map_webview::evaluate_script("enableManualMode();");
-                presentation = presentation.with_notification(info_fact(
-                    &l10n,
-                    "boundary.osm_not_found_title",
-                    &l10n.t("boundary.osm_unreachable_body"),
-                ));
-            }
-        }
-        presentation
     }
 
     fn confirm_map_boundary(&mut self, coords: &[[f64; 2]]) -> Presentation<WorkspacePageState> {
@@ -1080,6 +943,7 @@ impl WorkspaceProductionAdapter {
         self.context
             .export_flow
             .confirm_boundary(boundary_type, coordinates);
+        self.cache_confirmed_boundary(&coords);
         Presentation::ready(self.context.page())
     }
 

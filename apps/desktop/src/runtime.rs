@@ -20,11 +20,14 @@ use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
-use project_management::ProjectManager;
+use project_management::{PlanBoundarySession, ProjectManager};
 use review_workbench::ReviewWorkbench;
 use shared_domain_types::{Boundary, PlanId};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
+use crate::boundary_source::{
+    boundary_session_source, production_boundary_source, BoundaryFetchSource,
+};
 use crate::presenter::report_callback_error;
 use crate::presenter::ShellPresenter;
 
@@ -218,6 +221,8 @@ pub struct ViewModelInjector {
     export_flow: Arc<BoundaryExportFlow>,
     /// A1 候选采集完整用例（F4 → B2 → B14 → F7 在入口后协调，ADR-0039）。
     collection_flow: Arc<CollectionFlow>,
+    /// F3 方案边界完整会话入口；S1 不持有缓存键、完成结果或后台 receiver。
+    boundary_session: PlanBoundarySession,
     /// 校区在线搜索 WebView 桥的响应通道（D-3，S1 只做传输转发）。
     campus_search_ipc: mpsc::Sender<String>,
     /// 校区在线搜索传输（生产走 WebView，测试注入罐头）。
@@ -231,6 +236,23 @@ impl ViewModelInjector {
             db,
             Arc::new(StdExportFileSystem),
             production_collection_source(),
+        )
+    }
+
+    /// 方案边界数据源注入点（生产为 OSM，测试使用 fake 计数器）。
+    pub fn new_with_boundary_source(
+        db: ShellDatabases,
+        boundary_source: BoundaryFetchSource,
+    ) -> Result<Self> {
+        let (campus_search_ipc, campus_search_transport) =
+            crate::production::campus_search::campus_search_production_transport();
+        Self::new_with_sources(
+            db,
+            Arc::new(StdExportFileSystem),
+            campus_search_ipc,
+            campus_search_transport,
+            production_collection_source(),
+            boundary_source,
         )
     }
 
@@ -256,6 +278,7 @@ impl ViewModelInjector {
             campus_search_ipc,
             campus_search_transport,
             collection_source,
+            production_boundary_source(),
         )
     }
 
@@ -274,6 +297,7 @@ impl ViewModelInjector {
             campus_search_ipc,
             transport,
             production_collection_source(),
+            production_boundary_source(),
         )
     }
 
@@ -283,6 +307,7 @@ impl ViewModelInjector {
         campus_search_ipc: mpsc::Sender<String>,
         campus_search_transport: CampusSearchTransport,
         collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
+        boundary_source: BoundaryFetchSource,
     ) -> Result<Self> {
         let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
@@ -304,9 +329,14 @@ impl ViewModelInjector {
             review: None,
             export_flow,
             collection_flow,
+            boundary_session: PlanBoundarySession::new(boundary_session_source(boundary_source)),
             campus_search_ipc,
             campus_search_transport: Arc::new(campus_search_transport),
         })
+    }
+
+    pub(crate) fn boundary_session_mut(&mut self) -> &mut PlanBoundarySession {
+        &mut self.boundary_session
     }
 
     /// 把静态视图文案注入 Slint 窗口（只设 in property；动态页面状态由
@@ -343,6 +373,7 @@ impl ViewModelInjector {
         window.set_workspace_boundary_undo_label(l10n.t("boundary.undo_button").into());
         window.set_workspace_boundary_confirm_label(l10n.t("boundary.confirm_button").into());
         window.set_workspace_boundary_reset_label(l10n.t("boundary.reset_button").into());
+        window.set_workspace_boundary_refresh_label(l10n.t("boundary.refresh_button").into());
         window.set_workspace_boundary_status(l10n.t("boundary.status_idle").into());
         window.set_workspace_boundary_map_placeholder(l10n.t("boundary.map_placeholder").into());
         window.set_workspace_boundary_is_determined(false);

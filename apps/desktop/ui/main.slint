@@ -198,6 +198,7 @@ export component AppWindow inherits Window {
     in property <string> workspace-boundary-undo-label;
     in property <string> workspace-boundary-confirm-label;
     in property <string> workspace-boundary-reset-label;
+    in property <string> workspace-boundary-refresh-label;
     in property <string> workspace-boundary-status;
     in property <string> workspace-boundary-map-placeholder;
     in property <bool> workspace-boundary-is-determined;
@@ -206,6 +207,7 @@ export component AppWindow inherits Window {
     callback workspace-boundary-undo-clicked();
     callback workspace-boundary-confirm-clicked();
     callback workspace-boundary-reset-clicked();
+    callback workspace-boundary-refresh-clicked();
 
     // ── 屏 4 步骤②：定朝向交互页属性（T19B-5B Phase 2 Step B）────────
         in property <[OrientationPointData]> workspace-orientation-points;
@@ -1054,9 +1056,11 @@ export component AppWindow inherits Window {
                     boundary-is-determined: root.workspace-boundary-is-determined;
                     boundary-undo-label: root.workspace-boundary-undo-label;
                     boundary-reset-label: root.workspace-boundary-reset-label;
+                    boundary-refresh-label: root.workspace-boundary-refresh-label;
                     boundary-confirm-label: root.workspace-boundary-confirm-label;
                     boundary-undo-clicked => { root.workspace-boundary-undo-clicked(); }
                     boundary-reset-clicked => { root.workspace-boundary-reset-clicked(); }
+                    boundary-refresh-clicked => { root.workspace-boundary-refresh-clicked(); }
                     boundary-confirm-clicked => { root.workspace-boundary-confirm-clicked(); }
                     orientation-angle: root.workspace-orientation-angle;
                     orientation-angle-display: root.workspace-orientation-angle-display;

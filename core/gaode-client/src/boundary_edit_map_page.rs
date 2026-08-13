@@ -452,6 +452,17 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     setStatus('来自 OSM: ' + sourceName + ' ✓', 'success');
   }}
 
+  // 已确认的方案边界来自当前应用会话缓存；它可能最初来自 OSM，也可能由
+  // 用户人工圈画，因此恢复时不得伪称数据来源，只呈现调用方注入的本地化状态。
+  function drawRestoredBoundaryGcj(gcjCoords, statusText) {{
+    if (!gcjCoords || gcjCoords.length < 3) {{
+      enableManualMode();
+      return;
+    }}
+    drawBoundary(gcjCoords, '', true);
+    setStatus(statusText, 'success');
+  }}
+
   function drawBoundary(coords, name, editable) {{
     isEditMode = editable;
 
@@ -748,6 +759,10 @@ mod tests {
         let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
         let html = build_boundary_edit_page_html(&config).unwrap();
         assert!(html.contains("drawBoundaryGcj"));
+        assert!(
+            html.contains("drawRestoredBoundaryGcj"),
+            "方案会话缓存命中后必须能重绘已确认边界"
+        );
         assert!(!html.contains("convertAndDraw"));
         assert!(
             !html.contains("AMap.convertFrom(["),

@@ -269,6 +269,7 @@ pub struct BoundaryViewState {
     pub undo_label: String,
     pub confirm_label: String,
     pub reset_label: String,
+    pub refresh_label: String,
     pub status: String,
     pub map_placeholder: String,
     pub is_determined: bool,
@@ -284,6 +285,7 @@ impl BoundaryViewState {
         window.set_workspace_boundary_undo_label(self.undo_label.clone().into());
         window.set_workspace_boundary_confirm_label(self.confirm_label.clone().into());
         window.set_workspace_boundary_reset_label(self.reset_label.clone().into());
+        window.set_workspace_boundary_refresh_label(self.refresh_label.clone().into());
         window.set_workspace_boundary_status(self.status.clone().into());
         window.set_workspace_boundary_map_placeholder(self.map_placeholder.clone().into());
         window.set_workspace_boundary_is_determined(self.is_determined);
@@ -359,6 +361,8 @@ pub enum WorkspaceRequest {
     BoundaryConfirm,
     /// 重置边界并清除已保存的方案边界。
     BoundaryReset,
+    /// 明确重新请求当前方案的 OSM 边界；不把普通页面重建当作刷新。
+    BoundaryRefresh,
     /// 朝向提交（方位角输入模式；两点模式由地图 IPC 计算，见工单 06）。
     OrientationSubmit { mode: String, angle_text: String },
     /// 重置朝向并清除已保存的方案朝向。
