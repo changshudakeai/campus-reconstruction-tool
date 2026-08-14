@@ -848,6 +848,8 @@ impl WorkspaceProductionAdapter {
             // T38：评审地图 IPC 由 handle_map_ipc 在 is_review_page 分支路由，
             // 不会到达工作区适配器；此处保留显式空分支满足穷尽匹配。
             IpcMessage::ReviewObjectClicked { .. } => Presentation::ready(self.context.page()),
+            // 评审地图文字开关只由评审入口处理；此处保留空分支满足穷尽匹配。
+            IpcMessage::ReviewMapTextToggled { .. } => Presentation::ready(self.context.page()),
             IpcMessage::Error { message } => {
                 let l10n = self.l10n();
                 // T36：页面 onerror / 5s SDK 超时（及 Rust 侧 10s 加载超时）→

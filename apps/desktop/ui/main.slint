@@ -290,6 +290,8 @@ export component AppWindow inherits Window {
     in property <string> review-detail-state-label;
     // T38：卡片"定位到地图"按钮文案
     in property <string> review-locate-label;
+    // 地图三态/选中图例（虚线=待定、实线=保留、红色轮廓=选中/定位）
+    in property <string> review-legend;
     // T33 契约观测：评审候选列表滚动（大量候选下操作栏可达）。只读布局观测，
     // 不参与评审/封账逻辑；由 ReviewView 内部几何经双向绑定上联。
     in-out property <length> review-list-viewport-y;
@@ -794,6 +796,7 @@ export component AppWindow inherits Window {
                     card-keep-label: root.review-card-keep-label;
                     card-reject-label: root.review-card-reject-label;
                     locate-label: root.review-locate-label;
+                    legend: root.review-legend;
                     pause-label: root.review-pause-label;
                     resume-label: root.review-resume-label;
                     seal-label: root.review-seal-label;

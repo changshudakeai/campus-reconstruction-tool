@@ -116,6 +116,8 @@ enum PendingShow {
         security_key: String,
         anchor_lon: f64,
         anchor_lat: f64,
+        map_text_label: String,
+        map_text_visible: bool,
     },
 }
 
@@ -180,6 +182,10 @@ struct WebViewState {
     last_orientation_config: Option<gaode_client::BoundaryEditPageConfig>,
     /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
     campus_search_mode: bool,
+    /// 评审会话内“显示地图文字”开关状态（默认 false：隐藏地标/POI 文字）。
+    review_map_text_visible: bool,
+    /// 评审地图文字开关文案（经 B6 l10n 注入，重建评审页时复用）。
+    review_map_text_label: String,
     /// resize 跟随轮询定时器（hide 时 drop 即停）
     resize_timer: Option<slint::Timer>,
     /// 上次同步的（地图槽位矩形, 缩放因子）——变化才 set_bounds
@@ -206,27 +212,32 @@ thread_local! {
             last_page_kind: None,
             last_orientation_config: None,
             campus_search_mode: false,
+            review_map_text_visible: false,
+            review_map_text_label: String::new(),
             resize_timer: None,
             last_slot_scale: None,
         })
     };
 }
 
-/// T39：评审地图 Rust→JS 回推命令计数（契约测试注入观察；生产为廉价原子
-/// 计数，不做业务分支）。一次高亮/三态操作只应产生 1 条回推，不再是
-/// clear + 21 批全量。
-static REVIEW_PUSH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// T39：评审地图 Rust→JS 回推命令计数（契约测试注入观察；生产为廉价
+// 线程局部计数，不做业务分支）。一次高亮/三态操作只应产生 1 条回推，
+// 不再是 clear + 21 批全量。
+thread_local! {
+    static REVIEW_PUSH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// 评审地图回推命令累计条数（诊断/验收用）。
 #[doc(hidden)]
 pub fn review_push_count() -> usize {
-    REVIEW_PUSH_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    REVIEW_PUSH_COUNT.with(|s| s.get())
 }
 
 /// 清零评审地图回推计数（验收测试起点）。
 #[doc(hidden)]
 pub fn reset_review_push_count() {
-    REVIEW_PUSH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    REVIEW_PUSH_COUNT.with(|s| s.set(0));
+    REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow_mut().clear());
 }
 
 /// 无 WebView 测试环境下模拟"评审地图可见"，使回推路径可被计数观察；
@@ -238,6 +249,9 @@ pub fn set_review_push_probe_visible(visible: bool) {
 
 thread_local! {
     static REVIEW_PUSH_PROBE_VISIBLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REVIEW_PUSHED_SCRIPTS: std::cell::RefCell<Vec<String>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
 }
 
 /// 评审回推是否应执行：生产 = 活跃 WebView；契约测试可经探针模拟。
@@ -245,10 +259,20 @@ pub(crate) fn review_push_visible() -> bool {
     is_visible() || REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.get())
 }
 
+/// 测试用 JS 地图 spy：返回本次探针开启后记录到的 Rust→JS 回推脚本。
+#[doc(hidden)]
+pub fn review_pushed_scripts() -> Vec<String> {
+    REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow().clone())
+}
+
 /// 记录一条评审地图回推命令（在任何 evaluate_script 前调用，无 WebView
-/// 环境同样计数，供 T39 验收断言"一次高亮只产生 1 条回推"）。
-pub(crate) fn note_review_push() {
-    REVIEW_PUSH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+/// 环境同样计数，供 T39 验收断言"一次高亮只产生 1 条回推"）。探针开启时
+/// 同时记录脚本内容，供 JS 地图 spy 断言 center/zoom/overlay/highlight/文字开关。
+pub(crate) fn note_review_push(script: &str) {
+    REVIEW_PUSH_COUNT.with(|s| s.set(s.get() + 1));
+    if REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.get()) {
+        REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow_mut().push(script.to_owned()));
+    }
 }
 
 /// 注册 IPC 处理器（功能入口在 bind 时调用一次）
@@ -305,6 +329,22 @@ pub(crate) fn is_boundary_page() -> bool {
 /// 当前地图是否为评审页（T38：评审步的 IPC 路由到评审入口而非边界入口）。
 pub(crate) fn is_review_page() -> bool {
     page_kind() == Some(MapPageKind::Review)
+}
+
+/// 记录评审会话内“显示地图文字”开关状态（由评审地图 IPC 上报）。
+///
+/// 状态只保存在本进程的 WebView 会话状态中：评审页被隐藏/弹窗恢复重建时，
+/// [`show_review`] 会按该状态重新生成地图页，从而在当前评审会话内保持。
+pub(crate) fn set_review_map_text_visible(visible: bool) {
+    STATE.with(|s| {
+        s.borrow_mut().review_map_text_visible = visible;
+    });
+}
+
+/// 读取评审会话内“显示地图文字”开关状态（验收测试观察用）。
+#[doc(hidden)]
+pub fn review_map_text_visible() -> bool {
+    STATE.with(|s| s.borrow().review_map_text_visible)
 }
 
 /// 从 Slint 布局槽位读取地图矩形（逻辑像素；T34 不再硬编码坐标）。
@@ -443,10 +483,13 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             security_key,
             anchor_lon,
             anchor_lat,
+            map_text_label,
+            map_text_visible,
             ..
         } => {
             let config = gaode_client::ReviewMapPageConfig::new(api_key, security_key)
-                .with_anchor(*anchor_lon, *anchor_lat);
+                .with_anchor(*anchor_lon, *anchor_lat)
+                .with_map_text_toggle(map_text_label, *map_text_visible);
             gaode_client::build_review_map_page_html(&config)
         }
     }
@@ -783,6 +826,8 @@ fn request_show(request: PendingShow) {
                 security_key,
                 anchor_lon,
                 anchor_lat,
+                map_text_label,
+                map_text_visible,
                 ..
             } => {
                 state.last_api_key = api_key.clone();
@@ -790,6 +835,8 @@ fn request_show(request: PendingShow) {
                 state.last_anchor = Some((*anchor_lon, *anchor_lat));
                 state.last_page_kind = Some(MapPageKind::Review);
                 state.campus_search_mode = false;
+                state.review_map_text_label = map_text_label.clone();
+                state.review_map_text_visible = *map_text_visible;
             }
         }
         // 异页已显示：先隐藏（延迟销毁），再排队重建。
@@ -872,13 +919,17 @@ pub(crate) fn show_review(
     security_key: String,
     anchor_lon: f64,
     anchor_lat: f64,
+    map_text_label: String,
 ) {
+    let map_text_visible = STATE.with(|s| s.borrow().review_map_text_visible);
     request_show(PendingShow::Review {
         window: window_weak,
         api_key,
         security_key,
         anchor_lon,
         anchor_lat,
+        map_text_label,
+        map_text_visible,
     });
 }
 
@@ -994,12 +1045,13 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
     if !should_restore_after_modal(active_screen, active_step) {
         return;
     }
-    let (api_key, security_key, anchor) = STATE.with(|s| {
+    let (api_key, security_key, anchor, review_map_text_label) = STATE.with(|s| {
         let state = s.borrow();
         (
             state.last_api_key.clone(),
             state.last_security_key.clone(),
             state.last_anchor,
+            state.review_map_text_label.clone(),
         )
     });
     if active_screen == 4 {
@@ -1015,7 +1067,14 @@ pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
             // 评审页：用上次密钥/锚点重建评审地图——候选不再内嵌 HTML，
             // 重建后页面 map_ready → Rust 在事件循环安全上下文全量推送。
             if let Some((anchor_lon, anchor_lat)) = anchor {
-                show_review(window, api_key, security_key, anchor_lon, anchor_lat);
+                show_review(
+                    window,
+                    api_key,
+                    security_key,
+                    anchor_lon,
+                    anchor_lat,
+                    review_map_text_label,
+                );
             }
             return;
         }
@@ -1127,7 +1186,8 @@ mod tests {
     /// 清空注册的 handler 与状态（thread_local 在测试线程间共享）。
     fn reset_state() {
         REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.set(false));
-        REVIEW_PUSH_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+        REVIEW_PUSH_COUNT.with(|s| s.set(0));
+        REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow_mut().clear());
         STATE.with(|s| {
             let mut state = s.borrow_mut();
             state.ipc_handler = None;
@@ -1140,6 +1200,8 @@ mod tests {
             state.pending_show = None;
             state.load_timer = None;
             state.suppress_restore = false;
+            state.review_map_text_visible = false;
+            state.review_map_text_label = String::new();
         });
     }
 
@@ -1240,6 +1302,8 @@ mod tests {
                 security_key: "testsecurity123".into(),
                 anchor_lon: 116.4,
                 anchor_lat: 39.9,
+                map_text_label: "显示地图文字".into(),
+                map_text_visible: false,
             }
             .has_load_timeout(),
             "评审页必须跳过 Rust 侧加载超时"
@@ -1265,8 +1329,12 @@ mod tests {
         reset_state();
         set_review_push_probe_visible(true);
         assert!(review_push_visible(), "探针打开后回推路径必须可观察");
-        note_review_push();
+        note_review_push("window.highlightReviewCandidate(\"candidate\");");
         assert_eq!(review_push_count(), 1, "一次命令只计一条回推");
+        assert_eq!(
+            review_pushed_scripts(),
+            vec!["window.highlightReviewCandidate(\"candidate\");"]
+        );
         set_review_push_probe_visible(false);
         assert!(!review_push_visible(), "探针关闭后回到实际可见性");
         reset_review_push_count();

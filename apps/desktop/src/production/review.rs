@@ -9,7 +9,10 @@ use crate::presentation::{
 use crate::ReviewCandidateData;
 use localization::Localization;
 use notification_center::Notification;
-use review_workbench::{CandidateKey, CommandOutcome, ExportSummary, ReviewWorkbench, StateChange};
+use review_workbench::{
+    CandidateKey, CommandOutcome, ExportSummary, MapObjectView, ReviewWorkbench, StateChange,
+    WorkbenchView,
+};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,24 +41,25 @@ pub(crate) struct ReviewProductionAdapter {
     map_sync: Rc<RefCell<ReviewMapSync>>,
 }
 
-/// T39：评审地图回推同步状态。
+/// T39：评审地图回推同步状态（T41：地图只绘制当前类别 + 当前页的可见集合）。
 #[derive(Default)]
 struct ReviewMapSync {
     /// 已推送到 JS 的三态（candidate_id -> state 标识符；增量 diff 基准）。
     pushed_states: HashMap<String, String>,
     /// 已推送的高亮候选（None = 无高亮）。
     pushed_highlight: Option<String>,
-    /// 待执行的 map_ready 全量推送（IPC 回调栈内只排定，事件循环安全上下文执行）。
-    pending_full_push: Option<PendingFullPush>,
+    /// 已推送的可见集合身份（active_category_index, page_index）。
+    /// 分类/翻页变化时触发一次全量重推（清旧 overlay + 画新集合）。
+    pushed_visible: Option<(usize, usize)>,
     /// 全量推送是否已排定（幂等，防止多次 map_ready 重复排定）。
     full_push_scheduled: bool,
 }
 
-/// 一次 map_ready 全量推送的载荷（脚本 + 推送后应记录的基准状态）。
-struct PendingFullPush {
-    scripts: Vec<String>,
-    states: HashMap<String, String>,
-    highlight: Option<String>,
+/// 当前应绘制到评审地图的可见候选集合（当前类别 + 当前分页）。
+struct VisibleReviewSet {
+    active_category_index: usize,
+    page_index: usize,
+    objects: Vec<MapObjectView>,
 }
 
 /// T39：评审候选列表分页页大小（Slint 无虚拟化；50–100 内取 60）。
@@ -103,6 +107,7 @@ impl ReviewProductionAdapter {
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
             locate_label: l10n.t("review.locate"),
+            legend: l10n.t("review.legend"),
             detail_visible: false,
             detail_title: String::new(),
             detail_category_label: String::new(),
@@ -144,7 +149,15 @@ impl ReviewProductionAdapter {
         let category_labels: Vec<String> = view
             .category_tabs
             .iter()
-            .map(|tab| l10n.t(tab.label_key))
+            .map(|tab| {
+                l10n.t_with_args(
+                    "review.category_tab",
+                    serde_json::json!({
+                        "label": l10n.t(tab.label_key),
+                        "count": tab.count,
+                    }),
+                )
+            })
             .collect();
         let category_counts: Vec<i32> = view
             .category_tabs
@@ -265,6 +278,7 @@ impl ReviewProductionAdapter {
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
             locate_label: l10n.t("review.locate"),
+            legend: l10n.t("review.legend"),
             detail_visible,
             detail_title,
             detail_category_label,
@@ -296,34 +310,15 @@ impl ReviewProductionAdapter {
         }
     }
 
-    /// 把 F5 当前候选标注（待定虚线/保留实线/剔除隐藏）与高亮状态**增量**
-    /// 同步到评审地图（T39）。
+    /// 把 F5 当前**可见集合**（当前类别 + 当前分页）的候选标注与高亮同步到
+    /// 评审地图（T39/T41）。
     ///
-    /// 全量推送只在 Open/MapReady 发生一次（[`Self::schedule_review_map_full_push`]）；
-    /// 之后的 state/highlight/locate 变更只推对应候选：state 变化 → 单条
-    /// `updateReviewCandidate`；高亮变化 → 单条 `highlightReviewCandidate` /
-    /// `clearReviewHighlight`。禁止每次交互 clear + 全量重推（21 批）。
-    /// 地图不可用或非评审页时为空操作。map_ready 排定的全量推送若尚未被
-    /// 事件循环执行（生产下一拍；测试无事件循环），这里在用户操作的安全
-    /// 上下文内联冲刷一次，避免候选状态与地图失配。
+    /// 分类/翻页变化触发一次 `setReviewCandidates`（清旧 overlay + 画新集合），
+    /// 同页内的 state/highlight 变更才走 `updateReviewCandidate` /
+    /// `highlightReviewCandidate` 增量路径。地图不可用或非评审页时为空操作。
     fn sync_review_map(&self) {
         if !crate::map_webview::is_review_page() || !crate::map_webview::review_push_visible() {
             return;
-        }
-        let mut sync = self.map_sync.borrow_mut();
-        let mut scripts = Vec::new();
-        if let Some(pending) = sync.pending_full_push.take() {
-            // 全量推送尚未执行（timer 未触发）：在安全上下文内联执行并记录
-            // 基准状态，随后继续本交互的增量 diff（同一候选不会被重复推送）。
-            log::debug!(
-                "sync_review_map: 内联冲刷 map_ready 全量推送 {} 条脚本",
-                pending.scripts.len()
-            );
-            for script in &pending.scripts {
-                push_review_script(script);
-            }
-            sync.pushed_states = pending.states;
-            sync.pushed_highlight = pending.highlight;
         }
         let injector = self.context.injector();
         let injector = injector.borrow();
@@ -331,7 +326,20 @@ impl ReviewProductionAdapter {
             return;
         };
         let view = workbench.view();
-        for object in &view.map_objects {
+        let visible = visible_review_set_for(&self.context, &view);
+        drop(injector);
+
+        let mut sync = self.map_sync.borrow_mut();
+        let full_needed =
+            sync.pushed_visible != Some((visible.active_category_index, visible.page_index));
+        if full_needed {
+            push_full_visible_sync(&visible, &mut sync);
+            sync.full_push_scheduled = false;
+            return;
+        }
+
+        let mut scripts = Vec::new();
+        for object in &visible.objects {
             let state = object.state.to_identifier().to_string();
             if sync.pushed_states.get(&object.candidate_id) != Some(&state) {
                 let json = serde_json::to_string(&map_object_json(object))
@@ -341,7 +349,11 @@ impl ReviewProductionAdapter {
                     .insert(object.candidate_id.clone(), state);
             }
         }
-        let highlighted = workbench.highlighted().map(|key| key.candidate_id.clone());
+        let highlighted = visible
+            .objects
+            .iter()
+            .find(|object| object.highlighted)
+            .map(|object| object.candidate_id.clone());
         if sync.pushed_highlight != highlighted {
             match &highlighted {
                 Some(key) => {
@@ -352,76 +364,50 @@ impl ReviewProductionAdapter {
             }
             sync.pushed_highlight = highlighted;
         }
+        sync.full_push_scheduled = false;
         drop(sync);
         for script in scripts {
             push_review_script(&script);
         }
     }
 
-    /// map_ready 后的全量推送：在事件循环安全上下文分批推送一次。
-    ///
-    /// 在 WebView2 IPC 回调栈内只计算脚本并排定执行（T35/T38 纪律：回调栈内
-    /// 不执行 WebView2 脚本调用，避免 COM 通道时序竞争）；实际 evaluate_script
-    /// 由下一拍事件循环回调执行。全量采用"无清空 + 分批 addReviewCandidate"
-    /// ——评审地图页每次创建都是空画布，无需 clear + 全量重推循环。
+    /// map_ready 后的全量推送：在事件循环安全上下文排定一次，按当前可见集合
+    /// 生成脚本（IPC 回调栈内不执行 WebView2 脚本调用，T35/T38 纪律）。
     fn schedule_review_map_full_push(&self) {
-        let injector = self.context.injector();
-        let injector = injector.borrow();
-        let Some(workbench) = injector.review() else {
-            return;
-        };
-        let view = workbench.view();
-        let objects: Vec<serde_json::Value> =
-            view.map_objects.iter().map(map_object_json).collect();
-        let states: HashMap<String, String> = view
-            .map_objects
-            .iter()
-            .map(|object| {
-                (
-                    object.candidate_id.clone(),
-                    object.state.to_identifier().to_string(),
-                )
-            })
-            .collect();
-        let highlight = workbench.highlighted().map(|key| key.candidate_id.clone());
-        let scripts = full_push_scripts(&objects, highlight.as_ref());
-        drop(injector);
-        let mut sync = self.map_sync.borrow_mut();
-        if sync.pending_full_push.is_some() {
-            return;
-        }
-        sync.pending_full_push = Some(PendingFullPush {
-            scripts,
-            states,
-            highlight,
-        });
-        if sync.full_push_scheduled {
-            return;
-        }
-        sync.full_push_scheduled = true;
-        let map_sync = Rc::clone(&self.map_sync);
-        // 用 UI 线程一次性 Timer 把全量推送排到 IPC 回调栈之外（Timer 回调
-        // 无 Send 约束，Rc<RefCell> 可安全捕获；invoke_from_event_loop 要求
-        // Send，不适合持有 Rc 的同步状态）。
-        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
-            let mut sync = map_sync.borrow_mut();
-            if let Some(pending) = sync.pending_full_push.take() {
-                log::debug!(
-                    "sync_review_map: map_ready 全量推送 {} 条脚本",
-                    pending.scripts.len()
-                );
-                for script in &pending.scripts {
-                    push_review_script(script);
-                }
-                sync.pushed_states = pending.states;
-                sync.pushed_highlight = pending.highlight;
+        {
+            let mut sync = self.map_sync.borrow_mut();
+            if sync.full_push_scheduled {
+                return;
             }
+            sync.full_push_scheduled = true;
+        }
+        let context = self.context.clone();
+        let map_sync = Rc::clone(&self.map_sync);
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
+            let injector = context.injector();
+            let injector = injector.borrow();
+            let Some(workbench) = injector.review() else {
+                map_sync.borrow_mut().full_push_scheduled = false;
+                return;
+            };
+            let view = workbench.view();
+            let visible = visible_review_set_for(&context, &view);
+            drop(injector);
+            let mut sync = map_sync.borrow_mut();
+            let visible_key = (visible.active_category_index, visible.page_index);
+            if sync.pushed_visible == Some(visible_key) {
+                // 该可见集合已由用户操作路径内联推送（测试无事件循环或生产
+                // 1ms 窗口内用户先操作）：不再重复推一次。
+                sync.full_push_scheduled = false;
+                return;
+            }
+            push_full_visible_sync(&visible, &mut sync);
             sync.full_push_scheduled = false;
         });
     }
 
     /// 创建评审地图（候选不再内嵌 HTML；无密钥/锚点时跳过，抽屉仍可操作）。
-    /// 候选标注在页面 map_ready 后由 Rust 分批推送。
+    /// 候选标注在页面 map_ready 后由 Rust 按当前可见集合推送。
     fn show_review_map(&self) {
         let Some((keys, anchor)) = self.context.map_credentials() else {
             return;
@@ -429,12 +415,17 @@ impl ReviewProductionAdapter {
         if keys.0.is_empty() {
             return;
         }
+        let injector = self.context.injector();
+        let injector = injector.borrow();
+        let map_text_label = injector.l10n().t("review.map_text_toggle");
+        drop(injector);
         crate::map_webview::show_review(
             self.context.window.clone(),
             keys.0,
             keys.1,
             anchor.0,
             anchor.1,
+            map_text_label,
         );
     }
 
@@ -652,6 +643,73 @@ impl ReviewProductionAdapter {
     }
 }
 
+/// 当前应绘制到评审地图的候选集合：当前类别 + 当前分页（每页 ≤60）。
+///
+/// 分页索引由工作区会话保存；此处同时把越界索引钳制回写，保证地图与列表
+/// 永远绘制同一批候选，且全量推送不会把 12,000 条候选全部排进 JS 缓冲。
+fn visible_review_set_for(
+    context: &WorkspaceProductionContext,
+    view: &WorkbenchView,
+) -> VisibleReviewSet {
+    let active_category_index = view
+        .category_tabs
+        .iter()
+        .position(|tab| tab.active)
+        .unwrap_or(0);
+    let page_total = view.cards.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
+    let mut session = context.session.borrow_mut();
+    let page_index = session.review_page_index.min(page_total - 1);
+    session.review_page_index = page_index;
+    drop(session);
+
+    let start = page_index * REVIEW_PAGE_SIZE;
+    let end = (start + REVIEW_PAGE_SIZE).min(view.cards.len());
+    let id_set: std::collections::HashSet<String> = view.cards[start..end]
+        .iter()
+        .map(|card| card.candidate_id.clone())
+        .collect();
+    let objects: Vec<MapObjectView> = view
+        .map_objects
+        .iter()
+        .filter(|object| id_set.contains(&object.candidate_id))
+        .cloned()
+        .collect();
+
+    VisibleReviewSet {
+        active_category_index,
+        page_index,
+        objects,
+    }
+}
+
+/// 全量推送当前可见集合：`setReviewCandidates` 会清掉旧 overlay 再画新集合，
+/// 因此分类/翻页时不会残留上一页/上一类别的标注。
+fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut ReviewMapSync) {
+    let objects: Vec<serde_json::Value> = visible.objects.iter().map(map_object_json).collect();
+    let states: HashMap<String, String> = visible
+        .objects
+        .iter()
+        .map(|object| {
+            (
+                object.candidate_id.clone(),
+                object.state.to_identifier().to_string(),
+            )
+        })
+        .collect();
+    let highlight = visible
+        .objects
+        .iter()
+        .find(|object| object.highlighted)
+        .map(|object| object.candidate_id.clone());
+    let scripts = full_push_scripts(&objects, highlight.as_ref());
+    for script in &scripts {
+        push_review_script(script);
+    }
+    sync.pushed_states = states;
+    sync.pushed_highlight = highlight;
+    sync.pushed_visible = Some((visible.active_category_index, visible.page_index));
+}
+
 /// 评审地图对象 → JS 载荷（与 B3 回推协议同构）。
 fn map_object_json(object: &review_workbench::MapObjectView) -> serde_json::Value {
     serde_json::json!({
@@ -662,22 +720,11 @@ fn map_object_json(object: &review_workbench::MapObjectView) -> serde_json::Valu
     })
 }
 
-/// 全量推送脚本：每批 50 条 `addReviewCandidate` + 高亮命令（如有）。
-/// 真实 OSM 几何使全量 JSON 可达数百 KB，拆分小载荷降低 WebView2
-/// ExecuteScript 通道压力（JS 侧再以 50/150ms 分批上屏）。
+/// 全量推送脚本：一条 `setReviewCandidates(可见集合)` + 高亮命令（如有）。
+/// 可见集合受当前类别 + 当前分页限制，因此不会把全量候选排进 JS 缓冲。
 fn full_push_scripts(objects: &[serde_json::Value], highlight: Option<&String>) -> Vec<String> {
-    const CHUNK_SIZE: usize = 50;
-    let mut scripts = Vec::new();
-    for chunk in objects.chunks(CHUNK_SIZE) {
-        let mut script = String::new();
-        for object in chunk {
-            let json = serde_json::to_string(object).unwrap_or_else(|_| "{}".to_string());
-            script.push_str("window.addReviewCandidate(");
-            script.push_str(&json);
-            script.push_str(");");
-        }
-        scripts.push(script);
-    }
+    let json = serde_json::to_string(objects).unwrap_or_else(|_| "[]".to_string());
+    let mut scripts = vec![format!("window.setReviewCandidates({json});")];
     if let Some(key) = highlight {
         let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
         scripts.push(format!("window.highlightReviewCandidate({id});"));
@@ -687,7 +734,7 @@ fn full_push_scripts(objects: &[serde_json::Value], highlight: Option<&String>) 
 
 /// 评审地图回推命令：先计数（T39 验收观察），再执行（无 WebView 时为空操作）。
 fn push_review_script(script: &str) {
-    crate::map_webview::note_review_push();
+    crate::map_webview::note_review_push(script);
     crate::map_webview::evaluate_script(script);
 }
 
@@ -744,17 +791,42 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             }
             ReviewRequest::Locate { candidate_id } => {
                 let key = CandidateKey::new(candidate_id.clone());
-                let result = self.apply(|workbench| workbench.highlight(&key));
-                // 地图中心跳转 + 高亮（JS 侧；无 WebView/非评审页时为空操作）
-                if result.is_ok() && crate::map_webview::is_review_page() {
+                let mut target_page_index = None;
+                let result = self.apply(|workbench| {
+                    let target_category = workbench
+                        .view()
+                        .map_objects
+                        .iter()
+                        .find(|object| object.candidate_id == candidate_id)
+                        .map(|object| object.category);
+                    if let Some(category) = target_category {
+                        workbench.set_active_category(category);
+                        target_page_index = workbench
+                            .view()
+                            .cards
+                            .iter()
+                            .position(|card| card.candidate_id == candidate_id)
+                            .map(|index| index / REVIEW_PAGE_SIZE);
+                    }
+                    workbench.highlight(&key)
+                });
+                if let Some(page_index) = target_page_index {
+                    self.context.session.borrow_mut().review_page_index = page_index;
+                }
+                let located = matches!(&result, Ok(Some(())));
+                if located {
+                    // page_state 同步时不额外推一次 highlight；跨类别/分页时仍会
+                    // 先 setReviewCandidates 目标可见集合，再由下方 locate 定位。
+                    self.map_sync.borrow_mut().pushed_highlight = Some(candidate_id.clone());
+                }
+                let presentation = self.present_apply(result);
+                // 地图中心跳转 + 高亮（JS 侧；无 WebView/非评审页时为空操作）。
+                // 必须放在 page_state 的目标页全量同步之后，避免 pending 静默丢失。
+                if located && crate::map_webview::is_review_page() {
                     let id = serde_json::to_string(&candidate_id).unwrap_or_else(|_| "\"\"".into());
                     push_review_script(&format!("window.locateReviewCandidate({id});"));
-                    // locate 的 JS 已自高亮：记录已推送高亮，避免 page_state
-                    // 尾部的 sync_review_map 再补一条重复高亮命令（一次定位
-                    // 只产生 1 条回推）。
-                    self.map_sync.borrow_mut().pushed_highlight = Some(candidate_id);
                 }
-                self.present_apply(result)
+                presentation
             }
             ReviewRequest::MapReady => {
                 // T39：评审地图就绪——候选不再内嵌 HTML，这里排定一次全量
@@ -766,19 +838,57 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             ReviewRequest::MapFailed { message } => {
+                // 用户只看到可行动的 B7 文案；受控文件日志仅记录有限阶段码，
+                // 不写候选 ID、坐标、密钥、异常文本或未知 IPC 原文。
+                let diagnostic_code = match message.as_str() {
+                    "review_map_draw_failed:payload_validation"
+                    | "review_map_draw_failed:centroid_build"
+                    | "review_map_draw_failed:overlay_construct"
+                    | "review_map_draw_failed:overlay_bind"
+                    | "review_map_draw_failed:map_add"
+                    | "review_map_draw_failed:centroid_index"
+                    | "review_map_draw_failed:candidate_update"
+                    | "review_map_draw_failed:locate"
+                    | "review_map_draw_failed:fit_view"
+                    | "review_map_locate_hidden"
+                    | "review_map_locate_unavailable"
+                    | "review_map_page_error"
+                    | "review_map_sdk_timeout"
+                    | "review_map_init_failed" => message.as_str(),
+                    marker if marker == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER => marker,
+                    _ => "review_map_unclassified_failure",
+                };
+                log::warn!(target: "review_map", "failure_code={diagnostic_code}");
                 let injector = self.context.injector();
                 let injector = injector.borrow();
                 let l10n = injector.l10n();
-                let body = if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
-                    l10n.t("map.load_timeout_body")
+                let (title, body) = if message.starts_with("review_map_draw_failed:") {
+                    (
+                        l10n.t("review.map_draw_failed_title"),
+                        l10n.t("review.map_draw_failed_body"),
+                    )
+                } else if message == "review_map_locate_hidden" {
+                    (
+                        l10n.t("review.map_locate_failed_title"),
+                        l10n.t("review.map_locate_hidden_body"),
+                    )
+                } else if message == "review_map_locate_unavailable" {
+                    (
+                        l10n.t("review.map_locate_failed_title"),
+                        l10n.t("review.map_locate_unavailable_body"),
+                    )
+                } else if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
+                    (
+                        l10n.t("review.map_unavailable_title"),
+                        l10n.t("map.load_timeout_body"),
+                    )
                 } else {
-                    l10n.t_with_array("map.load_failed_body", &[&message])
+                    (
+                        l10n.t("review.map_unavailable_title"),
+                        l10n.t("review.map_unavailable_body"),
+                    )
                 };
-                let notification = Notification::error(
-                    l10n.t("app.source_tag"),
-                    l10n.t("boundary.map_notice_title"),
-                    body,
-                );
+                let notification = Notification::error(l10n.t("app.source_tag"), title, body);
                 drop(injector);
                 Presentation::failed(self.page_state())
                     .with_notification(NotificationFact::new(notification))

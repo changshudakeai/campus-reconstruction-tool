@@ -275,15 +275,38 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
     desktop_shell::set_review_push_probe_visible(true);
     desktop_shell::reset_review_push_count();
     window.invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
-    // 无事件循环环境下用一次不改变地图的交互触发内联冲刷（生产由下一拍
-    // 事件循环 Timer 执行；这里验证同一全量推送路径只发生一次）。
+    // 无事件循环环境下用切分类触发内联全量推送（生产由下一拍事件循环 Timer
+    // 执行；这里验证同一全量推送路径只按当前可见集合重推）。
     window.invoke_review_category_clicked(1);
     window.invoke_review_category_clicked(0);
-    assert_eq!(
-        desktop_shell::review_push_count(),
-        21,
-        "map_ready 全量只推一次：1026/50 = 21 批 addReviewCandidate，无 clear 循环"
-    );
+    {
+        let scripts = desktop_shell::review_pushed_scripts();
+        assert_eq!(
+            scripts.len(),
+            2,
+            "map_ready 后切分类只重推两次可见集合（道路页 + 建筑页）"
+        );
+        for script in &scripts {
+            assert!(
+                script.starts_with("window.setReviewCandidates("),
+                "可见集合必须用 setReviewCandidates 清旧画新，实际：{script}"
+            );
+            assert!(
+                !script.contains("window.addReviewCandidate("),
+                "不得把全量候选逐条 addReviewCandidate 排进 JS 缓冲"
+            );
+        }
+        // 建筑当前页 60 条是地图 overlay 的明确上限（1026 条只画 60）。
+        let building_push = scripts.last().expect("最后一条是建筑页全量推送");
+        let json_start = building_push
+            .find('[')
+            .expect("setReviewCandidates 参数为数组");
+        let json_end = building_push.rfind(']').expect("数组结尾存在");
+        let array: Vec<serde_json::Value> =
+            serde_json::from_str(&building_push[json_start..=json_end])
+                .expect("建筑页可见集合 JSON 必须是数组");
+        assert_eq!(array.len(), 60, "地图只绘制当前分页 60 条，而非全量 1026");
+    }
 
     // 一次高亮操作 → 只产生 1 条回推（不是 21 批全量）
     desktop_shell::reset_review_push_count();
@@ -292,6 +315,10 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         desktop_shell::review_push_count(),
         1,
         "高亮操作只推 1 条 highlightReviewCandidate"
+    );
+    assert!(
+        desktop_shell::review_pushed_scripts()[0].contains("window.highlightReviewCandidate("),
+        "高亮回推必须是 highlightReviewCandidate（地图 spy）"
     );
     let highlighted_row = card_row(&window, &page_ids[0]);
     assert!(
@@ -310,15 +337,18 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         1,
         "三态操作只推 1 条 updateReviewCandidate"
     );
+    assert!(
+        desktop_shell::review_pushed_scripts()[0].contains("window.updateReviewCandidate("),
+        "三态回推必须是 updateReviewCandidate（地图 spy）"
+    );
 
-    // 分类切换不改变地图对象 → 0 条回推
+    // 同类别重复切换不改变可见集合 → 0 条回推
     desktop_shell::reset_review_push_count();
-    window.invoke_review_category_clicked(1);
     window.invoke_review_category_clicked(0);
     assert_eq!(
         desktop_shell::review_push_count(),
         0,
-        "分类切换不产生地图回推"
+        "同类别重复切换不产生地图回推"
     );
 
     // 定位 → 只推 1 条 locateReviewCandidate（JS 已自高亮，不重复推高亮）
@@ -329,6 +359,43 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         1,
         "定位只推 1 条 locateReviewCandidate"
     );
+    assert!(
+        desktop_shell::review_pushed_scripts()[0].contains("window.locateReviewCandidate("),
+        "定位回推必须是 locateReviewCandidate（地图 spy）"
+    );
+
+    // 定位目标不在当前分页：生产入口必须先切换到目标页并全量推送该页，
+    // 再执行定位；不得把未知目标留给 JS pending 后静默丢弃。
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_locate_clicked(page_two_first.clone().into());
+    assert_eq!(
+        window.get_review_page_index(),
+        1,
+        "定位第二页候选必须把卡片与地图可见集合同步切到第二页"
+    );
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(card_row(&window, &page_two_first))
+            .expect("第二页定位卡片存在")
+            .highlighted,
+        "切页后目标卡片必须同步高亮"
+    );
+    let locate_other_page_scripts = desktop_shell::review_pushed_scripts();
+    assert!(
+        locate_other_page_scripts
+            .first()
+            .is_some_and(|script| script.starts_with("window.setReviewCandidates(")),
+        "跨页定位必须先推目标页可见集合"
+    );
+    assert!(
+        locate_other_page_scripts
+            .last()
+            .is_some_and(|script| script.contains("window.locateReviewCandidate(")),
+        "跨页定位必须在目标页推送后执行定位"
+    );
+    window.invoke_review_page_prev_clicked();
+    desktop_shell::reset_review_push_count();
 
     // 验收 2/4：推送阶段（慢速注入场景）不得被误杀——地图仍可用、无错误弹窗
     assert!(

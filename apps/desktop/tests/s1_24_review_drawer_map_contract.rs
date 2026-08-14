@@ -177,6 +177,20 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         3,
         "map_ready 不得破坏评审页状态"
     );
+    assert_eq!(
+        window.get_review_category_labels().row_count(),
+        6,
+        "六类标签入口必须齐全可见（建筑/道路/水域/植被/体育/其他）"
+    );
+    assert!(
+        !desktop_shell::review_map_text_visible(),
+        "评审模式默认必须隐藏易遮挡轮廓的地图文字"
+    );
+    window.invoke_workspace_map_ipc(r#"{"type":"review_map_text_toggled","visible":true}"#.into());
+    assert!(
+        desktop_shell::review_map_text_visible(),
+        "用户切换开关后地图文字状态必须在当前评审会话内保持"
+    );
 
     // 2a. 点地图对象 → 高亮对应卡片 + 选中详情
     window.invoke_workspace_map_ipc(
@@ -268,7 +282,46 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         "改回后详情必须显示保留"
     );
 
-    // 4. 评审地图加载失败 → B7 错误弹窗；评审抽屉状态保持可继续修改
+    // 4a. 单候选绘制失败 → B7 通俗弹窗，但不误判整张地图不可用。
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"error","message":"review_map_draw_failed:overlay_construct"}"#.into(),
+    );
+    assert!(
+        window.get_error_dialog_visible(),
+        "候选绘制失败必须经 B7 弹窗，不能只写 console.error"
+    );
+    assert_eq!(
+        window.get_error_dialog_title().as_str(),
+        l10n.t("review.map_draw_failed_title")
+    );
+    assert_eq!(
+        window.get_error_dialog_body().as_str(),
+        l10n.t("review.map_draw_failed_body")
+    );
+    assert!(
+        window.get_workspace_map_available(),
+        "单候选失败只影响部分轮廓，不得把整张地图标为不可用"
+    );
+    window.invoke_error_dialog_dismissed();
+
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"error","message":"review_map_locate_hidden"}"#.into(),
+    );
+    assert_eq!(
+        window.get_error_dialog_title().as_str(),
+        l10n.t("review.map_locate_failed_title")
+    );
+    assert_eq!(
+        window.get_error_dialog_body().as_str(),
+        l10n.t("review.map_locate_hidden_body")
+    );
+    assert!(
+        window.get_workspace_map_available(),
+        "剔除候选不可定位只影响该候选，不得把整张地图标为不可用"
+    );
+    window.invoke_error_dialog_dismissed();
+
+    // 4b. 评审地图加载失败 → B7 错误弹窗；评审抽屉状态保持可继续修改
     window.invoke_workspace_map_ipc(r#"{"type":"error","message":"评审地图初始化失败"}"#.into());
     assert!(
         window.get_error_dialog_visible(),

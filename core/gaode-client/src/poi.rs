@@ -335,6 +335,8 @@ pub enum IpcMessage {
     // T38: 评审地图
     /// 点击评审地图上的候选对象 → 高亮对应卡片（双向联动）
     ReviewObjectClicked { candidate_id: String },
+    /// 评审地图“显示地图文字”开关切换（true = 恢复地标/POI 文字）。
+    ReviewMapTextToggled { visible: bool },
 }
 
 /// T24: OSM 元素结构 (Overpass JSON)
@@ -514,6 +516,18 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                                 candidate_id: payload.candidate_id,
                             });
                         }
+                    }
+                }
+                "review_map_text_toggled" => {
+                    #[derive(Deserialize)]
+                    struct ReviewMapTextPayload {
+                        #[serde(default)]
+                        visible: bool,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<ReviewMapTextPayload>(msg) {
+                        return Ok(IpcMessage::ReviewMapTextToggled {
+                            visible: payload.visible,
+                        });
                     }
                 }
                 _ => {}
@@ -717,5 +731,22 @@ mod ipc_tests {
             parse_ipc_message(r#"{"type":"review_object_clicked","candidate_id":""}"#).is_err(),
             "空候选 ID 不得产生高亮请求"
         );
+    }
+
+    #[test]
+    fn review_map_text_toggled_payload_parsed_correctly() {
+        let result =
+            parse_ipc_message(r#"{"type":"review_map_text_toggled","visible":true}"#).unwrap();
+        assert!(matches!(
+            result,
+            IpcMessage::ReviewMapTextToggled { visible: true }
+        ));
+
+        let result =
+            parse_ipc_message(r#"{"type":"review_map_text_toggled","visible":false}"#).unwrap();
+        assert!(matches!(
+            result,
+            IpcMessage::ReviewMapTextToggled { visible: false }
+        ));
     }
 }

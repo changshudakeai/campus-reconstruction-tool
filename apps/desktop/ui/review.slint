@@ -5,6 +5,38 @@
 import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
+// 300px 抽屉专用类别入口：标准 Button 的平台内边距会挤压“植被 (1095)”等
+// 完整文案，因此这里用现有 Theme 角色呈现可点击入口。文字不省略、不缩写。
+component ReviewCategoryButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    height: 34px;
+    background: root.active ? Theme.highlight : Theme.surface;
+    border-color: Theme.separator;
+    border-width: root.active ? 2px : 1px;
+    border-radius: 4px;
+
+    Text {
+        x: 2px;
+        width: parent.width - 4px;
+        height: parent.height;
+        text: root.label;
+        font-size: 11px;
+        font-weight: root.active ? 700 : 400;
+        color: Theme.text-primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.clicked(); }
+    }
+}
+
 /// 评审抽屉上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
 export struct ReviewCandidateData {
     /// 稳定候选 ID（三态判定、复选、定位与高亮操作回传）。
@@ -60,6 +92,7 @@ export component ReviewDrawer inherits Rectangle {
     in property <string> card-keep-label;
     in property <string> card-reject-label;
     in property <string> locate-label;
+    in property <string> legend;
     in property <string> pause-label;
     in property <string> resume-label;
     in property <string> seal-label;
@@ -116,27 +149,54 @@ export component ReviewDrawer inherits Rectangle {
         if root.candidate-count > 0: VerticalLayout {
             spacing: 8px;
 
-            // 六类标签页（ADR-0016 固定顺序；抽屉内两行 3 列）；
-            // 切换分类时滚动位置复位到顶，保证新分类从第一张候选卡开始浏览。
-            HorizontalLayout {
-                spacing: 6px;
-                for label[i] in root.category-labels:
-                    Button {
-                        visible: i < 3;
-                        text: label + " (" + root.category-counts[i] + ")";
-                        primary: root.active-category == i;
-                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(i); }
+            // 六类标签页（ADR-0016）：固定 3×2。300px 抽屉内每格等宽，
+            // 完整显示两字类别名与四位数数量；切换时列表复位到顶。
+            VerticalLayout {
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    ReviewCategoryButton {
+                        label: root.category-labels[0];
+                        active: root.active-category == 0; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(0); }
                     }
+                    ReviewCategoryButton {
+                        label: root.category-labels[1];
+                        active: root.active-category == 1; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(1); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.category-labels[2];
+                        active: root.active-category == 2; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(2); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    ReviewCategoryButton {
+                        label: root.category-labels[3];
+                        active: root.active-category == 3; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(3); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.category-labels[4];
+                        active: root.active-category == 4; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(4); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.category-labels[5];
+                        active: root.active-category == 5; horizontal-stretch: 1;
+                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(5); }
+                    }
+                }
             }
-            HorizontalLayout {
-                spacing: 6px;
-                for label[i] in root.category-labels:
-                    Button {
-                        visible: i >= 3;
-                        text: label + " (" + root.category-counts[i] + ")";
-                        primary: root.active-category == i;
-                        clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(i); }
-                    }
+
+            // 三态与选中态图例：与地图标注保持一致（待定虚线/保留实线/红色选中）。
+            Text {
+                text: root.legend;
+                font-size: 11px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
             }
 
             // 选中候选详情（高亮候选；未命名标题由 Rust 侧拼装）。

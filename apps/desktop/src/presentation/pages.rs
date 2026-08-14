@@ -634,6 +634,8 @@ pub struct ReviewPageState {
     pub card_reject_label: String,
     /// 卡片"定位到地图"按钮文案。
     pub locate_label: String,
+    /// 地图三态/选中图例（虚线=待定、实线=保留、红色轮廓=选中/定位）。
+    pub legend: String,
     /// 选中候选详情是否可见（存在高亮候选时）。
     pub detail_visible: bool,
     /// 详情标题（未命名显示"未命名建筑 #id"）。
@@ -705,6 +707,7 @@ impl WindowPageState for ReviewPageState {
         window.set_review_card_keep_label(self.card_keep_label.clone().into());
         window.set_review_card_reject_label(self.card_reject_label.clone().into());
         window.set_review_locate_label(self.locate_label.clone().into());
+        window.set_review_legend(self.legend.clone().into());
         window.set_review_detail_visible(self.detail_visible);
         window.set_review_detail_title(self.detail_title.clone().into());
         window.set_review_detail_category_label(self.detail_category_label.clone().into());

@@ -855,6 +855,11 @@ impl ProductionEntries {
                 Ok(IpcMessage::ReviewObjectClicked { candidate_id }) => {
                     self.submit_review(window, ReviewRequest::MapObjectHighlight { candidate_id });
                 }
+                Ok(IpcMessage::ReviewMapTextToggled { visible }) => {
+                    // 地图文字开关只影响 WebView 内的 POI 标签显示；把状态记入
+                    // WebView 会话，评审页隐藏/弹窗恢复重建时按此状态重新生成。
+                    crate::map_webview::set_review_map_text_visible(visible);
+                }
                 Ok(IpcMessage::Error { message }) => self.review_map_error(window, &message),
                 _ => {}
             }
@@ -888,13 +893,19 @@ impl ProductionEntries {
     /// 评审地图加载失败：如实标记不可用并隐藏地图（评审抽屉仍可继续操作），
     /// 经 B7 呈现明确错误（与边界页失败同纪律，T36）。
     fn review_map_error(&mut self, window: &AppWindow, message: &str) {
-        crate::map_webview::mark_map_failed();
+        let recoverable_failure = message.starts_with("review_map_draw_failed:")
+            || message.starts_with("review_map_locate_");
+        if !recoverable_failure {
+            crate::map_webview::mark_map_failed();
+        }
         crate::map_webview::hide();
-        self.workspace.show(
-            window,
-            &self.center,
-            WorkspaceRequest::MapStatus { available: false },
-        );
+        if !recoverable_failure {
+            self.workspace.show(
+                window,
+                &self.center,
+                WorkspaceRequest::MapStatus { available: false },
+            );
+        }
         self.submit_review(
             window,
             ReviewRequest::MapFailed {

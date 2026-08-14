@@ -356,6 +356,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
                 card_keep_label: "保留".into(),
                 card_reject_label: "剔除".into(),
                 locate_label: "定位到地图".into(),
+                legend: "图例：待定=虚线".into(),
                 detail_visible: false,
                 detail_title: String::new(),
                 detail_category_label: String::new(),
