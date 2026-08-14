@@ -309,6 +309,8 @@ pub struct OrientationViewState {
     /// T40：一次性"清空朝向输入框"请求（重置/清除/切换方案时由功能入口置位，
     /// 渲染只在此请求下写空串；正常渲染绝不回写输入文本，避免覆盖用户键入值）。
     pub clear_input: bool,
+    /// 两点计算后把角度回填进输入框（一次性，随本次呈现消费；与 clear_input 互斥）。
+    pub fill_input: Option<String>,
     pub submit_label: String,
     pub reset_label: String,
     pub status: String,
@@ -333,6 +335,9 @@ impl OrientationViewState {
         // 只有显式的清空请求（重置/清除/切换方案）才写一次空串。
         if self.clear_input {
             window.set_workspace_orientation_input_text("".into());
+        }
+        if let Some(text) = &self.fill_input {
+            window.set_workspace_orientation_input_text(text.clone().into());
         }
         window.set_workspace_orientation_submit_label(self.submit_label.clone().into());
         window.set_workspace_orientation_reset_label(self.reset_label.clone().into());

@@ -27,6 +27,8 @@ slint = { workspace = true }
 # B3 + S1: 高德地图 WebView 嵌入（winit 版本差经 raw-window-handle 桥接）
 wry = { workspace = true }
 raw-window-handle = { workspace = true }
+# Windows 子窗口子类化：保持 Slint 键盘焦点不被 WebView2 抢占
+windows = { workspace = true }
 # B6 国际化（窗口标题与状态文案，文本外置铁律 ADR-0005）
 localization = { workspace = true }
 # T19B-5B: B5 地基模式 (边界绘制与朝向设定)

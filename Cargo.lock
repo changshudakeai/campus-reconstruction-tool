@@ -1401,6 +1401,7 @@ dependencies = [
  "slint-build",
  "sponge-export",
  "tempfile",
+ "windows 0.61.3",
  "wry",
 ]
 

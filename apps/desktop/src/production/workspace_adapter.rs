@@ -585,14 +585,19 @@ impl WorkspaceProductionAdapter {
     /// 地图两点参考线（orientation_points IPC）：F5 计算并把路径/箭头/角度
     /// 回填页面，尚未保存。
     fn orientation_points(&mut self, points: [[f64; 2]; 2]) -> Presentation<WorkspacePageState> {
-        if self.orientation_draft_from_points(points).is_err() {
-            let l10n = self.l10n();
-            return Presentation::failed(self.context.page()).with_notification(error_fact(
-                &l10n,
-                &l10n.t("orientation.error_coincident_points"),
-            ));
-        }
-        Presentation::ready(self.context.page())
+        let degree = match self.orientation_draft_from_points(points) {
+            Ok(degree) => degree,
+            Err(()) => {
+                let l10n = self.l10n();
+                return Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("orientation.error_coincident_points"),
+                ));
+            }
+        };
+        let mut page = self.context.page();
+        page.orientation.fill_input = Some(format!("{degree:.1}"));
+        Presentation::ready(page)
     }
 
     /// 地图确认朝向（confirm_orientation IPC）：先回填草稿，再走统一的

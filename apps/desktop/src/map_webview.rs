@@ -652,6 +652,7 @@ fn spawn_creation(
         let result = wry::WebViewBuilder::new()
             .with_html(html)
             .with_bounds(bounds)
+            .with_focused(false)
             .with_ipc_handler(|request: wry::http::Request<String>| {
                 let body = request.body().to_string();
                 log::debug!(
@@ -662,6 +663,11 @@ fn spawn_creation(
                 log::debug!("map_webview: WebView2 IPC 回调返回");
             })
             .build_as_child(&*winit_win);
+
+        #[cfg(windows)]
+        if result.is_ok() {
+            windows_focus_guard::install(&*winit_win);
+        }
 
         finish_creation(generation, result, window_weak, page_kind);
     });
@@ -1035,6 +1041,83 @@ pub(crate) fn evaluate_script(script: &str) {
         log::debug!("map_webview: evaluate_script 执行（len={}）", script.len());
         let _ = webview.evaluate_script(script);
     });
+}
+
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows subclass callback required to keep Slint keyboard focus instead of WebView2"
+)]
+mod windows_focus_guard {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, GetClassLongPtrW, GCLP_WNDPROC, WM_ENTERSIZEMOVE, WM_SETFOCUS, WNDPROC,
+    };
+
+    /// 与 wry 的 `PARENT_SUBCLASS_ID`（`WM_USER + 0x64`）错开的子类 ID。
+    const FOCUS_GUARD_SUBCLASS_ID: usize = 0x4d43_0001;
+
+    unsafe extern "system" fn subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uidsubclass: usize,
+        dwrefdata: usize,
+    ) -> LRESULT {
+        if bypasses_wry(msg) {
+            // 绕过 wry 父窗口子类（它会把焦点 MoveFocus 到 WebView2），直接交回
+            // 原始 winit 窗口过程，使 Slint 文本输入保持键盘焦点。
+            let original: WNDPROC = unsafe { std::mem::transmute(dwrefdata) };
+            unsafe { CallWindowProcW(original, hwnd, msg, wparam, lparam) }
+        } else {
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
+    }
+
+    /// 只把「抢焦点」的消息绕过 wry 子类；其余消息（含 WM_SIZE / WM_DESTROY /
+    /// WM_MOVE）仍走正常链，保证 wry 的尺寸与销毁清理逻辑不受影响。
+    fn bypasses_wry(msg: u32) -> bool {
+        msg == WM_SETFOCUS || msg == WM_ENTERSIZEMOVE
+    }
+
+    pub(crate) fn install(window: &impl HasWindowHandle) {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as _);
+        unsafe {
+            let original = GetClassLongPtrW(hwnd, GCLP_WNDPROC);
+            if original == 0 {
+                log::debug!("map_webview: 焦点守卫未安装（原始窗口过程为空）");
+                return;
+            }
+            log::debug!(
+                "map_webview: 安装焦点守卫子类（原始窗口过程=0x{:x}）",
+                original
+            );
+            let _ = SetWindowSubclass(hwnd, Some(subclass_proc), FOCUS_GUARD_SUBCLASS_ID, original);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use windows::Win32::UI::WindowsAndMessaging::{WM_MOVE, WM_SIZE};
+
+        #[test]
+        fn guard_bypasses_only_focus_messages() {
+            assert!(bypasses_wry(WM_SETFOCUS));
+            assert!(bypasses_wry(WM_ENTERSIZEMOVE));
+            assert!(!bypasses_wry(WM_SIZE));
+            assert!(!bypasses_wry(WM_MOVE));
+        }
+    }
 }
 
 #[cfg(test)]

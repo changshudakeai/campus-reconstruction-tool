@@ -127,6 +127,7 @@ fn workspace(suffix: &str) -> WorkspacePageState {
             angle_input_placeholder: format!("角度占位-{suffix}"),
             angle_display: String::new(),
             clear_input: false,
+            fill_input: None,
             submit_label: format!("提交-{suffix}"),
             reset_label: format!("重置-{suffix}"),
             status: format!("朝向状态-{suffix}"),

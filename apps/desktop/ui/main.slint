@@ -411,142 +411,6 @@ export component AppWindow inherits Window {
     min-width: 480px;
     min-height: 360px;
     
-    // ── 顶部工具栏 (ADR-0027)───────────────────────────────
-    // 校区上下文内的屏才显示（方案列表/工作区/公告栏/回收站）
-    if root.active-screen == 2 || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: Rectangle {
-        y: 0;
-        height: 56px;
-        width: parent.width;
-        background: Theme.surface;
-        border-color: Theme.separator;
-        
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            padding-left: 16px;
-            padding-right: 16px;
-            padding-top: 8px;
-            padding-bottom: 8px;
-            
-            // 工作区标题区左侧的层级返回入口；它不属于右侧四项辅助工具栏。
-            if root.active-screen == 4: Button {
-                text: root.workspace-back-to-plan-list-label;
-                clicked => { root.workspace-back-to-plan-list-clicked(); }
-            }
-
-            Text {
-                text: root.toolbar-title;
-                font-size: 16px;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            
-            Rectangle { 
-                // 弹性间隔
-            }
-            
-            // 公告栏图标 + 文字标签 + 未读角标 (ADR-0021/0027)
-            if root.notice-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 64px;
-                alignment: center;
-                
-                Rectangle {
-                    preferred-width: 36px;
-                    preferred-height: 32px;
-                    
-                    Button {
-                        text: "📢";
-                        width: 100%;
-                        height: 100%;
-                        clicked => { root.notice-toolbar-button-clicked(); }
-                    }
-                    
-                    if root.notice-unread-count > 0: Rectangle {
-                        x: parent.width - 16px;
-                        y: -6px;
-                        width: 18px;
-                        height: 18px;
-                        border-radius: 9px;
-                        background: Theme.error;
-                        
-                        Text {
-                            text: root.notice-unread-count;
-                            color: Theme.text-inverse;
-                            font-size: 10px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-                
-                Text {
-                    text: root.notice-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 切换校区图标 + 文字标签
-            if root.switch-campus-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 70px;
-                alignment: center;
-                
-                Button {
-                    text: "🔄";
-                    clicked => { root.switch-campus-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.switch-campus-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 回收站图标 + 文字标签
-            if root.trash-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 65px;
-                alignment: center;
-                
-                Button {
-                    text: "🗑️";
-                    clicked => { root.trash-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.trash-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 设置图标 + 文字标签
-            if root.settings-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 55px;
-                alignment: center;
-                
-                Button {
-                    text: "⚙️";
-                    clicked => { root.settings-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.settings-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-        }
-    }
     
     if root.operation-state == OperationPresentationState.processing || root.diagnostic-operation-state == OperationPresentationState.processing: Text {
         x: parent.width - 72px;
@@ -619,99 +483,6 @@ export component AppWindow inherits Window {
         tutorial-skip-all-clicked => { root.plan-list-tutorial-skip-all-clicked() }
     }
 
-    ConfirmDialog {
-        dialog-visible: root.confirm-dialog-visible;
-        title: root.confirm-dialog-title;
-        body: root.confirm-dialog-body;
-        confirm-label: root.confirm-dialog-confirm-label;
-        cancel-label: root.confirm-dialog-cancel-label;
-        confirmed => { root.confirm-dialog-confirmed() }
-        cancelled => { root.confirm-dialog-cancelled() }
-    }
-
-    // ── 通用输入窗（T19B-5A 对话框基建）──────────────────────
-    InputDialog {
-        dialog-visible: root.input-dialog-visible;
-        title: root.input-dialog-title;
-        label: root.input-dialog-label;
-        input-text <=> root.input-dialog-text;
-        confirm-label: root.input-dialog-confirm-label;
-        cancel-label: root.input-dialog-cancel-label;
-        confirmed => { root.input-dialog-confirmed() }
-        cancelled => { root.input-dialog-cancelled() }
-    }
-
-    // B7 错误模态遮罩：盖住全窗吞掉全部输入，点"知道了"前界面不可操作
-    // （弹窗铁律 ADR-0021"点掉才能继续"；声明在最后 = 渲染在最顶层）
-    if root.error-dialog-visible: Rectangle {
-        background: Theme.overlay;
-
-        // 空 TouchArea 拦截遮罩区域的所有点击/滚动
-        TouchArea { }
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: min(parent.width - 64px, 440px);
-            height: dialog-content.preferred-height + 48px;
-            background: Theme.surface;
-            border-radius: 8px;
-
-            dialog-content := VerticalLayout {
-                x: 24px;
-                y: 24px;
-                width: parent.width - 48px;
-                spacing: 12px;
-
-                Text {
-                    text: root.error-dialog-title;
-                    font-size: 18px;
-                    color: Theme.error;
-                    wrap: word-wrap;
-                }
-
-                Text {
-                    text: root.error-dialog-source;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                }
-
-                Text {
-                    text: root.error-dialog-body;
-                    font-size: 14px;
-                    color: Theme.text-primary;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: 8px;
-
-                    if root.error-dialog-diagnostic-action-visible: Button {
-                        text: root.error-dialog-diagnostic-action-label;
-                        clicked => {
-                            root.error-dialog-diagnostic-action-clicked(root.error-dialog-notification-id);
-                        }
-                    }
-
-                    if root.error-dialog-retry-visible: Button {
-                        text: root.error-dialog-retry-label;
-                        clicked => {
-                            root.error-dialog-retry-clicked();
-                        }
-                    }
-
-                    Button {
-                        text: root.error-dialog-ok-label;
-                        primary: true;
-                        clicked => {
-                            root.error-dialog-dismissed();
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     if root.active-screen == 3: VerticalLayout {
         alignment: center;
@@ -1245,6 +1016,143 @@ export component AppWindow inherits Window {
         
     }
 
+    // ── 顶部工具栏 (ADR-0027)───────────────────────────────
+    // 校区上下文内的屏才显示（方案列表/工作区/公告栏/回收站）
+    if root.active-screen == 2 || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: Rectangle {
+        y: 0;
+        height: 56px;
+        width: parent.width;
+        background: Theme.surface;
+        border-color: Theme.separator;
+        
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            
+            // 工作区标题区左侧的层级返回入口；它不属于右侧四项辅助工具栏。
+            if root.active-screen == 4: Button {
+                text: root.workspace-back-to-plan-list-label;
+                clicked => { root.workspace-back-to-plan-list-clicked(); }
+            }
+
+            Text {
+                text: root.toolbar-title;
+                font-size: 16px;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            
+            Rectangle { 
+                // 弹性间隔
+            }
+            
+            // 公告栏图标 + 文字标签 + 未读角标 (ADR-0021/0027)
+            if root.notice-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 64px;
+                alignment: center;
+                
+                Rectangle {
+                    preferred-width: 36px;
+                    preferred-height: 32px;
+                    
+                    Button {
+                        text: "📢";
+                        width: 100%;
+                        height: 100%;
+                        clicked => { root.notice-toolbar-button-clicked(); }
+                    }
+                    
+                    if root.notice-unread-count > 0: Rectangle {
+                        x: parent.width - 16px;
+                        y: -6px;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: Theme.error;
+                        
+                        Text {
+                            text: root.notice-unread-count;
+                            color: Theme.text-inverse;
+                            font-size: 10px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                
+                Text {
+                    text: root.notice-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 切换校区图标 + 文字标签
+            if root.switch-campus-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 70px;
+                alignment: center;
+                
+                Button {
+                    text: "🔄";
+                    clicked => { root.switch-campus-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.switch-campus-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 回收站图标 + 文字标签
+            if root.trash-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 65px;
+                alignment: center;
+                
+                Button {
+                    text: "🗑️";
+                    clicked => { root.trash-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.trash-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // 设置图标 + 文字标签
+            if root.settings-toolbar-button-visible: HorizontalLayout {
+                spacing: 4px;
+                preferred-width: 55px;
+                alignment: center;
+                
+                Button {
+                    text: "⚙️";
+                    clicked => { root.settings-toolbar-button-clicked(); }
+                }
+                
+                Text {
+                    text: root.settings-toolbar-label;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
     // B7 普通提示 toast（ADR-0021：短暂弹出自动消失；warn 级分派触发）
     if root.toast-visible: Rectangle {
         x: (parent.width - 320px) / 2;
@@ -1289,5 +1197,100 @@ export component AppWindow inherits Window {
         running: root.toast-visible;
         triggered => { root.toast-visible = false; }
     }
+
+    ConfirmDialog {
+        dialog-visible: root.confirm-dialog-visible;
+        title: root.confirm-dialog-title;
+        body: root.confirm-dialog-body;
+        confirm-label: root.confirm-dialog-confirm-label;
+        cancel-label: root.confirm-dialog-cancel-label;
+        confirmed => { root.confirm-dialog-confirmed() }
+        cancelled => { root.confirm-dialog-cancelled() }
+    }
+
+    // ── 通用输入窗（T19B-5A 对话框基建）──────────────────────
+    InputDialog {
+        dialog-visible: root.input-dialog-visible;
+        title: root.input-dialog-title;
+        label: root.input-dialog-label;
+        input-text <=> root.input-dialog-text;
+        confirm-label: root.input-dialog-confirm-label;
+        cancel-label: root.input-dialog-cancel-label;
+        confirmed => { root.input-dialog-confirmed() }
+        cancelled => { root.input-dialog-cancelled() }
+    }
+
+    // B7 错误模态遮罩：盖住全窗吞掉全部输入，点"知道了"前界面不可操作
+    // （弹窗铁律 ADR-0021"点掉才能继续"；声明在最后 = 渲染在最顶层）
+    if root.error-dialog-visible: Rectangle {
+        background: Theme.overlay;
+
+        // 空 TouchArea 拦截遮罩区域的所有点击/滚动
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 64px, 440px);
+            height: dialog-content.preferred-height + 48px;
+            background: Theme.surface;
+            border-radius: 8px;
+
+            dialog-content := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 12px;
+
+                Text {
+                    text: root.error-dialog-title;
+                    font-size: 18px;
+                    color: Theme.error;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.error-dialog-source;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                }
+
+                Text {
+                    text: root.error-dialog-body;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+
+                    if root.error-dialog-diagnostic-action-visible: Button {
+                        text: root.error-dialog-diagnostic-action-label;
+                        clicked => {
+                            root.error-dialog-diagnostic-action-clicked(root.error-dialog-notification-id);
+                        }
+                    }
+
+                    if root.error-dialog-retry-visible: Button {
+                        text: root.error-dialog-retry-label;
+                        clicked => {
+                            root.error-dialog-retry-clicked();
+                        }
+                    }
+
+                    Button {
+                        text: root.error-dialog-ok-label;
+                        primary: true;
+                        clicked => {
+                            root.error-dialog-dismissed();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 }
 

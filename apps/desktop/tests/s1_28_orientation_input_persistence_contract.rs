@@ -140,21 +140,22 @@ fn s1_28_orientation_input_persistence_fallback_and_clear_contract() {
     );
     assert_eq!(
         window.get_workspace_orientation_input_text().as_str(),
-        "123",
-        "orientation_points 呈现不得重置输入框"
+        format!("{:.1}", window.get_workspace_orientation_angle()),
+        "orientation_points 必须把计算角度回填进输入框"
     );
 
     // 呈现 3：步骤切换（切到边界步再切回朝向步）。
+    let filled_angle = format!("{:.1}", window.get_workspace_orientation_angle());
     window.invoke_workspace_step_clicked(0);
     assert_eq!(
         window.get_workspace_orientation_input_text().as_str(),
-        "123",
+        filled_angle.as_str(),
         "切到边界步不得重置输入框"
     );
     window.invoke_workspace_step_clicked(1);
     assert_eq!(
         window.get_workspace_orientation_input_text().as_str(),
-        "123",
+        filled_angle.as_str(),
         "切回朝向步不得重置输入框"
     );
 

@@ -108,6 +108,13 @@ ureq = { version = "2.12", default-features = false, features = ["native-tls", "
 native-tls = "0.2"
 # 测试临时目录
 tempfile = "3"
+# Windows 子窗口子类化：保持 Slint 键盘焦点不被 WebView2 抢占
+windows = { version = "0.61", default-features = false, features = [
+    "std",
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # RFC3339 时间戳（F2 引导完成时刻；B2 同版本同特性直接声明，同 sha2 先例）
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # path 依赖（workspace-dependencies bans 需要）

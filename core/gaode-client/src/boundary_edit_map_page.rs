@@ -113,7 +113,8 @@ const ORIENTATION_SCRIPT: &str = r#"
       strokeWeight: 2,
       fillOpacity: 0.15,
       fillColor: '#95a5a6',
-      editable: false
+      editable: false,
+      bubble: true
     });
     map.add(orientationPolygon);
     setStatus('已加载已确认边界作半透明参照', '');
@@ -873,6 +874,10 @@ mod tests {
         assert!(html.contains("confirm_orientation"));
         assert!(html.contains("orientation_points"));
         assert!(html.contains("orientationMode: true"));
+        assert!(
+            html.contains("bubble: true"),
+            "朝向参考多边形必须冒泡点击到地图，否则地图两点点击被覆盖物吞掉"
+        );
         assert!(
             html.contains("activateOrientationWhenReady"),
             "T40：Rust 侧创建成功激活通道需要页面激活函数"

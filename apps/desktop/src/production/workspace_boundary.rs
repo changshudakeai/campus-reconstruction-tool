@@ -412,6 +412,7 @@ impl WorkspaceProductionContext {
             angle_input_placeholder: l10n.t("orientation.angle_input_placeholder"),
             angle_display,
             clear_input: false,
+            fill_input: None,
             submit_label: l10n.t("orientation.submit_button"),
             reset_label: l10n.t("orientation.reset_button"),
             status,
