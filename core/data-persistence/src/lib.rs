@@ -41,8 +41,8 @@ mod trash;
 
 pub use candidate_projections::{
     CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateDisplay,
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation,
+    CandidateEligibility, CandidateNameSource, CandidateProjection, CandidateProjectionsApi,
+    CandidateShape, CandidateValidation,
 };
 pub use database::Database;
 pub use entities::{RawObservation, ReviewDecision, TrashItem, TRASH_RETENTION_DAYS};

@@ -20,6 +20,42 @@ pub enum CandidateValidation {
     Repaired,
     Rejected,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidateNameSource {
+    /// 名称来自 OSM `name` 标签（原始来源，不得被高德覆盖）。
+    Osm,
+    /// 名称来自一次真实高德 regeo 调用。
+    Gaode,
+    /// 名称来自持久化 regeo 缓存命中（没有产生新网络调用）。
+    Cache,
+    /// 仍无可用名称，展示稳定占位。
+    #[default]
+    Unnamed,
+    /// 补名尝试失败（网络/超时/限流/缺 Key），名称保持占位。
+    Failed,
+}
+
+impl CandidateNameSource {
+    fn from_db(value: &str) -> Self {
+        match value {
+            "osm" => Self::Osm,
+            "gaode" => Self::Gaode,
+            "cache" => Self::Cache,
+            "failed" => Self::Failed,
+            _ => Self::Unnamed,
+        }
+    }
+
+    fn to_db(self) -> &'static str {
+        match self {
+            Self::Osm => "osm",
+            Self::Gaode => "gaode",
+            Self::Cache => "cache",
+            Self::Unnamed => "unnamed",
+            Self::Failed => "failed",
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateShape {
     pub kind: String,
@@ -81,6 +117,7 @@ pub struct CandidateProjection {
     pub isolation_reason: Option<String>,
     pub automatically_repaired: bool,
     pub missing_in_latest_batch: bool,
+    pub name_source: CandidateNameSource,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -120,6 +157,7 @@ impl CandidateProjection {
             isolation_reason: None,
             automatically_repaired: matches!(validation, CandidateValidation::Repaired),
             missing_in_latest_batch: false,
+            name_source: CandidateNameSource::default(),
             created_at: now,
             updated_at: now,
         }
@@ -130,6 +168,10 @@ impl CandidateProjection {
     }
     pub fn missing_in_latest_batch(mut self) -> Self {
         self.missing_in_latest_batch = true;
+        self
+    }
+    pub fn with_name_source(mut self, source: CandidateNameSource) -> Self {
+        self.name_source = source;
         self
     }
 }
@@ -203,7 +245,7 @@ impl CandidateProjectionsApi for Database {
         }
         let tx = self.conn.transaction()?;
         {
-            let mut statement=tx.prepare("INSERT INTO candidate_projections (collection_batch_id,candidate_id,plan_id,raw_observation_id,data_source_tag,source_entity_id,geometry_part_id,category,display_title,display_tags,geometry_kind,normalized_geometry,validation,eligibility,isolation_reason,automatically_repaired,missing_in_latest_batch,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)")?;
+            let mut statement=tx.prepare("INSERT INTO candidate_projections (collection_batch_id,candidate_id,plan_id,raw_observation_id,data_source_tag,source_entity_id,geometry_part_id,category,display_title,display_tags,geometry_kind,normalized_geometry,validation,eligibility,isolation_reason,automatically_repaired,missing_in_latest_batch,created_at,updated_at,name_source) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)")?;
             for projection in projections {
                 if projection.plan_id != batch.plan_id {
                     return Err(Error::CandidateBatchRejected(
@@ -229,7 +271,8 @@ impl CandidateProjectionsApi for Database {
                     projection.automatically_repaired,
                     projection.missing_in_latest_batch,
                     timestamp_to_db(projection.created_at),
-                    timestamp_to_db(projection.updated_at)
+                    timestamp_to_db(projection.updated_at),
+                    projection.name_source.to_db(),
                 ])?;
             }
         }
@@ -271,14 +314,14 @@ impl CandidateProjectionsApi for Database {
         &self,
         plan_id: &str,
     ) -> Result<Vec<CandidateProjection>> {
-        self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.eligibility='reviewable' ORDER BY p.candidate_id",params![plan_id])
+        self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at,p.name_source FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.eligibility='reviewable' ORDER BY p.candidate_id",params![plan_id])
     }
     fn get_current_candidate_projection(
         &self,
         plan_id: &str,
         candidate_id: &str,
     ) -> Result<Option<CandidateProjection>> {
-        Ok(self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.candidate_id=?2",params![plan_id,candidate_id])?.into_iter().next())
+        Ok(self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at,p.name_source FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.candidate_id=?2",params![plan_id,candidate_id])?.into_iter().next())
     }
     fn candidate_batch_summary(&self, batch_id: &str) -> Result<CandidateBatchSummary> {
         let batch = self.batch(batch_id)?;
@@ -310,7 +353,7 @@ impl Database {
 
     fn current_projections(&self, plan_id: &str) -> Result<Vec<CandidateProjection>> {
         self.read_projections(
-            "SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1",
+            "SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at,p.name_source FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1",
             params![plan_id],
         )
     }
@@ -352,6 +395,7 @@ fn projection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CandidatePro
         missing_in_latest_batch: row.get(16)?,
         created_at: timestamp_from_db(&row.get::<_, String>(17)?).map_err(to_sql_error)?,
         updated_at: timestamp_from_db(&row.get::<_, String>(18)?).map_err(to_sql_error)?,
+        name_source: CandidateNameSource::from_db(&row.get::<_, String>(19)?),
     })
 }
 fn validation_db(value: CandidateValidation) -> &'static str {

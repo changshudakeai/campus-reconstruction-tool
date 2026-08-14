@@ -55,10 +55,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "T36: regeo 补名持久化缓存（坐标键 -> 名称）",
         sql: include_str!("../migrations/007_add_regeo_name_cache.sql"),
     },
+    Migration {
+        version: 8,
+        description: "候选投影保存名称来源（OSM/高德/缓存/仍未命名/失败）",
+        sql: include_str!("../migrations/008_add_candidate_name_source.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 7;
+pub const LATEST_SCHEMA_VERSION: u32 = 8;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

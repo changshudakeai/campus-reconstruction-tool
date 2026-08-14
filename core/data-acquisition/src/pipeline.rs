@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use data_persistence::{Database, RawObservation, RawObservationsApi};
+use data_persistence::{CandidateNameSource, Database, RawObservation, RawObservationsApi};
 use data_transformers::ClassifyEngine;
 use geo::{Contains, Intersects, Line, LineString, MultiPolygon, Point, Polygon};
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
@@ -76,6 +76,8 @@ pub struct CandidateDraft {
     pub geometry_part_id: String,
     pub category: CandidateCategory,
     pub name: String,
+    /// 当前名称来源（OSM 原始名称，或 A1 在 B14 验证后补名的来源）。
+    pub name_source: CandidateNameSource,
     pub source_data: serde_json::Value,
     pub source_geometry: Option<SourceGeometry>,
     /// bbox 粗查询之后、命名前完成的精确方案边界资格结论。
@@ -172,6 +174,7 @@ impl AcquisitionPipeline {
         source: &dyn DataSource,
         deadline: Instant,
     ) -> Result<AcquisitionBatch> {
+        let _ = deadline;
         if boundary.is_empty() {
             return Err(AcquisitionError::EmptyBoundary);
         }
@@ -185,38 +188,14 @@ impl AcquisitionPipeline {
                 boundary_disposition(entity.source_geometry.as_ref(), &confirmed_boundary)
             })
             .collect::<Vec<_>>();
-        // 边界资格先于命名：边界外、跨界和无效几何不消耗补名额度。
-        let naming_targets = entities
-            .iter()
-            .zip(&dispositions)
-            .filter(|(_, disposition)| **disposition == BoundaryDisposition::Inside)
-            .map(|(entity, _)| entity.clone())
-            .collect();
-        self.emit_stage(CollectionStage::Naming);
-        let enriched = source.enrich(naming_targets, deadline)?;
-        let mut enriched_by_identity = enriched
-            .entities
-            .into_iter()
-            .map(|entity| {
-                (
-                    (entity.entity_id.clone(), entity.geometry_part_id.clone()),
-                    entity,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
         let plan_key = plan_id.to_string();
         let mut raw_observations = Vec::new();
         let mut candidate_drafts = Vec::new();
         let mut diff_entries = Vec::new();
         let mut category_counts = BTreeMap::new();
         let mut fallback_count = 0;
-        for (source_entity, disposition) in entities.iter().zip(&dispositions) {
-            let entity = enriched_by_identity
-                .remove(&(
-                    source_entity.entity_id.clone(),
-                    source_entity.geometry_part_id.clone(),
-                ))
-                .unwrap_or_else(|| source_entity.clone());
+        for (entity, disposition) in entities.iter().zip(&dispositions) {
+            let source_entity = entity;
             let classification = self.engine.classify(&entity.tags);
             if *disposition == BoundaryDisposition::Inside {
                 fallback_count += usize::from(classification.is_fallback);
@@ -257,6 +236,11 @@ impl AcquisitionPipeline {
                 geometry_part_id: entity.geometry_part_id.clone(),
                 category: classification.category,
                 name: entity.name.clone(),
+                name_source: if entity.name == entity.entity_id {
+                    CandidateNameSource::Unnamed
+                } else {
+                    CandidateNameSource::Osm
+                },
                 source_data,
                 source_geometry: source_entity.source_geometry.clone(),
                 boundary_disposition: *disposition,
@@ -289,7 +273,7 @@ impl AcquisitionPipeline {
                 .count(),
             missing_geometry_object_count: entities.len() - geometry_object_count,
             geometry_object_count,
-            naming_partial: enriched.partial,
+            naming_partial: false,
             raw_observations,
             candidate_drafts,
             category_counts,

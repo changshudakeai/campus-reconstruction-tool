@@ -3,8 +3,9 @@
 //! 测试通过 [`CollectionFlow`] 的外部接口观察行为：开始采集、查看采集报告、
 //! 取消/进度；不越过接口检查 F4/B2/B14/F7 的内部调用顺序。数据源一律用
 //! 测试桩（真实高德在线链路留发布前验证）。
+// ignore-tidy-filelength: A1 候选采集完整缝验收（采集/隔离/取消/补名资格门/名称来源）同属一个用例入口，集中便于对照
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,9 +15,11 @@ use collection_flow::{
 };
 use data_acquisition::{
     overpass::{boundary_bbox, campus_objects_query, OverpassClient},
-    DataSource, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
+    DataSource, EnrichedEntities, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
 };
-use data_persistence::{CandidateProjectionsApi, Database, RawObservationsApi};
+use data_persistence::{
+    CandidateNameSource, CandidateProjectionsApi, Database, RawObservationsApi,
+};
 use data_transformers::TagMap;
 use export_flow::{BoundaryExportFlow, StdExportFileSystem};
 use global_settings::SettingsManager;
@@ -978,4 +981,261 @@ fn three_endpoint_hang_overpass_fails_within_overall_deadline() {
         "诊断必须保留端点回退事实：{}",
         failure.diagnostic
     );
+}
+
+fn building_polygon(id: &str, points: &[(f64, f64)]) -> RawEntity {
+    RawEntity::with_geometry(
+        id,
+        id.to_owned(),
+        tags(&[("building", "yes")]),
+        serde_json::json!({"id": id}),
+        Some(SourceGeometry::Polygon(points.to_vec())),
+        "polygon",
+    )
+}
+
+fn named_building_polygon(id: &str, name: &str, points: &[(f64, f64)]) -> RawEntity {
+    RawEntity::with_geometry(
+        id,
+        name,
+        tags(&[("building", "yes")]),
+        serde_json::json!({"id": id}),
+        Some(SourceGeometry::Polygon(points.to_vec())),
+        "polygon",
+    )
+}
+
+/// 记录 A1 命名资格门实际交给数据源的补名目标，并统一返回“高德名”。
+struct RecordingSource {
+    entities: Vec<RawEntity>,
+    enriched_ids: Arc<Mutex<Vec<String>>>,
+}
+
+impl DataSource for RecordingSource {
+    fn source_tag(&self) -> &str {
+        "recording"
+    }
+
+    fn fetch_raw_entities(&self, _boundary: &Boundary) -> data_acquisition::Result<Vec<RawEntity>> {
+        Ok(self.entities.clone())
+    }
+
+    fn enrich(
+        &self,
+        entities: Vec<RawEntity>,
+        _deadline: Instant,
+    ) -> data_acquisition::Result<EnrichedEntities> {
+        self.enriched_ids
+            .lock()
+            .expect("enriched ids lock")
+            .extend(entities.iter().map(|entity| entity.entity_id.clone()));
+        Ok(EnrichedEntities {
+            name_sources: entities
+                .iter()
+                .map(|_| CandidateNameSource::Gaode)
+                .collect(),
+            entities: entities
+                .into_iter()
+                .map(|mut entity| {
+                    entity.name = "高德名".to_owned();
+                    entity
+                })
+                .collect(),
+            partial: false,
+            attempted: 1,
+            key_missing: false,
+            skipped_count: 0,
+        })
+    }
+}
+
+#[test]
+fn naming_only_targets_reviewable_unnamed_building_polygons() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let enriched_ids = Arc::new(Mutex::new(Vec::new()));
+    let inside = vec![
+        (116.4001, 39.9001),
+        (116.4009, 39.9001),
+        (116.4009, 39.9009),
+        (116.4001, 39.9001),
+    ];
+    let crossing = vec![
+        (116.4005, 39.9005),
+        (116.4015, 39.9005),
+        (116.4015, 39.9015),
+        (116.4005, 39.9005),
+    ];
+    let outside = vec![
+        (116.4020, 39.9000),
+        (116.4030, 39.9000),
+        (116.4030, 39.9010),
+        (116.4020, 39.9000),
+    ];
+    let self_intersecting = vec![
+        (116.4002, 39.9002),
+        (116.4008, 39.9008),
+        (116.4002, 39.9008),
+        (116.4008, 39.9002),
+        (116.4002, 39.9002),
+    ];
+    let source = Arc::new(RecordingSource {
+        entities: vec![
+            building_polygon("way/eligible", &inside),
+            named_building_polygon("way/named", "图书馆", &inside),
+            building_polygon("way/crossing", &crossing),
+            building_polygon("way/outside", &outside),
+            building_polygon("way/self_intersecting", &self_intersecting),
+            water_polygon("way/water"),
+            building_point("node/point", 116.4003, 39.9003),
+        ],
+        enriched_ids: Arc::clone(&enriched_ids),
+    });
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(5)).expect("后台完成");
+    assert!(
+        matches!(outcome, CollectionOutcome::Succeeded(_)),
+        "隔离/边界外对象不得拖垮采集"
+    );
+
+    assert_eq!(
+        enriched_ids.lock().expect("ids lock").as_slice(),
+        ["way/eligible"],
+        "只有最终 Reviewable 的无名建筑面才进入补名"
+    );
+
+    let reviewable = db
+        .lock()
+        .expect("db lock")
+        .list_reviewable_candidate_projections(&plan_id.to_string())
+        .expect("Reviewable API");
+    let named = reviewable
+        .iter()
+        .find(|candidate| candidate.source_entity_id == "way/named")
+        .expect("命名建筑可评审");
+    assert_eq!(
+        named.display.title, "图书馆",
+        "OSM 名称优先，不得被高德覆盖"
+    );
+    assert_eq!(named.name_source, CandidateNameSource::Osm);
+    let eligible = reviewable
+        .iter()
+        .find(|candidate| candidate.source_entity_id == "way/eligible")
+        .expect("无名建筑面可评审");
+    assert_eq!(eligible.display.title, "高德名");
+    assert_eq!(eligible.name_source, CandidateNameSource::Gaode);
+}
+
+#[test]
+fn missing_key_reports_not_executed_and_keeps_placeholder_source() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let payload = unnamed_polygons_payload(2);
+    let overpass_transport = Box::new(move |_boundary: &Boundary| Ok(payload.clone()));
+    let calls_clone = Arc::clone(&calls);
+    let regeo_transport = Box::new(move |_: &str, _: Duration| {
+        calls_clone.fetch_add(1, Ordering::SeqCst);
+        Ok("unused".to_owned())
+    });
+    let namer = Arc::new(RegeoNamer::new(regeo_transport, Box::new(|| None)));
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(overpass_transport).with_name_enricher(Some(namer)));
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    flow.set_plan(&plan_id);
+    let convert = |lon: f64, lat: f64| {
+        let (lon, lat) = gaode_client::wgs84_to_gcj02(lon, lat);
+        serde_json::json!([lon, lat])
+    };
+    flow.confirm_boundary(Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            convert(121.399, 31.199),
+            convert(121.403, 31.199),
+            convert(121.403, 31.203),
+            convert(121.399, 31.203),
+            convert(121.399, 31.199)
+        ]]),
+    });
+
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(5)).expect("后台完成");
+    let CollectionOutcome::Succeeded(summary) = outcome else {
+        panic!("缺 Key 只是不执行补名，不得让采集失败");
+    };
+    let report = summary.page.report.expect("报告");
+    assert!(
+        report
+            .candidate_lines
+            .iter()
+            .any(|line| line == "未执行补名 2 项"),
+        "缺 Key 必须显示“未执行补名”和数量：{:?}",
+        report.candidate_lines
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "缺 Key 不得发高德请求");
+
+    let reviewable = db
+        .lock()
+        .expect("db lock")
+        .list_reviewable_candidate_projections(&plan_id.to_string())
+        .expect("Reviewable API");
+    assert_eq!(reviewable.len(), 2);
+    for candidate in &reviewable {
+        assert_eq!(candidate.display.title, candidate.source_entity_id);
+        assert_eq!(candidate.name_source, CandidateNameSource::Failed);
+    }
+}
+
+#[test]
+fn formatted_address_is_not_written_as_building_name() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let payload = unnamed_polygons_payload(1);
+    let overpass_transport = Box::new(move |_boundary: &Boundary| Ok(payload.clone()));
+    let regeo_transport = Box::new(|_: &str, _: Duration| {
+        Ok(
+            r#"{"status":"1","info":"OK","regeocode":{"formatted_address":"上海市闵行区东川路800号","pois":[]}}"#
+                .to_owned(),
+        )
+    });
+    let namer = Arc::new(RegeoNamer::new(
+        regeo_transport,
+        Box::new(|| Some("web-key".to_owned())),
+    ));
+    let source: Arc<dyn DataSource + Send + Sync> =
+        Arc::new(OverpassDataSource::new(overpass_transport).with_name_enricher(Some(namer)));
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    flow.set_plan(&plan_id);
+    let convert = |lon: f64, lat: f64| {
+        let (lon, lat) = gaode_client::wgs84_to_gcj02(lon, lat);
+        serde_json::json!([lon, lat])
+    };
+    flow.confirm_boundary(Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            convert(121.399, 31.199),
+            convert(121.403, 31.199),
+            convert(121.403, 31.203),
+            convert(121.399, 31.203),
+            convert(121.399, 31.199)
+        ]]),
+    });
+
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(5)).expect("后台完成");
+    assert!(matches!(outcome, CollectionOutcome::Succeeded(_)));
+    let reviewable = db
+        .lock()
+        .expect("db lock")
+        .list_reviewable_candidate_projections(&plan_id.to_string())
+        .expect("Reviewable API");
+    let candidate = &reviewable[0];
+    assert_eq!(
+        candidate.display.title, candidate.source_entity_id,
+        "formatted_address 不得写成正式建筑名"
+    );
+    assert_eq!(candidate.name_source, CandidateNameSource::Unnamed);
 }

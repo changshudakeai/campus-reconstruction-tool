@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use data_persistence::RegeoNameCacheApi;
+use data_persistence::{CandidateNameSource, RegeoNameCacheApi};
 
 use crate::source::{BatchEnrichment, NameEnricher, RawEntity, SourceGeometry};
 
@@ -37,6 +37,26 @@ pub type RegeoTransport =
 
 /// Web 服务 Key 提供器（只经设置页录入；生产按数据库路径实时读取）
 pub type KeyProvider = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// 一次 regeo 调用的最终去向（名称 + 来源 + 是否失败）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LookupOutcome {
+    name: Option<String>,
+    source: CandidateNameSource,
+}
+
+impl LookupOutcome {
+    fn named(name: String, source: CandidateNameSource) -> Self {
+        Self {
+            name: Some(name),
+            source,
+        }
+    }
+
+    fn unnamed(source: CandidateNameSource) -> Self {
+        Self { name: None, source }
+    }
+}
 
 /// regeo 补名器：面几何中心点反查 + 持久化缓存 + 有界并发批量补名
 pub struct RegeoNamer {
@@ -80,12 +100,14 @@ impl RegeoNamer {
         if let Ok(Some(cached)) = self.cache.get_regeo_name(&cache_key) {
             return cached;
         }
-        self.lookup_uncached(&cache_key, lon, lat)
+        self.lookup_uncached(&cache_key, lon, lat).name
     }
 
     /// 单次网络调用（5s 超时；失败降级为不补名）
-    fn lookup_uncached(&self, cache_key: &str, lon: f64, lat: f64) -> Option<String> {
-        let key = (self.key_provider)()?;
+    fn lookup_uncached(&self, cache_key: &str, lon: f64, lat: f64) -> LookupOutcome {
+        let Some(key) = (self.key_provider)() else {
+            return LookupOutcome::unnamed(CandidateNameSource::Failed);
+        };
         self.lookup_uncached_with_key(&key, cache_key, lon, lat)
     }
 
@@ -96,13 +118,37 @@ impl RegeoNamer {
         cache_key: &str,
         lon: f64,
         lat: f64,
-    ) -> Option<String> {
+    ) -> LookupOutcome {
         let url =
             format!("{REGEO_ENDPOINT}?key={key}&location={lon},{lat}&radius=200&extensions=base");
-        let body = (self.transport)(&url, REGEO_HTTP_TIMEOUT).ok()?;
-        let name = parse_regeo_name(&body);
-        let _ = self.cache.put_regeo_name(cache_key, name.as_deref());
-        name
+        match (self.transport)(&url, REGEO_HTTP_TIMEOUT) {
+            Ok(body) => {
+                let parsed = parse_regeo_name_outcome(&body);
+                let outcome = match parsed {
+                    RegeoNameOutcome {
+                        name: Some(name),
+                        failed: false,
+                    } => LookupOutcome::named(name, CandidateNameSource::Gaode),
+                    RegeoNameOutcome {
+                        name: None,
+                        failed: true,
+                    } => LookupOutcome::unnamed(CandidateNameSource::Failed),
+                    RegeoNameOutcome {
+                        name: None,
+                        failed: false,
+                    } => LookupOutcome::unnamed(CandidateNameSource::Unnamed),
+                    RegeoNameOutcome {
+                        name: Some(_),
+                        failed: true,
+                    } => LookupOutcome::unnamed(CandidateNameSource::Failed),
+                };
+                let _ = self
+                    .cache
+                    .put_regeo_name(cache_key, outcome.name.as_deref());
+                outcome
+            }
+            Err(_) => LookupOutcome::unnamed(CandidateNameSource::Failed),
+        }
     }
 }
 
@@ -139,6 +185,7 @@ impl NameEnricher for RegeoNamer {
     /// - 命中持久化缓存的坐标不再调用。
     fn enrich_batch(&self, entities: &[RawEntity], deadline: Instant) -> BatchEnrichment {
         let mut names: Vec<Option<String>> = vec![None; entities.len()];
+        let mut name_sources = vec![CandidateNameSource::Unnamed; entities.len()];
         let mut misses: Vec<(usize, String, f64, f64)> = Vec::new();
         for (index, entity) in entities.iter().enumerate() {
             let Some((lon, lat)) = entity.source_geometry.as_ref().and_then(polygon_centroid)
@@ -147,34 +194,46 @@ impl NameEnricher for RegeoNamer {
             };
             let cache_key = format!("{lon:.5},{lat:.5}");
             match self.cache.get_regeo_name(&cache_key) {
-                Ok(Some(cached)) => {
-                    names[index] = cached;
+                Ok(Some(Some(cached))) => {
+                    names[index] = Some(cached);
+                    name_sources[index] = CandidateNameSource::Cache;
+                }
+                Ok(Some(None)) => {
+                    name_sources[index] = CandidateNameSource::Unnamed;
                 }
                 Ok(None) | Err(_) => misses.push((index, cache_key, lon, lat)),
             }
         }
-        let key = match (self.key_provider)() {
-            Some(key) => key,
-            None => {
-                return BatchEnrichment {
-                    names,
-                    partial: false,
-                    attempted: 0,
-                };
+
+        let Some(key) = (self.key_provider)() else {
+            for (index, _, _, _) in &misses {
+                name_sources[*index] = CandidateNameSource::Failed;
             }
+            return BatchEnrichment {
+                names,
+                name_sources,
+                partial: false,
+                attempted: 0,
+                key_missing: true,
+                skipped_count: misses.len(),
+            };
         };
         if misses.is_empty() {
             return BatchEnrichment {
                 names,
+                name_sources,
                 partial: false,
                 attempted: 0,
+                key_missing: false,
+                skipped_count: 0,
             };
         }
+
         let missed_total = misses.len();
         let next = Arc::new(AtomicUsize::new(0));
         let calls = Arc::new(AtomicUsize::new(0));
         let limit_hit = Arc::new(AtomicBool::new(false));
-        let results = Arc::new(Mutex::new(Vec::<(usize, Option<String>)>::new()));
+        let results = Arc::new(Mutex::new(Vec::<(usize, LookupOutcome)>::new()));
         let workers = REGEO_CONCURRENCY.min(missed_total.max(1));
         let key_ref = &key;
         let misses_ref = &misses;
@@ -198,30 +257,42 @@ impl NameEnricher for RegeoNamer {
                         return;
                     }
                     let (index, cache_key, lon, lat) = &misses_ref[position];
-                    let name = self.lookup_uncached_with_key(key_ref, cache_key, *lon, *lat);
+                    let outcome = self.lookup_uncached_with_key(key_ref, cache_key, *lon, *lat);
                     results
                         .lock()
                         .expect("regeo batch results lock")
-                        .push((*index, name));
+                        .push((*index, outcome));
                 });
             }
         });
+
         let mut named = 0usize;
         let mut attempted = 0usize;
+        let mut attempted_indices = std::collections::HashSet::new();
         {
             let mut results = results.lock().expect("regeo batch results lock");
-            for (index, name) in results.drain(..) {
+            for (index, outcome) in results.drain(..) {
                 attempted += 1;
-                if name.is_some() {
+                attempted_indices.insert(index);
+                name_sources[index] = outcome.source;
+                names[index] = outcome.name;
+                if names[index].is_some() {
                     named += 1;
-                    names[index] = name;
                 }
+            }
+        }
+        for (index, _, _, _) in &misses {
+            if !attempted_indices.contains(index) {
+                name_sources[*index] = CandidateNameSource::Failed;
             }
         }
         BatchEnrichment {
             names,
+            name_sources,
             partial: limit_hit.load(Ordering::SeqCst) || attempted > named,
             attempted,
+            key_missing: false,
+            skipped_count: 0,
         }
     }
 }
@@ -241,28 +312,83 @@ pub fn polygon_centroid(geometry: &SourceGeometry) -> Option<(f64, f64)> {
     Some((sum_lon / n, sum_lat / n))
 }
 
-/// 解析 regeo 响应：优先最近 POI 名称，其次格式化地址。
-pub fn parse_regeo_name(json: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+/// regeo 响应解析结果：名称是否为可接受建筑名 + 本次调用是否失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegeoNameOutcome {
+    pub name: Option<String>,
+    pub failed: bool,
+}
+
+/// 解析 regeo 响应：只把满足可接受名称规则的最近 POI 名称作为建筑名。
+///
+/// `formatted_address` 只能作为地址辅助信息，绝不回退为正式建筑名。
+pub fn parse_regeo_name_outcome(json: &str) -> RegeoNameOutcome {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return RegeoNameOutcome {
+            name: None,
+            failed: true,
+        };
+    };
     if value.get("status").and_then(serde_json::Value::as_str) != Some("1") {
-        return None;
+        return RegeoNameOutcome {
+            name: None,
+            failed: true,
+        };
     }
-    let regeocode = value.get("regeocode")?;
-    let poi_name = regeocode
+    let Some(regeocode) = value.get("regeocode") else {
+        return RegeoNameOutcome {
+            name: None,
+            failed: false,
+        };
+    };
+    let formatted_address = regeocode
+        .get("formatted_address")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let name = regeocode
         .get("pois")
         .and_then(serde_json::Value::as_array)
         .and_then(|pois| pois.first())
         .and_then(|poi| poi.get("name"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
-        .filter(|name| !name.is_empty());
-    poi_name.or_else(|| {
-        regeocode
-            .get("formatted_address")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .filter(|address| !address.is_empty())
-    })
+        .filter(|name| acceptable_poi_name(name, &formatted_address));
+    RegeoNameOutcome {
+        name,
+        failed: false,
+    }
+}
+
+/// 仅返回可接受的最近 POI 名称；无法接受时返回 `None`。
+pub fn parse_regeo_name(json: &str) -> Option<String> {
+    parse_regeo_name_outcome(json).name
+}
+
+/// 高德最近 POI 名称是否可作为建筑名（保守规则，避免地址/校名污染）。
+///
+/// 产品规则 #3/#4：名称非空、长度合理、不包含控制字符、不等于格式化地址、
+/// 且不是“道路/行政区 + 门牌号”这类地址表达。
+pub fn acceptable_poi_name(name: &str, formatted_address: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return false;
+    }
+    if name.chars().any(char::is_control) {
+        return false;
+    }
+    let address = formatted_address.trim();
+    if !address.is_empty() && name == address {
+        return false;
+    }
+    !is_address_like(name)
+}
+
+fn is_address_like(name: &str) -> bool {
+    const AREA_TOKENS: &[&str] = &[
+        "路", "街", "道", "弄", "巷", "村", "镇", "乡", "县", "区", "市", "省",
+    ];
+    AREA_TOKENS.iter().any(|token| name.contains(token)) && name.ends_with('号')
 }
 
 #[cfg(test)]
@@ -287,12 +413,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_regeo_falls_back_to_formatted_address() {
+    fn parse_regeo_does_not_fall_back_to_formatted_address() {
         let json = r#"{"status":"1","info":"OK","regeocode":{"formatted_address":"上海市闵行区东川路800号","pois":[]}}"#;
-        assert_eq!(
-            parse_regeo_name(json).as_deref(),
-            Some("上海市闵行区东川路800号")
-        );
+        let outcome = parse_regeo_name_outcome(json);
+        assert_eq!(outcome.name, None, "formatted_address 不得伪装成建筑名");
+        assert!(!outcome.failed, "成功响应但无可接受名称不算失败");
+        assert_eq!(parse_regeo_name(json), None);
     }
 
     #[test]
@@ -302,6 +428,52 @@ mod tests {
             None
         );
         assert_eq!(parse_regeo_name("not json"), None);
+        assert!(parse_regeo_name_outcome("not json").failed);
+        assert!(
+            parse_regeo_name_outcome(r#"{"status":"0","info":"CUQPS_HAS_EXCEEDED_THE_LIMIT"}"#)
+                .failed
+        );
+    }
+
+    #[test]
+    fn acceptable_poi_name_rejects_address_like_and_control_characters() {
+        assert!(acceptable_poi_name("第一教学楼", "上海市闵行区东川路800号"));
+        assert!(!acceptable_poi_name(
+            "东川路800号",
+            "上海市闵行区东川路800号"
+        ));
+        assert!(!acceptable_poi_name(
+            "上海市闵行区东川路800号",
+            "上海市闵行区东川路800号"
+        ));
+        assert!(!acceptable_poi_name("", ""));
+        assert!(!acceptable_poi_name("第一教学楼\u{0}", ""));
+    }
+
+    #[test]
+    fn batch_enrichment_reports_missing_key_without_network() {
+        use std::sync::Arc;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+        let transport = Box::new(move |_: &str, _: Duration| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            Ok("unused".to_owned())
+        });
+        let namer = RegeoNamer::new(transport, Box::new(|| None));
+        let entities = vec![
+            building_entity("a", 121.41, 31.21),
+            building_entity("b", 121.42, 31.22),
+        ];
+        let batch = namer.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(batch.key_missing);
+        assert_eq!(batch.skipped_count, 2);
+        assert_eq!(batch.attempted, 0);
+        assert!(!batch.partial);
+        assert!(batch
+            .name_sources
+            .iter()
+            .all(|source| *source == CandidateNameSource::Failed));
     }
 
     #[test]
@@ -445,6 +617,10 @@ mod tests {
         let first_batch = first.enrich_batch(&entities, Instant::now() + Duration::from_secs(60));
         assert_eq!(first_batch.attempted, 2);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(first_batch
+            .name_sources
+            .iter()
+            .all(|source| *source == CandidateNameSource::Gaode));
 
         // 第二次“会话”共享同一持久化缓存：不再调用 regeo
         let second = RegeoNamer {
@@ -458,6 +634,10 @@ mod tests {
         assert_eq!(second_batch.attempted, 0, "重复采集不再重复调用");
         assert_eq!(second_batch.names[0].as_deref(), Some("教学楼"));
         assert_eq!(second_batch.names[1].as_deref(), Some("教学楼"));
+        assert!(second_batch
+            .name_sources
+            .iter()
+            .all(|source| *source == CandidateNameSource::Cache));
         assert!(!second_batch.partial);
     }
 

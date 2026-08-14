@@ -13,7 +13,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use coverage_audit::{AuditOutcome, QuietSentinel, ALL_CATEGORIES};
 use data_acquisition::{
     AcquisitionBatch, AcquisitionPipeline, BoundaryDisposition, CandidateDraft,
-    CollectionProgressView, CollectionReport, CollectionStage, DataSource, SourceGeometry,
+    CollectionProgressView, CollectionReport, CollectionStage, DataSource, RawEntity,
+    SourceGeometry,
 };
 use data_persistence::{
     CandidateBatchSummary, CandidateDisplay, CandidateEligibility, CandidateProjection,
@@ -24,7 +25,7 @@ use geometry_validator::{
 };
 use localization::Localization;
 use notification_center::Notification;
-use shared_domain_types::PlanId;
+use shared_domain_types::{CandidateCategory, PlanId};
 
 use crate::error::{CollectionError, Result};
 use crate::input::CollectionInputStore;
@@ -288,6 +289,12 @@ struct CollectionWorker {
     limits: CollectionRunLimits,
 }
 
+/// 一次命名阶段的汇总事实（缺 Key 未执行 + 跳过数量）。
+struct NamingSummary {
+    key_missing: bool,
+    skipped_count: usize,
+}
+
 impl CollectionWorker {
     fn run(self) -> CollectionOutcome {
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| self.run_inner()))
@@ -350,6 +357,80 @@ impl CollectionWorker {
         failure_view(&self.l10n, error)
     }
 
+    /// 只在 B14 判定为 Reviewable 之后，对“无名建筑面”调用数据源补名。
+    ///
+    /// 资格门为：建筑类别、完全位于边界内、通过几何验证（Retained/Repaired）、
+    /// 无可用 OSM 名称、面几何。
+    ///
+    /// Point/LineString、边界外/相交/隔离对象不会进入这里，因此不会发出高德请求。
+    fn enrich_reviewable_building_names(
+        &self,
+        batch: &mut AcquisitionBatch,
+        validation: &GeometryValidation,
+        deadline: Instant,
+    ) -> Result<NamingSummary> {
+        let mut targets: Vec<(usize, RawEntity)> = Vec::new();
+        for (index, draft) in batch.candidate_drafts.iter().enumerate() {
+            if draft.boundary_disposition != BoundaryDisposition::Inside {
+                continue;
+            }
+            if draft.category != CandidateCategory::Building {
+                continue;
+            }
+            if draft.name != draft.source_entity_id {
+                continue;
+            }
+            let Some(SourceGeometry::Polygon(_)) = draft.source_geometry.as_ref() else {
+                continue;
+            };
+            let reviewable = validation.outcomes.iter().any(|outcome| {
+                outcome.candidate_id == draft.raw_observation_id
+                    && matches!(
+                        outcome.disposition,
+                        ValidationDisposition::Retained | ValidationDisposition::Repaired
+                    )
+            });
+            if !reviewable {
+                continue;
+            }
+            targets.push((
+                index,
+                RawEntity::for_naming(
+                    draft.source_entity_id.clone(),
+                    draft.source_geometry.clone(),
+                    draft.geometry_part_id.clone(),
+                ),
+            ));
+        }
+
+        if targets.is_empty() {
+            batch.naming_partial = false;
+            return Ok(NamingSummary {
+                key_missing: false,
+                skipped_count: 0,
+            });
+        }
+
+        let entities = targets.iter().map(|(_, entity)| entity.clone()).collect();
+        let enriched = self
+            .source
+            .enrich(entities, deadline)
+            .map_err(CollectionError::Acquisition)?;
+        for (position, (draft_index, _)) in targets.iter().enumerate() {
+            if let Some(entity) = enriched.entities.get(position) {
+                batch.candidate_drafts[*draft_index].name = entity.name.clone();
+            }
+            if let Some(source) = enriched.name_sources.get(position) {
+                batch.candidate_drafts[*draft_index].name_source = *source;
+            }
+        }
+        batch.naming_partial = enriched.partial;
+        Ok(NamingSummary {
+            key_missing: enriched.key_missing,
+            skipped_count: enriched.skipped_count,
+        })
+    }
+
     /// 完整采集链：F4 采集批次 → B2 原始观测落库 → B14 点线面验证 →
     /// B2 候选投影原子发布 → F7 覆盖体检 → 组装报告并解锁评审。
     fn run_inner(&self) -> Result<CollectionSummary> {
@@ -381,7 +462,7 @@ impl CollectionWorker {
         let mut db = self.db.lock().expect("collection database lock");
 
         // 1. F4：采集批次（拉取 + 归类 + 增量比对，不发布投影）。
-        let batch = pipeline
+        let mut batch = pipeline
             .acquire_batch(
                 &mut db,
                 &self.request.plan_id,
@@ -405,6 +486,11 @@ impl CollectionWorker {
                 .filter_map(candidate_geometry)
                 .collect(),
         );
+
+        // 3.5 命名资格门后移：只有最终 Reviewable 的无名建筑面才调用补名。
+        notify_stage(CollectionStage::Naming);
+        let naming =
+            self.enrich_reviewable_building_names(&mut batch, &validation, enrich_deadline)?;
 
         // 4. B2：候选投影批次原子发布（构建 → 写入 → 继承缺失 → 发布）。
         let candidate_batch = db
@@ -460,7 +546,7 @@ impl CollectionWorker {
                 "unchanged": batch.diff.unchanged_count(),
             }),
         );
-        let report_view = self.build_report_view(&audit, &batch, &batch_summary);
+        let report_view = self.build_report_view(&audit, &batch, &batch_summary, &naming);
         let notification = audit.popup.as_ref().map(|popup| {
             Notification::error(
                 self.l10n.t("audit.source_tag"),
@@ -486,9 +572,10 @@ impl CollectionWorker {
         audit: &AuditOutcome,
         batch: &AcquisitionBatch,
         batch_summary: &CandidateBatchSummary,
+        naming: &NamingSummary,
     ) -> CollectionReportView {
         let audit_view = self.sentinel.report_view(&audit.result, self.l10n.as_ref());
-        let candidate_lines = vec![
+        let mut candidate_lines = vec![
             self.l10n.t_with_args(
                 "collection.report_source_total",
                 serde_json::json!({ "count": batch.total_source_object_count }),
@@ -522,6 +609,12 @@ impl CollectionWorker {
                 serde_json::json!({ "count": batch_summary.repaired_count }),
             ),
         ];
+        if naming.key_missing {
+            candidate_lines.push(self.l10n.t_with_args(
+                "collection.report_naming_skipped",
+                serde_json::json!({ "count": naming.skipped_count }),
+            ));
+        }
         CollectionReportView {
             title: audit_view.title,
             entry_label: audit_view.entry_label,
@@ -626,6 +719,7 @@ fn projection_for(
             validation_flag,
             eligibility,
         )
+        .with_name_source(draft.name_source)
     };
     match draft.boundary_disposition {
         BoundaryDisposition::Outside => {

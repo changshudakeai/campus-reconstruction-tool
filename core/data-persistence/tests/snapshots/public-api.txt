@@ -150,6 +150,58 @@ pub fn data_persistence::CandidateEligibility::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::CandidateEligibility
 pub type data_persistence::CandidateEligibility::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateEligibility where T: ?core::marker::Sized
+pub enum data_persistence::CandidateNameSource
+pub data_persistence::CandidateNameSource::Cache
+pub data_persistence::CandidateNameSource::Failed
+pub data_persistence::CandidateNameSource::Gaode
+pub data_persistence::CandidateNameSource::Osm
+pub data_persistence::CandidateNameSource::Unnamed
+impl core::clone::Clone for data_persistence::CandidateNameSource
+pub fn data_persistence::CandidateNameSource::clone(&self) -> data_persistence::CandidateNameSource
+impl core::cmp::Eq for data_persistence::CandidateNameSource
+impl core::cmp::PartialEq for data_persistence::CandidateNameSource
+pub fn data_persistence::CandidateNameSource::eq(&self, other: &data_persistence::CandidateNameSource) -> bool
+impl core::default::Default for data_persistence::CandidateNameSource
+pub fn data_persistence::CandidateNameSource::default() -> data_persistence::CandidateNameSource
+impl core::fmt::Debug for data_persistence::CandidateNameSource
+pub fn data_persistence::CandidateNameSource::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for data_persistence::CandidateNameSource
+impl core::marker::StructuralPartialEq for data_persistence::CandidateNameSource
+impl core::marker::Freeze for data_persistence::CandidateNameSource
+impl core::marker::Send for data_persistence::CandidateNameSource
+impl core::marker::Sync for data_persistence::CandidateNameSource
+impl core::marker::Unpin for data_persistence::CandidateNameSource
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::CandidateNameSource
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::CandidateNameSource
+impl<Q, K> hashbrown::Equivalent<K> for data_persistence::CandidateNameSource where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_persistence::CandidateNameSource::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::CandidateNameSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::CandidateNameSource where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::CandidateNameSource where U: core::convert::From<T>
+pub fn data_persistence::CandidateNameSource::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::CandidateNameSource where U: core::convert::Into<T>
+pub type data_persistence::CandidateNameSource::Error = core::convert::Infallible
+pub fn data_persistence::CandidateNameSource::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::CandidateNameSource where U: core::convert::TryFrom<T>
+pub type data_persistence::CandidateNameSource::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::CandidateNameSource::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_persistence::CandidateNameSource where T: core::clone::Clone
+pub type data_persistence::CandidateNameSource::Owned = T
+pub fn data_persistence::CandidateNameSource::clone_into(&self, target: &mut T)
+pub fn data_persistence::CandidateNameSource::to_owned(&self) -> T
+impl<T> core::any::Any for data_persistence::CandidateNameSource where T: 'static + ?core::marker::Sized
+pub fn data_persistence::CandidateNameSource::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::CandidateNameSource where T: ?core::marker::Sized
+pub fn data_persistence::CandidateNameSource::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::CandidateNameSource where T: ?core::marker::Sized
+pub fn data_persistence::CandidateNameSource::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_persistence::CandidateNameSource where T: core::clone::Clone
+pub unsafe fn data_persistence::CandidateNameSource::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_persistence::CandidateNameSource
+pub fn data_persistence::CandidateNameSource::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::CandidateNameSource
+pub type data_persistence::CandidateNameSource::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateNameSource where T: ?core::marker::Sized
 pub enum data_persistence::CandidateValidation
 pub data_persistence::CandidateValidation::Rejected
 pub data_persistence::CandidateValidation::Repaired
@@ -459,6 +511,7 @@ pub data_persistence::CandidateProjection::eligibility: data_persistence::Candid
 pub data_persistence::CandidateProjection::geometry_part_id: alloc::string::String
 pub data_persistence::CandidateProjection::isolation_reason: core::option::Option<alloc::string::String>
 pub data_persistence::CandidateProjection::missing_in_latest_batch: bool
+pub data_persistence::CandidateProjection::name_source: data_persistence::CandidateNameSource
 pub data_persistence::CandidateProjection::plan_id: alloc::string::String
 pub data_persistence::CandidateProjection::raw_observation_id: alloc::string::String
 pub data_persistence::CandidateProjection::shape: data_persistence::CandidateShape
@@ -469,6 +522,7 @@ impl data_persistence::CandidateProjection
 pub fn data_persistence::CandidateProjection::isolated_reason(self, reason: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn data_persistence::CandidateProjection::missing_in_latest_batch(self) -> Self
 pub fn data_persistence::CandidateProjection::new(candidate_id: impl core::convert::Into<alloc::string::String>, plan_id: impl core::convert::Into<alloc::string::String>, raw_observation_id: impl core::convert::Into<alloc::string::String>, data_source_tag: impl core::convert::Into<alloc::string::String>, source_entity_id: impl core::convert::Into<alloc::string::String>, geometry_part_id: impl core::convert::Into<alloc::string::String>, category: shared_domain_types::category::CandidateCategory, display: data_persistence::CandidateDisplay, shape: data_persistence::CandidateShape, validation: data_persistence::CandidateValidation, eligibility: data_persistence::CandidateEligibility) -> Self
+pub fn data_persistence::CandidateProjection::with_name_source(self, source: data_persistence::CandidateNameSource) -> Self
 impl core::clone::Clone for data_persistence::CandidateProjection
 pub fn data_persistence::CandidateProjection::clone(&self) -> data_persistence::CandidateProjection
 impl core::cmp::PartialEq for data_persistence::CandidateProjection

@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use data_persistence::CandidateNameSource;
 use data_transformers::TagMap;
 use gaode_client::{
     convert_pairs_wgs84_to_gcj02, parse_location_value, parse_place_search_response,
@@ -88,6 +89,23 @@ impl RawEntity {
         }
     }
 
+    /// 仅供命名资格门构造最小命名目标（无标签；几何只用于计算补名质心）。
+    pub fn for_naming(
+        entity_id: impl Into<String>,
+        source_geometry: Option<SourceGeometry>,
+        geometry_part_id: impl Into<String>,
+    ) -> Self {
+        let entity_id = entity_id.into();
+        Self::with_geometry(
+            entity_id.clone(),
+            entity_id,
+            TagMap::new(),
+            serde_json::json!({}),
+            source_geometry,
+            geometry_part_id,
+        )
+    }
+
     /// 组装写入数据粮仓的 source_data：名称 + 标签 + 原始载荷全量保全，
     /// 未来精细建筑模式可凭 tags 重新归类、凭 payload 还原现场。
     pub fn to_source_data(&self) -> serde_json::Value {
@@ -117,9 +135,12 @@ pub trait DataSource {
     /// 前停止派发新调用，超限立即结束并如实标记“部分建筑未命名”。
     fn enrich(&self, entities: Vec<RawEntity>, _deadline: Instant) -> Result<EnrichedEntities> {
         Ok(EnrichedEntities {
+            name_sources: entities.iter().map(entity_name_source).collect(),
             entities,
             partial: false,
             attempted: 0,
+            key_missing: false,
+            skipped_count: 0,
         })
     }
 
@@ -138,6 +159,12 @@ pub struct EnrichedEntities {
     pub partial: bool,
     /// 本次实际发出的补名调用数
     pub attempted: usize,
+    /// 与 `entities` 对齐的每个实体名称来源。
+    pub name_sources: Vec<CandidateNameSource>,
+    /// 是否因未配置 Web 服务 Key 而未执行补名。
+    pub key_missing: bool,
+    /// 因缺 Key 而未执行补名的目标数。
+    pub skipped_count: usize,
 }
 
 /// 桥接传输：边界 → 高德地点搜索响应 JSON（REST 风格信封）。
@@ -155,10 +182,16 @@ pub type OverpassTransport = BridgeTransport;
 pub struct BatchEnrichment {
     /// 每个入参实体的补名结果；`None` 表示保持来源 #id 名称
     pub names: Vec<Option<String>>,
+    /// 每个入参实体的名称来源（与 `names` 对齐）。
+    pub name_sources: Vec<CandidateNameSource>,
     /// 本次是否“部分建筑未命名”（截止 / 上限 / 调用失败导致）
     pub partial: bool,
     /// 本次实际发出的补名调用数
     pub attempted: usize,
+    /// 是否因未配置 Web 服务 Key 而未执行补名。
+    pub key_missing: bool,
+    /// 因缺 Key 而未执行补名的目标数。
+    pub skipped_count: usize,
 }
 
 /// 命名补强器（T36）：OSM name 缺失时批量补名（regeo 等）。
@@ -227,9 +260,12 @@ impl DataSource for OverpassDataSource {
         let Some(enricher) = &self.name_enricher else {
             self.last_enrichment_partial.store(false, Ordering::SeqCst);
             return Ok(EnrichedEntities {
+                name_sources: entities.iter().map(entity_name_source).collect(),
                 entities,
                 partial: false,
                 attempted: 0,
+                key_missing: false,
+                skipped_count: 0,
             });
         };
         // 命名两级：OSM name 优先（RawEntity::name 已取 tags.name）；
@@ -247,14 +283,26 @@ impl DataSource for OverpassDataSource {
         if unnamed.is_empty() {
             self.last_enrichment_partial.store(false, Ordering::SeqCst);
             return Ok(EnrichedEntities {
+                name_sources: entities.iter().map(entity_name_source).collect(),
                 entities,
                 partial: false,
                 attempted: 0,
+                key_missing: false,
+                skipped_count: 0,
             });
         }
         let unnamed_entities: Vec<RawEntity> =
             unnamed.iter().map(|(_, entity)| entity.clone()).collect();
         let batch = enricher.enrich_batch(&unnamed_entities, deadline);
+        let mut name_sources: Vec<CandidateNameSource> =
+            entities.iter().map(entity_name_source).collect();
+        for (position, (index, _)) in unnamed.iter().enumerate() {
+            name_sources[*index] = batch
+                .name_sources
+                .get(position)
+                .copied()
+                .unwrap_or_default();
+        }
         for (position, name) in batch.names.into_iter().enumerate() {
             if let Some(name) = name {
                 let (index, _) = &unnamed[position];
@@ -267,11 +315,23 @@ impl DataSource for OverpassDataSource {
             entities,
             partial: batch.partial,
             attempted: batch.attempted,
+            name_sources,
+            key_missing: batch.key_missing,
+            skipped_count: batch.skipped_count,
         })
     }
 
     fn enrichment_partial(&self) -> bool {
         self.last_enrichment_partial.load(Ordering::SeqCst)
+    }
+}
+
+/// 未补名实体的当前来源：有 OSM 名称 → OSM；否则仍以回退标识占位 → 仍未命名。
+fn entity_name_source(entity: &RawEntity) -> CandidateNameSource {
+    if entity.name == entity.entity_id {
+        CandidateNameSource::Unnamed
+    } else {
+        CandidateNameSource::Osm
     }
 }
 
@@ -746,8 +806,14 @@ mod tests {
                         .iter()
                         .map(|_| Some("未命名建筑".to_owned()))
                         .collect(),
+                    name_sources: entities
+                        .iter()
+                        .map(|_| CandidateNameSource::Gaode)
+                        .collect(),
                     partial: false,
                     attempted: entities.len(),
+                    key_missing: false,
+                    skipped_count: 0,
                 }
             }
         }

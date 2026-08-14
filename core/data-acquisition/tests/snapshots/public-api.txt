@@ -490,6 +490,7 @@ pub data_acquisition::pipeline::CandidateDraft::category: shared_domain_types::c
 pub data_acquisition::pipeline::CandidateDraft::data_source_tag: alloc::string::String
 pub data_acquisition::pipeline::CandidateDraft::geometry_part_id: alloc::string::String
 pub data_acquisition::pipeline::CandidateDraft::name: alloc::string::String
+pub data_acquisition::pipeline::CandidateDraft::name_source: data_persistence::candidate_projections::CandidateNameSource
 pub data_acquisition::pipeline::CandidateDraft::raw_observation_id: alloc::string::String
 pub data_acquisition::pipeline::CandidateDraft::source_data: serde_json::value::Value
 pub data_acquisition::pipeline::CandidateDraft::source_entity_id: alloc::string::String
@@ -930,6 +931,55 @@ impl<T> typenum::type_operators::Same for data_acquisition::refresh::RefreshDiff
 pub type data_acquisition::refresh::RefreshDiff::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::refresh::RefreshDiff where T: ?core::marker::Sized
 pub mod data_acquisition::regeo
+pub struct data_acquisition::regeo::RegeoNameOutcome
+pub data_acquisition::regeo::RegeoNameOutcome::failed: bool
+pub data_acquisition::regeo::RegeoNameOutcome::name: core::option::Option<alloc::string::String>
+impl core::clone::Clone for data_acquisition::regeo::RegeoNameOutcome
+pub fn data_acquisition::regeo::RegeoNameOutcome::clone(&self) -> data_acquisition::regeo::RegeoNameOutcome
+impl core::cmp::Eq for data_acquisition::regeo::RegeoNameOutcome
+impl core::cmp::PartialEq for data_acquisition::regeo::RegeoNameOutcome
+pub fn data_acquisition::regeo::RegeoNameOutcome::eq(&self, other: &data_acquisition::regeo::RegeoNameOutcome) -> bool
+impl core::fmt::Debug for data_acquisition::regeo::RegeoNameOutcome
+pub fn data_acquisition::regeo::RegeoNameOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for data_acquisition::regeo::RegeoNameOutcome
+impl core::marker::Freeze for data_acquisition::regeo::RegeoNameOutcome
+impl core::marker::Send for data_acquisition::regeo::RegeoNameOutcome
+impl core::marker::Sync for data_acquisition::regeo::RegeoNameOutcome
+impl core::marker::Unpin for data_acquisition::regeo::RegeoNameOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::regeo::RegeoNameOutcome
+impl core::panic::unwind_safe::UnwindSafe for data_acquisition::regeo::RegeoNameOutcome
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::regeo::RegeoNameOutcome where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::regeo::RegeoNameOutcome::is_within(&self, b: &G2) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::regeo::RegeoNameOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_acquisition::regeo::RegeoNameOutcome::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::regeo::RegeoNameOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::regeo::RegeoNameOutcome where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_acquisition::regeo::RegeoNameOutcome where U: core::convert::From<T>
+pub fn data_acquisition::regeo::RegeoNameOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_acquisition::regeo::RegeoNameOutcome where U: core::convert::Into<T>
+pub type data_acquisition::regeo::RegeoNameOutcome::Error = core::convert::Infallible
+pub fn data_acquisition::regeo::RegeoNameOutcome::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_acquisition::regeo::RegeoNameOutcome where U: core::convert::TryFrom<T>
+pub type data_acquisition::regeo::RegeoNameOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_acquisition::regeo::RegeoNameOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_acquisition::regeo::RegeoNameOutcome where T: core::clone::Clone
+pub type data_acquisition::regeo::RegeoNameOutcome::Owned = T
+pub fn data_acquisition::regeo::RegeoNameOutcome::clone_into(&self, target: &mut T)
+pub fn data_acquisition::regeo::RegeoNameOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for data_acquisition::regeo::RegeoNameOutcome where T: 'static + ?core::marker::Sized
+pub fn data_acquisition::regeo::RegeoNameOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_acquisition::regeo::RegeoNameOutcome where T: ?core::marker::Sized
+pub fn data_acquisition::regeo::RegeoNameOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_acquisition::regeo::RegeoNameOutcome where T: ?core::marker::Sized
+pub fn data_acquisition::regeo::RegeoNameOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_acquisition::regeo::RegeoNameOutcome where T: core::clone::Clone
+pub unsafe fn data_acquisition::regeo::RegeoNameOutcome::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_acquisition::regeo::RegeoNameOutcome
+pub fn data_acquisition::regeo::RegeoNameOutcome::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::regeo::RegeoNameOutcome
+impl<T> typenum::type_operators::Same for data_acquisition::regeo::RegeoNameOutcome
+pub type data_acquisition::regeo::RegeoNameOutcome::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::regeo::RegeoNameOutcome where T: ?core::marker::Sized
 pub struct data_acquisition::regeo::RegeoNamer
 impl data_acquisition::regeo::RegeoNamer
 pub fn data_acquisition::regeo::RegeoNamer::name_for_geometry(&self, geometry: &data_acquisition::source::SourceGeometry) -> core::option::Option<alloc::string::String>
@@ -971,7 +1021,9 @@ pub const data_acquisition::regeo::REGEO_CONCURRENCY: usize
 pub const data_acquisition::regeo::REGEO_ENDPOINT: &str
 pub const data_acquisition::regeo::REGEO_HTTP_TIMEOUT: core::time::Duration
 pub const data_acquisition::regeo::REGEO_MAX_CALLS_PER_RUN: usize
+pub fn data_acquisition::regeo::acceptable_poi_name(name: &str, formatted_address: &str) -> bool
 pub fn data_acquisition::regeo::parse_regeo_name(json: &str) -> core::option::Option<alloc::string::String>
+pub fn data_acquisition::regeo::parse_regeo_name_outcome(json: &str) -> data_acquisition::regeo::RegeoNameOutcome
 pub fn data_acquisition::regeo::polygon_centroid(geometry: &data_acquisition::source::SourceGeometry) -> core::option::Option<(f64, f64)>
 pub type data_acquisition::regeo::KeyProvider = alloc::boxed::Box<(dyn core::ops::function::Fn() -> core::option::Option<alloc::string::String> + core::marker::Send + core::marker::Sync)>
 pub type data_acquisition::regeo::RegeoTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&str, core::time::Duration) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
@@ -1025,8 +1077,11 @@ pub type data_acquisition::source::SourceGeometry::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::source::SourceGeometry where T: ?core::marker::Sized
 pub struct data_acquisition::source::BatchEnrichment
 pub data_acquisition::source::BatchEnrichment::attempted: usize
+pub data_acquisition::source::BatchEnrichment::key_missing: bool
+pub data_acquisition::source::BatchEnrichment::name_sources: alloc::vec::Vec<data_persistence::candidate_projections::CandidateNameSource>
 pub data_acquisition::source::BatchEnrichment::names: alloc::vec::Vec<core::option::Option<alloc::string::String>>
 pub data_acquisition::source::BatchEnrichment::partial: bool
+pub data_acquisition::source::BatchEnrichment::skipped_count: usize
 impl core::clone::Clone for data_acquisition::source::BatchEnrichment
 pub fn data_acquisition::source::BatchEnrichment::clone(&self) -> data_acquisition::source::BatchEnrichment
 impl core::cmp::Eq for data_acquisition::source::BatchEnrichment
@@ -1076,7 +1131,10 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub struct data_acquisition::source::EnrichedEntities
 pub data_acquisition::source::EnrichedEntities::attempted: usize
 pub data_acquisition::source::EnrichedEntities::entities: alloc::vec::Vec<data_acquisition::source::RawEntity>
+pub data_acquisition::source::EnrichedEntities::key_missing: bool
+pub data_acquisition::source::EnrichedEntities::name_sources: alloc::vec::Vec<data_persistence::candidate_projections::CandidateNameSource>
 pub data_acquisition::source::EnrichedEntities::partial: bool
+pub data_acquisition::source::EnrichedEntities::skipped_count: usize
 impl core::clone::Clone for data_acquisition::source::EnrichedEntities
 pub fn data_acquisition::source::EnrichedEntities::clone(&self) -> data_acquisition::source::EnrichedEntities
 impl core::cmp::PartialEq for data_acquisition::source::EnrichedEntities
@@ -1207,6 +1265,7 @@ pub data_acquisition::source::RawEntity::source_geometry: core::option::Option<d
 pub data_acquisition::source::RawEntity::source_payload: serde_json::value::Value
 pub data_acquisition::source::RawEntity::tags: data_transformers::engine::TagMap
 impl data_acquisition::source::RawEntity
+pub fn data_acquisition::source::RawEntity::for_naming(entity_id: impl core::convert::Into<alloc::string::String>, source_geometry: core::option::Option<data_acquisition::source::SourceGeometry>, geometry_part_id: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn data_acquisition::source::RawEntity::new(entity_id: impl core::convert::Into<alloc::string::String>, name: impl core::convert::Into<alloc::string::String>, tags: data_transformers::engine::TagMap, source_payload: serde_json::value::Value) -> Self
 pub fn data_acquisition::source::RawEntity::to_source_data(&self) -> serde_json::value::Value
 pub fn data_acquisition::source::RawEntity::with_geometry(entity_id: impl core::convert::Into<alloc::string::String>, name: impl core::convert::Into<alloc::string::String>, tags: data_transformers::engine::TagMap, source_payload: serde_json::value::Value, source_geometry: core::option::Option<data_acquisition::source::SourceGeometry>, geometry_part_id: impl core::convert::Into<alloc::string::String>) -> Self
@@ -1637,8 +1696,11 @@ pub type data_acquisition::pipeline::AcquisitionPipeline::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::AcquisitionPipeline where T: ?core::marker::Sized
 pub struct data_acquisition::BatchEnrichment
 pub data_acquisition::BatchEnrichment::attempted: usize
+pub data_acquisition::BatchEnrichment::key_missing: bool
+pub data_acquisition::BatchEnrichment::name_sources: alloc::vec::Vec<data_persistence::candidate_projections::CandidateNameSource>
 pub data_acquisition::BatchEnrichment::names: alloc::vec::Vec<core::option::Option<alloc::string::String>>
 pub data_acquisition::BatchEnrichment::partial: bool
+pub data_acquisition::BatchEnrichment::skipped_count: usize
 impl core::clone::Clone for data_acquisition::source::BatchEnrichment
 pub fn data_acquisition::source::BatchEnrichment::clone(&self) -> data_acquisition::source::BatchEnrichment
 impl core::cmp::Eq for data_acquisition::source::BatchEnrichment
@@ -1691,6 +1753,7 @@ pub data_acquisition::CandidateDraft::category: shared_domain_types::category::C
 pub data_acquisition::CandidateDraft::data_source_tag: alloc::string::String
 pub data_acquisition::CandidateDraft::geometry_part_id: alloc::string::String
 pub data_acquisition::CandidateDraft::name: alloc::string::String
+pub data_acquisition::CandidateDraft::name_source: data_persistence::candidate_projections::CandidateNameSource
 pub data_acquisition::CandidateDraft::raw_observation_id: alloc::string::String
 pub data_acquisition::CandidateDraft::source_data: serde_json::value::Value
 pub data_acquisition::CandidateDraft::source_entity_id: alloc::string::String
@@ -1957,7 +2020,10 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub struct data_acquisition::EnrichedEntities
 pub data_acquisition::EnrichedEntities::attempted: usize
 pub data_acquisition::EnrichedEntities::entities: alloc::vec::Vec<data_acquisition::source::RawEntity>
+pub data_acquisition::EnrichedEntities::key_missing: bool
+pub data_acquisition::EnrichedEntities::name_sources: alloc::vec::Vec<data_persistence::candidate_projections::CandidateNameSource>
 pub data_acquisition::EnrichedEntities::partial: bool
+pub data_acquisition::EnrichedEntities::skipped_count: usize
 impl core::clone::Clone for data_acquisition::source::EnrichedEntities
 pub fn data_acquisition::source::EnrichedEntities::clone(&self) -> data_acquisition::source::EnrichedEntities
 impl core::cmp::PartialEq for data_acquisition::source::EnrichedEntities
@@ -2088,6 +2154,7 @@ pub data_acquisition::RawEntity::source_geometry: core::option::Option<data_acqu
 pub data_acquisition::RawEntity::source_payload: serde_json::value::Value
 pub data_acquisition::RawEntity::tags: data_transformers::engine::TagMap
 impl data_acquisition::source::RawEntity
+pub fn data_acquisition::source::RawEntity::for_naming(entity_id: impl core::convert::Into<alloc::string::String>, source_geometry: core::option::Option<data_acquisition::source::SourceGeometry>, geometry_part_id: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn data_acquisition::source::RawEntity::new(entity_id: impl core::convert::Into<alloc::string::String>, name: impl core::convert::Into<alloc::string::String>, tags: data_transformers::engine::TagMap, source_payload: serde_json::value::Value) -> Self
 pub fn data_acquisition::source::RawEntity::to_source_data(&self) -> serde_json::value::Value
 pub fn data_acquisition::source::RawEntity::with_geometry(entity_id: impl core::convert::Into<alloc::string::String>, name: impl core::convert::Into<alloc::string::String>, tags: data_transformers::engine::TagMap, source_payload: serde_json::value::Value, source_geometry: core::option::Option<data_acquisition::source::SourceGeometry>, geometry_part_id: impl core::convert::Into<alloc::string::String>) -> Self

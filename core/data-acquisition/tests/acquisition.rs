@@ -209,9 +209,15 @@ fn changing_plan_boundary_does_not_change_raw_osm_payload_or_digest() {
                 entity.name = "方案派生补名".to_owned();
             }
             Ok(EnrichedEntities {
+                name_sources: entities
+                    .iter()
+                    .map(|_| data_persistence::CandidateNameSource::Osm)
+                    .collect(),
                 entities,
                 partial: false,
                 attempted: 1,
+                key_missing: false,
+                skipped_count: 0,
             })
         }
     }
@@ -459,74 +465,6 @@ fn malformed_overpass_coordinates_keep_source_evidence_and_count_as_invalid() {
         2,
         "可识别来源 ID 的坏几何不得在解析阶段静默消失"
     );
-}
-
-#[test]
-fn boundary_eligibility_is_decided_before_optional_naming() {
-    struct NamingProbe {
-        named_targets: AtomicUsize,
-    }
-    impl DataSource for NamingProbe {
-        fn source_tag(&self) -> &str {
-            "naming-probe"
-        }
-
-        fn fetch_raw_entities(
-            &self,
-            _boundary: &Boundary,
-        ) -> data_acquisition::Result<Vec<data_acquisition::RawEntity>> {
-            let tags =
-                data_transformers::TagMap::from([("building".to_owned(), "school".to_owned())]);
-            Ok(vec![
-                data_acquisition::RawEntity::with_geometry(
-                    "inside",
-                    "inside",
-                    tags.clone(),
-                    serde_json::json!({"id":"inside"}),
-                    Some(data_acquisition::SourceGeometry::Point((121.405, 31.230))),
-                    "point",
-                ),
-                data_acquisition::RawEntity::with_geometry(
-                    "outside",
-                    "outside",
-                    tags,
-                    serde_json::json!({"id":"outside"}),
-                    Some(data_acquisition::SourceGeometry::Point((121.500, 31.300))),
-                    "point",
-                ),
-            ])
-        }
-
-        fn enrich(
-            &self,
-            entities: Vec<data_acquisition::RawEntity>,
-            _deadline: Instant,
-        ) -> data_acquisition::Result<data_acquisition::EnrichedEntities> {
-            self.named_targets.store(entities.len(), Ordering::SeqCst);
-            assert_eq!(entities[0].entity_id, "inside");
-            Ok(data_acquisition::EnrichedEntities {
-                entities,
-                partial: false,
-                attempted: 1,
-            })
-        }
-    }
-
-    let source = NamingProbe {
-        named_targets: AtomicUsize::new(0),
-    };
-    let mut db = Database::open_in_memory().expect("内存库");
-    AcquisitionPipeline::new()
-        .expect("pipeline")
-        .collect(
-            &mut db,
-            &PlanId::generate(),
-            &putuo_boundary_gcj02(),
-            &source,
-            run_deadline(),
-        )
-        .expect("采集");
-    assert_eq!(source.named_targets.load(Ordering::SeqCst), 1);
 }
 
 #[test]
