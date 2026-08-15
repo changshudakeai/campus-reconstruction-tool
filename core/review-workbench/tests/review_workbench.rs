@@ -1,16 +1,19 @@
 //! F5 评审工作台集成测试
+// ignore-tidy-filelength: F5 集成测试集中（三态/批量确认闸/会话/封账/轻量建议筛选与撤销）同属
+// 一个用例入口，便于对照验收；失效里程碑：v2.1.0（2026-12-31），届时建议测试拆入独立文件后消除
 //!
 //! 覆盖缝 4 全流程：一次性读入 → 纯内存三态评审（状态变更操作）→
 //! 批量确认闸 → 暂停/恢复 → 封账批量写回。
 
 use data_persistence::{
-    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
-    ReviewDecisionsApi,
+    CandidateDisplay, CandidateEligibility, CandidateNameSource, CandidateProjection,
+    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
+    RawObservationsApi, ReviewDecisionsApi,
 };
 use review_workbench::CandidateKey;
 use review_workbench::{
-    CommandOutcome, Error, ReviewWorkbench, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
+    CommandOutcome, Error, ReviewWorkbench, StateChange, SuggestFilter, SuggestionAction,
+    SuggestionCategory, BATCH_REMOVE_CONFIRM_THRESHOLD,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::collections::HashSet;
@@ -750,4 +753,473 @@ fn seal_batch_writes_back_and_freezes_review() {
     // 重新进台读到的是封账终态（对回内存）
     let reloaded = ReviewWorkbench::load(&db, &plan_id).unwrap();
     assert_eq!(reloaded.state_of(&building_key(0)), Some(ReviewState::Keep));
+}
+
+// ── 轻量建议辅助（工单：自动标记 + 可读理由 + 筛选 + 一键应用 + 撤销）──
+
+/// 建议夹具：混合信号的已发布 Reviewable 候选。
+///
+/// - b1 教学楼甲（干净）→ 建议保留
+/// - b2 教学楼乙（干净、独立位置）→ 建议保留
+/// - b3 教学楼甲（与 b1 同来源实体 + 同几何 = 重复投影）→ 建议剔除
+/// - b4 未命名建筑 → 建议人工确认（未命名）
+/// - b5 实验楼（几何自动修复）→ 建议人工确认（形状经修复）
+/// - r1 道路（未命名）→ 建议人工确认（未命名）
+/// - w1 游泳池（干净水体）→ 建议保留
+fn suggestion_fixture() -> (Database, PlanId) {
+    let (mut db, plan_id) = fixture();
+    let plan_key = plan_id.to_string();
+    let batch = db
+        .prepare_candidate_batch(&plan_key)
+        .expect("准备建议夹具批次");
+
+    fn ring(offset: f64) -> serde_json::Value {
+        serde_json::json!([
+            [121.4 + offset, 31.2],
+            [121.5 + offset, 31.2],
+            [121.5 + offset, 31.3],
+            [121.4 + offset, 31.3],
+            [121.4 + offset, 31.2]
+        ])
+    }
+
+    let mut projections = Vec::new();
+    let mut push = |candidate_id: &str,
+                    source_entity_id: &str,
+                    category: CandidateCategory,
+                    title: &str,
+                    tags: Vec<(String, String)>,
+                    shape: CandidateShape,
+                    validation: CandidateValidation,
+                    name_source: CandidateNameSource| {
+        projections.push(
+            CandidateProjection::new(
+                candidate_id,
+                &plan_key,
+                format!("raw:{candidate_id}"),
+                "overpass",
+                source_entity_id,
+                "outer",
+                category,
+                CandidateDisplay::new(title, tags),
+                shape,
+                validation,
+                CandidateEligibility::Reviewable,
+            )
+            .with_name_source(name_source),
+        );
+    };
+
+    push(
+        "overpass:way/b1:outer",
+        "way/b1",
+        CandidateCategory::Building,
+        "教学楼甲",
+        vec![("building".to_owned(), "school".to_owned())],
+        CandidateShape::polygon(ring(0.0)),
+        CandidateValidation::Retained,
+        CandidateNameSource::Osm,
+    );
+    push(
+        "overpass:way/b2:outer",
+        "way/b2",
+        CandidateCategory::Building,
+        "教学楼乙",
+        vec![("building".to_owned(), "school".to_owned())],
+        CandidateShape::polygon(ring(0.2)),
+        CandidateValidation::Retained,
+        CandidateNameSource::Osm,
+    );
+    // b3 与 b1 同来源实体 + 同几何（重复投影）。
+    push(
+        "overpass:way/b3:outer",
+        "way/b1",
+        CandidateCategory::Building,
+        "教学楼甲",
+        vec![("building".to_owned(), "school".to_owned())],
+        CandidateShape::polygon(ring(0.0)),
+        CandidateValidation::Retained,
+        CandidateNameSource::Osm,
+    );
+    push(
+        "overpass:way/b4:outer",
+        "way/b4",
+        CandidateCategory::Building,
+        "way/b4",
+        Vec::new(),
+        CandidateShape::polygon(ring(0.4)),
+        CandidateValidation::Retained,
+        CandidateNameSource::Unnamed,
+    );
+    push(
+        "overpass:way/b5:outer",
+        "way/b5",
+        CandidateCategory::Building,
+        "实验楼",
+        vec![("building".to_owned(), "lab".to_owned())],
+        CandidateShape::polygon(ring(0.6)),
+        CandidateValidation::Repaired,
+        CandidateNameSource::Osm,
+    );
+    push(
+        "overpass:way/r1:outer",
+        "way/r1",
+        CandidateCategory::Road,
+        "way/r1",
+        vec![("highway".to_owned(), "footway".to_owned())],
+        CandidateShape::line_string(serde_json::json!([[121.4, 31.1], [121.6, 31.1]])),
+        CandidateValidation::Retained,
+        CandidateNameSource::Unnamed,
+    );
+    push(
+        "overpass:way/w1:outer",
+        "way/w1",
+        CandidateCategory::Water,
+        "游泳池",
+        vec![("leisure".to_owned(), "swimming_pool".to_owned())],
+        CandidateShape::polygon(ring(0.8)),
+        CandidateValidation::Retained,
+        CandidateNameSource::Osm,
+    );
+
+    db.write_candidate_projections(&batch.id, &projections)
+        .expect("建议夹具投影写入");
+    db.publish_candidate_batch(&batch.id)
+        .expect("建议夹具批次发布");
+    (db, plan_id)
+}
+
+fn suggestion_key(candidate_id: &str) -> CandidateKey {
+    CandidateKey::new(candidate_id)
+}
+
+#[test]
+fn generating_suggestions_never_changes_review_state() {
+    let (db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    let before: Vec<(CandidateKey, ReviewState)> = workbench
+        .suggestions()
+        .iter()
+        .map(|(key, _)| ((*key).clone(), workbench.state_of(key).unwrap()))
+        .collect();
+
+    // 生成建议只读候选数据：逐条查询、筛选计数、切换筛选、产出视图。
+    for (key, suggestion) in workbench.suggestions() {
+        assert!(workbench.suggestion_of(key).is_some());
+        assert!(!suggestion.reason_key.is_empty());
+    }
+    for filter in SuggestFilter::ALL {
+        let _ = workbench.suggestion_filter_count(filter);
+        workbench.toggle_suggestion_filter(filter);
+    }
+    let _ = workbench.view();
+
+    let after: Vec<(CandidateKey, ReviewState)> = workbench
+        .suggestions()
+        .iter()
+        .map(|(key, _)| ((*key).clone(), workbench.state_of(key).unwrap()))
+        .collect();
+    assert_eq!(
+        before, after,
+        "仅生成建议/筛选不得改变 ReviewState（验收 5）"
+    );
+    assert_eq!(workbench.export_summary().pending_count, 7);
+}
+
+#[test]
+fn suggestions_are_deterministic_across_loads() {
+    let (db, plan_id) = suggestion_fixture();
+    let first = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    let second = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    assert_eq!(first.suggestions(), second.suggestions());
+}
+
+#[test]
+fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
+    let (db, plan_id) = suggestion_fixture();
+    let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    let by_id: std::collections::HashMap<_, _> = workbench
+        .suggestions()
+        .into_iter()
+        .map(|(key, suggestion)| (key.candidate_id.clone(), suggestion))
+        .collect();
+
+    // 未命名（b4/r1）
+    for id in ["overpass:way/b4:outer", "overpass:way/r1:outer"] {
+        let suggestion = &by_id[id];
+        assert_eq!(suggestion.category, SuggestionCategory::Unnamed);
+        assert_eq!(suggestion.action, SuggestionAction::HumanReview);
+    }
+    // 需要关注（b3 重复投影、b5 自动修复）
+    let duplicate = &by_id["overpass:way/b3:outer"];
+    assert_eq!(duplicate.category, SuggestionCategory::NeedsAttention);
+    assert_eq!(duplicate.action, SuggestionAction::Remove);
+    let repaired = &by_id["overpass:way/b5:outer"];
+    assert_eq!(repaired.category, SuggestionCategory::NeedsAttention);
+    assert_eq!(repaired.action, SuggestionAction::HumanReview);
+    // 无需处理（b1/b2/w1 建议保留）
+    for id in [
+        "overpass:way/b1:outer",
+        "overpass:way/b2:outer",
+        "overpass:way/w1:outer",
+    ] {
+        let suggestion = &by_id[id];
+        assert_eq!(suggestion.category, SuggestionCategory::NoActionNeeded);
+        assert_eq!(suggestion.action, SuggestionAction::Keep);
+    }
+    // 每条建议都有可读理由文本键（public_api 测试再断言 zh-CN.json 可解析）
+    for (_, suggestion) in by_id {
+        assert!(!suggestion.reason_key.is_empty());
+        assert!(!suggestion.summary_key.is_empty());
+    }
+}
+
+#[test]
+fn suggestion_filters_combine_with_category_and_count_accurately() {
+    let (db, plan_id) = suggestion_fixture();
+    let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+
+    assert_eq!(workbench.suggestion_filter_count(SuggestFilter::Unnamed), 2);
+    assert_eq!(
+        workbench.suggestion_filter_count(SuggestFilter::SuggestKeep),
+        3
+    );
+    assert_eq!(
+        workbench.suggestion_filter_count(SuggestFilter::SuggestHumanReview),
+        3
+    );
+    assert_eq!(
+        workbench.suggestion_filter_count(SuggestFilter::SuggestRemove),
+        1
+    );
+    assert_eq!(
+        workbench.suggestion_filter_count(SuggestFilter::NeedsAttention),
+        2
+    );
+
+    // 视图中的筛选标签与类别组合（卡片只显示当前类别）。
+    let view = workbench.view();
+    assert_eq!(view.suggestion_filters.len(), 5);
+    let keep_tab = view
+        .suggestion_filters
+        .iter()
+        .find(|tab| tab.filter == SuggestFilter::SuggestKeep)
+        .expect("建议保留标签存在");
+    assert_eq!(keep_tab.count, 3);
+    assert!(!keep_tab.active);
+
+    // 激活"建议保留"后与建筑类别组合：建筑页 2 张建议保留卡。
+    let mut workbench = workbench;
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+    let view = workbench.view();
+    assert!(view.apply_suggestions_enabled);
+    assert_eq!(
+        view.cards
+            .iter()
+            .filter(|card| card.suggestion.is_some())
+            .count(),
+        2,
+        "建筑类别 + 建议保留筛选组合后只显示建议保留的候选"
+    );
+    assert!(view.cards.iter().all(|card| card
+        .suggestion
+        .as_ref()
+        .is_some_and(|s| s.action_key == "review.suggestion_action_keep")));
+}
+
+#[test]
+fn apply_suggestions_confirmation_cancel_leaves_state_untouched() {
+    let (db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+
+    let outcome = workbench.apply_suggestions().unwrap();
+    let CommandOutcome::NeedsSuggestionConfirmation(request) = outcome else {
+        panic!("一键应用必须先弹确认，实际 {outcome:?}");
+    };
+    assert_eq!(request.count, 2);
+    assert_eq!(request.keep_count, 2);
+    assert_eq!(request.remove_count, 0);
+    assert!(request.reason_lines.iter().any(|line| line.count == 2));
+
+    // 弹窗期间状态原样不动。
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b1:outer")),
+        Some(ReviewState::Pending)
+    );
+    assert!(workbench.view().pending_suggestion_apply.is_some());
+
+    // 取消：状态不变、待确认计划清除。
+    workbench.cancel_suggestion_apply().unwrap();
+    assert!(workbench.view().pending_suggestion_apply.is_none());
+    for id in ["overpass:way/b1:outer", "overpass:way/b2:outer"] {
+        assert_eq!(
+            workbench.state_of(&suggestion_key(id)),
+            Some(ReviewState::Pending),
+            "取消后状态不得改变"
+        );
+    }
+    assert!(!workbench.can_undo_suggestion_apply());
+    assert!(matches!(
+        workbench.cancel_suggestion_apply(),
+        Err(Error::NoSuggestionApplyPending)
+    ));
+}
+
+#[test]
+fn apply_suggestions_confirm_writes_states_and_undo_restores_them() {
+    let (db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+
+    let CommandOutcome::NeedsSuggestionConfirmation(request) =
+        workbench.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    assert_eq!(request.count, 2);
+
+    let outcome = workbench.confirm_suggestion_apply().unwrap();
+    assert_eq!(outcome, CommandOutcome::Applied { changed: 2 });
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b1:outer")),
+        Some(ReviewState::Keep)
+    );
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b2:outer")),
+        Some(ReviewState::Keep)
+    );
+
+    // 可追溯：批次与理由被记录。
+    let batch = workbench
+        .last_applied_suggestion_batch()
+        .expect("已记录最近一批");
+    assert_eq!(batch.keep_count, 2);
+    assert_eq!(batch.remove_count, 0);
+    assert_eq!(batch.targets.len(), 2);
+    assert_eq!(batch.before_states.len(), 2);
+    assert!(batch
+        .before_states
+        .iter()
+        .all(|(_, state)| *state == ReviewState::Pending));
+    assert!(workbench.can_undo_suggestion_apply());
+    assert!(workbench.view().undo_available);
+
+    // 撤销上一批：恢复到应用前状态。
+    let changed = workbench.undo_last_suggestion_apply().unwrap();
+    assert_eq!(changed, 2);
+    for id in ["overpass:way/b1:outer", "overpass:way/b2:outer"] {
+        assert_eq!(
+            workbench.state_of(&suggestion_key(id)),
+            Some(ReviewState::Pending),
+            "撤销后必须恢复应用前状态"
+        );
+    }
+    assert!(!workbench.can_undo_suggestion_apply());
+    assert!(matches!(
+        workbench.undo_last_suggestion_apply(),
+        Err(Error::NoSuggestionApplyToUndo)
+    ));
+}
+
+#[test]
+fn apply_suggestions_scope_respects_active_category_and_remove_batch() {
+    let (db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestRemove);
+
+    // 建筑类别 + 建议剔除筛选：只有 b3 一个重复投影。
+    let CommandOutcome::NeedsSuggestionConfirmation(request) =
+        workbench.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    assert_eq!(request.count, 1);
+    assert_eq!(request.remove_count, 1);
+    let changed = workbench.confirm_suggestion_apply().unwrap();
+    assert_eq!(changed, CommandOutcome::Applied { changed: 1 });
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b3:outer")),
+        Some(ReviewState::Remove)
+    );
+
+    // 水类别 + 建议保留筛选：只有 w1。
+    let mut water = workbench;
+    water.set_active_category(CandidateCategory::Water);
+    water.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+    let CommandOutcome::NeedsSuggestionConfirmation(request) = water.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    assert_eq!(request.count, 1);
+    assert_eq!(request.keep_count, 1);
+    assert_eq!(request.reason_lines.len(), 1);
+    assert_eq!(
+        water.confirm_suggestion_apply().unwrap(),
+        CommandOutcome::Applied { changed: 1 }
+    );
+    assert_eq!(
+        water.state_of(&suggestion_key("overpass:way/w1:outer")),
+        Some(ReviewState::Keep)
+    );
+}
+
+#[test]
+fn undo_is_rejected_after_seal_but_batch_record_remains_traceable() {
+    let (mut db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+    let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    workbench.confirm_suggestion_apply().unwrap();
+    assert!(workbench.can_undo_suggestion_apply());
+
+    workbench.seal(&mut db).unwrap();
+    assert!(!workbench.can_undo_suggestion_apply(), "封账后不可撤销");
+    assert!(matches!(
+        workbench.undo_last_suggestion_apply(),
+        Err(Error::AlreadySealed)
+    ));
+    // 追溯记录仍保留（批次与理由可查），只是不能再撤销。
+    let batch = workbench
+        .last_applied_suggestion_batch()
+        .expect("封账后追溯记录仍可读");
+    assert_eq!(batch.keep_count, 2);
+    assert_eq!(batch.reason_lines.len(), 1);
+}
+
+#[test]
+fn only_most_recent_batch_is_undoable() {
+    let (db, plan_id) = suggestion_fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+    let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    workbench.confirm_suggestion_apply().unwrap();
+    // 第二次应用（建议剔除）覆盖上一批撤销点。
+    workbench.toggle_suggestion_filter(SuggestFilter::SuggestRemove);
+    let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
+    else {
+        panic!("需要确认");
+    };
+    workbench.confirm_suggestion_apply().unwrap();
+    let batch = workbench
+        .last_applied_suggestion_batch()
+        .expect("最近一批为剔除批");
+    assert_eq!(batch.remove_count, 1);
+
+    // 撤销只回滚最近一批（b3 回到待定），b1/b2 保持上一批的保留。
+    workbench.undo_last_suggestion_apply().unwrap();
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b3:outer")),
+        Some(ReviewState::Pending)
+    );
+    assert_eq!(
+        workbench.state_of(&suggestion_key("overpass:way/b1:outer")),
+        Some(ReviewState::Keep)
+    );
 }

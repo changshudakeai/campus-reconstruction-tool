@@ -109,6 +109,8 @@ enum PendingConfirmation {
     OrientationRecalc,
     /// 批量剔除 >=5 项的二次确认（M3：确认后 F5 执行批量剔除）
     ReviewBatchReject,
+    /// 一键应用建议的确认（确认后 F5 按当前筛选范围执行保留/剔除）
+    ReviewApplySuggestions,
     /// 校区搜索候选详情确认窗（D-3：确认后经 F1 建/选校区）
     ConfirmCampusSelection {
         poi_id: String,
@@ -397,6 +399,10 @@ impl ProductionEntries {
                 self.review
                     .show(window, &self.center, ReviewRequest::ConfirmPending);
             }
+            PendingConfirmation::ReviewApplySuggestions => {
+                self.review
+                    .show(window, &self.center, ReviewRequest::ConfirmSuggestionApply);
+            }
             PendingConfirmation::ConfirmCampusSelection { poi_id } => {
                 self.campus_plan.show(
                     window,
@@ -418,6 +424,11 @@ impl ProductionEntries {
         if matches!(pending, Some(PendingConfirmation::ReviewBatchReject)) {
             self.review
                 .show(window, &self.center, ReviewRequest::CancelPending);
+            return;
+        }
+        if matches!(pending, Some(PendingConfirmation::ReviewApplySuggestions)) {
+            self.review
+                .show(window, &self.center, ReviewRequest::CancelSuggestionApply);
             return;
         }
         if matches!(
@@ -521,9 +532,14 @@ impl ProductionEntries {
     /// 转发一次评审操作；批量剔除 >=5 项时记录待二次确认。
     fn submit_review(&mut self, window: &AppWindow, request: ReviewRequest) {
         self.supersede_diagnostic(window);
+        let apply_requested = matches!(request, ReviewRequest::ApplySuggestions);
         let presentation = self.review.show(window, &self.center, request);
         if presentation.operation() == &OperationState::NeedsConfirmation {
-            self.pending_confirmation = Some(PendingConfirmation::ReviewBatchReject);
+            self.pending_confirmation = Some(if apply_requested {
+                PendingConfirmation::ReviewApplySuggestions
+            } else {
+                PendingConfirmation::ReviewBatchReject
+            });
         }
     }
 
@@ -583,6 +599,23 @@ impl ProductionEntries {
 
     pub(crate) fn review_bulk_state(&mut self, window: &AppWindow, state: String) {
         self.submit_review(window, ReviewRequest::SetBulk { state });
+    }
+
+    pub(crate) fn review_toggle_suggestion_filter(&mut self, window: &AppWindow, index: i32) {
+        self.submit_review(
+            window,
+            ReviewRequest::ToggleSuggestionFilter {
+                index: index as usize,
+            },
+        );
+    }
+
+    pub(crate) fn review_apply_suggestions(&mut self, window: &AppWindow) {
+        self.submit_review(window, ReviewRequest::ApplySuggestions);
+    }
+
+    pub(crate) fn review_undo_suggestions(&mut self, window: &AppWindow) {
+        self.submit_review(window, ReviewRequest::UndoSuggestionApply);
     }
 
     pub(crate) fn review_pause(&mut self, window: &AppWindow) {
@@ -1529,6 +1562,29 @@ impl ProductionEntries {
         window.on_review_seal_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             shared.borrow_mut().review_seal(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_suggestion_filter_clicked(move |index| {
+            let Some(window) = weak.upgrade() else { return };
+            shared
+                .borrow_mut()
+                .review_toggle_suggestion_filter(&window, index);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_apply_suggestions_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            shared.borrow_mut().review_apply_suggestions(&window);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_review_undo_suggestions_clicked(move || {
+            let Some(window) = weak.upgrade() else { return };
+            shared.borrow_mut().review_undo_suggestions(&window);
         });
 
         let weak = window.as_weak();

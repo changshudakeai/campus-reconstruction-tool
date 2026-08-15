@@ -7,6 +7,9 @@
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 use crate::command::ConfirmationRequest;
+use crate::suggestion::{
+    SuggestFilter, SuggestionAction, SuggestionApplyRequest, SuggestionCategory,
+};
 
 /// 本 crate 产出的全部文本键（zh-CN.json 中必须逐条存在，由测试保证）
 pub mod text_keys {
@@ -54,6 +57,94 @@ pub mod text_keys {
     pub const CONFIRM_BUTTON: &str = "app.confirm_button";
     /// 取消按钮（弹窗共用，app 命名空间既有键）
     pub const CANCEL_BUTTON: &str = "app.cancel_button";
+    /// 建议筛选区标题
+    pub const SUGGESTION_FILTERS_LABEL: &str = "review.suggestion_filters_label";
+    /// 建议筛选器标签行（含 `{label}`/`{count}` 占位符）
+    pub const SUGGESTION_FILTER_TAB: &str = "review.suggestion_filter_tab";
+    /// 建议筛选：需要关注
+    pub const FILTER_NEEDS_ATTENTION: &str = "review.filter_needs_attention";
+    /// 建议筛选：未命名
+    pub const FILTER_UNNAMED: &str = "review.filter_unnamed";
+    /// 建议筛选：建议保留
+    pub const FILTER_SUGGEST_KEEP: &str = "review.filter_suggest_keep";
+    /// 建议筛选：建议人工确认
+    pub const FILTER_HUMAN_REVIEW: &str = "review.filter_human_review";
+    /// 建议筛选：建议剔除
+    pub const FILTER_SUGGEST_REMOVE: &str = "review.filter_suggest_remove";
+    /// 一键应用建议按钮
+    pub const APPLY_SUGGESTIONS: &str = "review.apply_suggestions";
+    /// 撤销上一批按钮
+    pub const UNDO_SUGGESTIONS: &str = "review.undo_suggestions";
+    /// 建议类别：未命名
+    pub const SUGGESTION_CATEGORY_UNNAMED: &str = "review.suggestion_category_unnamed";
+    /// 建议类别：需要关注
+    pub const SUGGESTION_CATEGORY_NEEDS_ATTENTION: &str =
+        "review.suggestion_category_needs_attention";
+    /// 建议类别：无需处理
+    pub const SUGGESTION_CATEGORY_NO_ACTION: &str = "review.suggestion_category_no_action";
+    /// 建议动作：建议保留
+    pub const SUGGESTION_ACTION_KEEP: &str = "review.suggestion_action_keep";
+    /// 建议动作：建议人工确认
+    pub const SUGGESTION_ACTION_HUMAN_REVIEW: &str = "review.suggestion_action_human_review";
+    /// 建议动作：建议剔除
+    pub const SUGGESTION_ACTION_REMOVE: &str = "review.suggestion_action_remove";
+    /// 建议理由：未命名
+    pub const SUGGESTION_REASON_UNNAMED: &str = "review.suggestion_reason_unnamed";
+    /// 建议理由：疑似重叠
+    pub const SUGGESTION_REASON_OVERLAP: &str = "review.suggestion_reason_overlap";
+    /// 建议理由：重复投影
+    pub const SUGGESTION_REASON_EXACT_DUPLICATE: &str = "review.suggestion_reason_exact_duplicate";
+    /// 建议理由：重复嫌疑
+    pub const SUGGESTION_REASON_DUPLICATE_SUSPECT: &str =
+        "review.suggestion_reason_duplicate_suspect";
+    /// 建议理由：形状可疑
+    pub const SUGGESTION_REASON_SUSPICIOUS_SHAPE: &str =
+        "review.suggestion_reason_suspicious_shape";
+    /// 建议理由：几何经自动修复
+    pub const SUGGESTION_REASON_REPAIRED: &str = "review.suggestion_reason_repaired";
+    /// 建议理由：缺少标签
+    pub const SUGGESTION_REASON_SPARSE_TAGS: &str = "review.suggestion_reason_sparse_tags";
+    /// 建议理由：缺少来源信息（来源类型输入）
+    pub const SUGGESTION_REASON_MISSING_SOURCE: &str = "review.suggestion_reason_missing_source";
+    /// 建议理由：携带隔离/警告理由（D）
+    pub const SUGGESTION_REASON_ISOLATED: &str = "review.suggestion_reason_isolated";
+    /// 建议理由：本次采集未找到
+    pub const SUGGESTION_REASON_MISSING_LATEST: &str = "review.suggestion_reason_missing_latest";
+    /// 建议理由：无需处理（建议保留）
+    pub const SUGGESTION_REASON_KEEP: &str = "review.suggestion_reason_keep";
+    /// 理由摘要：未命名
+    pub const SUGGESTION_SUMMARY_UNNAMED: &str = "review.suggestion_summary_unnamed";
+    /// 理由摘要：疑似重叠
+    pub const SUGGESTION_SUMMARY_OVERLAP: &str = "review.suggestion_summary_overlap";
+    /// 理由摘要：重复投影
+    pub const SUGGESTION_SUMMARY_EXACT_DUPLICATE: &str =
+        "review.suggestion_summary_exact_duplicate";
+    /// 理由摘要：疑似重复
+    pub const SUGGESTION_SUMMARY_DUPLICATE_SUSPECT: &str =
+        "review.suggestion_summary_duplicate_suspect";
+    /// 理由摘要：形状可疑
+    pub const SUGGESTION_SUMMARY_SUSPICIOUS_SHAPE: &str =
+        "review.suggestion_summary_suspicious_shape";
+    /// 理由摘要：形状经修复
+    pub const SUGGESTION_SUMMARY_REPAIRED: &str = "review.suggestion_summary_repaired";
+    /// 理由摘要：缺少标签
+    pub const SUGGESTION_SUMMARY_SPARSE_TAGS: &str = "review.suggestion_summary_sparse_tags";
+    /// 理由摘要：缺少来源
+    pub const SUGGESTION_SUMMARY_MISSING_SOURCE: &str = "review.suggestion_summary_missing_source";
+    /// 理由摘要：携带隔离理由
+    pub const SUGGESTION_SUMMARY_ISOLATED: &str = "review.suggestion_summary_isolated";
+    /// 理由摘要：本次未找到
+    pub const SUGGESTION_SUMMARY_MISSING_LATEST: &str = "review.suggestion_summary_missing_latest";
+    /// 理由摘要：无需处理
+    pub const SUGGESTION_SUMMARY_KEEP: &str = "review.suggestion_summary_keep";
+    /// 应用建议确认弹窗标题
+    pub const APPLY_SUGGEST_CONFIRM_TITLE: &str = "review.apply_suggest_confirm_title";
+    /// 应用建议确认弹窗正文（含 {count}/{keep}/{remove} 占位符）
+    pub const APPLY_SUGGEST_CONFIRM_BODY: &str = "review.apply_suggest_confirm_body";
+    /// 确认弹窗"主要理由分布"标签
+    pub const APPLY_SUGGEST_REASON_LABEL: &str = "review.apply_suggest_reason_label";
+    /// 理由分布行（含 {label}/{count} 占位符）
+    pub const APPLY_SUGGEST_REASON_LINE: &str = "review.apply_suggest_reason_line";
 }
 
 /// 三态 → 显示名文本键
@@ -77,6 +168,24 @@ pub(crate) fn category_text_key(category: CandidateCategory) -> &'static str {
         CandidateCategory::Sports => "collection.category_sports",
         // B1 枚举带 #[non_exhaustive]：未知新类别兜底进"其他"显示
         _ => "collection.category_other",
+    }
+}
+
+/// 建议类别 → 显示名文本键
+pub(crate) fn suggestion_category_text_key(category: SuggestionCategory) -> &'static str {
+    match category {
+        SuggestionCategory::Unnamed => text_keys::SUGGESTION_CATEGORY_UNNAMED,
+        SuggestionCategory::NeedsAttention => text_keys::SUGGESTION_CATEGORY_NEEDS_ATTENTION,
+        SuggestionCategory::NoActionNeeded => text_keys::SUGGESTION_CATEGORY_NO_ACTION,
+    }
+}
+
+/// 建议动作 → 显示名文本键
+pub(crate) fn suggestion_action_text_key(action: SuggestionAction) -> &'static str {
+    match action {
+        SuggestionAction::Keep => text_keys::SUGGESTION_ACTION_KEEP,
+        SuggestionAction::HumanReview => text_keys::SUGGESTION_ACTION_HUMAN_REVIEW,
+        SuggestionAction::Remove => text_keys::SUGGESTION_ACTION_REMOVE,
     }
 }
 
@@ -112,6 +221,36 @@ pub struct CandidateCardView {
     pub selected: bool,
     /// 是否与地图联动高亮
     pub highlighted: bool,
+    /// 轻量建议（无建议时不会出现；生成建议不改变三态）
+    pub suggestion: Option<SuggestionCardView>,
+}
+
+/// 候选卡片上的建议呈现数据（类别/动作/理由全部为文本键，由 UI 层解析）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SuggestionCardView {
+    /// 建议类别显示名文本键（未命名 / 需要关注 / 无需处理）。
+    pub category_key: &'static str,
+    /// 建议动作显示名文本键（建议保留 / 建议人工确认 / 建议剔除）。
+    pub action_key: &'static str,
+    /// 一句话可读理由文本键。
+    pub reason_key: &'static str,
+    /// 理由插值参数。
+    pub reason_args: serde_json::Value,
+}
+
+/// 建议筛选器标签（六类标签之外；与类别组合，验收 3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SuggestionFilterView {
+    /// 筛选器标识。
+    pub filter: SuggestFilter,
+    /// 筛选器显示名文本键。
+    pub label_key: &'static str,
+    /// 命中该筛选器的候选总数（跨类别）。
+    pub count: usize,
+    /// 是否已激活。
+    pub active: bool,
 }
 
 /// 中间大地图上的一个对象（与卡片同源、双向高亮联动）
@@ -180,6 +319,20 @@ pub struct WorkbenchView {
     pub bulk_buttons_visible: bool,
     /// 等待中的二次确认弹窗（批量剔除 ≥5 项时出现）
     pub pending_confirmation: Option<ConfirmationRequest>,
+    /// 建议筛选区标题文本键
+    pub suggestion_filters_label_key: &'static str,
+    /// 建议筛选器标签（固定顺序，可多选，与类别组合）
+    pub suggestion_filters: Vec<SuggestionFilterView>,
+    /// 一键应用建议按钮文本键
+    pub apply_suggestions_label_key: &'static str,
+    /// 撤销上一批按钮文本键
+    pub undo_suggestions_label_key: &'static str,
+    /// 一键应用是否可用（未封账且当前筛选范围内有可执行建议）
+    pub apply_suggestions_enabled: bool,
+    /// 是否存在可撤销的上一批（未封账时）
+    pub undo_available: bool,
+    /// 等待中的建议应用确认（对象数量 + 主要理由分布，验收 4）
+    pub pending_suggestion_apply: Option<SuggestionApplyRequest>,
     /// 是否已封账（评审入口禁用信号）
     pub sealed: bool,
 }

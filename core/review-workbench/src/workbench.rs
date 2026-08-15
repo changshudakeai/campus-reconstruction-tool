@@ -16,9 +16,13 @@ use crate::candidate::{Candidate, CandidateKey};
 use crate::command::{CommandOutcome, ConfirmationRequest, StateChange};
 use crate::error::{Error, Result};
 use crate::session::{SessionEntry, SessionSnapshot};
+use crate::suggestion::{
+    apply_request, AppliedSuggestionBatch, SuggestFilter, SuggestionApplyRequest, SuggestionEngine,
+};
 use crate::view_models::{
-    category_text_key, state_text_key, text_keys, CandidateCardView, CategoryTabView,
-    ExportSummary, InfoPanelView, MapObjectView, WorkbenchView,
+    category_text_key, state_text_key, suggestion_action_text_key, suggestion_category_text_key,
+    text_keys, CandidateCardView, CategoryTabView, ExportSummary, InfoPanelView, MapObjectView,
+    SuggestionCardView, SuggestionFilterView, WorkbenchView,
 };
 
 /// 类别抽屉的固定展示顺序（ADR-0016 左栏标签页）
@@ -40,7 +44,24 @@ pub struct ReviewWorkbench {
     highlighted: Option<CandidateKey>,
     /// 等待二次确认的批量剔除操作（弹窗期间暂存，确认后执行）
     pending_confirmation: Option<StateChange>,
+    /// 等待确认的一键应用建议计划（弹窗期间暂存，确认后执行）
+    pending_suggestion_apply: Option<SuggestionApplyPlan>,
+    /// 最近一批已应用建议（撤销与追溯记录；封账后不可撤销）
+    undo: Option<AppliedSuggestionBatch>,
+    /// 当前激活的建议筛选器（多选，与类别组合）
+    suggestion_filters: Vec<SuggestFilter>,
     sealed: bool,
+}
+
+/// 一键应用建议的待确认计划：按当前筛选范围预生成的两批状态变更。
+#[derive(Debug, Clone)]
+struct SuggestionApplyPlan {
+    /// 建议保留的候选
+    keep: Vec<CandidateKey>,
+    /// 建议剔除的候选
+    remove: Vec<CandidateKey>,
+    /// 确认弹窗数据（对象数量 + 主要理由分布）
+    request: SuggestionApplyRequest,
 }
 
 impl ReviewWorkbench {
@@ -69,14 +90,29 @@ impl ReviewWorkbench {
             .find(|category| candidates.iter().any(|c| c.category == *category))
             .unwrap_or(CandidateCategory::Building);
 
-        Ok(Self {
+        let mut workbench = Self {
             plan_id: plan_key,
             candidates,
             active_category,
             highlighted: None,
             pending_confirmation: None,
+            pending_suggestion_apply: None,
+            undo: None,
+            suggestion_filters: Vec::new(),
             sealed: false,
-        })
+        };
+        // 轻量建议：进台时按候选数据确定性生成；只读，不改变 ReviewState。
+        let suggestions = SuggestionEngine::compute(&workbench.candidates);
+        for (key, suggestion) in suggestions {
+            if let Some(candidate) = workbench
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.key == key)
+            {
+                candidate.suggestion = Some(suggestion);
+            }
+        }
+        Ok(workbench)
     }
 
     /// 所属方案 ID
@@ -95,6 +131,194 @@ impl ReviewWorkbench {
             .iter()
             .find(|c| &c.key == key)
             .map(|c| c.state)
+    }
+
+    // ── 轻量建议（验收 1/2/5：可解释、只读现有数据、不改三态）────────
+
+    /// 某候选的建议（进台时确定性生成）。
+    pub fn suggestion_of(
+        &self,
+        key: &CandidateKey,
+    ) -> Option<&crate::suggestion::CandidateSuggestion> {
+        self.candidates
+            .iter()
+            .find(|c| &c.key == key)
+            .and_then(|c| c.suggestion.as_ref())
+    }
+
+    /// 全部建议（按候选标识升序）。
+    pub fn suggestions(&self) -> Vec<(&CandidateKey, &crate::suggestion::CandidateSuggestion)> {
+        let mut pairs: Vec<_> = self
+            .candidates
+            .iter()
+            .filter_map(|c| c.suggestion.as_ref().map(|s| (&c.key, s)))
+            .collect();
+        pairs.sort_by(|a, b| a.0.cmp(b.0));
+        pairs
+    }
+
+    /// 建议筛选器是否已激活。
+    pub fn suggestion_filter_active(&self, filter: SuggestFilter) -> bool {
+        self.suggestion_filters.contains(&filter)
+    }
+
+    /// 当前激活的建议筛选器（固定顺序）。
+    pub fn active_suggestion_filters(&self) -> Vec<SuggestFilter> {
+        SuggestFilter::ALL
+            .into_iter()
+            .filter(|filter| self.suggestion_filter_active(*filter))
+            .collect()
+    }
+
+    /// 命中某筛选器的候选总数（跨类别）。
+    pub fn suggestion_filter_count(&self, filter: SuggestFilter) -> usize {
+        self.candidates
+            .iter()
+            .filter(|c| {
+                c.suggestion
+                    .as_ref()
+                    .is_some_and(|suggestion| filter.matches(suggestion))
+            })
+            .count()
+    }
+
+    /// 切换建议筛选器（多选，与类别组合）。
+    pub fn toggle_suggestion_filter(&mut self, filter: SuggestFilter) {
+        if let Some(position) = self.suggestion_filters.iter().position(|f| *f == filter) {
+            self.suggestion_filters.remove(position);
+        } else {
+            self.suggestion_filters.push(filter);
+        }
+    }
+
+    /// 一键应用是否可用：未封账，且当前筛选范围内存在可执行（保留/剔除）建议。
+    pub fn apply_suggestions_enabled(&self) -> bool {
+        if self.sealed || self.active_suggestion_filters().is_empty() {
+            return false;
+        }
+        let (keep, remove) = self.actionable_scope();
+        !keep.is_empty() || !remove.is_empty()
+    }
+
+    /// 是否存在可撤销的上一批（封账后不可撤销）。
+    pub fn can_undo_suggestion_apply(&self) -> bool {
+        !self.sealed && self.undo.is_some()
+    }
+
+    /// 最近一批已应用建议的追溯记录（批次与理由；封账后仍可读但不可撤销）。
+    pub fn last_applied_suggestion_batch(&self) -> Option<&AppliedSuggestionBatch> {
+        self.undo.as_ref()
+    }
+
+    /// 当前筛选范围内的可执行建议：当前类别 ∩ 激活筛选器（至少一个激活）。
+    fn actionable_scope(&self) -> (Vec<CandidateKey>, Vec<CandidateKey>) {
+        let filters = self.active_suggestion_filters();
+        if filters.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let mut keep = Vec::new();
+        let mut remove = Vec::new();
+        for candidate in &self.candidates {
+            if candidate.category != self.active_category {
+                continue;
+            }
+            let Some(suggestion) = candidate.suggestion.as_ref() else {
+                continue;
+            };
+            if !filters.iter().any(|filter| filter.matches(suggestion)) {
+                continue;
+            }
+            match suggestion.action {
+                crate::suggestion::SuggestionAction::Keep => keep.push(candidate.key.clone()),
+                crate::suggestion::SuggestionAction::Remove => remove.push(candidate.key.clone()),
+                crate::suggestion::SuggestionAction::HumanReview => {}
+            }
+        }
+        keep.sort();
+        remove.sort();
+        (keep, remove)
+    }
+
+    /// 一键应用建议（验收 4）：对当前筛选范围生成保留/剔除批次并请求确认；
+    /// 生成建议本身不改变任何 `ReviewState`（验收 5）。
+    pub fn apply_suggestions(&mut self) -> Result<CommandOutcome> {
+        self.ensure_not_sealed()?;
+        let (keep, remove) = self.actionable_scope();
+        if keep.is_empty() && remove.is_empty() {
+            return Ok(CommandOutcome::Applied { changed: 0 });
+        }
+        let request = apply_request(&keep, &remove, &self.candidates);
+        self.pending_suggestion_apply = Some(SuggestionApplyPlan {
+            keep,
+            remove,
+            request: request.clone(),
+        });
+        Ok(CommandOutcome::NeedsSuggestionConfirmation(request))
+    }
+
+    /// 确认弹窗点了"确认"：复用既有批量状态变更机制执行保留/剔除两批，
+    /// 记录批次与理由供撤销与追溯；取消路径见
+    /// [`Self::cancel_suggestion_apply`]。
+    pub fn confirm_suggestion_apply(&mut self) -> Result<CommandOutcome> {
+        self.ensure_not_sealed()?;
+        let plan = self
+            .pending_suggestion_apply
+            .take()
+            .ok_or(Error::NoSuggestionApplyPending)?;
+        let before_states: Vec<(CandidateKey, shared_domain_types::ReviewState)> = plan
+            .keep
+            .iter()
+            .chain(plan.remove.iter())
+            .filter_map(|key| self.state_of(key).map(|state| (key.clone(), state)))
+            .collect();
+        let mut changed = 0;
+        if !plan.keep.is_empty() {
+            changed += self.apply(&StateChange::batch(
+                plan.keep.clone(),
+                shared_domain_types::ReviewState::Keep,
+            ));
+        }
+        if !plan.remove.is_empty() {
+            changed += self.apply(&StateChange::batch(
+                plan.remove.clone(),
+                shared_domain_types::ReviewState::Remove,
+            ));
+        }
+        let mut targets: Vec<CandidateKey> =
+            before_states.iter().map(|(key, _)| key.clone()).collect();
+        targets.sort();
+        self.undo = Some(AppliedSuggestionBatch {
+            targets,
+            keep_count: plan.request.keep_count,
+            remove_count: plan.request.remove_count,
+            reason_lines: plan.request.reason_lines,
+            before_states,
+        });
+        Ok(CommandOutcome::Applied { changed })
+    }
+
+    /// 确认弹窗点了"取消"：丢弃待确认计划，状态原样不动。
+    pub fn cancel_suggestion_apply(&mut self) -> Result<()> {
+        self.pending_suggestion_apply
+            .take()
+            .map(|_| ())
+            .ok_or(Error::NoSuggestionApplyPending)
+    }
+
+    /// 撤销上一批（验收 6）：只覆盖未封账前的最近一批；封账后拒绝。
+    pub fn undo_last_suggestion_apply(&mut self) -> Result<usize> {
+        self.ensure_not_sealed()?;
+        let batch = self.undo.take().ok_or(Error::NoSuggestionApplyToUndo)?;
+        let mut changed = 0;
+        for (key, state) in &batch.before_states {
+            if let Some(candidate) = self.candidates.iter_mut().find(|c| &c.key == key) {
+                if candidate.state != *state {
+                    candidate.state = *state;
+                    changed += 1;
+                }
+            }
+        }
+        Ok(changed)
     }
 
     // ── 状态变更操作（B8 接口预留，ADR-0022 验收标准）──────
@@ -384,6 +608,7 @@ impl ReviewWorkbench {
         db.batch_update_review_decisions(&decisions)?;
         self.sealed = true;
         self.pending_confirmation = None;
+        self.pending_suggestion_apply = None;
         Ok(self.export_summary())
     }
 
@@ -410,18 +635,37 @@ impl ReviewWorkbench {
             })
             .collect();
 
+        // 卡片列表 = 当前类别 ∩ 激活建议筛选器（无激活筛选器时显示全部）。
+        let active_filters = self.active_suggestion_filters();
         let cards = self
             .candidates
             .iter()
-            .filter(|c| c.category == self.active_category)
-            .map(|c| CandidateCardView {
-                candidate_id: c.key.candidate_id.clone(),
-                title: c.title.clone(),
-                named: c.named,
-                state: c.state,
-                state_key: state_text_key(c.state),
-                selected: c.selected,
-                highlighted: self.highlighted.as_ref() == Some(&c.key),
+            .filter(|c| {
+                c.category == self.active_category
+                    && (active_filters.is_empty()
+                        || c.suggestion.as_ref().is_some_and(|suggestion| {
+                            active_filters
+                                .iter()
+                                .any(|filter| filter.matches(suggestion))
+                        }))
+            })
+            .map(|c| {
+                let suggestion = c.suggestion.as_ref().map(|s| SuggestionCardView {
+                    category_key: suggestion_category_text_key(s.category),
+                    action_key: suggestion_action_text_key(s.action),
+                    reason_key: s.reason_key,
+                    reason_args: s.reason_args.clone(),
+                });
+                CandidateCardView {
+                    candidate_id: c.key.candidate_id.clone(),
+                    title: c.title.clone(),
+                    named: c.named,
+                    state: c.state,
+                    state_key: state_text_key(c.state),
+                    selected: c.selected,
+                    highlighted: self.highlighted.as_ref() == Some(&c.key),
+                    suggestion,
+                }
             })
             .collect();
 
@@ -469,6 +713,24 @@ impl ReviewWorkbench {
                 .pending_confirmation
                 .as_ref()
                 .map(|change| ConfirmationRequest::batch_remove(change.targets.len())),
+            suggestion_filters_label_key: text_keys::SUGGESTION_FILTERS_LABEL,
+            suggestion_filters: SuggestFilter::ALL
+                .into_iter()
+                .map(|filter| SuggestionFilterView {
+                    filter,
+                    label_key: filter.label_key(),
+                    count: self.suggestion_filter_count(filter),
+                    active: self.suggestion_filter_active(filter),
+                })
+                .collect(),
+            apply_suggestions_label_key: text_keys::APPLY_SUGGESTIONS,
+            undo_suggestions_label_key: text_keys::UNDO_SUGGESTIONS,
+            apply_suggestions_enabled: self.apply_suggestions_enabled(),
+            undo_available: self.can_undo_suggestion_apply(),
+            pending_suggestion_apply: self
+                .pending_suggestion_apply
+                .as_ref()
+                .map(|plan| plan.request.clone()),
             sealed: self.sealed,
         }
     }

@@ -53,6 +53,10 @@ export struct ReviewCandidateData {
     selected: bool,
     /// 与地图对象联动高亮（点击地图对象/卡片共用同一份高亮）。
     highlighted: bool,
+    /// 建议动作显示名（如"建议保留"；无建议时为空串）。
+    suggestion-action-label: string,
+    /// 一句话可读建议理由（无建议时为空串）。
+    suggestion-reason: string,
 }
 
 /// 左侧评审抽屉：类别标签 + 选中候选详情 + 可滚动候选列表 +
@@ -97,6 +101,16 @@ export component ReviewDrawer inherits Rectangle {
     in property <string> resume-label;
     in property <string> seal-label;
     in property <bool> sealed;
+    // 轻量建议辅助：筛选区标题、五个筛选器（标签含计数）、激活标记。
+    in property <string> suggestion-filters-label;
+    in property <[string]> suggestion-filter-labels;
+    in property <[int]> suggestion-filter-counts;
+    in property <[int]> suggestion-filter-active;
+    // 一键应用建议 / 撤销上一批。
+    in property <string> apply-suggestions-label;
+    in property <string> undo-suggestions-label;
+    in property <bool> apply-suggestions-enabled;
+    in property <bool> undo-available;
     in property <bool> summary-visible;
     in property <string> summary-text;
 
@@ -118,6 +132,9 @@ export component ReviewDrawer inherits Rectangle {
     callback pause-clicked();
     callback resume-clicked();
     callback seal-clicked();
+    callback suggestion-filter-clicked(index: int);
+    callback apply-suggestions-clicked();
+    callback undo-suggestions-clicked();
 
     background: Theme.surface;
     border-color: Theme.separator;
@@ -130,7 +147,7 @@ export component ReviewDrawer inherits Rectangle {
         y: 12px;
         width: parent.width - 24px;
         height: parent.height - 24px;
-        spacing: 8px;
+        spacing: 6px;
 
         Text {
             text: root.title;
@@ -147,7 +164,8 @@ export component ReviewDrawer inherits Rectangle {
         }
 
         if root.candidate-count > 0: VerticalLayout {
-            spacing: 8px;
+            vertical-stretch: 1;
+            spacing: 6px;
 
             // 六类标签页（ADR-0016）：固定 3×2。300px 抽屉内每格等宽，
             // 完整显示两字类别名与四位数数量；切换时列表复位到顶。
@@ -187,6 +205,54 @@ export component ReviewDrawer inherits Rectangle {
                         label: root.category-labels[5];
                         active: root.active-category == 5; horizontal-stretch: 1;
                         clicked => { review-cards-scroll.viewport-y = 0px; root.category-clicked(5); }
+                    }
+                }
+            }
+
+            // 建议筛选（验收 3：需要关注/未命名/建议保留/建议人工确认/建议剔除；
+            // 多选，与上方六类标签组合）。标签含计数，由 Rust 侧拼装；
+            // 紧凑高度避免挤压下方候选滚动区（T33 大量候选下操作栏可达）。
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 2px;
+                    ReviewCategoryButton {
+                        label: root.suggestion-filter-labels[0];
+                        active: root.suggestion-filter-active[0] == 1;
+                        horizontal-stretch: 1;
+                        height: 22px;
+                        clicked => { root.suggestion-filter-clicked(0); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.suggestion-filter-labels[1];
+                        active: root.suggestion-filter-active[1] == 1;
+                        horizontal-stretch: 1;
+                        height: 22px;
+                        clicked => { root.suggestion-filter-clicked(1); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.suggestion-filter-labels[2];
+                        active: root.suggestion-filter-active[2] == 1;
+                        horizontal-stretch: 1;
+                        height: 22px;
+                        clicked => { root.suggestion-filter-clicked(2); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    ReviewCategoryButton {
+                        label: root.suggestion-filter-labels[3];
+                        active: root.suggestion-filter-active[3] == 1;
+                        horizontal-stretch: 1;
+                        height: 22px;
+                        clicked => { root.suggestion-filter-clicked(3); }
+                    }
+                    ReviewCategoryButton {
+                        label: root.suggestion-filter-labels[4];
+                        active: root.suggestion-filter-active[4] == 1;
+                        horizontal-stretch: 1;
+                        height: 22px;
+                        clicked => { root.suggestion-filter-clicked(4); }
                     }
                 }
             }
@@ -253,6 +319,7 @@ export component ReviewDrawer inherits Rectangle {
             // 转发为滚动）；点击卡片高亮（地图↔卡片双向联动）；三态点错可直接改。
             review-focus := FocusScope {
                 focus-on-click: true;
+                vertical-stretch: 1;
                 key-pressed(event) => {
                     if (event.text == Key.UpArrow) {
                         review-cards-scroll.viewport-y = Math.min(0px, review-cards-scroll.viewport-y + 36px);
@@ -277,6 +344,8 @@ export component ReviewDrawer inherits Rectangle {
                 }
                 review-cards-scroll := ScrollView {
                     viewport-y <=> root.list-viewport-y;
+                    width: parent.width;
+                    height: parent.height;
                     VerticalLayout {
                         spacing: 8px;
                         for card in root.cards:
@@ -311,6 +380,21 @@ export component ReviewDrawer inherits Rectangle {
                                             text: card.state-label;
                                             color: Theme.text-secondary;
                                         }
+                                    }
+                                    if card.suggestion-reason != "": HorizontalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: card.suggestion-action-label;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            color: Theme.highlight;
+                                        }
+                                    }
+                                    if card.suggestion-reason != "": Text {
+                                        text: card.suggestion-reason;
+                                        font-size: 11px;
+                                        color: Theme.text-secondary;
+                                        wrap: word-wrap;
                                     }
                                     HorizontalLayout {
                                         spacing: 6px;
@@ -399,6 +483,21 @@ export component ReviewDrawer inherits Rectangle {
                     text: root.set-pending-label;
                     enabled: !root.sealed;
                     clicked => { root.bulk-state-clicked("pending"); }
+                }
+            }
+
+            // 一键应用建议（当前筛选范围；确认后执行）与撤销上一批。
+            HorizontalLayout {
+                spacing: 6px;
+                Button {
+                    text: root.apply-suggestions-label;
+                    enabled: root.apply-suggestions-enabled && !root.sealed;
+                    clicked => { root.apply-suggestions-clicked(); }
+                }
+                Button {
+                    text: root.undo-suggestions-label;
+                    enabled: root.undo-available && !root.sealed;
+                    clicked => { root.undo-suggestions-clicked(); }
                 }
             }
 

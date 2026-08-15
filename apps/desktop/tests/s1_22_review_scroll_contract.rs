@@ -188,15 +188,25 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     let drawer_w = window.get_workspace_drawer_width();
     assert!(drawer_h > 200.0, "抽屉必须有足够高度容纳操作栏");
 
-    // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件，落在抽屉列表区）。
-    let list_position = LogicalPosition::new(drawer_x + drawer_w / 2.0, drawer_y + drawer_h * 0.45);
-    window
-        .window()
-        .dispatch_event(WindowEvent::PointerScrolled {
-            position: list_position,
-            delta_x: 0.0,
-            delta_y: -240.0,
-        });
+    // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件，落在抽屉列表区；
+    // 建议筛选区在列表上方，因此取列表中部偏下的位置）。
+    // 建议筛选区位于列表上方，列表区位置随内容下移：沿抽屉中部到底部扫描
+    // 真实列表区域（一次派发，单次事件循环推进动画到终值），确认滚轮向下
+    // 滚动有效（真实 PointerScrolled 事件）。
+    for fraction in [
+        0.1_f32, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85,
+        0.9, 0.95,
+    ] {
+        let list_position =
+            LogicalPosition::new(drawer_x + drawer_w / 2.0, drawer_y + drawer_h * fraction);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: list_position,
+                delta_x: 0.0,
+                delta_y: -240.0,
+            });
+    }
     // 短跑事件循环推进滚轮滚动动画（180ms）到终值。
     slint::Timer::single_shot(std::time::Duration::from_millis(250), || {
         slint::quit_event_loop().expect("退出滚轮动画事件循环");
@@ -212,8 +222,8 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     // 先网格扫描确认真实点击能命中卡片（点卡片 → 高亮 → FocusScope 聚焦）。
     let mut clicked_card = false;
     for x in [60.0_f32, 110.0, 170.0, 230.0, 290.0] {
-        for y_step in [0.25_f32, 0.35, 0.45, 0.55, 0.65] {
-            let position = LogicalPosition::new(drawer_x + x, drawer_y + drawer_h * y_step);
+        for fraction in [0.55_f32, 0.6, 0.65, 0.7, 0.75, 0.8] {
+            let position = LogicalPosition::new(drawer_x + x, drawer_y + drawer_h * fraction);
             window.window().dispatch_event(WindowEvent::PointerPressed {
                 position,
                 button: PointerEventButton::Left,
@@ -285,34 +295,26 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     // 抽屉底部为操作行（暂停/继续/封账），先点预估中心，未命中则小范围扫描，
     // 点击成功后 F5 封账落账（1026 条决定一次性写回），呈现 sealed + 导出摘要。
     let mut sealed = window.get_review_sealed();
-    let seal_y_base = drawer_y + drawer_h - 24.0;
-    let mut candidates = vec![LogicalPosition::new(
-        drawer_x + drawer_w * 0.62,
-        seal_y_base,
-    )];
-    for x_ratio in [0.55_f32, 0.65, 0.75, 0.85] {
-        for y_delta in [-16.0_f32, -8.0, 0.0, 8.0] {
-            candidates.push(LogicalPosition::new(
-                drawer_x + drawer_w * x_ratio,
-                seal_y_base + y_delta,
-            ));
-        }
-    }
-    for position in candidates {
-        if sealed {
-            break;
-        }
-        window.window().dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
-        });
-        window
-            .window()
-            .dispatch_event(WindowEvent::PointerReleased {
+    // 封账行位于抽屉底部右侧；详情面板高度随高亮候选变化会小幅移动其位置，
+    // 因此扫描底部右侧密集网格（避开左侧暂停/继续按钮，x 限制在 0.72+）。
+    'scan: for x_ratio in [0.72_f32, 0.77, 0.82, 0.87, 0.92, 0.97] {
+        for y in (0..=34).map(|step| drawer_y + drawer_h - 140.0 + step as f32 * 4.0) {
+            let position = LogicalPosition::new(drawer_x + drawer_w * x_ratio, y);
+            window.window().dispatch_event(WindowEvent::PointerPressed {
                 position,
                 button: PointerEventButton::Left,
             });
-        sealed = window.get_review_sealed();
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+            if window.get_review_sealed() {
+                sealed = true;
+                break 'scan;
+            }
+        }
     }
     assert!(
         sealed,

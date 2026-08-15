@@ -4,8 +4,12 @@
 //! 评审期间所有状态都在这里改，不碰数据库。
 //! 类别与三态复用 B1 共享领域类型（不重新定义）。
 
-use data_persistence::{CandidateProjection, CandidateShape};
+use data_persistence::{
+    CandidateNameSource, CandidateProjection, CandidateShape, CandidateValidation,
+};
 use shared_domain_types::{CandidateCategory, ReviewState};
+
+use crate::suggestion::CandidateSuggestion;
 
 /// 候选对象的稳定标识。
 ///
@@ -50,10 +54,26 @@ pub struct Candidate {
     pub tags: Vec<(String, String)>,
     /// GCJ-02 几何（点/线/面；评审地图标注与"定位到地图"用）。
     pub shape: CandidateShape,
+    /// 名称来源（E：OSM / 高德 / 缓存 / 未命名 / 补名失败；建议依据）。
+    pub name_source: CandidateNameSource,
+    /// B14 几何验证结果（保留 / 自动修复；建议依据）。
+    pub validation: CandidateValidation,
+    /// 几何是否经自动修复（B14 唯一修复，外观不变）。
+    pub automatically_repaired: bool,
+    /// 本次采集是否未找到该对象（继承上批投影并显式标记）。
+    pub missing_in_latest_batch: bool,
+    /// 现有隔离/警告理由（D 的字符串理由；Reviewable 候选通常为 None）。
+    pub isolation_reason: Option<String>,
+    /// 来源实体标识（OSM 对象 ID；重复嫌疑/重复投影判定的输入）。
+    pub source_entity_id: String,
+    /// 来源原始观测标识（同一原始观测的两个投影 = 重复投影）。
+    pub raw_observation_id: String,
     /// 评审三态（初始一律"待定"，ADR-0022）
     pub state: ReviewState,
     /// 卡片复选框勾选状态（批量操作的输入）
     pub selected: bool,
+    /// 轻量建议（进台时按候选数据确定性生成；生成建议不改动三态）。
+    pub suggestion: Option<CandidateSuggestion>,
 }
 
 impl Candidate {
@@ -67,8 +87,16 @@ impl Candidate {
             source: projection.data_source_tag.clone(),
             tags: projection.display.tags.clone(),
             shape: projection.shape.clone(),
+            name_source: projection.name_source,
+            validation: projection.validation,
+            automatically_repaired: projection.automatically_repaired,
+            missing_in_latest_batch: projection.missing_in_latest_batch,
+            isolation_reason: projection.isolation_reason.clone(),
+            source_entity_id: projection.source_entity_id.clone(),
+            raw_observation_id: projection.raw_observation_id.clone(),
             state: ReviewState::Pending,
             selected: false,
+            suggestion: None,
         }
     }
 }

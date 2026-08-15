@@ -26,6 +26,7 @@ mod candidate;
 mod command;
 mod error;
 mod session;
+mod suggestion;
 mod view_models;
 mod workbench;
 
@@ -34,8 +35,12 @@ pub use command::{
     CommandOutcome, ConfirmationRequest, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
 };
 pub use error::{Error, Result};
+pub use suggestion::{
+    AppliedSuggestionBatch, CandidateSuggestion, ReasonLine, SuggestFilter, SuggestionAction,
+    SuggestionApplyRequest, SuggestionCategory, SuggestionEngine,
+};
 pub use view_models::{
     text_keys, CandidateCardView, CategoryTabView, ExportSummary, InfoPanelView, MapObjectView,
-    WorkbenchView,
+    SuggestionCardView, SuggestionFilterView, WorkbenchView,
 };
 pub use workbench::ReviewWorkbench;
