@@ -25,6 +25,14 @@ pub enum Error {
     #[error("当前没有等待二次确认的批量操作")]
     NoPendingConfirmation,
 
+    /// 没有等待确认的建议应用（confirm/cancel 被凭空调用）
+    #[error("当前没有等待确认的建议应用")]
+    NoSuggestionApplyPending,
+
+    /// 没有可撤销的上一批建议应用
+    #[error("当前没有可撤销的上一批建议")]
+    NoSuggestionApplyToUndo,
+
     /// 会话临时文件读写失败（暂停/恢复）
     #[error("评审会话文件读写失败：{0}")]
     SessionIo(String),

@@ -658,6 +658,22 @@ pub struct ReviewPageState {
     pub seal_label: String,
     /// 是否已封账（评审入口禁用信号）。
     pub sealed: bool,
+    /// 建议筛选区标题。
+    pub suggestion_filters_label: String,
+    /// 建议筛选器标签（固定顺序，与 F5 `SuggestFilter::ALL` 一致）。
+    pub suggestion_filter_labels: Vec<String>,
+    /// 每个建议筛选器的候选总数。
+    pub suggestion_filter_counts: Vec<i32>,
+    /// 每个建议筛选器是否激活（1=激活，0=未激活）。
+    pub suggestion_filter_active: Vec<i32>,
+    /// "应用建议"按钮文案。
+    pub apply_suggestions_label: String,
+    /// "撤销上一批"按钮文案。
+    pub undo_suggestions_label: String,
+    /// 一键应用是否可用（未封账且当前筛选范围内有可执行建议）。
+    pub apply_suggestions_enabled: bool,
+    /// 是否存在可撤销的上一批（封账后不可撤销）。
+    pub undo_available: bool,
     /// 封账成功后显示导出摘要。
     pub summary_visible: bool,
     /// 导出摘要文案。
@@ -720,6 +736,18 @@ impl WindowPageState for ReviewPageState {
         window.set_review_resume_label(self.resume_label.clone().into());
         window.set_review_seal_label(self.seal_label.clone().into());
         window.set_review_sealed(self.sealed);
+        window.set_review_suggestion_filters_label(self.suggestion_filters_label.clone().into());
+        window.set_review_suggestion_filter_labels(string_model(&self.suggestion_filter_labels));
+        window.set_review_suggestion_filter_counts(ModelRc::new(VecModel::from(
+            self.suggestion_filter_counts.clone(),
+        )));
+        window.set_review_suggestion_filter_active(ModelRc::new(VecModel::from(
+            self.suggestion_filter_active.clone(),
+        )));
+        window.set_review_apply_suggestions_label(self.apply_suggestions_label.clone().into());
+        window.set_review_undo_suggestions_label(self.undo_suggestions_label.clone().into());
+        window.set_review_apply_suggestions_enabled(self.apply_suggestions_enabled);
+        window.set_review_undo_available(self.undo_available);
         window.set_review_summary_visible(self.summary_visible);
         window.set_review_summary_text(self.summary_text.clone().into());
     }
@@ -762,6 +790,16 @@ pub enum ReviewRequest {
     ConfirmPending,
     /// 二次确认弹窗点了“取消”。
     CancelPending,
+    /// 切换建议筛选器（index 对应 F5 `SuggestFilter::ALL` 顺序）。
+    ToggleSuggestionFilter { index: usize },
+    /// 一键应用建议：对当前筛选范围生成保留/剔除批次并请求确认。
+    ApplySuggestions,
+    /// 建议应用确认弹窗点了“确认”。
+    ConfirmSuggestionApply,
+    /// 建议应用确认弹窗点了“取消”。
+    CancelSuggestionApply,
+    /// 撤销上一批建议应用（封账前最近一批）。
+    UndoSuggestionApply,
     /// 暂停：会话状态写入临时文件。
     Pause,
     /// 恢复：从临时文件恢复会话状态。

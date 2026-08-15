@@ -1,4 +1,7 @@
 //! 评审呈现适配器：S1 只转发一次完整评审意图，并呈现 F5 工作台返回的页面状态与通知。
+// ignore-tidy-filelength: 轻量建议辅助（建议筛选/一键应用/撤销上一批）并入既有评审呈现适配器，
+// 保持 S1"只转发完整意图"接缝的内聚（本文件不含功能模块呈现翻译之外的业务）。失效里程碑：
+// v2.1.0（2026-12-31），届时将建议相关呈现翻译拆入独立模块后消除
 
 use super::collection::COLLECTION_CATEGORY_KEYS;
 use super::workspace_boundary::WorkspaceProductionContext;
@@ -10,8 +13,8 @@ use crate::ReviewCandidateData;
 use localization::Localization;
 use notification_center::Notification;
 use review_workbench::{
-    CandidateKey, CommandOutcome, ExportSummary, MapObjectView, ReviewWorkbench, StateChange,
-    WorkbenchView,
+    text_keys, CandidateKey, CommandOutcome, ExportSummary, MapObjectView, ReviewWorkbench,
+    StateChange, SuggestFilter, WorkbenchView,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::cell::RefCell;
@@ -120,6 +123,14 @@ impl ReviewProductionAdapter {
             resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
             sealed: false,
+            suggestion_filters_label: l10n.t(text_keys::SUGGESTION_FILTERS_LABEL),
+            suggestion_filter_labels: Vec::new(),
+            suggestion_filter_counts: Vec::new(),
+            suggestion_filter_active: Vec::new(),
+            apply_suggestions_label: l10n.t(text_keys::APPLY_SUGGESTIONS),
+            undo_suggestions_label: l10n.t(text_keys::UNDO_SUGGESTIONS),
+            apply_suggestions_enabled: false,
+            undo_available: false,
             summary_visible: false,
             summary_text: String::new(),
         };
@@ -180,6 +191,18 @@ impl ReviewProductionAdapter {
                 state_key: card.state.to_identifier().into(),
                 selected: card.selected,
                 highlighted: card.highlighted,
+                suggestion_action_label: card
+                    .suggestion
+                    .as_ref()
+                    .map(|s| l10n.t(s.action_key))
+                    .unwrap_or_default()
+                    .into(),
+                suggestion_reason: card
+                    .suggestion
+                    .as_ref()
+                    .map(|s| l10n.t_with_args(s.reason_key, s.reason_args.clone()))
+                    .unwrap_or_default()
+                    .into(),
             })
             .collect();
         // T39：Slint 无虚拟化 → 卡片分页（每页 60，50–100 内）。全量卡片只在
@@ -247,6 +270,29 @@ impl ReviewProductionAdapter {
             "review.selected_count",
             serde_json::json!({ "count": view.selected_count }),
         );
+        let suggestion_filter_labels: Vec<String> = view
+            .suggestion_filters
+            .iter()
+            .map(|filter| {
+                l10n.t_with_args(
+                    text_keys::SUGGESTION_FILTER_TAB,
+                    serde_json::json!({
+                        "label": l10n.t(filter.label_key),
+                        "count": filter.count,
+                    }),
+                )
+            })
+            .collect();
+        let suggestion_filter_counts: Vec<i32> = view
+            .suggestion_filters
+            .iter()
+            .map(|filter| filter.count as i32)
+            .collect();
+        let suggestion_filter_active: Vec<i32> = view
+            .suggestion_filters
+            .iter()
+            .map(|filter| i32::from(filter.active))
+            .collect();
         let (summary_visible, summary_text) = if view.sealed {
             (true, self.summary_text(l10n, workbench.export_summary()))
         } else {
@@ -291,6 +337,14 @@ impl ReviewProductionAdapter {
             resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
             sealed: view.sealed,
+            suggestion_filters_label: l10n.t(view.suggestion_filters_label_key),
+            suggestion_filter_labels,
+            suggestion_filter_counts,
+            suggestion_filter_active,
+            apply_suggestions_label: l10n.t(view.apply_suggestions_label_key),
+            undo_suggestions_label: l10n.t(view.undo_suggestions_label_key),
+            apply_suggestions_enabled: view.apply_suggestions_enabled,
+            undo_available: view.undo_available,
             summary_visible,
             summary_text,
         };
@@ -518,6 +572,50 @@ impl ReviewProductionAdapter {
                     ),
                     l10n.t(request.confirm_key),
                     l10n.t(request.cancel_key),
+                );
+                drop(injector);
+                Presentation::needs_confirmation(self.page_state(), confirmation)
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
+            CommandOutcome::NeedsSuggestionConfirmation(request) => {
+                let injector = self.context.injector();
+                let injector = injector.borrow();
+                let l10n = injector.l10n();
+                let main = l10n.t_with_args(
+                    text_keys::APPLY_SUGGEST_CONFIRM_BODY,
+                    serde_json::json!({
+                        "count": request.count,
+                        "keep": request.keep_count,
+                        "remove": request.remove_count,
+                    }),
+                );
+                let lines: Vec<String> = request
+                    .reason_lines
+                    .iter()
+                    .map(|line| {
+                        l10n.t_with_args(
+                            text_keys::APPLY_SUGGEST_REASON_LINE,
+                            serde_json::json!({
+                                "label": l10n.t(line.summary_key),
+                                "count": line.count,
+                            }),
+                        )
+                    })
+                    .collect();
+                let body = if lines.is_empty() {
+                    main
+                } else {
+                    format!(
+                        "{main}\n{}\n{}",
+                        l10n.t(text_keys::APPLY_SUGGEST_REASON_LABEL),
+                        lines.join("\n")
+                    )
+                };
+                let confirmation = ConfirmationPresentation::new(
+                    l10n.t(text_keys::APPLY_SUGGEST_CONFIRM_TITLE),
+                    body,
+                    l10n.t(text_keys::CONFIRM_BUTTON),
+                    l10n.t(text_keys::CANCEL_BUTTON),
                 );
                 drop(injector);
                 Presentation::needs_confirmation(self.page_state(), confirmation)
@@ -920,6 +1018,25 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             ReviewRequest::CancelPending => {
                 self.present_apply(self.apply(|workbench| workbench.cancel_pending()))
             }
+            ReviewRequest::ToggleSuggestionFilter { index } => {
+                let Some(filter) = SuggestFilter::ALL.get(index).copied() else {
+                    return Presentation::ready(self.page_state())
+                        .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                };
+                self.mutate_simple(|workbench| workbench.toggle_suggestion_filter(filter))
+            }
+            ReviewRequest::ApplySuggestions => {
+                self.present_submit(self.submit(|workbench| workbench.apply_suggestions()))
+            }
+            ReviewRequest::ConfirmSuggestionApply => {
+                self.present_submit(self.submit(|workbench| workbench.confirm_suggestion_apply()))
+            }
+            ReviewRequest::CancelSuggestionApply => {
+                self.present_apply(self.apply(|workbench| workbench.cancel_suggestion_apply()))
+            }
+            ReviewRequest::UndoSuggestionApply => self.present_apply(
+                self.apply(|workbench| workbench.undo_last_suggestion_apply().map(|_| ())),
+            ),
             ReviewRequest::Pause => {
                 let plan_id = self.context.active_plan_id().unwrap_or_default();
                 let path = self.session_path(&plan_id);

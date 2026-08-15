@@ -277,6 +277,16 @@ export component AppWindow inherits Window {
     in property <string> review-resume-label;
     in property <string> review-seal-label;
     in property <bool> review-sealed;
+    // 轻量建议辅助：筛选区标题、五个筛选器（标签含计数、激活标记）、
+    // 一键应用建议与撤销上一批。
+    in property <string> review-suggestion-filters-label;
+    in property <[string]> review-suggestion-filter-labels;
+    in property <[int]> review-suggestion-filter-counts;
+    in property <[int]> review-suggestion-filter-active;
+    in property <string> review-apply-suggestions-label;
+    in property <string> review-undo-suggestions-label;
+    in property <bool> review-apply-suggestions-enabled;
+    in property <bool> review-undo-available;
     in property <bool> review-summary-visible;
     in property <string> review-summary-text;
     // T38 抽屉：选中候选详情（名称/类别/标签与属性/来源/状态）
@@ -308,6 +318,9 @@ export component AppWindow inherits Window {
     callback review-pause-clicked();
     callback review-resume-clicked();
     callback review-seal-clicked();
+    callback review-suggestion-filter-clicked(index: int);
+    callback review-apply-suggestions-clicked();
+    callback review-undo-suggestions-clicked();
     callback workspace-export-start-clicked();
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
@@ -801,6 +814,14 @@ export component AppWindow inherits Window {
                     resume-label: root.review-resume-label;
                     seal-label: root.review-seal-label;
                     sealed: root.review-sealed;
+                    suggestion-filters-label: root.review-suggestion-filters-label;
+                    suggestion-filter-labels: root.review-suggestion-filter-labels;
+                    suggestion-filter-counts: root.review-suggestion-filter-counts;
+                    suggestion-filter-active: root.review-suggestion-filter-active;
+                    apply-suggestions-label: root.review-apply-suggestions-label;
+                    undo-suggestions-label: root.review-undo-suggestions-label;
+                    apply-suggestions-enabled: root.review-apply-suggestions-enabled;
+                    undo-available: root.review-undo-available;
                     summary-visible: root.review-summary-visible;
                     summary-text: root.review-summary-text;
                     list-viewport-y <=> root.review-list-viewport-y;
@@ -817,6 +838,9 @@ export component AppWindow inherits Window {
                     pause-clicked => { root.review-pause-clicked(); }
                     resume-clicked => { root.review-resume-clicked(); }
                     seal-clicked => { root.review-seal-clicked(); }
+                    suggestion-filter-clicked(index) => { root.review-suggestion-filter-clicked(index); }
+                    apply-suggestions-clicked => { root.review-apply-suggestions-clicked(); }
+                    undo-suggestions-clicked => { root.review-undo-suggestions-clicked(); }
                 }
                 if root.workspace-drawer-open && root.workspace-active-step != 3: WorkspaceDrawer {
                     x: 20px;

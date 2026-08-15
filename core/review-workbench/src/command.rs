@@ -10,6 +10,7 @@
 use shared_domain_types::ReviewState;
 
 use crate::candidate::CandidateKey;
+use crate::suggestion::SuggestionApplyRequest;
 use crate::view_models::text_keys;
 
 /// 批量剔除需要二次确认的阈值（≥5 项弹窗，ADR-0016）
@@ -55,6 +56,8 @@ pub enum CommandOutcome {
     },
     /// 危险批量操作被拦下，等待二次确认弹窗的结果
     NeedsConfirmation(ConfirmationRequest),
+    /// 一键应用建议被拦下，等待确认弹窗（对象数量 + 主要理由分布）的结果
+    NeedsSuggestionConfirmation(SuggestionApplyRequest),
 }
 
 /// 二次确认弹窗请求（UI 层按文本键渲染，ADR-0021 弹窗铁律）
