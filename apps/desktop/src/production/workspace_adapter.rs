@@ -144,25 +144,42 @@ impl WorkspaceProductionAdapter {
         if let Some(cached) = cached.as_ref() {
             self.restore_cached_drawer_state(cached);
         }
+        // 工作现场恢复：读回上次打开该方案时落库的已确认边界/朝向/步骤。
+        // 边界确认后重启不再重复校名解析/Overpass 查询（B.12 修复之一）。
+        let (restored_step, restore_notice) = self.restore_persisted_workspace(&parsed);
+        self.context.checkpoint_workspace_session();
+        if let Err(error) = self
+            .context
+            .injector
+            .borrow_mut()
+            .save_last_active_plan(Some(plan_id))
+        {
+            log::warn!("记录上次打开方案失败: {error}");
+        }
         let Some((keys, anchor)) = self.context.map_credentials() else {
-            let l10n = self.l10n();
+            let map_notice_body = {
+                let l10n = self.l10n();
+                l10n.t("boundary.map_load_failed")
+            };
             let mut page = self.context.page();
             // T40：切换方案是输入框显式清空入口（一次性请求，随本次呈现消费；
             // 渲染不再回写输入文本）。
             page.orientation.clear_input = true;
-            return Presentation::ready(page)
-                .with_notification(info_fact(
-                    &l10n,
-                    "boundary.map_notice_title",
-                    &l10n.t("boundary.map_load_failed"),
-                ))
-                .with_navigation(NavigationDecision::Show(Screen::Workspace));
+            let mut presentation = Presentation::ready(page).with_notification(info_fact(
+                &self.l10n(),
+                "boundary.map_notice_title",
+                &map_notice_body,
+            ));
+            if let Some(notice) = restore_notice {
+                presentation = presentation.with_notification(notice);
+            }
+            return self.finish_open_plan(presentation, restored_step);
         };
         // T34：打开方案必须落在边界页——若残留其他页 WebView（如朝向页），
         // 先重建为边界页，避免"恢复错页"。
         let map_is_boundary =
             crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
-        let presentation = if keys.0.is_empty() || map_is_boundary {
+        let mut presentation = if keys.0.is_empty() || map_is_boundary {
             let mut page = self.context.page();
             page.orientation.clear_input = true;
             Presentation::ready(page)
@@ -181,10 +198,13 @@ impl WorkspaceProductionAdapter {
             page.orientation.clear_input = true;
             Presentation::processing(page, Progress::ZERO)
         };
-        presentation.with_navigation(NavigationDecision::Show(Screen::Workspace))
+        if let Some(notice) = restore_notice {
+            presentation = presentation.with_notification(notice);
+        }
+        self.finish_open_plan(presentation, restored_step)
     }
 
-    fn navigate(&mut self, step: i32) -> Presentation<WorkspacePageState> {
+    pub(super) fn navigate(&mut self, step: i32) -> Presentation<WorkspacePageState> {
         if !(0..=4).contains(&step) {
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Blocked);
@@ -240,6 +260,7 @@ impl WorkspaceProductionAdapter {
                 );
             }
             self.context.session.borrow_mut().active_step = 0;
+            self.context.checkpoint_workspace_session();
             // T34：进入边界步骤必须落在边界页（朝向页 WebView 不能留在本步骤）
             let map_is_boundary =
                 crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
@@ -272,6 +293,7 @@ impl WorkspaceProductionAdapter {
                     .with_navigation(NavigationDecision::Show(Screen::Workspace));
             };
             self.context.session.borrow_mut().active_step = 1;
+            self.context.checkpoint_workspace_session();
             let presentation = if keys.0.is_empty() {
                 Presentation::ready(self.context.page())
             } else {
@@ -300,6 +322,7 @@ impl WorkspaceProductionAdapter {
             // 评审地图由评审入口（ReviewRequest::Open）在候选装载后创建并
             // 内嵌标注（候选在 navigate 时尚未载入；T38 弹窗恢复复用缓存）。
             self.context.session.borrow_mut().active_step = 3;
+            self.context.checkpoint_workspace_session();
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
@@ -326,6 +349,7 @@ impl WorkspaceProductionAdapter {
             }
         }
         self.context.session.borrow_mut().active_step = step;
+        self.context.checkpoint_workspace_session();
         Presentation::ready(self.context.page())
             .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
@@ -459,6 +483,7 @@ impl WorkspaceProductionAdapter {
         self.context
             .export_flow
             .confirm_boundary("Polygon", coordinates);
+        self.context.checkpoint_workspace_session();
         Presentation::ready(self.context.page())
     }
 
@@ -481,6 +506,7 @@ impl WorkspaceProductionAdapter {
             .clear_active();
         self.context.export_flow.reset_boundary();
         self.context.collection_flow.reset_boundary();
+        self.context.checkpoint_workspace_session();
         Presentation::ready(self.context.page())
     }
 
@@ -570,6 +596,7 @@ impl WorkspaceProductionAdapter {
         match result {
             Ok(()) => {
                 self.context.export_flow.set_orientation(Some(angle));
+                self.context.checkpoint_workspace_session();
                 Presentation::ready(self.context.page())
             }
             Err(()) => self.orientation_save_failed(),
@@ -703,6 +730,7 @@ impl WorkspaceProductionAdapter {
             crate::map_webview::evaluate_script("clearOrientationFromDrawer();");
         }
         self.context.export_flow.set_orientation(None);
+        self.context.checkpoint_workspace_session();
         let mut page = self.context.page();
         // T40：抽屉"重置"是输入框显式清空入口（一次性请求，随本次呈现消费）。
         page.orientation.clear_input = true;
@@ -839,6 +867,7 @@ impl WorkspaceProductionAdapter {
                     .borrow_mut()
                     .boundary_session_mut()
                     .clear_active();
+                self.context.checkpoint_workspace_session();
                 Presentation::ready(self.context.page())
             }
             IpcMessage::Coordinate { .. } => Presentation::ready(self.context.page()),
@@ -886,8 +915,14 @@ impl WorkspaceProductionAdapter {
         if active_step == 1 {
             crate::map_webview::evaluate_script("initOrientationMode();");
             Presentation::ready(self.context.page())
-        } else {
+        } else if active_step == 0 {
             self.start_boundary_fetch()
+        } else {
+            // 采集/评审/导出步骤的地图只是让位显示：迟到的 map_ready 既不应
+            // 重新触发边界获取（边界只属于步骤①，B 工单“避免重复查询”），
+            // 也不得用工作区页面覆盖采集/导出入口的进度呈现（恢复工作流实测
+            // 暴露的竞态：导出进行中 map_ready 会把状态重置回 Ready）。
+            Presentation::ready(self.context.page())
         }
     }
 
@@ -951,6 +986,7 @@ impl WorkspaceProductionAdapter {
             .export_flow
             .confirm_boundary(boundary_type, coordinates);
         self.cache_confirmed_boundary(&coords);
+        self.context.checkpoint_workspace_session();
         Presentation::ready(self.context.page())
     }
 

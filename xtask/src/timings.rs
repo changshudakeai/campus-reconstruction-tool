@@ -82,7 +82,12 @@ pub(crate) fn run(root: &Path) -> anyhow::Result<()> {
         .status()?;
     anyhow::ensure!(status.success(), "cargo build --timings 失败");
 
-    let report = root.join("target/cargo-timings/cargo-timing.html");
+    // cargo 把 --timings 报告写到 CARGO_TARGET_DIR/cargo-timings；xtask 不能
+    // 假设目标目录固定在 root/target（多个工作树共享 target 时 os error 3）。
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    let report = target_dir.join("cargo-timings/cargo-timing.html");
     let html = std::fs::read_to_string(&report)?;
     let warnings = over_budget(&parse_unit_data(&html)?, BUDGET_SECONDS);
     if warnings.is_empty() {

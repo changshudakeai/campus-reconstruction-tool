@@ -10,11 +10,8 @@ use std::sync::{mpsc, Arc};
 
 use anyhow::Result;
 use collection_flow::CollectionFlow;
-use data_acquisition::overpass::{boundary_bbox, campus_objects_query, OverpassClient};
-use data_acquisition::RegeoNamer;
-use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport};
+use data_acquisition::overpass::OverpassClient;
 use data_persistence::Database;
-use data_persistence::{AppSettingKey, AppSettingsApi};
 use export_flow::{BoundaryExportFlow, ExportFileSystem, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
@@ -22,7 +19,7 @@ use notification_center::{Notification, NotificationCenter, PresenterRegistry};
 use onboarding_tutorial::{OnboardingTutorial, TutorialStep};
 use project_management::{PlanBoundarySession, ProjectManager};
 use review_workbench::ReviewWorkbench;
-use shared_domain_types::{Boundary, PlanId};
+use shared_domain_types::PlanId;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::boundary_source::{
@@ -232,10 +229,11 @@ pub struct ViewModelInjector {
 impl ViewModelInjector {
     /// 构造并持有全部 F 模块实例（F1-F9，B8/F6/F8 未立户不在册）。
     pub fn new(db: ShellDatabases) -> Result<Self> {
-        Self::new_with_collection_source(
+        let overpass = Arc::new(OverpassClient::production());
+        Self::new_with_collection_source_and_overpass(
             db,
             Arc::new(StdExportFileSystem),
-            production_collection_source(),
+            collection_source::production_collection_source(Arc::clone(&overpass)),
         )
     }
 
@@ -246,13 +244,15 @@ impl ViewModelInjector {
     ) -> Result<Self> {
         let (campus_search_ipc, campus_search_transport) =
             crate::production::campus_search::campus_search_production_transport();
+        let overpass = Arc::new(OverpassClient::production());
         Self::new_with_sources(
             db,
             Arc::new(StdExportFileSystem),
             campus_search_ipc,
             campus_search_transport,
-            production_collection_source(),
+            collection_source::production_collection_source(Arc::clone(&overpass)),
             boundary_source,
+            overpass,
         )
     }
 
@@ -260,7 +260,12 @@ impl ViewModelInjector {
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,
     ) -> Result<Self> {
-        Self::new_with_collection_source(db, file_system, production_collection_source())
+        let overpass = Arc::new(OverpassClient::production());
+        Self::new_with_collection_source_and_overpass(
+            db,
+            file_system,
+            collection_source::production_collection_source(Arc::clone(&overpass)),
+        )
     }
 
     /// T31：候选采集数据源注入点（生产 = OverpassDataSource 直连；
@@ -270,15 +275,26 @@ impl ViewModelInjector {
         file_system: Arc<dyn ExportFileSystem>,
         collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
     ) -> Result<Self> {
+        Self::new_with_collection_source_and_overpass(db, file_system, collection_source)
+    }
+
+    /// T31 注入点 + 共享 Overpass 客户端（生产边界源与候选源共用同一客户端）。
+    fn new_with_collection_source_and_overpass(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+        collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
+    ) -> Result<Self> {
         let (campus_search_ipc, campus_search_transport) =
             crate::production::campus_search::campus_search_production_transport();
+        let overpass = Arc::new(OverpassClient::production());
         Self::new_with_sources(
             db,
             file_system,
             campus_search_ipc,
             campus_search_transport,
             collection_source,
-            production_boundary_source(),
+            production_boundary_source(Arc::clone(&overpass)),
+            overpass,
         )
     }
 
@@ -291,13 +307,15 @@ impl ViewModelInjector {
     ) -> Result<Self> {
         let (campus_search_ipc, _) =
             crate::production::campus_search::campus_search_production_transport();
+        let overpass = Arc::new(OverpassClient::production());
         Self::new_with_sources(
             db,
             file_system,
             campus_search_ipc,
             transport,
-            production_collection_source(),
-            production_boundary_source(),
+            collection_source::production_collection_source(Arc::clone(&overpass)),
+            production_boundary_source(Arc::clone(&overpass)),
+            overpass,
         )
     }
 
@@ -308,6 +326,7 @@ impl ViewModelInjector {
         campus_search_transport: CampusSearchTransport,
         collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
         boundary_source: BoundaryFetchSource,
+        _overpass: Arc<OverpassClient>,
     ) -> Result<Self> {
         let l10n = Arc::new(Localization::new(Language::ZhCn).map_err(anyhow::Error::msg)?);
         let tutorial = OnboardingTutorial::load(&db.projects)?;
@@ -610,55 +629,8 @@ impl ViewModelInjector {
     }
 }
 
-/// 生产候选数据源：F4 `DataSource` 适配器（OSM/Overpass，T31）。
-///
-/// - Overpass 传输走 **Rust 侧直连**（端点 de → kumi → mail.ru 回退、每端点
-///   12s 超时、失败返回结构化 `SourceUnreachable`），不再依赖 WebView fetch/CORS；
-/// - 候选建筑查询为 union 写法 `building=*`（面几何 + name/building:levels 标签）；
-/// - 命名两级：OSM `name` 优先；缺名关键建筑由 regeo 补名并缓存
-///   （Web 服务 Key 只经设置页录入，这里按数据库路径实时读取）。
-///
-/// 构造期接线（ADR-0037 壳接线澄清）：组合根创建数据源适配器并注入 A1。
-fn production_collection_source() -> Arc<dyn data_acquisition::DataSource + Send + Sync> {
-    let transport: OverpassTransport = Box::new(move |boundary: &Boundary| {
-        // 边界为 GCJ-02；工单禁止 GCJ→WGS 反向，查询窗口用“边界包围盒 +
-        // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
-        let bbox =
-            boundary_bbox(boundary, 0.01).ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
-        let query = campus_objects_query(bbox)
-            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
-        OverpassClient::production()
-            .query_with_fallback(&query)
-            .map_err(|message| format!("Overpass 采集查询失败：{message}"))
-    });
-    // regeo Web 服务 Key 提供器：只经设置页录入（B2 app_settings），实时读取。
-    let key_provider: data_acquisition::regeo::KeyProvider = Box::new(move || {
-        Database::open(DEV_DB_FILE)
-            .ok()
-            .and_then(|db| {
-                AppSettingsApi::get_setting(&db, AppSettingKey::GaodeWebServiceKey)
-                    .ok()
-                    .flatten()
-            })
-            .filter(|key| !key.is_empty())
-    });
-    // T36：补名缓存从“会话级”改为“持久化 SQLite”（同一开发库文件）。
-    // 打开失败只降级为内存缓存并告警，不阻断采集（缓存非正式业务数据）。
-    let cache: Arc<dyn data_persistence::RegeoNameCacheApi> =
-        match data_persistence::RegeoNameCache::open(DEV_DB_FILE) {
-            Ok(cache) => Arc::new(cache),
-            Err(error) => {
-                log::warn!("regeo 持久化缓存打开失败，本次会话降级为内存缓存：{error}");
-                Arc::new(
-                    data_persistence::RegeoNameCache::open_in_memory()
-                        .expect("内存 regeo 缓存必须可用"),
-                )
-            }
-        };
-    let namer = Arc::new(RegeoNamer::production(key_provider, cache));
-    let enricher: Option<Arc<dyn NameEnricher>> = Some(namer);
-    Arc::new(OverpassDataSource::new(transport).with_name_enricher(enricher))
-}
+mod collection_source;
+mod workspace_state;
 
 // ────────────────────────────────────────────────────────────────────────────
 // 色卡加载器与相对时间（原 theme.rs；S1-04 为生产适配器腾出模块文件配额并入）

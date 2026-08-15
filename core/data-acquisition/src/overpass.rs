@@ -16,7 +16,7 @@
 //! 再失败回退 `landuse=education`；均无数据 → 人工圈画兜底（由调用方决定）。
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use data_transformers::{ClassifyEngine, TransformError};
@@ -36,8 +36,47 @@ pub const OVERPASS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 /// 整体查询截止（工单：≤15s；三端点 5s × 3 恰好封顶）
 pub const OVERPASS_QUERY_DEADLINE: Duration = Duration::from_secs(15);
 
-/// Overpass 服务端超时（秒；比客户端超时小，避免公共端点长期占用）
-pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 25;
+/// Overpass 服务端超时（秒；必须比客户端超时小，避免客户端已放弃后公共端点
+/// 仍继续占用算力——25s > 5s 的历史值正是“公共端点负载起伏”的一个自制造因）。
+pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 4;
+
+/// 边界获取的阶段（分阶段耗时记录与用户可见反馈用，工单 workspace-restore B.8/B.9）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchStage {
+    /// Nominatim 校名解析
+    CampusName,
+    /// Overpass 按元素 ID 拉取边界
+    ByElementId,
+    /// Overpass amenity=university|college|school 锚点近域
+    Amenity,
+    /// Overpass landuse=education 兜底
+    Landuse,
+}
+
+impl FetchStage {
+    /// 稳定文本键（B6 zh-CN.json；S1 只按键取文案）
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::CampusName => "boundary.stage_campus_name",
+            Self::ByElementId => "boundary.stage_by_id",
+            Self::Amenity => "boundary.stage_amenity",
+            Self::Landuse => "boundary.stage_landuse",
+        }
+    }
+}
+
+/// 一次获取进度事件（阶段 + 端点尝试 + 自请求开始已耗时）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchProgress {
+    /// 当前阶段
+    pub stage: FetchStage,
+    /// 该阶段内第几次尝试（端点回退时 1..=total_attempts；非端点阶段为 0）
+    pub attempt: u32,
+    /// 该阶段端点总数（非端点阶段为 0）
+    pub total_attempts: u32,
+    /// 自阶段开始（端点阶段自端点查询开始）的整数秒
+    pub elapsed_secs: u64,
+}
 
 /// Nominatim 端点（OSMF 公共实例）
 pub const NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org/search";
@@ -100,9 +139,15 @@ pub struct NominatimMatch {
     pub kind: String,
 }
 
-/// Overpass 客户端：端点回退 + union 查询（全部可单测）
+/// Overpass 客户端：端点回退 + union 查询（全部可单测）。
+///
+/// 会话内自适应端点排序（工单 B.12 端点选择/重试策略）：公共端点负载起伏是
+/// “时快时慢”的主要来源；同一会话内记住最近成功端点，后续查询优先试它，
+/// 避免每次都在已知慢的端点上空等一个超时周期。
 pub struct OverpassClient {
     transport: HttpTransport,
+    /// 会话内端点尝试顺序（最近成功端点前置；初始为 [`OVERPASS_ENDPOINTS`] 原序）
+    order: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl OverpassClient {
@@ -110,21 +155,46 @@ impl OverpassClient {
     pub fn production() -> Self {
         Self {
             transport: ureq_transport(),
+            order: Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec())),
         }
     }
 
     /// 测试注入
     pub fn with_transport(transport: HttpTransport) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            order: Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec())),
+        }
+    }
+
+    /// 当前端点尝试顺序（最近成功端点在前；测试断言用）。
+    pub fn endpoint_order(&self) -> Vec<&'static str> {
+        self.order
+            .lock()
+            .expect("overpass endpoint order lock")
+            .clone()
     }
 
     /// 按端点回退执行查询：de → kumi → mail.ru；
     /// 错误页（parse error / Runtime error / HTML / 504）视为失败，换下一端点；
     /// 整体查询不得超过 [`OVERPASS_QUERY_DEADLINE`]，并记录每端点耗时。
     pub fn query_with_fallback(&self, query: &str) -> std::result::Result<String, String> {
+        self.query_with_fallback_progress(query, FetchStage::ByElementId, &|_| {})
+    }
+
+    /// 同 [`Self::query_with_fallback`]，但逐端点上报进度（阶段 + 尝试序号 + 已耗时）。
+    pub fn query_with_fallback_progress(
+        &self,
+        query: &str,
+        stage: FetchStage,
+        on_progress: &dyn Fn(FetchProgress),
+    ) -> std::result::Result<String, String> {
         let mut errors: Vec<String> = Vec::new();
         let overall_deadline = Instant::now() + OVERPASS_QUERY_DEADLINE;
-        for endpoint in OVERPASS_ENDPOINTS {
+        let started = Instant::now();
+        let endpoints = self.endpoint_order();
+        let total = endpoints.len() as u32;
+        for (index, endpoint) in endpoints.iter().enumerate() {
             let remaining = overall_deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 errors.push(format!(
@@ -132,6 +202,12 @@ impl OverpassClient {
                 ));
                 break;
             }
+            on_progress(FetchProgress {
+                stage,
+                attempt: index as u32 + 1,
+                total_attempts: total,
+                elapsed_secs: started.elapsed().as_secs(),
+            });
             let timeout = OVERPASS_HTTP_TIMEOUT.min(remaining);
             let url = format!("{endpoint}/api/interpreter?data={}", encode_query(query));
             let started = Instant::now();
@@ -152,6 +228,15 @@ impl OverpassClient {
                         "Overpass 端点 {endpoint} 成功，耗时 {:?}",
                         started.elapsed()
                     );
+                    // 自适应排序：最近成功的端点前置，后续查询优先尝试
+                    if let Ok(mut order) = self.order.lock() {
+                        if let Some(position) =
+                            order.iter().position(|candidate| candidate == endpoint)
+                        {
+                            let endpoint = order.remove(position);
+                            order.insert(0, endpoint);
+                        }
+                    }
                     return Ok(body);
                 }
                 Err(message) => {
@@ -218,21 +303,29 @@ impl NominatimClient {
 
 /// 校区边界自动获取器：Nominatim → by-id → amenity 近域 → landuse 级联
 pub struct CampusBoundaryFetcher {
-    overpass: OverpassClient,
+    overpass: Arc<OverpassClient>,
     nominatim: NominatimClient,
 }
 
 impl CampusBoundaryFetcher {
     pub fn production() -> Self {
         Self {
-            overpass: OverpassClient::production(),
+            overpass: Arc::new(OverpassClient::production()),
+            nominatim: NominatimClient::production(),
+        }
+    }
+
+    /// 生产构造：注入共享 Overpass 客户端（会话内端点自适应排序跨查询生效）。
+    pub fn production_with_overpass(overpass: Arc<OverpassClient>) -> Self {
+        Self {
+            overpass,
             nominatim: NominatimClient::production(),
         }
     }
 
     pub fn with_clients(overpass: OverpassClient, nominatim: NominatimClient) -> Self {
         Self {
-            overpass,
+            overpass: Arc::new(overpass),
             nominatim,
         }
     }
@@ -244,11 +337,39 @@ impl CampusBoundaryFetcher {
         anchor_lon: f64,
         anchor_lat: f64,
     ) -> CampusBoundaryResult {
+        self.fetch_campus_with_progress(campus_name, anchor_lon, anchor_lat, &|_| {})
+    }
+
+    /// 同 [`Self::fetch_campus`]，但分阶段上报进度（工单 B.9：超过 15s 必须给
+    /// 用户明确阶段反馈，不是干等）并记录每阶段耗时（工单 B.8）。
+    pub fn fetch_campus_with_progress(
+        &self,
+        campus_name: &str,
+        anchor_lon: f64,
+        anchor_lat: f64,
+        on_progress: &dyn Fn(FetchProgress),
+    ) -> CampusBoundaryResult {
+        let fetch_started = Instant::now();
+        on_progress(FetchProgress {
+            stage: FetchStage::CampusName,
+            attempt: 0,
+            total_attempts: 0,
+            elapsed_secs: 0,
+        });
         // 1. Nominatim 校名 → 元素 ID → Overpass 按 ID 拉取
-        match self.nominatim.resolve_campus(campus_name) {
+        let campus_name_result = self.nominatim.resolve_campus(campus_name);
+        log::info!(
+            "边界获取阶段 校名解析 完成，耗时 {:?}",
+            fetch_started.elapsed()
+        );
+        match campus_name_result {
             Ok(Some(matched)) => {
                 let query = element_by_id_query(&matched.osm_type, matched.osm_id);
-                match self.overpass.query_with_fallback(&query) {
+                match self.overpass.as_ref().query_with_fallback_progress(
+                    &query,
+                    FetchStage::ByElementId,
+                    on_progress,
+                ) {
                     Ok(body) => {
                         if let Some(best) = select_best(&body, anchor_lon, anchor_lat, campus_name)
                         {
@@ -262,11 +383,12 @@ impl CampusBoundaryFetcher {
                     }
                     Err(message) => {
                         return fallback_after_error(
-                            &self.overpass,
+                            self.overpass.as_ref(),
                             anchor_lon,
                             anchor_lat,
                             campus_name,
-                            message,
+                            format!("边界 by-ID 查询失败：{message}"),
+                            on_progress,
                         );
                     }
                 }
@@ -274,11 +396,12 @@ impl CampusBoundaryFetcher {
             Ok(None) => {}
             Err(message) => {
                 return fallback_after_error(
-                    &self.overpass,
+                    self.overpass.as_ref(),
                     anchor_lon,
                     anchor_lat,
                     campus_name,
-                    message,
+                    format!("校名解析失败：{message}"),
+                    on_progress,
                 );
             }
         }
@@ -289,6 +412,8 @@ impl CampusBoundaryFetcher {
             anchor_lat,
             campus_name,
             BoundarySourceKind::OverpassAmenity,
+            FetchStage::Amenity,
+            on_progress,
         ) {
             Some(result) => result,
             None => CampusBoundaryResult::NotFound,
@@ -296,6 +421,10 @@ impl CampusBoundaryFetcher {
     }
 
     /// 执行一次 Overpass 查询并自动选取最佳边界；查询失败返回 Unreachable。
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "级联查询需要：查询/锚点/校名/来源 + 进度阶段与回调；保持平铺可读"
+    )]
     fn query_and_select(
         &self,
         query: &str,
@@ -303,8 +432,13 @@ impl CampusBoundaryFetcher {
         anchor_lat: f64,
         campus_name: &str,
         source: BoundarySourceKind,
+        stage: FetchStage,
+        on_progress: &dyn Fn(FetchProgress),
     ) -> Option<CampusBoundaryResult> {
-        match self.overpass.query_with_fallback(query) {
+        match self
+            .overpass
+            .query_with_fallback_progress(query, stage, on_progress)
+        {
             Ok(body) => select_best(&body, anchor_lon, anchor_lat, campus_name).map(|best| {
                 CampusBoundaryResult::AutoSelected {
                     name: best.name,
@@ -313,7 +447,17 @@ impl CampusBoundaryFetcher {
                     candidate_count: best.candidate_count,
                 }
             }),
-            Err(message) => Some(CampusBoundaryResult::Unreachable { message }),
+            Err(message) => Some(CampusBoundaryResult::Unreachable {
+                message: format!(
+                    "{}查询失败：{message}",
+                    match stage {
+                        FetchStage::Amenity => "amenity 近域",
+                        FetchStage::Landuse => "landuse 兜底",
+                        FetchStage::ByElementId => "边界 by-ID",
+                        FetchStage::CampusName => "校名解析",
+                    }
+                ),
+            }),
         }
     }
 }
@@ -325,10 +469,13 @@ fn fallback_after_error(
     anchor_lat: f64,
     campus_name: &str,
     first_error: String,
+    on_progress: &dyn Fn(FetchProgress),
 ) -> CampusBoundaryResult {
-    let amenity = overpass.query_with_fallback(&university_query(bbox_around(
-        anchor_lon, anchor_lat, 1500.0,
-    )));
+    let amenity = overpass.query_with_fallback_progress(
+        &university_query(bbox_around(anchor_lon, anchor_lat, 1500.0)),
+        FetchStage::Amenity,
+        on_progress,
+    );
     match amenity {
         Ok(body) => {
             if let Some(best) = select_best(&body, anchor_lon, anchor_lat, campus_name) {
@@ -339,9 +486,11 @@ fn fallback_after_error(
                     candidate_count: best.candidate_count,
                 };
             }
-            let landuse = overpass.query_with_fallback(&landuse_education_query(bbox_around(
-                anchor_lon, anchor_lat, 1500.0,
-            )));
+            let landuse = overpass.query_with_fallback_progress(
+                &landuse_education_query(bbox_around(anchor_lon, anchor_lat, 1500.0)),
+                FetchStage::Landuse,
+                on_progress,
+            );
             match landuse {
                 Ok(body) => {
                     if let Some(best) = select_best(&body, anchor_lon, anchor_lat, campus_name) {
@@ -355,12 +504,12 @@ fn fallback_after_error(
                     CampusBoundaryResult::NotFound
                 }
                 Err(message) => CampusBoundaryResult::Unreachable {
-                    message: format!("{first_error}；{message}"),
+                    message: format!("{first_error}；landuse 兜底查询失败：{message}"),
                 },
             }
         }
         Err(message) => CampusBoundaryResult::Unreachable {
-            message: format!("{first_error}；{message}"),
+            message: format!("{first_error}；amenity 近域查询失败：{message}"),
         },
     }
 }

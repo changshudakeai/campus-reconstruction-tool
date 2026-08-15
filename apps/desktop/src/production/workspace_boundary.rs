@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use collection_flow::CollectionFlow;
+use data_persistence::PlanWorkspaceState;
 use export_flow::BoundaryExportFlow;
 use foundation_mode::{
     BoundaryDrawer, BoundaryState, MercatorCoord, OrientationCalculator, OrientationLine, Point2D,
@@ -25,6 +26,7 @@ use crate::presentation::{
     BoundaryViewState, NotificationFact, OrientationViewState, WorkspacePageState,
 };
 use crate::ViewModelInjector;
+use project_management::BoundaryFetchStage;
 
 use super::workspace_leave::{
     LeaveWorkspaceDecision, LeaveWorkspaceIntent, LeaveWorkspaceUseCase, WorkspaceOperation,
@@ -69,6 +71,14 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) tutorial_skip_all_label: String,
     /// T39：评审候选列表当前页索引（S1 呈现层分页状态；切分类时复位到 0）。
     pub(super) review_page_index: usize,
+    /// B 工单：边界自动获取当前阶段（None = 无在途获取；S1 只显示阶段与耗时）
+    pub(super) boundary_fetch_stage: Option<BoundaryFetchStage>,
+    /// 当前阶段内端点尝试序号（1..=total；非端点阶段为 0）
+    pub(super) boundary_fetch_attempt: u32,
+    /// 当前阶段端点总数（非端点阶段为 0）
+    pub(super) boundary_fetch_total_attempts: u32,
+    /// 自阶段开始的整数秒（进度反馈用，B.9）
+    pub(super) boundary_fetch_elapsed_secs: u64,
 }
 
 /// T34: 地图侧边界绘制状态（纯呈现；几何真相仍在地图 JS/B5 侧）
@@ -184,6 +194,52 @@ impl WorkspaceProductionContext {
         Rc::clone(&self.injector)
     }
 
+    /// 把当前工作区会话状态写成方案级安全检查点（状态变更即落库，工单 A.6）。
+    ///
+    /// 边界几何取自 export-flow（正式导出输入），名称取自 F3 边界会话；
+    /// 落库失败只告警不阻塞用户操作，但绝不静默伪造"已确认"。
+    pub(super) fn checkpoint_workspace_session(&self) {
+        let Some(plan_id) = self.session.borrow().active_plan_id.clone() else {
+            return;
+        };
+        let (boundary, boundary_confirmed) = {
+            let view = self.export_flow.boundary_view();
+            let coords = view
+                .as_ref()
+                .and_then(polygon_coordinates)
+                .unwrap_or_default();
+            (coords, self.export_flow.boundary_confirmed())
+        };
+        let boundary_name = self
+            .injector
+            .borrow_mut()
+            .boundary_session_mut()
+            .active_view()
+            .map(|view| view.name)
+            .unwrap_or_default();
+        let (orientation_angle, active_step) = {
+            let session = self.session.borrow();
+            let angle = session
+                .plans
+                .get(&plan_id)
+                .and_then(|state| state.orientation_angle)
+                .map(f64::from);
+            (angle, session.active_step)
+        };
+        let state = PlanWorkspaceState::new(
+            plan_id.clone(),
+            boundary_name,
+            boundary,
+            boundary_confirmed,
+            orientation_angle,
+            active_step,
+        );
+        let mut injector = self.injector.borrow_mut();
+        if let Err(error) = injector.save_workspace_state(&state) {
+            log::warn!("工作区安全检查点落库失败（plan={plan_id}）: {error}");
+        }
+    }
+
     /// 当前打开方案 ID（评审进台/封账按此方案装载会话）。
     pub(crate) fn active_plan_id(&self) -> Option<String> {
         self.session.borrow().active_plan_id.clone()
@@ -217,6 +273,7 @@ impl WorkspaceProductionContext {
             l10n.t_with_array("workspace.context_campus_plan", &[&campus_name, &plan_name])
         };
         let boundary = self.boundary_view(l10n, &session);
+        let boundary_fetch_status = fetch_status_label(l10n, &session);
         WorkspacePageState {
             toolbar: super::toolbar(l10n, true),
             campus_name,
@@ -256,6 +313,7 @@ impl WorkspaceProductionContext {
             orientation_confirm_two_points_label: l10n.t("orientation.confirm_two_points_button"),
             drawer_expand_tooltip: l10n.t("workspace.drawer_expand_tooltip"),
             drawer_collapse_tooltip: l10n.t("workspace.drawer_collapse_tooltip"),
+            boundary_fetch_status,
             boundary,
             orientation: self.orientation_view(l10n, &session),
             tutorial_visible: session.tutorial_visible,
@@ -609,6 +667,51 @@ pub(super) fn error_fact(l10n: &Localization, body: &str) -> NotificationFact {
         l10n.t("dialog.error_title"),
         body.to_owned(),
     ))
+}
+
+/// 边界获取阶段 → 本地化文本键（B6；S1 只按键取文案）。
+pub(super) fn fetch_stage_key(stage: BoundaryFetchStage) -> &'static str {
+    match stage {
+        BoundaryFetchStage::CampusName => "boundary.stage_campus_name",
+        BoundaryFetchStage::ByElementId => "boundary.stage_by_id",
+        BoundaryFetchStage::Amenity => "boundary.stage_amenity",
+        BoundaryFetchStage::Landuse => "boundary.stage_landuse",
+    }
+}
+
+/// 恢复的已确认边界环是否可信（≥3 个有限坐标；A.7：数据损坏不得伪造已确认）。
+pub(super) fn valid_restored_ring(coords: &[[f64; 2]]) -> bool {
+    coords.len() >= 3
+        && coords
+            .iter()
+            .all(|[lon, lat]| lon.is_finite() && lat.is_finite())
+}
+
+/// 边界自动获取的进度文案（阶段 + 端点尝试 + 已耗时；无在途获取时为空串）。
+fn fetch_status_label(l10n: &Localization, session: &WorkspaceSessionState) -> String {
+    let Some(stage) = session.boundary_fetch_stage else {
+        return String::new();
+    };
+    let stage_label = l10n.t(fetch_stage_key(stage));
+    if session.boundary_fetch_total_attempts > 0 {
+        l10n.t_with_args(
+            "boundary.fetch_progress_endpoint",
+            serde_json::json!({
+                "stage": stage_label,
+                "attempt": session.boundary_fetch_attempt,
+                "total": session.boundary_fetch_total_attempts,
+                "seconds": session.boundary_fetch_elapsed_secs,
+            }),
+        )
+    } else {
+        l10n.t_with_args(
+            "boundary.fetch_progress_stage",
+            serde_json::json!({
+                "stage": stage_label,
+                "seconds": session.boundary_fetch_elapsed_secs,
+            }),
+        )
+    }
 }
 #[cfg(test)]
 mod tests {

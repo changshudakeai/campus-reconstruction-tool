@@ -18,6 +18,97 @@ mod tests {
     }
 
     #[test]
+    fn server_timeout_stays_below_client_timeout() {
+        // 客户端 5s 放弃后，服务端必须更早取消（25s > 5s 的历史值会让公共端点
+        // 在客户端断开后继续占用算力，是“端点负载起伏”的一个自制造因）。
+        assert!(
+            Duration::from_secs(u64::from(OVERPASS_SERVER_TIMEOUT_SECS)) < OVERPASS_HTTP_TIMEOUT,
+            "服务端超时必须小于客户端超时"
+        );
+    }
+
+    #[test]
+    fn query_fallback_prefers_recently_successful_endpoint() {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let calls_clone = calls.clone();
+        let transport = Box::new(move |url: &str, _timeout: Duration| {
+            calls_clone.lock().unwrap().push(url.to_owned());
+            if url.contains("overpass.kumi.systems") {
+                Ok(r#"{"elements":[{"type":"way","id":1}]}"#.to_owned())
+            } else {
+                Err("端点挂起".to_owned())
+            }
+        });
+        let client = OverpassClient::with_transport(transport);
+
+        // 第一次：de 失败 → kumi 成功（自适应记住 kumi）
+        client.query_with_fallback("q").unwrap();
+        assert_eq!(client.endpoint_order()[0], OVERPASS_ENDPOINTS[1]);
+
+        // 第二次：直接先试 kumi，不再在已知坏的 de 上空等
+        client.query_with_fallback("q").unwrap();
+        let urls = calls.lock().unwrap();
+        assert_eq!(urls.len(), 3);
+        assert!(urls[0].contains("overpass-api.de"));
+        assert!(urls[1].contains("kumi"));
+        assert!(urls[2].contains("kumi"), "第二次必须先试最近成功的端点");
+    }
+
+    #[test]
+    fn query_fallback_emits_per_endpoint_progress() {
+        let progress = std::cell::RefCell::new(Vec::new());
+        let transport = Box::new(|_: &str, _timeout: Duration| Err("全部失败".to_owned()));
+        let client = OverpassClient::with_transport(transport);
+        let result = client.query_with_fallback_progress("q", FetchStage::ByElementId, &|p| {
+            progress.borrow_mut().push(p);
+        });
+        assert!(result.is_err());
+        let events = progress.into_inner();
+        assert_eq!(events.len(), OVERPASS_ENDPOINTS.len());
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(event.stage, FetchStage::ByElementId);
+            assert_eq!(event.attempt, index as u32 + 1);
+            assert_eq!(event.total_attempts, OVERPASS_ENDPOINTS.len() as u32);
+        }
+    }
+
+    #[test]
+    fn fetch_campus_failure_names_the_failing_stage() {
+        let overpass = OverpassClient::with_transport(Box::new(|_: &str, _: Duration| {
+            Err("三个公共端点全部不可达".to_owned())
+        }));
+        let nominatim = NominatimClient::with_transport(Box::new(|_: &str, _: Duration| {
+            Err("Nominatim 请求失败".to_owned())
+        }));
+        let fetcher = CampusBoundaryFetcher::with_clients(overpass, nominatim);
+        let progress = std::cell::RefCell::new(Vec::new());
+        match fetcher.fetch_campus_with_progress("示例大学", 121.4, 31.2, &|p| {
+            progress.borrow_mut().push(p);
+        }) {
+            CampusBoundaryResult::Unreachable { message } => {
+                assert!(
+                    message.contains("校名解析失败"),
+                    "必须点名第一步失败：{message}"
+                );
+                assert!(
+                    message.contains("amenity 近域查询失败"),
+                    "必须点名兜底步骤失败：{message}"
+                );
+            }
+            other => panic!("期望 Unreachable，得到 {other:?}"),
+        }
+        let events = progress.into_inner();
+        assert!(
+            events.iter().any(|p| p.stage == FetchStage::CampusName),
+            "必须先上报校名解析阶段"
+        );
+        assert!(
+            events.iter().any(|p| p.stage == FetchStage::Amenity),
+            "必须上报 amenity 兜底阶段"
+        );
+    }
+
+    #[test]
     fn three_endpoints_all_hang_respect_overall_query_deadline() {
         // 注入“三端点全挂 Overpass transport”：每个端点睡满超时后失败。
         // 整体查询必须 ≤ 15s 截止并返回包含全部端点的结构化错误。

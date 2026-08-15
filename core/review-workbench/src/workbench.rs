@@ -6,7 +6,9 @@
 //! - [`ReviewWorkbench::seal`] 封账时把最终三态一次性批量写回 B2，
 //!   写回失败则封账不生效（评审状态保持可改）。
 
-use data_persistence::{CandidateProjectionsApi, Database, ReviewDecision, ReviewDecisionsApi};
+use data_persistence::{
+    CandidateProjectionsApi, Database, ReviewDecision, ReviewDecisionsApi, ReviewDraftEntry,
+};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::path::Path;
 
@@ -294,6 +296,38 @@ impl ReviewWorkbench {
             .any(|candidate| candidate.category == snapshot.active_category)
         {
             self.active_category = snapshot.active_category;
+        }
+        Ok(())
+    }
+
+    /// 导出当前全部候选的三态与勾选（安全检查点；应用流层据此落库）。
+    ///
+    /// 与 [`Self::save_session`] 的数据同源：核心工作台保持零写库，持久化
+    /// 由应用流层在每次状态变更后调用本方法 + B2 草稿 API 完成。
+    pub fn draft_entries(&self) -> Vec<ReviewDraftEntry> {
+        self.candidates
+            .iter()
+            .map(|c| ReviewDraftEntry {
+                candidate_id: c.key.candidate_id.clone(),
+                review_state: c.state,
+                selected: c.selected,
+            })
+            .collect()
+    }
+
+    /// 从安全检查点把三态与勾选对回内存（候选集以 B2 已发布投影为事实
+    /// 来源；对不上的条目安静跳过，与 [`Self::restore_session`] 同一规则）。
+    pub fn restore_draft_entries(&mut self, entries: &[ReviewDraftEntry]) -> Result<()> {
+        self.ensure_not_sealed()?;
+        for entry in entries {
+            if let Some(candidate) = self
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.key.candidate_id == entry.candidate_id)
+            {
+                candidate.state = entry.review_state;
+                candidate.selected = entry.selected;
+            }
         }
         Ok(())
     }

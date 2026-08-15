@@ -60,10 +60,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "候选投影保存名称来源（OSM/高德/缓存/仍未命名/失败）",
         sql: include_str!("../migrations/008_add_candidate_name_source.sql"),
     },
+    Migration {
+        version: 9,
+        description: "工作现场恢复：方案级边界/朝向/步骤 + 上次打开方案 + 未封账评审草稿检查点",
+        sql: include_str!("../migrations/009_add_workspace_session_state.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 8;
+pub const LATEST_SCHEMA_VERSION: u32 = 9;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

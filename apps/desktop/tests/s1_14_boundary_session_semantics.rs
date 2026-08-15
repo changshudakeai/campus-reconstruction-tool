@@ -1,8 +1,9 @@
-//! M1 acceptance: the confirmed boundary is a current-session promise only.
+//! M1 + workspace-restore acceptance: the confirmed boundary is a per-plan
+//! safety checkpoint and is restored after restart（含意外退出）。
 //!
-//! ADR-0007 把边界归属定义为方案级数据，但 M1 尚未落地方案边界持久化
-//! （plans 表无边界字段）。本测试证明：应用重启后已确认边界不会静默恢复，
-//! 也不会伪造边界——导出入口明确拒绝（error.export_boundary_failed）。
+//! ADR-0007 把边界归属定义为方案级数据；workspace-restore 工单把已确认
+//! 边界/朝向/步骤在状态变更点落库。本测试证明：确认边界 → 重启 → 恢复
+//! "已确认"可直接导出；未确认边界时导出仍明确拒绝，不伪造边界。
 
 use data_acquisition::overpass::{BoundarySourceKind, CampusBoundaryResult};
 use data_persistence::CampusCrudApi;
@@ -16,7 +17,6 @@ use desktop_shell::{
     OperationPresentationState, ShellDatabases, ShellPresenter, ViewModelInjector,
 };
 use global_settings::FirstRunSetup;
-use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
 use slint::ComponentHandle;
@@ -150,7 +150,7 @@ fn boundary_cache_scenarios() {
     let (rapid_switch_a_release_tx, rapid_switch_a_release_rx) = std::sync::mpsc::channel::<()>();
     let rapid_switch_a_release_rx = Arc::new(std::sync::Mutex::new(rapid_switch_a_release_rx));
     let source_rapid_switch_a_release = Arc::clone(&rapid_switch_a_release_rx);
-    let source: BoundaryFetchSource = Arc::new(move |_, _, _| {
+    let source: BoundaryFetchSource = Arc::new(move |_, _, _, _progress| {
         let call = source_calls.fetch_add(1, Ordering::SeqCst) + 1;
         match call {
             1 => canned_boundary(),
@@ -531,8 +531,7 @@ fn pump_until_terminal(window: &AppWindow) -> OperationPresentationState {
     terminal_value
 }
 
-fn confirmed_boundary_is_session_only_and_restart_refuses_without_it() {
-    let l10n = Localization::new(Language::ZhCn).expect("load zh-CN resources");
+fn confirmed_boundary_persists_and_restarts_ready_for_export() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let database_path = directory.path().join("m1-session.db");
     let export_dir = directory.path().join("exports");
@@ -616,41 +615,32 @@ fn confirmed_boundary_is_session_only_and_restart_refuses_without_it() {
         .expect("set export directory after restart");
     let _runtime = assemble_application(&window, injector, Arc::clone(&center));
 
+    // 第二段启动即自动恢复上次打开方案（A.1）；再点一次方案卡片保持幂等。
     window.invoke_plan_list_card_clicked(plan_id.clone().into());
     assert!(
-        !window.get_workspace_boundary_is_determined(),
-        "重启后不得静默恢复已确认边界，也不得伪造边界"
+        window.get_workspace_boundary_is_determined(),
+        "重启后必须恢复上次确认的边界（状态“边界已确认”，A.2）"
     );
 
-    // 无边界时导出必须明确拒绝，而不是静默成功或伪造边界。
+    // 恢复后无需重新抓取即可直接导出（A.2）。
     window.invoke_workspace_step_clicked(4);
     window.invoke_workspace_export_start_clicked();
     let terminal = pump_until_terminal(&window);
     assert_eq!(
         terminal,
-        OperationPresentationState::Failed,
-        "重启后没有已确认边界时导出必须明确失败；当前状态：{terminal:?}"
-    );
-    assert!(window.get_error_dialog_visible());
-    let expected_body = l10n.t_with_array(
-        "export.failure_user_message",
-        &[&l10n.t("error.export_boundary_failed")],
-    );
-    assert_eq!(
-        window.get_error_dialog_body().as_str(),
-        expected_body,
-        "缺失边界必须呈现为边界失败（不产生成功产物）"
+        OperationPresentationState::Succeeded,
+        "重启后恢复的已确认边界必须可直接导出；当前状态：{terminal:?}"
     );
     assert!(
-        !export_dir_after_restart
+        export_dir_after_restart
             .join(format!("{plan_id}.schem"))
             .is_file(),
-        "拒绝导出时不得产生成功产物"
+        "恢复后导出必须产出 .schem"
     );
 }
 
 #[test]
 fn workspace_boundary_session_semantics() {
     boundary_cache_scenarios();
-    confirmed_boundary_is_session_only_and_restart_refuses_without_it();
+    confirmed_boundary_persists_and_restarts_ready_for_export();
 }

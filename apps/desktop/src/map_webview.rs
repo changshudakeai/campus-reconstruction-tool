@@ -940,7 +940,7 @@ pub(crate) fn show_review(
 /// 触发 combase.dll 0xc0000005（CoUnmarshalInterface 通道对端已死）。这里在
 /// 事件循环仍存活、COM 仍健康时先同步关闭控制器（含待退休 WebView），
 /// 使退出时 TLS 析构为空操作。不得在事件循环停止后再调用本函数。
-pub(crate) fn shutdown() {
+pub fn shutdown() {
     let (webview, retiring) = STATE.with(|s| {
         let mut state = s.borrow_mut();
         state.resize_timer = None;

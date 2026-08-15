@@ -165,6 +165,8 @@ export component AppWindow inherits Window {
     in property <string> workspace-boundary-points-label;
     in property <string> workspace-orientation-current-angle-label;
     in property <string> workspace-orientation-confirm-two-points-label;
+    // B 工单：边界自动获取进度（阶段 + 端点尝试 + 已耗时；空串 = 无在途）
+    in property <string> workspace-boundary-fetch-status;
     in property <string> workspace-drawer-expand-tooltip;
     in property <string> workspace-drawer-collapse-tooltip;
     // ADR-0027：五个步骤顶部始终同时显示校区名与方案名（合成文案由 Rust 侧注入）
@@ -827,6 +829,7 @@ export component AppWindow inherits Window {
                     boundary-point-count: root.workspace-boundary-point-count;
                     boundary-points-label: root.workspace-boundary-points-label;
                     boundary-status: root.workspace-boundary-status;
+                    boundary-fetch-status: root.workspace-boundary-fetch-status;
                     boundary-is-determined: root.workspace-boundary-is-determined;
                     boundary-undo-label: root.workspace-boundary-undo-label;
                     boundary-reset-label: root.workspace-boundary-reset-label;

@@ -30,6 +30,8 @@ mod collection;
 mod export;
 mod notification;
 mod review;
+mod review_draft;
+mod review_map;
 mod startup_settings;
 mod workspace_adapter;
 mod workspace_boundary;
@@ -43,6 +45,7 @@ use export::ExportProductionAdapter;
 use notification::NotificationRequest;
 use notification::{DiagnosticFailureLabels, NotificationLabels, NotificationProductionAdapter};
 use review::ReviewProductionAdapter;
+use shared_domain_types::PlanId;
 use startup_settings::{SettingsProductionAdapter, StartupProductionAdapter};
 use workspace_adapter::WorkspaceProductionAdapter;
 use workspace_boundary::WorkspaceProductionContext;
@@ -124,6 +127,8 @@ enum PendingInput {
 }
 
 pub(crate) struct ProductionEntries {
+    /// 组合根持有的注入器（工作现场恢复查找"上次打开方案"用；构造期接线）。
+    injector: Rc<RefCell<ViewModelInjector>>,
     startup: StartupPresentationEntry<'static, StartupRequest>,
     settings: SettingsPresentationEntry<'static, SettingsRequest>,
     campus_plan: CampusPlanPresentationEntry<'static, CampusPlanRequest>,
@@ -187,6 +192,7 @@ impl ProductionEntries {
             collection_flow.clone(),
         );
         Self {
+            injector: Rc::clone(&injector),
             startup: StartupPresentationEntry::new(StartupProductionAdapter {
                 injector: Rc::clone(&injector),
                 workspace: workspace.clone(),
@@ -245,6 +251,32 @@ impl ProductionEntries {
     pub(crate) fn show_startup(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
+        // 工作现场恢复（A.1）：启动时若存在"上次打开方案"且方案仍在，
+        // 直接恢复该方案的工作区（含步骤/边界/朝向）；方案已删除或数据
+        // 读取失败时清除标记并回落正常启动流程，绝不伪造恢复。
+        let last_plan = self
+            .injector
+            .borrow()
+            .load_last_active_plan()
+            .ok()
+            .flatten();
+        if let Some(plan_id) = last_plan {
+            let parsed = PlanId::parse(&plan_id).ok();
+            let still_exists = parsed
+                .as_ref()
+                .and_then(|plan| self.injector.borrow().projects().plan_context(plan).ok())
+                .flatten()
+                .is_some();
+            if still_exists {
+                self.open_workspace_plan(window, &plan_id);
+                return;
+            }
+            let mut injector = self.injector.borrow_mut();
+            if let Err(error) = injector.save_last_active_plan(None) {
+                log::warn!("清除失效的“上次打开方案”失败: {error}");
+            }
+            drop(injector);
+        }
         self.startup
             .show(window, &self.center, StartupRequest::Show);
     }
@@ -712,6 +744,20 @@ impl ProductionEntries {
                 plan_id: plan_id.to_string(),
             },
         );
+        // 工作现场恢复：OpenPlan 内部已导航到上次停留步骤（A.1）；步骤 ③④⑤
+        // 需要各自入口装载（评审进台/采集状态/导出页），与步骤点击路径一致。
+        self.open_restored_step_entry(window);
+    }
+
+    /// 恢复步骤落在 ③采集/④评审/⑤导出时，由对应入口呈现页面。
+    fn open_restored_step_entry(&mut self, window: &AppWindow) {
+        let step = window.get_workspace_active_step();
+        match step {
+            2 => self.show_collection(window),
+            3 => self.show_review(window),
+            4 => self.show_export(window),
+            _ => {}
+        }
     }
 
     /// 步骤点击：功能入口返回允许进入/条件不足/需要确认；占位步骤页由对应入口渲染。
@@ -830,6 +876,12 @@ impl ProductionEntries {
 
     /// 地图加载完成状态（成功/故障）：故障只暂停地图相关操作。
     pub(crate) fn handle_map_status(&mut self, window: &AppWindow, available: bool) {
+        // 采集/导出步骤的地图只是让位显示：状态回调不渲染工作区页面，
+        // 避免用 Ready 页面覆盖在途导出/采集进度（恢复工作流实测竞态；
+        // 边界步①/朝向步②仍需要地图可用性呈现）。
+        if !matches!(window.get_workspace_active_step(), 0 | 1) {
+            return;
+        }
         self.workspace.show(
             window,
             &self.center,
@@ -870,6 +922,12 @@ impl ProductionEntries {
             gaode_client::parse_ipc_message(message),
             Ok(IpcMessage::MapReady)
         );
+        // B 工单/恢复实测竞态：采集/导出步骤（2/4）的迟到 map_ready 只确认
+        // 让位地图加载完成——不渲染工作区页面，避免用 Ready 页面覆盖在途
+        // 导出/采集进度；边界获取只属于步骤①（步骤②由朝向入口处理）。
+        if map_ready && !matches!(window.get_workspace_active_step(), 0 | 1) {
+            return;
+        }
         let mut presentation = self.workspace.show(
             window,
             &self.center,
@@ -1518,6 +1576,12 @@ impl ProductionEntries {
                     if crate::map_webview::is_review_page() {
                         return;
                     }
+                    // 只有边界步（步骤①）的 map_ready 会真正启动边界获取；
+                    // 采集/导出步的 map_ready 只是让位显示，启动轮询会把迟到
+                    // 的 Idle 呈现覆盖掉在途导出/采集进度（恢复工作流实测竞态）。
+                    if window.get_workspace_active_step() != 0 {
+                        return;
+                    }
                     ProductionEntries::start_boundary_fetch_polling(&shared, &window);
                 }
             }
@@ -1548,6 +1612,9 @@ impl ProductionEntries {
                     // 轮询空态会触发 poll_boundary_fetch 的 RefCell 借用 panic
                     // （见 workspace_adapter 修复），与 on_workspace_map_ipc 同纪律。
                     if crate::map_webview::is_review_page() {
+                        return;
+                    }
+                    if window.get_workspace_active_step() != 0 {
                         return;
                     }
                     ProductionEntries::start_boundary_fetch_polling(&shared, &window);

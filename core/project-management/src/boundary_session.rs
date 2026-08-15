@@ -8,6 +8,32 @@ use std::sync::{mpsc, Arc};
 
 use shared_domain_types::PlanId;
 
+/// 边界获取阶段（分阶段反馈与耗时记录，工单 B.8/B.9）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryFetchStage {
+    /// Nominatim 校名解析
+    CampusName,
+    /// Overpass 按元素 ID 拉取边界
+    ByElementId,
+    /// Overpass amenity 近域
+    Amenity,
+    /// Overpass landuse 兜底
+    Landuse,
+}
+
+/// 一次边界获取进度事件（阶段 + 端点尝试 + 已耗时）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundaryFetchProgress {
+    /// 当前阶段
+    pub stage: BoundaryFetchStage,
+    /// 该阶段内第几次尝试（端点回退时 1..=total_attempts；非端点阶段为 0）
+    pub attempt: u32,
+    /// 该阶段端点总数（非端点阶段为 0）
+    pub total_attempts: u32,
+    /// 自请求开始（或该阶段端点查询开始）的整数秒
+    pub elapsed_secs: u64,
+}
+
 /// 外部边界来源返回的结构化结果。
 #[derive(Debug, Clone, PartialEq)]
 pub enum BoundaryFetchOutcome {
@@ -23,8 +49,12 @@ pub enum BoundaryFetchOutcome {
     },
 }
 
+/// 后台线程上报的进度通道（S1 只显示阶段与耗时，不判断业务条件）。
+pub type BoundaryProgressSink = Arc<dyn Fn(BoundaryFetchProgress) + Send + Sync>;
+
 /// 真实 OSM 适配器与测试 fake 共用的外部来源 seam。
-pub type BoundarySource = Arc<dyn Fn(&str, f64, f64) -> BoundaryFetchOutcome + Send + Sync>;
+pub type BoundarySource =
+    Arc<dyn Fn(&str, f64, f64, BoundaryProgressSink) -> BoundaryFetchOutcome + Send + Sync>;
 
 /// S1 恢复边界页面所需的只读状态；正式获取状态仍由本模块持有。
 #[derive(Debug, Clone, PartialEq)]
@@ -47,9 +77,18 @@ pub enum BoundaryRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BoundaryPoll {
     Idle,
-    Loading,
+    /// 仍在获取；带最近一次进度事件（无新事件时为 None，呈现层沿用上次阶段）
+    Loading {
+        progress: Option<BoundaryFetchProgress>,
+    },
     Ready(BoundaryFetchOutcome),
     Stale,
+}
+
+/// 后台线程经通道上报的事件（进度 + 最终结果）。
+enum BoundaryFetchEvent {
+    Progress(BoundaryFetchProgress),
+    Done(BoundaryFetchOutcome),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -92,7 +131,7 @@ impl PlanBoundaryState {
 }
 
 struct PendingBoundaryFetch {
-    receiver: mpsc::Receiver<BoundaryFetchOutcome>,
+    receiver: mpsc::Receiver<BoundaryFetchEvent>,
 }
 
 /// F3 的方案级边界会话入口。
@@ -209,12 +248,23 @@ impl PlanBoundarySession {
         let Some(pending) = self.pending.get_mut(&key) else {
             return BoundaryPoll::Idle;
         };
-        let outcome = match pending.receiver.try_recv() {
-            Ok(outcome) => outcome,
-            Err(mpsc::TryRecvError::Empty) => return BoundaryPoll::Loading,
-            Err(mpsc::TryRecvError::Disconnected) => BoundaryFetchOutcome::Unreachable {
-                message: "boundary fetch worker disconnected".to_owned(),
-            },
+        let event = match pending.receiver.try_recv() {
+            Ok(event) => event,
+            Err(mpsc::TryRecvError::Empty) => return BoundaryPoll::Loading { progress: None },
+            Err(mpsc::TryRecvError::Disconnected) => {
+                BoundaryFetchEvent::Done(BoundaryFetchOutcome::Unreachable {
+                    message: "boundary fetch worker disconnected".to_owned(),
+                })
+            }
+        };
+        // 进度事件只透传，不终结在途请求（最终 Done 事件才移除 pending）。
+        if let BoundaryFetchEvent::Progress(progress) = &event {
+            return BoundaryPoll::Loading {
+                progress: Some(progress.clone()),
+            };
+        }
+        let BoundaryFetchEvent::Done(outcome) = event else {
+            unreachable!("event handled above");
         };
         self.pending.remove(&key).expect("pending boundary fetch");
         if self.active_key.as_ref() != Some(&key) {
@@ -239,6 +289,30 @@ impl PlanBoundarySession {
         BoundaryPoll::Ready(outcome)
     }
 
+    /// 工作现场恢复：把已确认边界预置为当前方案的正式状态（重启后不再
+    /// 重复校名解析/Overpass 查询；map_ready 直接命中缓存）。
+    pub fn restore_confirmed(&mut self, view: PlanBoundaryView) {
+        let Some(key) = self.active_key.clone() else {
+            return;
+        };
+        let state = self
+            .plans
+            .entry(key.plan_id)
+            .or_insert_with(|| PlanBoundaryState {
+                key: key.clone(),
+                official: None,
+                candidate: None,
+            });
+        state.key = key;
+        state.official = Some(view);
+        state.candidate = None;
+    }
+
+    /// 当前活动方案的可见边界（恢复/落库读取边界名用）。
+    pub fn active_view(&self) -> Option<PlanBoundaryView> {
+        self.visible_active()
+    }
+
     fn start_active_request(&mut self) -> BoundaryRequest {
         let Some(key) = self.active_key.clone() else {
             return BoundaryRequest::MissingContext;
@@ -254,8 +328,13 @@ impl PlanBoundarySession {
         let campus_name = key.campus_name.clone();
         let source = Arc::clone(&self.source);
         let (sender, receiver) = mpsc::channel();
+        let progress_sender = sender.clone();
+        let progress_sink: BoundaryProgressSink = Arc::new(move |progress| {
+            let _ = progress_sender.send(BoundaryFetchEvent::Progress(progress));
+        });
         std::thread::spawn(move || {
-            let _ = sender.send(source(&campus_name, anchor_lon, anchor_lat));
+            let outcome = source(&campus_name, anchor_lon, anchor_lat, progress_sink);
+            let _ = sender.send(BoundaryFetchEvent::Done(outcome));
         });
         self.pending.insert(key, PendingBoundaryFetch { receiver });
         BoundaryRequest::Started

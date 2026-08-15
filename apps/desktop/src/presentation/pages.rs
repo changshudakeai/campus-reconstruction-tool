@@ -470,6 +470,8 @@ pub struct WorkspacePageState {
     pub drawer_expand_tooltip: String,
     /// T34: 抽屉开合箭头提示文案（收起）
     pub drawer_collapse_tooltip: String,
+    /// B 工单：边界自动获取的进度文案（阶段 + 端点尝试 + 已耗时；空串 = 无在途）
+    pub boundary_fetch_status: String,
     pub boundary: BoundaryViewState,
     pub orientation: OrientationViewState,
     pub tutorial_visible: bool,
@@ -514,6 +516,7 @@ impl WorkspacePageState {
         );
         window.set_workspace_drawer_expand_tooltip(self.drawer_expand_tooltip.clone().into());
         window.set_workspace_drawer_collapse_tooltip(self.drawer_collapse_tooltip.clone().into());
+        window.set_workspace_boundary_fetch_status(self.boundary_fetch_status.clone().into());
         window.set_workspace_tutorial_visible(self.tutorial_visible);
         window.set_workspace_tutorial_text(self.tutorial_text.clone().into());
         window.set_workspace_tutorial_dismiss_label(self.tutorial_dismiss_label.clone().into());

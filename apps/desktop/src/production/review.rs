@@ -1,6 +1,11 @@
 //! 评审呈现适配器：S1 只转发一次完整评审意图，并呈现 F5 工作台返回的页面状态与通知。
 
 use super::collection::COLLECTION_CATEGORY_KEYS;
+use super::review_draft::{checkpoint_review, restore_review_draft_if_unsealed};
+use super::review_map::{
+    map_object_json, push_full_visible_sync, push_review_script, visible_review_set_for,
+    ReviewMapSync,
+};
 use super::workspace_boundary::WorkspaceProductionContext;
 use crate::presentation::{
     ConfirmationPresentation, NavigationDecision, NotificationFact, Presentation,
@@ -9,13 +14,9 @@ use crate::presentation::{
 use crate::ReviewCandidateData;
 use localization::Localization;
 use notification_center::Notification;
-use review_workbench::{
-    CandidateKey, CommandOutcome, ExportSummary, MapObjectView, ReviewWorkbench, StateChange,
-    WorkbenchView,
-};
+use review_workbench::{CandidateKey, CommandOutcome, ExportSummary, ReviewWorkbench, StateChange};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 #[cfg(test)]
@@ -39,27 +40,6 @@ pub(crate) struct ReviewProductionAdapter {
     pub(crate) context: WorkspaceProductionContext,
     /// T39：评审地图回推同步状态（全量只推一次，之后增量只推对应候选）。
     map_sync: Rc<RefCell<ReviewMapSync>>,
-}
-
-/// T39：评审地图回推同步状态（T41：地图只绘制当前类别 + 当前页的可见集合）。
-#[derive(Default)]
-struct ReviewMapSync {
-    /// 已推送到 JS 的三态（candidate_id -> state 标识符；增量 diff 基准）。
-    pushed_states: HashMap<String, String>,
-    /// 已推送的高亮候选（None = 无高亮）。
-    pushed_highlight: Option<String>,
-    /// 已推送的可见集合身份（active_category_index, page_index）。
-    /// 分类/翻页变化时触发一次全量重推（清旧 overlay + 画新集合）。
-    pushed_visible: Option<(usize, usize)>,
-    /// 全量推送是否已排定（幂等，防止多次 map_ready 重复排定）。
-    full_push_scheduled: bool,
-}
-
-/// 当前应绘制到评审地图的可见候选集合（当前类别 + 当前分页）。
-struct VisibleReviewSet {
-    active_category_index: usize,
-    page_index: usize,
-    objects: Vec<MapObjectView>,
 }
 
 /// T39：评审候选列表分页页大小（Slint 无虚拟化；50–100 内取 60）。
@@ -326,7 +306,7 @@ impl ReviewProductionAdapter {
             return;
         };
         let view = workbench.view();
-        let visible = visible_review_set_for(&self.context, &view);
+        let visible = visible_review_set_for(&self.context, &view, REVIEW_PAGE_SIZE);
         drop(injector);
 
         let mut sync = self.map_sync.borrow_mut();
@@ -391,7 +371,7 @@ impl ReviewProductionAdapter {
                 return;
             };
             let view = workbench.view();
-            let visible = visible_review_set_for(&context, &view);
+            let visible = visible_review_set_for(&context, &view, REVIEW_PAGE_SIZE);
             drop(injector);
             let mut sync = map_sync.borrow_mut();
             let visible_key = (visible.active_category_index, visible.page_index);
@@ -459,19 +439,16 @@ impl ReviewProductionAdapter {
         }
     }
 
-    fn session_path(&self, plan_id: &str) -> std::path::PathBuf {
-        let safe = plan_id.replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-        std::env::temp_dir().join(format!("campus-rebuild-review-{safe}.json"))
-    }
-
     /// 简单变更（无需确认）：应用后呈现最新页面状态。
     fn mutate_simple(&self, f: impl FnOnce(&mut ReviewWorkbench)) -> Presentation<ReviewPageState> {
-        let injector = self.context.injector();
-        let mut injector = injector.borrow_mut();
-        if let Some(workbench) = injector.review_mut() {
-            f(workbench);
+        {
+            let injector = self.context.injector();
+            let mut injector = injector.borrow_mut();
+            if let Some(workbench) = injector.review_mut() {
+                f(workbench);
+            }
         }
-        drop(injector);
+        checkpoint_review(&self.context);
         Presentation::ready(self.page_state())
             .with_navigation(NavigationDecision::Show(Screen::Workspace))
     }
@@ -504,8 +481,11 @@ impl ReviewProductionAdapter {
 
     fn command_presentation(&self, outcome: &CommandOutcome) -> Presentation<ReviewPageState> {
         match outcome {
-            CommandOutcome::Applied { .. } => Presentation::ready(self.page_state())
-                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            CommandOutcome::Applied { .. } => {
+                checkpoint_review(&self.context);
+                Presentation::ready(self.page_state())
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
             CommandOutcome::NeedsConfirmation(request) => {
                 let injector = self.context.injector();
                 let injector = injector.borrow();
@@ -547,8 +527,11 @@ impl ReviewProductionAdapter {
         result: std::result::Result<Option<()>, review_workbench::Error>,
     ) -> Presentation<ReviewPageState> {
         match result {
-            Ok(_) => Presentation::ready(self.page_state())
-                .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+            Ok(_) => {
+                checkpoint_review(&self.context);
+                Presentation::ready(self.page_state())
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
+            }
             Err(error) => self
                 .review_failure_presentation(&error)
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
@@ -629,6 +612,11 @@ impl ReviewProductionAdapter {
             });
         match result {
             Ok(()) => {
+                // 工作现场恢复：未封账三态检查点对回（A.4）；已封账时终态以
+                // review_decisions 为准，草稿不得覆盖（A.4 封账语义不变）。
+                if let Ok(plan_id) = PlanId::parse(&plan_id) {
+                    restore_review_draft_if_unsealed(&self.context, &plan_id);
+                }
                 // T38/T39：评审地图在候选装载后创建——候选不再内嵌 HTML；
                 // 页面加载后发送 map_ready，Rust 在事件循环安全上下文全量
                 // 推送一次（回调栈内不执行 WebView2 脚本调用，T35 同纪律）。
@@ -641,101 +629,6 @@ impl ReviewProductionAdapter {
                 .with_navigation(NavigationDecision::Show(Screen::Workspace)),
         }
     }
-}
-
-/// 当前应绘制到评审地图的候选集合：当前类别 + 当前分页（每页 ≤60）。
-///
-/// 分页索引由工作区会话保存；此处同时把越界索引钳制回写，保证地图与列表
-/// 永远绘制同一批候选，且全量推送不会把 12,000 条候选全部排进 JS 缓冲。
-fn visible_review_set_for(
-    context: &WorkspaceProductionContext,
-    view: &WorkbenchView,
-) -> VisibleReviewSet {
-    let active_category_index = view
-        .category_tabs
-        .iter()
-        .position(|tab| tab.active)
-        .unwrap_or(0);
-    let page_total = view.cards.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
-    let mut session = context.session.borrow_mut();
-    let page_index = session.review_page_index.min(page_total - 1);
-    session.review_page_index = page_index;
-    drop(session);
-
-    let start = page_index * REVIEW_PAGE_SIZE;
-    let end = (start + REVIEW_PAGE_SIZE).min(view.cards.len());
-    let id_set: std::collections::HashSet<String> = view.cards[start..end]
-        .iter()
-        .map(|card| card.candidate_id.clone())
-        .collect();
-    let objects: Vec<MapObjectView> = view
-        .map_objects
-        .iter()
-        .filter(|object| id_set.contains(&object.candidate_id))
-        .cloned()
-        .collect();
-
-    VisibleReviewSet {
-        active_category_index,
-        page_index,
-        objects,
-    }
-}
-
-/// 全量推送当前可见集合：`setReviewCandidates` 会清掉旧 overlay 再画新集合，
-/// 因此分类/翻页时不会残留上一页/上一类别的标注。
-fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut ReviewMapSync) {
-    let objects: Vec<serde_json::Value> = visible.objects.iter().map(map_object_json).collect();
-    let states: HashMap<String, String> = visible
-        .objects
-        .iter()
-        .map(|object| {
-            (
-                object.candidate_id.clone(),
-                object.state.to_identifier().to_string(),
-            )
-        })
-        .collect();
-    let highlight = visible
-        .objects
-        .iter()
-        .find(|object| object.highlighted)
-        .map(|object| object.candidate_id.clone());
-    let scripts = full_push_scripts(&objects, highlight.as_ref());
-    for script in &scripts {
-        push_review_script(script);
-    }
-    sync.pushed_states = states;
-    sync.pushed_highlight = highlight;
-    sync.pushed_visible = Some((visible.active_category_index, visible.page_index));
-}
-
-/// 评审地图对象 → JS 载荷（与 B3 回推协议同构）。
-fn map_object_json(object: &review_workbench::MapObjectView) -> serde_json::Value {
-    serde_json::json!({
-        "candidate_id": object.candidate_id,
-        "kind": object.shape_kind,
-        "coordinates": object.shape_coordinates,
-        "state": object.state.to_identifier(),
-    })
-}
-
-/// 全量推送脚本：一条 `setReviewCandidates(可见集合)` + 高亮命令（如有）。
-/// 可见集合受当前类别 + 当前分页限制，因此不会把全量候选排进 JS 缓冲。
-fn full_push_scripts(objects: &[serde_json::Value], highlight: Option<&String>) -> Vec<String> {
-    let json = serde_json::to_string(objects).unwrap_or_else(|_| "[]".to_string());
-    let mut scripts = vec![format!("window.setReviewCandidates({json});")];
-    if let Some(key) = highlight {
-        let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
-        scripts.push(format!("window.highlightReviewCandidate({id});"));
-    }
-    scripts
-}
-
-/// 评审地图回推命令：先计数（T39 验收观察），再执行（无 WebView 时为空操作）。
-fn push_review_script(script: &str) {
-    crate::map_webview::note_review_push(script);
-    crate::map_webview::evaluate_script(script);
 }
 
 impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAdapter {
@@ -921,43 +814,42 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 self.present_apply(self.apply(|workbench| workbench.cancel_pending()))
             }
             ReviewRequest::Pause => {
-                let plan_id = self.context.active_plan_id().unwrap_or_default();
-                let path = self.session_path(&plan_id);
-                let result = {
-                    let injector = self.context.injector();
-                    let injector = injector.borrow();
-                    injector
-                        .review()
-                        .map(|workbench| workbench.save_session(&path))
-                };
-                match result {
-                    Some(Ok(())) => {
-                        let injector = self.context.injector();
-                        let injector = injector.borrow();
-                        let l10n = injector.l10n();
-                        let notification = Notification::info(
-                            l10n.t("app.source_tag"),
-                            l10n.t("review.session_saved_title"),
-                            l10n.t("review.session_saved_body"),
-                        );
-                        drop(injector);
-                        Presentation::ready(self.page_state())
-                            .with_notification(NotificationFact::new(notification))
-                            .with_navigation(NavigationDecision::Show(Screen::Workspace))
-                    }
-                    Some(Err(error)) => self
-                        .review_failure_presentation(&error)
-                        .with_navigation(NavigationDecision::Show(Screen::Workspace)),
-                    None => Presentation::ready(self.empty_page())
-                        .with_navigation(NavigationDecision::Show(Screen::Workspace)),
-                }
+                // 检查点已随每次状态变更落库；暂停按钮只是再次确认并提示。
+                checkpoint_review(&self.context);
+                let injector = self.context.injector();
+                let injector = injector.borrow();
+                let l10n = injector.l10n();
+                let notification = Notification::info(
+                    l10n.t("app.source_tag"),
+                    l10n.t("review.session_saved_title"),
+                    l10n.t("review.session_saved_body"),
+                );
+                drop(injector);
+                Presentation::ready(self.page_state())
+                    .with_notification(NotificationFact::new(notification))
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
             }
             ReviewRequest::Resume => {
                 let plan_id = self.context.active_plan_id().unwrap_or_default();
-                let path = self.session_path(&plan_id);
-                let result = self.apply(|workbench| workbench.restore_session(&path));
+                let result = {
+                    let injector = self.context.injector();
+                    let mut injector = injector.borrow_mut();
+                    let draft = injector.load_review_draft(&plan_id);
+                    match draft {
+                        Ok(Some(draft)) => match injector.review_mut() {
+                            Some(workbench) => {
+                                workbench.restore_draft_entries(&draft.entries).map(|_| {
+                                    workbench.set_active_category(draft.active_category);
+                                })
+                            }
+                            None => Ok(()),
+                        },
+                        Ok(None) => Ok(()),
+                        Err(error) => Err(review_workbench::Error::SessionIo(error.to_string())),
+                    }
+                };
                 match result {
-                    Ok(Some(())) => {
+                    Ok(()) => {
                         let injector = self.context.injector();
                         let injector = injector.borrow();
                         let l10n = injector.l10n();
@@ -971,8 +863,6 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                             .with_notification(NotificationFact::new(notification))
                             .with_navigation(NavigationDecision::Show(Screen::Workspace))
                     }
-                    Ok(None) => Presentation::ready(self.empty_page())
-                        .with_navigation(NavigationDecision::Show(Screen::Workspace)),
                     Err(error) => self
                         .review_failure_presentation(&error)
                         .with_navigation(NavigationDecision::Show(Screen::Workspace)),
@@ -985,8 +875,18 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     injector.seal_review()
                 };
                 match result {
-                    Some(Ok(_summary)) => Presentation::succeeded(self.page_state())
-                        .with_navigation(NavigationDecision::Show(Screen::Workspace)),
+                    Some(Ok(_summary)) => {
+                        // 封账成功后清理未封账草稿：终态以 review_decisions 为唯一权威，
+                        // 残留草稿不得在下次进台时覆盖终态（A.4 封账语义保持）。
+                        if let Some(plan_id) = self.context.active_plan_id() {
+                            let mut injector = self.context.injector.borrow_mut();
+                            if let Err(error) = injector.clear_review_draft(&plan_id) {
+                                log::warn!("封账后清理评审草稿失败（plan={plan_id}）: {error}");
+                            }
+                        }
+                        Presentation::succeeded(self.page_state())
+                            .with_navigation(NavigationDecision::Show(Screen::Workspace))
+                    }
                     Some(Err(error)) => self
                         .review_failure_presentation(&error)
                         .with_navigation(NavigationDecision::Show(Screen::Workspace)),

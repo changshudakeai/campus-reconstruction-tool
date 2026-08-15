@@ -162,10 +162,66 @@ impl<T> either::into_either::IntoEither for data_acquisition::overpass::CampusBo
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::CampusBoundaryResult
 pub type data_acquisition::overpass::CampusBoundaryResult::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::CampusBoundaryResult where T: ?core::marker::Sized
+pub enum data_acquisition::overpass::FetchStage
+pub data_acquisition::overpass::FetchStage::Amenity
+pub data_acquisition::overpass::FetchStage::ByElementId
+pub data_acquisition::overpass::FetchStage::CampusName
+pub data_acquisition::overpass::FetchStage::Landuse
+impl data_acquisition::overpass::FetchStage
+pub fn data_acquisition::overpass::FetchStage::label_key(self) -> &'static str
+impl core::clone::Clone for data_acquisition::overpass::FetchStage
+pub fn data_acquisition::overpass::FetchStage::clone(&self) -> data_acquisition::overpass::FetchStage
+impl core::cmp::Eq for data_acquisition::overpass::FetchStage
+impl core::cmp::PartialEq for data_acquisition::overpass::FetchStage
+pub fn data_acquisition::overpass::FetchStage::eq(&self, other: &data_acquisition::overpass::FetchStage) -> bool
+impl core::fmt::Debug for data_acquisition::overpass::FetchStage
+pub fn data_acquisition::overpass::FetchStage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for data_acquisition::overpass::FetchStage
+impl core::marker::StructuralPartialEq for data_acquisition::overpass::FetchStage
+impl core::marker::Freeze for data_acquisition::overpass::FetchStage
+impl core::marker::Send for data_acquisition::overpass::FetchStage
+impl core::marker::Sync for data_acquisition::overpass::FetchStage
+impl core::marker::Unpin for data_acquisition::overpass::FetchStage
+impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::FetchStage
+impl core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::FetchStage
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::FetchStage where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::FetchStage::is_within(&self, b: &G2) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for data_acquisition::overpass::FetchStage where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchStage::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::FetchStage where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::FetchStage where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_acquisition::overpass::FetchStage where U: core::convert::From<T>
+pub fn data_acquisition::overpass::FetchStage::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_acquisition::overpass::FetchStage where U: core::convert::Into<T>
+pub type data_acquisition::overpass::FetchStage::Error = core::convert::Infallible
+pub fn data_acquisition::overpass::FetchStage::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_acquisition::overpass::FetchStage where U: core::convert::TryFrom<T>
+pub type data_acquisition::overpass::FetchStage::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_acquisition::overpass::FetchStage::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_acquisition::overpass::FetchStage where T: core::clone::Clone
+pub type data_acquisition::overpass::FetchStage::Owned = T
+pub fn data_acquisition::overpass::FetchStage::clone_into(&self, target: &mut T)
+pub fn data_acquisition::overpass::FetchStage::to_owned(&self) -> T
+impl<T> core::any::Any for data_acquisition::overpass::FetchStage where T: 'static + ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchStage::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_acquisition::overpass::FetchStage where T: ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchStage::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_acquisition::overpass::FetchStage where T: ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchStage::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_acquisition::overpass::FetchStage where T: core::clone::Clone
+pub unsafe fn data_acquisition::overpass::FetchStage::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_acquisition::overpass::FetchStage
+pub fn data_acquisition::overpass::FetchStage::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::FetchStage
+impl<T> typenum::type_operators::Same for data_acquisition::overpass::FetchStage
+pub type data_acquisition::overpass::FetchStage::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::FetchStage where T: ?core::marker::Sized
 pub struct data_acquisition::overpass::CampusBoundaryFetcher
 impl data_acquisition::overpass::CampusBoundaryFetcher
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::fetch_campus(&self, campus_name: &str, anchor_lon: f64, anchor_lat: f64) -> data_acquisition::overpass::CampusBoundaryResult
+pub fn data_acquisition::overpass::CampusBoundaryFetcher::fetch_campus_with_progress(&self, campus_name: &str, anchor_lon: f64, anchor_lat: f64, on_progress: &dyn core::ops::function::Fn(data_acquisition::overpass::FetchProgress)) -> data_acquisition::overpass::CampusBoundaryResult
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::production() -> Self
+pub fn data_acquisition::overpass::CampusBoundaryFetcher::production_with_overpass(overpass: alloc::sync::Arc<data_acquisition::overpass::OverpassClient>) -> Self
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::with_clients(overpass: data_acquisition::overpass::OverpassClient, nominatim: data_acquisition::overpass::NominatimClient) -> Self
 impl core::marker::Freeze for data_acquisition::overpass::CampusBoundaryFetcher
 impl core::marker::Send for data_acquisition::overpass::CampusBoundaryFetcher
@@ -197,6 +253,54 @@ impl<T> either::into_either::IntoEither for data_acquisition::overpass::CampusBo
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::CampusBoundaryFetcher
 pub type data_acquisition::overpass::CampusBoundaryFetcher::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::CampusBoundaryFetcher where T: ?core::marker::Sized
+pub struct data_acquisition::overpass::FetchProgress
+pub data_acquisition::overpass::FetchProgress::attempt: u32
+pub data_acquisition::overpass::FetchProgress::elapsed_secs: u64
+pub data_acquisition::overpass::FetchProgress::stage: data_acquisition::overpass::FetchStage
+pub data_acquisition::overpass::FetchProgress::total_attempts: u32
+impl core::clone::Clone for data_acquisition::overpass::FetchProgress
+pub fn data_acquisition::overpass::FetchProgress::clone(&self) -> data_acquisition::overpass::FetchProgress
+impl core::cmp::PartialEq for data_acquisition::overpass::FetchProgress
+pub fn data_acquisition::overpass::FetchProgress::eq(&self, other: &data_acquisition::overpass::FetchProgress) -> bool
+impl core::fmt::Debug for data_acquisition::overpass::FetchProgress
+pub fn data_acquisition::overpass::FetchProgress::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for data_acquisition::overpass::FetchProgress
+impl core::marker::Freeze for data_acquisition::overpass::FetchProgress
+impl core::marker::Send for data_acquisition::overpass::FetchProgress
+impl core::marker::Sync for data_acquisition::overpass::FetchProgress
+impl core::marker::Unpin for data_acquisition::overpass::FetchProgress
+impl core::panic::unwind_safe::RefUnwindSafe for data_acquisition::overpass::FetchProgress
+impl core::panic::unwind_safe::UnwindSafe for data_acquisition::overpass::FetchProgress
+impl<G1, G2> geo::algorithm::within::Within<G2> for data_acquisition::overpass::FetchProgress where G2: geo::algorithm::contains::Contains<G1>
+pub fn data_acquisition::overpass::FetchProgress::is_within(&self, b: &G2) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_acquisition::overpass::FetchProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_acquisition::overpass::FetchProgress where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_acquisition::overpass::FetchProgress where U: core::convert::From<T>
+pub fn data_acquisition::overpass::FetchProgress::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_acquisition::overpass::FetchProgress where U: core::convert::Into<T>
+pub type data_acquisition::overpass::FetchProgress::Error = core::convert::Infallible
+pub fn data_acquisition::overpass::FetchProgress::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_acquisition::overpass::FetchProgress where U: core::convert::TryFrom<T>
+pub type data_acquisition::overpass::FetchProgress::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_acquisition::overpass::FetchProgress::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_acquisition::overpass::FetchProgress where T: core::clone::Clone
+pub type data_acquisition::overpass::FetchProgress::Owned = T
+pub fn data_acquisition::overpass::FetchProgress::clone_into(&self, target: &mut T)
+pub fn data_acquisition::overpass::FetchProgress::to_owned(&self) -> T
+impl<T> core::any::Any for data_acquisition::overpass::FetchProgress where T: 'static + ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchProgress::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_acquisition::overpass::FetchProgress where T: ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchProgress::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_acquisition::overpass::FetchProgress where T: ?core::marker::Sized
+pub fn data_acquisition::overpass::FetchProgress::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_acquisition::overpass::FetchProgress where T: core::clone::Clone
+pub unsafe fn data_acquisition::overpass::FetchProgress::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_acquisition::overpass::FetchProgress
+pub fn data_acquisition::overpass::FetchProgress::from(t: T) -> T
+impl<T> either::into_either::IntoEither for data_acquisition::overpass::FetchProgress
+impl<T> typenum::type_operators::Same for data_acquisition::overpass::FetchProgress
+pub type data_acquisition::overpass::FetchProgress::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::FetchProgress where T: ?core::marker::Sized
 pub struct data_acquisition::overpass::NominatimClient
 impl data_acquisition::overpass::NominatimClient
 pub fn data_acquisition::overpass::NominatimClient::production() -> Self
@@ -283,8 +387,10 @@ pub type data_acquisition::overpass::NominatimMatch::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::NominatimMatch where T: ?core::marker::Sized
 pub struct data_acquisition::overpass::OverpassClient
 impl data_acquisition::overpass::OverpassClient
+pub fn data_acquisition::overpass::OverpassClient::endpoint_order(&self) -> alloc::vec::Vec<&'static str>
 pub fn data_acquisition::overpass::OverpassClient::production() -> Self
 pub fn data_acquisition::overpass::OverpassClient::query_with_fallback(&self, query: &str) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn data_acquisition::overpass::OverpassClient::query_with_fallback_progress(&self, query: &str, stage: data_acquisition::overpass::FetchStage, on_progress: &dyn core::ops::function::Fn(data_acquisition::overpass::FetchProgress)) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn data_acquisition::overpass::OverpassClient::with_transport(transport: data_acquisition::overpass::HttpTransport) -> Self
 impl core::marker::Freeze for data_acquisition::overpass::OverpassClient
 impl core::marker::Send for data_acquisition::overpass::OverpassClient

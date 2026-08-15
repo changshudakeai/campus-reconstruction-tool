@@ -101,6 +101,7 @@ fn workspace(suffix: &str) -> WorkspacePageState {
         orientation_confirm_two_points_label: format!("两点-{suffix}"),
         drawer_expand_tooltip: format!("展开-{suffix}"),
         drawer_collapse_tooltip: format!("收起-{suffix}"),
+        boundary_fetch_status: String::new(),
         boundary: BoundaryViewState {
             refresh_label: format!("refresh-{suffix}"),
             points: Vec::new(),

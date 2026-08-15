@@ -37,7 +37,9 @@ mod projects;
 mod raw_observations;
 mod regeo_cache;
 mod review_decisions;
+mod review_drafts;
 mod trash;
+mod workspace_state;
 
 pub use candidate_projections::{
     CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateDisplay,
@@ -45,7 +47,10 @@ pub use candidate_projections::{
     CandidateShape, CandidateValidation,
 };
 pub use database::Database;
-pub use entities::{RawObservation, ReviewDecision, TrashItem, TRASH_RETENTION_DAYS};
+pub use entities::{
+    PlanWorkspaceState, RawObservation, ReviewDecision, ReviewDraft, ReviewDraftEntry, TrashItem,
+    TRASH_RETENTION_DAYS,
+};
 pub use error::{Error, Result};
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use projects::{
@@ -54,4 +59,6 @@ pub use projects::{
 pub use raw_observations::RawObservationsApi;
 pub use regeo_cache::{RegeoNameCache, RegeoNameCacheApi};
 pub use review_decisions::ReviewDecisionsApi;
+pub use review_drafts::ReviewDraftApi;
 pub use trash::TrashApi;
+pub use workspace_state::WorkspaceStateApi;

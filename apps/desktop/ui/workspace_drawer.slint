@@ -22,6 +22,7 @@ export component WorkspaceDrawer inherits Rectangle {
     in property <int> boundary-point-count;
     in property <string> boundary-points-label;
     in property <string> boundary-status;
+    in property <string> boundary-fetch-status;
     in property <bool> boundary-is-determined;
     in property <string> boundary-undo-label;
     in property <string> boundary-reset-label;
@@ -103,6 +104,12 @@ export component WorkspaceDrawer inherits Rectangle {
                     text: root.boundary-status;
                     font-size: 12px;
                     color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                if root.boundary-fetch-status != "": Text {
+                    text: root.boundary-fetch-status;
+                    font-size: 12px;
+                    color: Theme.text-primary;
                     wrap: word-wrap;
                 }
                 Button {

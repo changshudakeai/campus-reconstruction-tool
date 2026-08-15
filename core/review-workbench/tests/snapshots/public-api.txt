@@ -535,12 +535,14 @@ pub fn review_workbench::ReviewWorkbench::candidate_count(&self) -> usize
 pub fn review_workbench::ReviewWorkbench::clear_highlight(&mut self)
 pub fn review_workbench::ReviewWorkbench::confirm_pending(&mut self) -> review_workbench::Result<review_workbench::CommandOutcome>
 pub fn review_workbench::ReviewWorkbench::deselect_all_in_active_category(&mut self)
+pub fn review_workbench::ReviewWorkbench::draft_entries(&self) -> alloc::vec::Vec<data_persistence::entities::ReviewDraftEntry>
 pub fn review_workbench::ReviewWorkbench::export_summary(&self) -> review_workbench::ExportSummary
 pub fn review_workbench::ReviewWorkbench::highlight(&mut self, key: &review_workbench::CandidateKey) -> review_workbench::Result<()>
 pub fn review_workbench::ReviewWorkbench::highlighted(&self) -> core::option::Option<&review_workbench::CandidateKey>
 pub fn review_workbench::ReviewWorkbench::is_sealed(&self) -> bool
 pub fn review_workbench::ReviewWorkbench::load(db: &data_persistence::database::Database, plan_id: &shared_domain_types::id::PlanId) -> review_workbench::Result<Self>
 pub fn review_workbench::ReviewWorkbench::plan_id(&self) -> &str
+pub fn review_workbench::ReviewWorkbench::restore_draft_entries(&mut self, entries: &[data_persistence::entities::ReviewDraftEntry]) -> review_workbench::Result<()>
 pub fn review_workbench::ReviewWorkbench::restore_session(&mut self, path: &std::path::Path) -> review_workbench::Result<()>
 pub fn review_workbench::ReviewWorkbench::save_session(&self, path: &std::path::Path) -> review_workbench::Result<()>
 pub fn review_workbench::ReviewWorkbench::seal(&mut self, db: &mut data_persistence::database::Database) -> review_workbench::Result<review_workbench::ExportSummary>

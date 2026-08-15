@@ -161,6 +161,69 @@ impl TrashItem {
     }
 }
 
+/// 方案工作区持久化快照（工作现场恢复；状态变更即落库的安全检查点）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanWorkspaceState {
+    /// 所属方案 ID
+    pub plan_id: String,
+    /// 已确认边界的显示名（OSM name / 空串表示未命名）
+    pub boundary_name: String,
+    /// 已确认边界外环（GCJ-02 [lon, lat]；空表示未确认/已重置）
+    pub boundary_gcj02: Vec<[f64; 2]>,
+    /// 边界是否已经用户确认（确认后才允许导出）
+    pub boundary_confirmed: bool,
+    /// 自定义朝向（度）；None = 未设置（导出按地图正北，ADR-0041）
+    pub orientation_angle: Option<f64>,
+    /// 上次停留的工作区步骤（0..=4）
+    pub active_step: i32,
+    /// 最后更新时间
+    pub updated_at: DateTime<Utc>,
+}
+
+impl PlanWorkspaceState {
+    /// 构造一条无历史时间戳的快照（写入方负责填充 updated_at）
+    pub fn new(
+        plan_id: impl Into<String>,
+        boundary_name: impl Into<String>,
+        boundary_gcj02: Vec<[f64; 2]>,
+        boundary_confirmed: bool,
+        orientation_angle: Option<f64>,
+        active_step: i32,
+    ) -> Self {
+        Self {
+            plan_id: plan_id.into(),
+            boundary_name: boundary_name.into(),
+            boundary_gcj02,
+            boundary_confirmed,
+            orientation_angle,
+            active_step,
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+/// 未封账评审草稿：某候选的安全检查点三态与勾选。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDraftEntry {
+    /// B2 候选投影的稳定 ID
+    pub candidate_id: String,
+    /// 三态标识符（B1 `ReviewState::to_identifier`）
+    pub review_state: ReviewState,
+    /// 复选框勾选状态（恢复时一并回填）
+    pub selected: bool,
+}
+
+/// 未封账评审草稿整体（按方案保存；恢复时按候选标识对回，候选集以 B2 为准）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewDraft {
+    /// 所属方案 ID（恢复时防串档）
+    pub plan_id: String,
+    /// 当前激活的类别抽屉
+    pub active_category: CandidateCategory,
+    /// 全部候选的三态与勾选
+    pub entries: Vec<ReviewDraftEntry>,
+}
+
 /// 类别 → 数据库文本（与迁移脚本 CHECK 约束一致）
 pub(crate) fn category_to_db(category: CandidateCategory) -> Result<&'static str> {
     match category {
