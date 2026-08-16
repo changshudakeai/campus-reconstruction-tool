@@ -5,7 +5,7 @@ MCRebuild V2 是一款面向 Minecraft 校园复刻场景的 Windows 桌面工�
 V2 是对 v1.x 的彻底重写，核心目标是：**轻便、高效、好维护，并让产品决策和代码实现都可追溯**。
 
 > [!IMPORTANT]
-> 当前版本为 **`2.0.0-dev`（实施期）**，不是可直接交付的稳定版本。当前产品真相见 [`docs/product-baseline.md`](docs/product-baseline.md)，当前施工顺序只见 [`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`](.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md)。历史 PRD、旧索引、旧工单和交接不得覆盖这两个入口。
+> 当前版本为 **`2.0.0`（正式版候选，2026-08-17）**。当前产品真相见 [`docs/product-baseline.md`](docs/product-baseline.md)，施工与发布状态见 [`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`](.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md)，项目总结与经验教训见 [`project_summary.md`](project_summary.md)。历史 PRD、旧索引、旧工单和交接不得覆盖这三个入口。
 
 ## 产品流程
 

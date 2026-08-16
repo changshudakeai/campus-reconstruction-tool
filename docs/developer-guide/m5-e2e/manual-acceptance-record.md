@@ -4,6 +4,17 @@
 
 ---
 
+## V2.0.0 发布验收（2026-08-17）
+
+- 状态：**v2.0.0 正式版候选，全部工单与主线收口项验收完毕**（产品负责人确认）。
+- `main` = `7988d5d` 已推送 `origin/main`；工作区干净，已合并分支清理完成。
+- 门禁：workspace 测试全绿 / fmt --check / clippy -D warnings / machete 通过。
+- 交付范围与经验教训见 `project_summary.md`；布局惯例见
+  `docs/research/nav-workspace-layout-forms.md`。
+- 遗留（明确不做，另行决策）：生成规则精细效果、Overture 离线补充包。
+
+---
+
 ## T38 实施窗口记录（2026-08-09，fix/t38-review-drawer）
 
 工单：`.scratch/v2-implementation/issues/T38-review-drawer-workbench.md`
