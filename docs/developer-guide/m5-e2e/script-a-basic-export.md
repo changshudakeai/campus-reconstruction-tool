@@ -6,8 +6,8 @@ desktop-shell --test s1_08_boundary_export_flow`（同一 UI 回调链路写出�
 
 ## 前置
 
-- 发布产物：`dist/MCRebuild-V2.0.0-dev-portable.zip`（解压后运行
-  `campus-rebuild-dev.exe`），或桌面快捷方式"校园复刻工具 - 开发版"。
+- 发布产物：`dist/MCRebuild-V2.0.0-portable.zip`（解压后运行
+  `campus-rebuild.exe`），或桌面快捷方式"校园复刻工具 - 开发版"。
 - 干净验收环境：删除 `%LOCALAPPDATA%\MCRebuildV2\dev\campus-rebuild.db`
   与导出目录，保证从首次设置开始。
 

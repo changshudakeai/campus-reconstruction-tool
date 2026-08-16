@@ -2,7 +2,7 @@
 
 ## 项目状态
 
-**实施期（ADR 驱动）**。当前产品行为以 `docs/product-baseline.md` 为唯一基线，决策记录于 `docs/adr/`（ADR-0001 起连续编号至 0041），施工顺序以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一入口。
+**实施期（ADR 驱动）**。当前产品行为以 `docs/product-baseline.md` 为唯一基线，决策记录于 `docs/adr/`（ADR-0001 起连续编号至 0044），施工顺序以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一入口。
 
 ## 开工前必读（按此顺序）
 
@@ -22,7 +22,8 @@
 
 ### Issue tracker
 
-当前主线计划 + 本地 `.scratch/` 工单；GitHub 只用于 PR。详见 `docs/agents/issue-tracker.md`。
+当前主线计划 + `.scratch/v2-implementation/` 工单（随仓库提交）；历史归档见
+`docs/history/`。GitHub 只用于 PR。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 

@@ -10,7 +10,7 @@
 
 **Blocked by:** T01, T02（B2 依赖 B1 的共享类型定义）
 
-**Status:** hardening-required（既有交付 completed；ADR-0040 候选投影扩展待实施）
+**Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
 
 ### ADR-0040 增补验收
 

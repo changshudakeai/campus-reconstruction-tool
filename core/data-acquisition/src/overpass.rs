@@ -82,7 +82,7 @@ pub struct FetchProgress {
 pub const NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org/search";
 
 /// 所有 OSM 请求的 User-Agent（Nominatim 政策要求；Overpass 礼貌请求也带）
-pub const USER_AGENT: &str = "MCRebuildV2/2.0.0-dev (campus-reconstruction-tool; desktop; T31)";
+pub const USER_AGENT: &str = "MCRebuildV2/2.0.0 (campus-reconstruction-tool; desktop)";
 
 /// 可注入的 HTTP 传输（生产为 ureq；测试注入罐头）
 pub type HttpTransport =

@@ -55,8 +55,8 @@ temp/
 *.tmp
 *.temp
 
-# Local scratch (issues, handoffs) — per-worktree, never committed
-.scratch/
+# Local scratch archive (historical artifacts) — never committed
+.scratch/archive/
 
 # Mock data for tests
 tests/mock-data/

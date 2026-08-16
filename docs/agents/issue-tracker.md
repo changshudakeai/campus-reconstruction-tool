@@ -7,13 +7,15 @@
 
 ## 工单存放位置
 
-当前排期以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一执行入口；局部工单仍可存放于本地 `.scratch/`（per-worktree 本地追踪器，gitignore，不入库）。
+当前排期以 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` 为唯一执行入口；
+工单跟踪器 `.scratch/v2-implementation/` 随仓库提交（v2.0.0 起）。历史归档见
+`docs/history/`（旧 s1 批次、旧 PRD、历史 handoff）与 `.scratch/archive/`（不入库）。
 GitHub Issues 不用于本项目的工单追踪；`gh` CLI 仅用于代码 PR 的创建与合并。
 
 ## 本地工单约定
 
 - `.scratch/v2-implementation/issues/TXX-*.md` — V2 实施工单（T01 起）
-- `.scratch/s1-thin-shell-repair/issues/NN-*.md` — S1 薄壳批次工单（01 起）
+- `docs/history/s1-thin-shell-repair/issues/NN-*.md` — S1 薄壳批次工单（历史归档）
 - `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md` — 唯一执行顺序
 - `.scratch/v2-implementation/issues-index.md` — 历史状态账本，不用于判断下一步
 
