@@ -55,6 +55,17 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
         window.get_wizard_version_label().to_string(),
         window.get_wizard_notice_text().to_string(),
         window.get_wizard_continue_label().to_string(),
+        window.get_wizard_gaode_group_title().to_string(),
+        window.get_wizard_gaode_api_key_label().to_string(),
+        window.get_wizard_gaode_api_key_placeholder().to_string(),
+        window.get_wizard_gaode_security_key_label().to_string(),
+        window
+            .get_wizard_gaode_security_key_placeholder()
+            .to_string(),
+        window.get_wizard_gaode_web_service_key_label().to_string(),
+        window
+            .get_wizard_gaode_web_service_key_placeholder()
+            .to_string(),
         window.get_tutorial_replay_label().to_string(),
         window.get_error_dialog_ok_label().to_string(),
         window.get_settings_title().to_string(),
@@ -81,8 +92,19 @@ fn ui_bindings_cover_wizard_replay_and_error_dialog() {
     assert!(is_first_run());
     assert_eq!(window.get_active_screen(), 0);
 
-    // 勾选后完成 → F1 落库；无上次校区 → 校区选择页占位文案
+    // 勾选知情告知但未填必填高德 Key → "继续"禁用（UI 之外 F1 另有兜底校验）
     window.set_wizard_acknowledged(true);
+    assert!(
+        !window.get_wizard_continue_enabled(),
+        "缺必填高德 Key 时'继续'必须禁用"
+    );
+    window.set_wizard_gaode_api_key("0123456789abcdef01234567".into());
+    window.set_wizard_gaode_security_key("fedcba9876543210fedcba98".into());
+    assert!(
+        window.get_wizard_continue_enabled(),
+        "填齐必填高德 Key 后'继续'必须可用"
+    );
+    // 勾选后完成 → F1 落库；无上次校区 → 校区选择页占位文案
     window.invoke_wizard_continue_clicked();
     assert!(!is_first_run());
     assert_eq!(window.get_active_screen(), 1, "向导完成应跳到着陆占位屏");

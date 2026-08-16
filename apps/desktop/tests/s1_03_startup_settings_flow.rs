@@ -44,6 +44,16 @@ fn startup_page(suffix: &str) -> StartupPageState {
         version_label: format!("版本-{suffix}"),
         notice_text: format!("说明-{suffix}"),
         continue_label: format!("继续-{suffix}"),
+        wizard_gaode_group_title: format!("高德配置-{suffix}"),
+        wizard_gaode_api_key_label: format!("API-{suffix}"),
+        wizard_gaode_api_key_placeholder: format!("API占位-{suffix}"),
+        wizard_gaode_security_key_label: format!("安全-{suffix}"),
+        wizard_gaode_security_key_placeholder: format!("安全占位-{suffix}"),
+        wizard_gaode_web_service_key_label: format!("Web-{suffix}"),
+        wizard_gaode_web_service_key_placeholder: format!("Web占位-{suffix}"),
+        wizard_gaode_api_key: format!("api{suffix}"),
+        wizard_gaode_security_key: format!("security{suffix}"),
+        wizard_gaode_web_service_key: format!("web{suffix}"),
         language_options: vec![format!("zh-{suffix}")],
         version_options: vec![format!("1-{suffix}")],
         selected_language: format!("zh-{suffix}"),
@@ -165,6 +175,28 @@ fn s1_03_startup_and_settings_flow_through_presentation_seams() {
 
     assert_eq!(window.get_active_screen(), 0, "全新库必须落在首次设置");
     window.set_wizard_acknowledged(true);
+
+    // 首启向导集成高德配置（ADR-0004）：缺失必填 Key 时"继续"被拒绝，页面停留
+    window.invoke_wizard_continue_clicked();
+    assert_eq!(
+        window.get_active_screen(),
+        0,
+        "缺少必填的高德 API Key 时不得完成首启"
+    );
+    assert!(
+        center.board_snapshot().iter().any(|record| {
+            record.title == l10n.t("dialog.error_title") && record.body.contains("API Key")
+        }),
+        "缺失必填 Key 必须明确指出缺失项（通知事实）"
+    );
+
+    // 填写三个 Key 后继续：一并保存（B2/设置快照校验），进入校区选择页
+    let wizard_api_key = "abc123DEF456ghi789";
+    let wizard_security_key = "xyz789GHI012mno345";
+    let wizard_web_service_key = "web123DEF456ghi789";
+    window.set_wizard_gaode_api_key(wizard_api_key.into());
+    window.set_wizard_gaode_security_key(wizard_security_key.into());
+    window.set_wizard_gaode_web_service_key(wizard_web_service_key.into());
     window.invoke_wizard_continue_clicked();
     assert_eq!(
         window.get_active_screen(),
@@ -176,8 +208,37 @@ fn s1_03_startup_and_settings_flow_through_presentation_seams() {
         l10n.t("app.shell_status_campus_select")
     );
 
+    let first_run_saved = SettingsManager::new(Database::open(&database_path).expect("重开设置库"));
+    assert_eq!(
+        first_run_saved.gaode_api_key().expect("读 API Key"),
+        Some(wizard_api_key.to_owned()),
+        "首启完成时必须把 Web 端 JS API Key 一并保存"
+    );
+    assert_eq!(
+        first_run_saved.gaode_security_key().expect("读安全密钥"),
+        Some(wizard_security_key.to_owned()),
+        "首启完成时必须把安全密钥一并保存"
+    );
+    assert_eq!(
+        first_run_saved
+            .gaode_web_service_key()
+            .expect("读 Web 服务 Key"),
+        Some(wizard_web_service_key.to_owned()),
+        "首启完成时必须把 Web 服务 Key 一并保存"
+    );
+
     window.invoke_settings_toolbar_button_clicked();
     assert_eq!(window.get_active_screen(), 3, "设置入口导航到常规设置页");
+    assert_eq!(
+        window.get_gaode_api_key().as_str(),
+        wizard_api_key,
+        "设置页必须读回首启保存的 API Key，不要求用户重复配置"
+    );
+    assert_eq!(
+        window.get_gaode_security_key().as_str(),
+        wizard_security_key,
+        "设置页必须读回首启保存的安全密钥"
+    );
     assert_eq!(
         window.get_settings_language().as_str(),
         global_settings::DEFAULT_LANGUAGE

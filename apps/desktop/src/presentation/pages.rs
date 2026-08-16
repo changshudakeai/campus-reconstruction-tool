@@ -50,6 +50,17 @@ pub struct StartupPageState {
     pub version_label: String,
     pub notice_text: String,
     pub continue_label: String,
+    // 首启向导高德地图配置区（ADR-0004：JS API Key + 安全密钥必填）
+    pub wizard_gaode_group_title: String,
+    pub wizard_gaode_api_key_label: String,
+    pub wizard_gaode_api_key_placeholder: String,
+    pub wizard_gaode_security_key_label: String,
+    pub wizard_gaode_security_key_placeholder: String,
+    pub wizard_gaode_web_service_key_label: String,
+    pub wizard_gaode_web_service_key_placeholder: String,
+    pub wizard_gaode_api_key: String,
+    pub wizard_gaode_security_key: String,
+    pub wizard_gaode_web_service_key: String,
     pub language_options: Vec<String>,
     pub version_options: Vec<String>,
     pub selected_language: String,
@@ -68,6 +79,26 @@ impl WindowPageState for StartupPageState {
         window.set_wizard_version_label(self.version_label.clone().into());
         window.set_wizard_notice_text(self.notice_text.clone().into());
         window.set_wizard_continue_label(self.continue_label.clone().into());
+        window.set_wizard_gaode_group_title(self.wizard_gaode_group_title.clone().into());
+        window.set_wizard_gaode_api_key_label(self.wizard_gaode_api_key_label.clone().into());
+        window.set_wizard_gaode_api_key_placeholder(
+            self.wizard_gaode_api_key_placeholder.clone().into(),
+        );
+        window.set_wizard_gaode_security_key_label(
+            self.wizard_gaode_security_key_label.clone().into(),
+        );
+        window.set_wizard_gaode_security_key_placeholder(
+            self.wizard_gaode_security_key_placeholder.clone().into(),
+        );
+        window.set_wizard_gaode_web_service_key_label(
+            self.wizard_gaode_web_service_key_label.clone().into(),
+        );
+        window.set_wizard_gaode_web_service_key_placeholder(
+            self.wizard_gaode_web_service_key_placeholder.clone().into(),
+        );
+        window.set_wizard_gaode_api_key(self.wizard_gaode_api_key.clone().into());
+        window.set_wizard_gaode_security_key(self.wizard_gaode_security_key.clone().into());
+        window.set_wizard_gaode_web_service_key(self.wizard_gaode_web_service_key.clone().into());
         window.set_wizard_language_options(string_model(&self.language_options));
         window.set_wizard_version_options(string_model(&self.version_options));
         window.set_wizard_language(self.selected_language.clone().into());
@@ -89,6 +120,9 @@ pub enum StartupRequest {
         language: String,
         minecraft_version: String,
         acknowledged: bool,
+        api_key: String,
+        security_key: String,
+        web_service_key: String,
     },
 }
 

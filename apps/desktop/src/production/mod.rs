@@ -78,13 +78,16 @@ pub(crate) fn entry_calls() -> [usize; 10] {
 fn toolbar(l10n: &Localization, visible: bool) -> ToolbarPageState {
     ToolbarPageState {
         title: l10n.t("app.welcome_title"),
-        notice_visible: visible,
+        // 校区选择页（visible=false，尚无当前校区）也常驻通知与设置：
+        // 用户需要在尚未选校区时就能改高德 Key；回收站/切换校区在
+        // 该上下文中隐藏，避免点击后因无当前校区报错。
+        notice_visible: true,
         notice_label: l10n.t("messages.notification_center"),
         switch_campus_visible: visible,
         switch_campus_label: l10n.t("app.switch_campus"),
         trash_visible: visible,
         trash_label: l10n.t("trash.page_title"),
-        settings_visible: visible,
+        settings_visible: true,
         settings_label: l10n.t("app.settings_button"),
     }
 }
@@ -302,6 +305,9 @@ impl ProductionEntries {
             language: window.get_wizard_language().to_string(),
             minecraft_version: window.get_wizard_version().to_string(),
             acknowledged: window.get_wizard_acknowledged(),
+            api_key: window.get_wizard_gaode_api_key().to_string(),
+            security_key: window.get_wizard_gaode_security_key().to_string(),
+            web_service_key: window.get_wizard_gaode_web_service_key().to_string(),
         };
         self.startup.show(window, &self.center, request);
     }

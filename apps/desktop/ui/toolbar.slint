@@ -108,8 +108,10 @@ export component AppToolbar inherits Rectangle {
             clicked => { root.settings-clicked(); }
         }
 
-        // 右："…" 溢出菜单（回收站 / 切换校区，带文字标签）
-        overflow-btn := Button {
+        // 右："…" 溢出菜单（回收站 / 切换校区，带文字标签）。
+        // 两个菜单项都被隐藏（如校区选择页尚无当前校区）时整个按钮隐藏，
+        // 避免出现点了只有空面板的 "···"。
+        if root.trash-visible || root.switch-campus-visible: overflow-btn := Button {
             text: "···";
             width: 40px;
             height: 32px;

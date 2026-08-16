@@ -78,6 +78,12 @@ fn pump_until(
     slint::run_event_loop_until_quit().expect("运行事件循环");
 }
 
+fn logical_size(window: &AppWindow) -> (f32, f32) {
+    let scale = window.window().scale_factor().max(0.001);
+    let size = window.window().size();
+    (size.width as f32 / scale, size.height as f32 / scale)
+}
+
 #[test]
 fn s1_04_campus_plan_trash_flow_through_plan_management_entry() {
     let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
@@ -115,6 +121,56 @@ fn s1_04_campus_plan_trash_flow_through_plan_management_entry() {
         0,
         "没有最近记录时不显示列表，直接显示搜索框"
     );
+
+    // ── 1b. 校区选择页工具栏矩阵：设置/通知可见，回收站/切换校区隐藏 ──
+    assert!(
+        window.get_settings_toolbar_button_visible(),
+        "校区选择页设置入口必须可见（用户需要在此改 Key）"
+    );
+    assert!(
+        window.get_notice_toolbar_button_visible(),
+        "校区选择页通知入口可显示"
+    );
+    assert!(
+        !window.get_trash_toolbar_button_visible(),
+        "尚未选定校区时回收站入口必须隐藏"
+    );
+    assert!(
+        !window.get_switch_campus_toolbar_button_visible(),
+        "尚未选定校区时切换校区入口必须隐藏"
+    );
+
+    // ── 1c. 两档窗口搜索行矩形断言：限宽居中、不越界、输入框可读 ──
+    for (width, height) in [(800.0, 666.0), (1000.0, 666.0)] {
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(width, height));
+        let (w, h) = logical_size(&window);
+        assert!((w - width).abs() < 0.5, "{width} 逻辑宽生效");
+        let x = window.get_campus_search_row_x();
+        let y = window.get_campus_search_row_y();
+        let row_w = window.get_campus_search_row_width();
+        let row_h = window.get_campus_search_row_height();
+        let input_w = window.get_campus_search_input_width();
+        assert!(
+            row_w > 0.0 && row_w <= 560.5,
+            "搜索行最大宽 560：实际 {row_w}（窗口 {width}）"
+        );
+        assert!(
+            input_w >= 300.0,
+            "搜索输入框可读：实际宽 {input_w}（窗口 {width}）"
+        );
+        assert!(
+            x >= 0.0 && x + row_w <= w + 0.5,
+            "搜索行水平不越界：{x}..{}（窗口 {w}）",
+            x + row_w
+        );
+        assert!(
+            y >= 56.0 && y + row_h <= h + 0.5,
+            "搜索行垂直不越界：{y}..{}（窗口 {h}）",
+            y + row_h
+        );
+    }
 
     // ── 2. 高德在线搜索：只在点击"搜索"或按回车时开始 ──
     window.set_campus_search_text("上海交通大学".into());
@@ -164,6 +220,14 @@ fn s1_04_campus_plan_trash_flow_through_plan_management_entry() {
     );
     window.invoke_confirm_dialog_confirmed();
     assert_eq!(window.get_active_screen(), 2, "确认后直接进入方案列表");
+    assert!(
+        window.get_switch_campus_toolbar_button_visible(),
+        "选定校区后切换校区入口恢复可见"
+    );
+    assert!(
+        window.get_trash_toolbar_button_visible(),
+        "选定校区后回收站入口恢复可见"
+    );
 
     let campuses = Database::open(&database_path)
         .expect("重开设置库")

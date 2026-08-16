@@ -306,7 +306,31 @@ fn s1_31_toolbar_navigation_and_back_stack_contract() {
         !fresh.window.get_toolbar_back_visible(),
         "首启向导不显示返回按钮"
     );
+    assert!(
+        !fresh.window.get_wizard_continue_enabled(),
+        "知情告知未勾选且必填高德 Key 缺失时'继续'必须禁用"
+    );
     fresh.window.set_wizard_acknowledged(true);
+    assert!(
+        !fresh.window.get_wizard_continue_enabled(),
+        "只勾选知情告知、仍缺必填高德 Key 时'继续'必须禁用"
+    );
+    fresh.window.invoke_wizard_continue_clicked();
+    assert_eq!(
+        fresh.window.get_active_screen(),
+        0,
+        "缺少必填高德 Key 时首启不得放行"
+    );
+    fresh
+        .window
+        .set_wizard_gaode_api_key("0123456789abcdef01234567".into());
+    fresh
+        .window
+        .set_wizard_gaode_security_key("fedcba9876543210fedcba98".into());
+    assert!(
+        fresh.window.get_wizard_continue_enabled(),
+        "填齐必填高德 Key 后'继续'必须可用"
+    );
     fresh.window.invoke_wizard_continue_clicked();
     assert_eq!(
         fresh.window.get_active_screen(),
@@ -321,6 +345,23 @@ fn s1_31_toolbar_navigation_and_back_stack_contract() {
         fresh.window.get_toolbar_title().as_str(),
         "校区选择",
         "校区选择页工具栏标题"
+    );
+    // 校区选择（尚未选定校区）工具栏矩阵：设置/通知可见，回收站/切换校区隐藏
+    assert!(
+        fresh.window.get_settings_toolbar_button_visible(),
+        "校区选择页设置入口必须可见（用户需要在此改 Key）"
+    );
+    assert!(
+        fresh.window.get_notice_toolbar_button_visible(),
+        "校区选择页通知入口可显示"
+    );
+    assert!(
+        !fresh.window.get_trash_toolbar_button_visible(),
+        "尚未选定校区时回收站入口必须隐藏"
+    );
+    assert!(
+        !fresh.window.get_switch_campus_toolbar_button_visible(),
+        "尚未选定校区时切换校区入口必须隐藏"
     );
     // 校区选择（入口页）→ 通知中心 → 返回 = 校区选择
     fresh.window.invoke_notice_toolbar_button_clicked();

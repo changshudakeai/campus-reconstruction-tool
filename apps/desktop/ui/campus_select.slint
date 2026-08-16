@@ -1,6 +1,8 @@
 // T19B-3 — 校区选择页（ADR-0006：搜索框 + 最近使用的校区）。
 // T19B-5A — 色卡角色名替换（ADR-0023），零硬编码颜色号。
 // S1-04 — 搜索只在点击"搜索"或按回车时触发；无记录时直接显示搜索框。
+// UI 修复：内容列最大宽度 520 逻辑像素并居中，搜索行不再全宽拉伸；
+// 800×666 / 1000×666 两档窗口下不截断、不溢出。
 
 import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -43,91 +45,44 @@ export component CampusSelect inherits Rectangle {
     // 点击"搜索"按钮或按回车触发；输入期间不自动搜索
     callback search-requested();
 
-    width: 800px;
-    height: 600px;
-
-    VerticalLayout {
-        spacing: 16px;
+    // 内容列：宽度 = min(父宽 - 左右内边距, 520px)，水平居中；
+    // 页面整体（搜索/最近使用/搜索结果）随之收敛，视觉平衡。
+    HorizontalLayout {
         padding: 24px;
+        alignment: center;
 
-        // 标题由统一工具栏显示（左侧返回 + 上下文标题），本页不再重复。
+        content-column := VerticalLayout {
+            width: min(parent.width - 48px, 520px);
+            spacing: 16px;
+            // 主轴默认 stretch：搜索行显式 36px 固定高度，不再被纵向拉高；
+            // 列表/空态用 vertical-stretch 吸收其余空间。
 
-        // 搜索行：输入 + 按钮（搜索只在显式触发时开始）
-        HorizontalLayout {
-            spacing: 12px;
+            // 标题由统一工具栏显示（左侧返回 + 上下文标题），本页不再重复。
 
-            LineEdit {
-                text <=> root.search-text;
-                placeholder-text: root.search-placeholder;
-                accepted => { root.search-requested(); }
-            }
+            // 搜索行：输入 + 按钮（搜索只在显式触发时开始）
+            search-row := HorizontalLayout {
+                spacing: 12px;
+                height: 36px;
 
-            Button {
-                text: root.search-button-text;
-                primary: true;
-                clicked => { root.search-requested(); }
-            }
-        }
-
-        // 搜索结果（与最近使用记录按已确认规则切换）
-        if root.show-results: ListView {
-            for campus in root.result-model: Rectangle {
-                height: 56px;
-
-                TouchArea {
-                    clicked => { root.campus-clicked(campus.id); }
+                search-input := LineEdit {
+                    text <=> root.search-text;
+                    placeholder-text: root.search-placeholder;
+                    accepted => { root.search-requested(); }
                 }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    padding: 12px;
-
-                    VerticalLayout {
-                        spacing: 2px;
-
-                        Text {
-                            text: campus.name;
-                            font-size: 16px;
-                        }
-
-                        Text {
-                            text: campus.address;
-                            font-size: 12px;
-                            color: Theme.text-tertiary;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    y: parent.height - 1px;
-                    height: 1px;
-                    background: Theme.separator;
+                Button {
+                    text: root.search-button-text;
+                    primary: true;
+                    clicked => { root.search-requested(); }
                 }
             }
-        }
 
-        // 搜索结果区状态（搜索中/无结果提示；非空时显示在列表上方）
-        if root.show-results && root.search-status != "": Text {
-            text: root.search-status;
-            font-size: 13px;
-            color: Theme.text-secondary;
-        }
-
-        // 最近使用的校区（无搜索结果时展示；无记录时只显示搜索框与提示）
-        if !root.show-results && root.campus-model.length > 0: VerticalLayout {
-            spacing: 8px;
-
-            Text {
-                text: root.recent-title;
-                font-size: 15px;
-                color: Theme.text-secondary;
-            }
-
-            ListView {
-                for campus in root.campus-model: Rectangle {
+            // 搜索结果（与最近使用记录按已确认规则切换）
+            if root.show-results: ListView {
+                vertical-stretch: 1;
+                for campus in root.result-model: Rectangle {
                     height: 56px;
 
-                    // 校区行单击热区（置于底层，右侧小叉优先捕获自身点击）
                     TouchArea {
                         clicked => { root.campus-clicked(campus.id); }
                     }
@@ -150,17 +105,6 @@ export component CampusSelect inherits Rectangle {
                                 color: Theme.text-tertiary;
                             }
                         }
-
-                        Rectangle {
-                            // 弹性间隔
-                        }
-
-                        Button {
-                            text: "×";
-                            width: 28px;
-                            height: 28px;
-                            clicked => { root.remove-recent-clicked(campus.id); }
-                        }
                     }
 
                     Rectangle {
@@ -170,16 +114,85 @@ export component CampusSelect inherits Rectangle {
                     }
                 }
             }
-        }
 
-        if !root.show-results && root.campus-model.length == 0: VerticalLayout {
-            alignment: center;
+            // 搜索结果区状态（搜索中/无结果提示；非空时显示在列表上方）
+            if root.show-results && root.search-status != "": Text {
+                text: root.search-status;
+                font-size: 13px;
+                color: Theme.text-secondary;
+            }
 
-            Text {
-                text: root.empty_list_text;
-                font-size: 15px;
-                color: Theme.text-quaternary;
-                horizontal-alignment: center;
+            // 最近使用的校区（无搜索结果时展示；无记录时只显示搜索框与提示）
+            if !root.show-results && root.campus-model.length > 0: VerticalLayout {
+                spacing: 8px;
+                vertical-stretch: 1;
+
+                Text {
+                    text: root.recent-title;
+                    font-size: 15px;
+                    color: Theme.text-secondary;
+                }
+
+                ListView {
+                    vertical-stretch: 1;
+                    for campus in root.campus-model: Rectangle {
+                        height: 56px;
+
+                        // 校区行单击热区（置于底层，右侧小叉优先捕获自身点击）
+                        TouchArea {
+                            clicked => { root.campus-clicked(campus.id); }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            padding: 12px;
+
+                            VerticalLayout {
+                                spacing: 2px;
+
+                                Text {
+                                    text: campus.name;
+                                    font-size: 16px;
+                                }
+
+                                Text {
+                                    text: campus.address;
+                                    font-size: 12px;
+                                    color: Theme.text-tertiary;
+                                }
+                            }
+
+                            Rectangle {
+                                // 弹性间隔
+                            }
+
+                            Button {
+                                text: "×";
+                                width: 28px;
+                                height: 28px;
+                                clicked => { root.remove-recent-clicked(campus.id); }
+                            }
+                        }
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.separator;
+                        }
+                    }
+                }
+            }
+
+            if !root.show-results && root.campus-model.length == 0: VerticalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+
+                Text {
+                    text: root.empty_list_text;
+                    font-size: 15px;
+                    color: Theme.text-quaternary;
+                    horizontal-alignment: center;
+                }
             }
         }
     }

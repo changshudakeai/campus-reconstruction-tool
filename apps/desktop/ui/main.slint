@@ -52,11 +52,40 @@ export component AppWindow inherits Window {
     in property <string> wizard-version-label;
     in property <string> wizard-notice-text;
     in property <string> wizard-continue-label;
+    // 首启向导高德地图配置区（ADR-0004：JS API Key + 安全密钥必填）
+    in property <string> wizard-gaode-group-title;
+    in property <string> wizard-gaode-api-key-label;
+    in property <string> wizard-gaode-api-key-placeholder;
+    in-out property <string> wizard-gaode-api-key;
+    in property <string> wizard-gaode-security-key-label;
+    in property <string> wizard-gaode-security-key-placeholder;
+    in-out property <string> wizard-gaode-security-key;
+    in property <string> wizard-gaode-web-service-key-label;
+    in property <string> wizard-gaode-web-service-key-placeholder;
+    in-out property <string> wizard-gaode-web-service-key;
+    // 继续按钮可用性（契约测试置位断言：知情告知 + 两个必填 Key）
+    in-out property <bool> wizard-continue-enabled:
+        root.wizard-acknowledged && root.wizard-gaode-api-key != ""
+            && root.wizard-gaode-security-key != "";
     in property <[string]> wizard-language-options;
     in property <[string]> wizard-version-options;
     in-out property <string> wizard-language;
     in-out property <string> wizard-version;
     in-out property <bool> wizard-acknowledged;
+
+    // ── 校区搜索页布局观测（T34 同款契约断言：搜索行限宽居中、两档窗口不溢出）。
+    // 仅观测，不参与业务；与 CampusSelect 布局同源的解析几何
+    // （内容列宽 = min(窗口宽 - 左右 24 内边距, 520px)，行水平居中、位于
+    // 页顶 24 处；工具栏占顶部 56）。──
+    in-out property <length> campus-search-row-x:
+        max(0px, (root.width - root.campus-search-row-width) / 2);
+    in-out property <length> campus-search-row-y: 80px;
+    in-out property <length> campus-search-row-width:
+        min(max(0px, root.width - 48px), 520px);
+    in-out property <length> campus-search-row-height: 36px;
+    // 输入框可读性观测：行宽 - 12 间距 - 搜索按钮 88（标准按钮宽）
+    in-out property <length> campus-search-input-width:
+        max(0px, root.campus-search-row-width - 12px - 88px);
 
     // ── 设置页（债务②：F2 规矩④"重新查看教程"入口）──
     in property <string> settings-title;
@@ -482,10 +511,20 @@ export component AppWindow inherits Window {
         version-label: root.wizard-version-label;
         notice-text: root.wizard-notice-text;
         continue-label: root.wizard-continue-label;
+        gaode-group-title: root.wizard-gaode-group-title;
+        api-key-label: root.wizard-gaode-api-key-label;
+        api-key-placeholder: root.wizard-gaode-api-key-placeholder;
+        security-key-label: root.wizard-gaode-security-key-label;
+        security-key-placeholder: root.wizard-gaode-security-key-placeholder;
+        web-service-key-label: root.wizard-gaode-web-service-key-label;
+        web-service-key-placeholder: root.wizard-gaode-web-service-key-placeholder;
         language-options: root.wizard-language-options;
         version-options: root.wizard-version-options;
         selected-language <=> root.wizard-language;
         selected-version <=> root.wizard-version;
+        api-key <=> root.wizard-gaode-api-key;
+        security-key <=> root.wizard-gaode-security-key;
+        web-service-key <=> root.wizard-gaode-web-service-key;
         acknowledged <=> root.wizard-acknowledged;
         continue-clicked => {
             root.wizard-continue-clicked();

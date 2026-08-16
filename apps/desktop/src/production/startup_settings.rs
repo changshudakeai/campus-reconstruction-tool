@@ -52,17 +52,46 @@ impl PresentationAdapter<StartupRequest, StartupPageState> for StartupProduction
             language,
             minecraft_version,
             acknowledged,
+            api_key,
+            security_key,
+            web_service_key,
         } = &request
         {
+            // ADR-0004：JS API Key 与安全密钥必填，缺失时不得保存并明确指出
+            // 缺失项；三个 Key 复用设置页 save_gaode_keys 语义一并落库。
+            if let Err(error) =
+                save_first_run_gaode_keys(&mut injector, api_key, security_key, web_service_key)
+            {
+                // 校验失败仍停留首次设置页，错误由通知中心呈现；保留已填输入
+                let mut page = startup_page_with_values(
+                    injector.l10n(),
+                    language,
+                    minecraft_version,
+                    api_key,
+                    security_key,
+                    web_service_key,
+                );
+                page.acknowledged = *acknowledged;
+                page.status_text = injector.l10n().t("app.shell_status_first_run");
+                return Presentation::failed(page)
+                    .with_notification(error_fact(injector.l10n(), &error.to_string()));
+            }
             let setup = FirstRunSetup {
                 language: language.clone(),
                 minecraft_version: minecraft_version.clone(),
                 acknowledged: *acknowledged,
             };
             if let Err(error) = injector.settings_mut().complete_first_run(&setup) {
-                // 校验失败仍停留首次设置页，错误由通知中心呈现；不切换到内存数据
-                let mut page =
-                    startup_page_with_values(injector.l10n(), language, minecraft_version);
+                // 校验失败仍停留首次设置页，错误由通知中心呈现；保留已填输入
+                let mut page = startup_page_with_values(
+                    injector.l10n(),
+                    language,
+                    minecraft_version,
+                    api_key,
+                    security_key,
+                    web_service_key,
+                );
+                page.acknowledged = *acknowledged;
                 page.status_text = injector.l10n().t("app.shell_status_first_run");
                 return Presentation::failed(page)
                     .with_notification(error_fact(injector.l10n(), &error.to_string()));
@@ -70,6 +99,15 @@ impl PresentationAdapter<StartupRequest, StartupPageState> for StartupProduction
         }
 
         let provider = CampusPlanLandingProvider(injector.projects());
+        // 首启向导输入预填：已保存的高德配置（部分完成的首次设置不丢输入）
+        let saved_keys = match injector.settings().settings_snapshot() {
+            Ok(snapshot) => (
+                snapshot.gaode_api_key.unwrap_or_default(),
+                snapshot.gaode_security_key.unwrap_or_default(),
+                snapshot.gaode_web_service_key.unwrap_or_default(),
+            ),
+            Err(_) => (String::new(), String::new(), String::new()),
+        };
         match injector.settings().startup_result(&provider) {
             Ok(result) => {
                 let snapshot = result.snapshot;
@@ -80,7 +118,14 @@ impl PresentationAdapter<StartupRequest, StartupPageState> for StartupProduction
                     );
                     campus_plan_page(&injector, &self.workspace, campus_plan, show_plan_list)
                 });
-                let (page, destination) = startup_landing(injector.l10n(), snapshot, landing_page);
+                let (page, destination) = startup_landing(
+                    injector.l10n(),
+                    snapshot,
+                    landing_page,
+                    saved_keys.0,
+                    saved_keys.1,
+                    saved_keys.2,
+                );
                 let presentation = if matches!(request, StartupRequest::CompleteFirstRun { .. }) {
                     Presentation::succeeded(page)
                 } else {
@@ -101,6 +146,9 @@ fn startup_landing(
     l10n: &Localization,
     snapshot: StartupSnapshot,
     landing_page: Option<crate::presentation::CampusPlanPageState>,
+    gaode_api_key: String,
+    gaode_security_key: String,
+    gaode_web_service_key: String,
 ) -> (StartupPageState, Screen) {
     let (status_text, destination) = match &snapshot.destination {
         StartupDestination::FirstRunSetup => {
@@ -118,22 +166,44 @@ fn startup_landing(
     let page = StartupPageState {
         status_text,
         landing_page,
-        ..startup_page(l10n, Some(snapshot))
+        ..startup_page(
+            l10n,
+            Some(snapshot),
+            &gaode_api_key,
+            &gaode_security_key,
+            &gaode_web_service_key,
+        )
     };
     (page, destination)
 }
 
-fn startup_page(l10n: &Localization, snapshot: Option<StartupSnapshot>) -> StartupPageState {
+fn startup_page(
+    l10n: &Localization,
+    snapshot: Option<StartupSnapshot>,
+    gaode_api_key: &str,
+    gaode_security_key: &str,
+    gaode_web_service_key: &str,
+) -> StartupPageState {
     let settings = snapshot
         .map(|snapshot| snapshot.settings)
         .unwrap_or_default();
-    startup_page_with_values(l10n, &settings.language, &settings.minecraft_version)
+    startup_page_with_values(
+        l10n,
+        &settings.language,
+        &settings.minecraft_version,
+        gaode_api_key,
+        gaode_security_key,
+        gaode_web_service_key,
+    )
 }
 
 fn startup_page_with_values(
     l10n: &Localization,
     language: &str,
     minecraft_version: &str,
+    gaode_api_key: &str,
+    gaode_security_key: &str,
+    gaode_web_service_key: &str,
 ) -> StartupPageState {
     StartupPageState {
         app_title: l10n.t("app.welcome_title"),
@@ -143,6 +213,18 @@ fn startup_page_with_values(
         version_label: l10n.t("settings.minecraft_version_label"),
         notice_text: l10n.t("settings.notice_checkbox"),
         continue_label: l10n.t("settings.continue_button"),
+        wizard_gaode_group_title: l10n.t("settings.wizard_gaode_group_title"),
+        wizard_gaode_api_key_label: l10n.t("settings.wizard_gaode_api_key_label"),
+        wizard_gaode_api_key_placeholder: l10n.t("settings.wizard_gaode_api_key_placeholder"),
+        wizard_gaode_security_key_label: l10n.t("settings.wizard_gaode_security_key_label"),
+        wizard_gaode_security_key_placeholder: l10n
+            .t("settings.wizard_gaode_security_key_placeholder"),
+        wizard_gaode_web_service_key_label: l10n.t("settings.wizard_gaode_web_service_key_label"),
+        wizard_gaode_web_service_key_placeholder: l10n
+            .t("settings.wizard_gaode_web_service_key_placeholder"),
+        wizard_gaode_api_key: gaode_api_key.to_owned(),
+        wizard_gaode_security_key: gaode_security_key.to_owned(),
+        wizard_gaode_web_service_key: gaode_web_service_key.to_owned(),
         language_options: global_settings::SUPPORTED_LANGUAGES
             .iter()
             .map(ToString::to_string)
@@ -168,6 +250,18 @@ fn startup_failure_page(l10n: &Localization) -> StartupPageState {
         version_label: l10n.t("settings.minecraft_version_label"),
         notice_text: l10n.t("settings.notice_checkbox"),
         continue_label: l10n.t("settings.continue_button"),
+        wizard_gaode_group_title: l10n.t("settings.wizard_gaode_group_title"),
+        wizard_gaode_api_key_label: l10n.t("settings.wizard_gaode_api_key_label"),
+        wizard_gaode_api_key_placeholder: l10n.t("settings.wizard_gaode_api_key_placeholder"),
+        wizard_gaode_security_key_label: l10n.t("settings.wizard_gaode_security_key_label"),
+        wizard_gaode_security_key_placeholder: l10n
+            .t("settings.wizard_gaode_security_key_placeholder"),
+        wizard_gaode_web_service_key_label: l10n.t("settings.wizard_gaode_web_service_key_label"),
+        wizard_gaode_web_service_key_placeholder: l10n
+            .t("settings.wizard_gaode_web_service_key_placeholder"),
+        wizard_gaode_api_key: String::new(),
+        wizard_gaode_security_key: String::new(),
+        wizard_gaode_web_service_key: String::new(),
         language_options: Vec::new(),
         version_options: Vec::new(),
         selected_language: String::new(),
@@ -336,6 +430,28 @@ fn save_gaode_keys(
             .set_gaode_web_service_key(web_service_key)?;
     }
     Ok(())
+}
+
+/// 首启向导高德配置保存（复用 [`save_gaode_keys`] 语义）：
+/// JS API Key 与安全密钥必填（缺失时明确指出缺失项，ADR-0004），
+/// Web 服务 Key 开发人员使用、可留空。
+fn save_first_run_gaode_keys(
+    injector: &mut ViewModelInjector,
+    api_key: &str,
+    security_key: &str,
+    web_service_key: &str,
+) -> global_settings::Result<()> {
+    if api_key.trim().is_empty() {
+        return Err(global_settings::Error::MissingGaodeKeys(
+            "API Key".to_owned(),
+        ));
+    }
+    if security_key.trim().is_empty() {
+        return Err(global_settings::Error::MissingGaodeKeys(
+            "安全密钥".to_owned(),
+        ));
+    }
+    save_gaode_keys(injector, api_key, security_key, web_service_key)
 }
 
 fn settings_snapshot_page(injector: &ViewModelInjector, l10n: &Localization) -> SettingsPageState {

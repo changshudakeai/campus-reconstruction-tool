@@ -26,6 +26,10 @@ pub enum Error {
     #[error("请先确认已阅读版本提示")]
     NoticeNotAcknowledged,
 
+    /// 高德必填配置缺失（ADR-0004：JS API Key 与安全密钥必填，明确指出缺失项）
+    #[error("缺少必填的高德配置：{0}")]
+    MissingGaodeKeys(String),
+
     /// 高德 API key 格式无效（T22）
     #[error("高德 API key 格式无效，只能包含字母或数字")]
     InvalidGaodeApiKey,

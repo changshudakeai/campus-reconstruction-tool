@@ -101,6 +101,7 @@ pub enum Error {                                              (#[non_exhaustive]
     UnsupportedLanguage(String),
     UnsupportedMinecraftVersion(String),
     NoticeNotAcknowledged,
+    MissingGaodeKeys(String),                                (首启向导必填 Key 缺失)
     InvalidGaodeApiKey,
     InvalidGaodeSecurityKey,
     GaodeConnectionFailed(String),
