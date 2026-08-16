@@ -711,6 +711,10 @@ fn spawn_creation(
 
         let result = wry::WebViewBuilder::new()
             .with_html(html)
+            // WebView2 默认背景透明：HTML 首帧绘制前会透出桌面。设为不透明白，
+            // 与 boundary/review/campus 各页 html/body 背景（默认白）及 Slint
+            // Theme.surface（#ffffff）一致，避免改出突兀色块或白闪。
+            .with_background_color((255, 255, 255, 255))
             .with_bounds(bounds)
             .with_focused(false)
             .with_ipc_handler(|request: wry::http::Request<String>| {
