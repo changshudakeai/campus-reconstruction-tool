@@ -5,10 +5,12 @@
 //! 增量刷新 → 封账批量写回 → 回收站生命周期）。
 
 use data_persistence::{
-    Database, RawObservation, RawObservationsApi, ReviewDecision, ReviewDecisionsApi, TrashApi,
-    TrashItem, LATEST_SCHEMA_VERSION,
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateDisplay, CandidateEligibility,
+    CandidateEligibilityUpdate, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, DecisionVoid, RawObservation, RawObservationsApi,
+    ReviewDecision, ReviewDecisionsApi, TrashApi, TrashItem, LATEST_SCHEMA_VERSION,
 };
-use shared_domain_types::{CandidateCategory, ReviewState};
+use shared_domain_types::{Boundary, CandidateCategory, ReviewState};
 
 fn sample_observation(plan_id: &str, entity_id: &str, name: &str) -> RawObservation {
     RawObservation::new(
@@ -324,4 +326,187 @@ fn full_collection_flow_lands_in_raw_observations() {
     let trash_item = TrashItem::new_plan("campus-1", plan_id, None);
     db.insert_to_trash(&trash_item).unwrap();
     assert_eq!(db.list_raw_observations(plan_id).unwrap().len(), 5);
+}
+
+#[test]
+fn boundary_fingerprint_changes_with_coordinates() {
+    let boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.90]
+        ]]),
+    };
+    let same = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.90]
+        ]]),
+    };
+    assert_eq!(boundary_fingerprint(&boundary), boundary_fingerprint(&same));
+    let mut moved = boundary.clone();
+    moved.coordinates = serde_json::json!([[
+        [116.40, 39.90],
+        [116.42, 39.90],
+        [116.42, 39.91],
+        [116.40, 39.90]
+    ]]);
+    assert_ne!(
+        boundary_fingerprint(&boundary),
+        boundary_fingerprint(&moved)
+    );
+}
+
+#[test]
+fn boundary_revalidation_applies_eligibility_voids_and_pending_atomically() {
+    let mut db = Database::open_in_memory().unwrap();
+    let plan = "plan-rv";
+    let observation_a = RawObservation::new(
+        plan,
+        CandidateCategory::Building,
+        "way/1",
+        serde_json::json!({
+            "name": "A",
+            "tags": {"building": "school"},
+            "payload": {},
+            "source_geometry": {"kind": "point", "coordinates": [116.40, 39.90]},
+            "geometry_part_id": "point"
+        }),
+        "overpass",
+    );
+    let observation_b = RawObservation::new(
+        plan,
+        CandidateCategory::Building,
+        "way/2",
+        serde_json::json!({
+            "name": "B",
+            "tags": {"building": "school"},
+            "payload": {},
+            "source_geometry": {"kind": "point", "coordinates": [116.41, 39.91]},
+            "geometry_part_id": "point"
+        }),
+        "overpass",
+    );
+    db.write_raw_observations(&[observation_a.clone(), observation_b.clone()])
+        .unwrap();
+    let batch = db.prepare_candidate_batch(plan).unwrap();
+    db.write_candidate_projections(
+        &batch.id,
+        &[
+            CandidateProjection::new(
+                "cand-a",
+                plan,
+                observation_a.id.clone(),
+                "overpass",
+                "way/1",
+                "point",
+                CandidateCategory::Building,
+                CandidateDisplay::new("教学楼A", vec![]),
+                CandidateShape::point(serde_json::json!([116.40, 39.90])),
+                CandidateValidation::Retained,
+                CandidateEligibility::Reviewable,
+            ),
+            CandidateProjection::new(
+                "cand-b",
+                plan,
+                observation_b.id.clone(),
+                "overpass",
+                "way/2",
+                "point",
+                CandidateCategory::Building,
+                CandidateDisplay::new("教学楼B", vec![]),
+                CandidateShape::point(serde_json::json!([116.41, 39.91])),
+                CandidateValidation::Rejected,
+                CandidateEligibility::Isolated,
+            )
+            .isolated_reason("outside_confirmed_plan_boundary"),
+        ],
+    )
+    .unwrap();
+    db.publish_candidate_batch(&batch.id).unwrap();
+    db.batch_update_review_decisions(&[
+        ReviewDecision::new(
+            plan,
+            CandidateCategory::Building,
+            "cand-a",
+            ReviewState::Keep,
+        ),
+        ReviewDecision::new(
+            plan,
+            CandidateCategory::Building,
+            "cand-b",
+            ReviewState::Remove,
+        ),
+    ])
+    .unwrap();
+
+    // 指纹记录：无记录 → 保存 → 回读。
+    assert!(db.load_plan_collection_boundary(plan).unwrap().is_none());
+    db.save_plan_collection_boundary(plan, "fp-1").unwrap();
+    assert_eq!(
+        db.load_plan_collection_boundary(plan).unwrap().as_deref(),
+        Some("fp-1")
+    );
+
+    // 单事务应用重验证：cand-a 隔离 + 决定作废；cand-b 回待定；指纹更新。
+    let summary = db
+        .apply_boundary_revalidation(
+            plan,
+            &[CandidateEligibilityUpdate {
+                candidate_id: "cand-a".to_owned(),
+                eligibility: CandidateEligibility::Isolated,
+                isolation_reason: Some("outside_confirmed_plan_boundary".to_owned()),
+            }],
+            &[DecisionVoid {
+                candidate_id: "cand-a".to_owned(),
+                reason: "boundary_changed:outside_confirmed_plan_boundary".to_owned(),
+            }],
+            &["cand-b".to_owned()],
+            "fp-2",
+        )
+        .unwrap();
+    assert_eq!(summary.eligibility_updated, 1);
+    assert_eq!(summary.decisions_voided, 1);
+    assert_eq!(summary.decisions_reset_to_pending, 1);
+    assert_eq!(
+        db.load_plan_collection_boundary(plan).unwrap().as_deref(),
+        Some("fp-2")
+    );
+
+    // cand-a 投影已隔离（资格更新落库）。
+    let all = db.list_current_candidate_projections(plan).unwrap();
+    let a = all.iter().find(|p| p.candidate_id == "cand-a").unwrap();
+    assert_eq!(a.eligibility, CandidateEligibility::Isolated);
+    assert_eq!(
+        a.isolation_reason.as_deref(),
+        Some("outside_confirmed_plan_boundary")
+    );
+
+    // 决定：cand-a 被作废标注（保留记录 + 历史）；cand-b 回到待定；
+    // 常规读取只看到未作废的 cand-b。
+    let decisions = db.list_review_decisions(plan).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].candidate_id, "cand-b");
+    assert!(decisions[0].review_state.is_pending());
+    let (pending, keep, remove) = db.count_review_states(plan).unwrap();
+    assert_eq!((pending, keep, remove), (1, 0, 0));
+    let voided = db.list_voided_review_decisions(plan).unwrap();
+    assert_eq!(voided.len(), 1);
+    assert_eq!(voided[0].candidate_id, "cand-a");
+    assert_eq!(voided[0].review_state, ReviewState::Keep);
+    assert_eq!(
+        voided[0].voided_reason.as_deref(),
+        Some("boundary_changed:outside_confirmed_plan_boundary")
+    );
+    assert!(voided[0].voided_at.is_some());
+    let history = db.list_review_decision_invalidations(plan).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].candidate_id, "cand-a");
+    assert_eq!(history[0].previous_state, ReviewState::Keep);
+    assert!(history[0].reason.contains("boundary_changed"));
 }

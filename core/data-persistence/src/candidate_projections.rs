@@ -212,6 +212,9 @@ pub trait CandidateProjectionsApi {
         &self,
         plan_id: &str,
     ) -> Result<Vec<CandidateProjection>>;
+    /// 列出方案当前批次的全量候选投影（含隔离；边界重验证读全部）。
+    fn list_current_candidate_projections(&self, plan_id: &str)
+        -> Result<Vec<CandidateProjection>>;
     fn get_current_candidate_projection(
         &self,
         plan_id: &str,
@@ -315,6 +318,12 @@ impl CandidateProjectionsApi for Database {
         plan_id: &str,
     ) -> Result<Vec<CandidateProjection>> {
         self.read_projections("SELECT p.collection_batch_id,p.candidate_id,p.plan_id,p.raw_observation_id,p.data_source_tag,p.source_entity_id,p.geometry_part_id,p.category,p.display_title,p.display_tags,p.geometry_kind,p.normalized_geometry,p.validation,p.eligibility,p.isolation_reason,p.automatically_repaired,p.missing_in_latest_batch,p.created_at,p.updated_at,p.name_source FROM current_candidate_batches c JOIN candidate_projections p ON p.collection_batch_id=c.collection_batch_id WHERE c.plan_id=?1 AND p.eligibility='reviewable' ORDER BY p.candidate_id",params![plan_id])
+    }
+    fn list_current_candidate_projections(
+        &self,
+        plan_id: &str,
+    ) -> Result<Vec<CandidateProjection>> {
+        self.current_projections(plan_id)
     }
     fn get_current_candidate_projection(
         &self,

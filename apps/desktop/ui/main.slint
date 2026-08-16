@@ -201,12 +201,16 @@ export component AppWindow inherits Window {
     in property <string> workspace-boundary-confirm-label;
     in property <string> workspace-boundary-reset-label;
     in property <string> workspace-boundary-refresh-label;
+    in property <string> workspace-boundary-delete-selected-label;
+    in property <bool> workspace-boundary-delete-selected-enabled;
+    in property <bool> workspace-boundary-edited-since-confirmed;
     in property <string> workspace-boundary-status;
     in property <string> workspace-boundary-map-placeholder;
     in property <bool> workspace-boundary-is-determined;
     in property <int> workspace-boundary-point-count;
         callback workspace-boundary-canvas-clicked(x: float, y: float);
     callback workspace-boundary-undo-clicked();
+    callback workspace-boundary-delete-selected-clicked();
     callback workspace-boundary-confirm-clicked();
     callback workspace-boundary-reset-clicked();
     callback workspace-boundary-refresh-clicked();
@@ -858,8 +862,12 @@ export component AppWindow inherits Window {
                     boundary-undo-label: root.workspace-boundary-undo-label;
                     boundary-reset-label: root.workspace-boundary-reset-label;
                     boundary-refresh-label: root.workspace-boundary-refresh-label;
+                    boundary-delete-selected-label: root.workspace-boundary-delete-selected-label;
+                    boundary-delete-selected-enabled: root.workspace-boundary-delete-selected-enabled;
+                    boundary-edited-since-confirmed: root.workspace-boundary-edited-since-confirmed;
                     boundary-confirm-label: root.workspace-boundary-confirm-label;
                     boundary-undo-clicked => { root.workspace-boundary-undo-clicked(); }
+                    boundary-delete-selected-clicked => { root.workspace-boundary-delete-selected-clicked(); }
                     boundary-reset-clicked => { root.workspace-boundary-reset-clicked(); }
                     boundary-refresh-clicked => { root.workspace-boundary-refresh-clicked(); }
                     boundary-confirm-clicked => { root.workspace-boundary-confirm-clicked(); }

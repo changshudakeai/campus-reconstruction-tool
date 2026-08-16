@@ -19,6 +19,9 @@ pub enum CollectionError {
     /// 已有采集正在进行，不接受新的开始意图（export-flow 的 active 守卫）。
     #[error("已有采集正在进行，请等待完成或取消后再试")]
     Busy,
+    /// 边界无法解析为合法多边形（重验证入口的防御性校验）。
+    #[error("边界无效，无法重验证候选资格")]
+    InvalidBoundary,
     /// F4 采集失败（数据源不可达、响应畸形、落库失败等）。
     #[error("数据采集失败：{0}")]
     Acquisition(#[from] data_acquisition::AcquisitionError),
@@ -42,6 +45,7 @@ impl CollectionError {
         match self {
             Self::MissingInput => "collection.error_missing_input",
             Self::Busy => "collection.error_busy",
+            Self::InvalidBoundary => "collection.error_invalid_boundary",
             Self::Acquisition(data_acquisition::AcquisitionError::SourceUnreachable { .. }) => {
                 "error.data_source_unreachable"
             }

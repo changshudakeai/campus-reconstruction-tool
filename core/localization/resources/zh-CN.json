@@ -232,6 +232,7 @@
     "step_title": "① 圈边界",
     "hint": "点击画布加点，绘制方案范围多边形",
     "undo_button": "撤销上一点",
+    "delete_selected_button": "删除选中点",
     "confirm_button": "确认边界",
     "reset_button": "重置",
     "refresh_button": "重新获取边界",
@@ -240,6 +241,7 @@
     "status_determined": "边界已确认，可点'重置'重新绘制",
     "session_restored_status": "已恢复当前方案的已确认边界",
     "status_editing": "拖动顶点调整位置",
+    "status_vertex_selected": "已选中边界点，可拖动调整；相邻两条边中点可加点",
     "map_placeholder": "地图底图待后续决策",
     "osm_auto_selected_title": "OSM 边界已自动选取",
     "osm_auto_selected_body": "已按规则自动选取「{0}」（{1} 个候选，来源：{2}），可拖动顶点调整",
@@ -261,7 +263,9 @@
     "map_notice_title": "地图提示",
     "map_load_failed": "地图加载失败，地图相关操作暂时不可用；设置、方案列表与已有正式数据仍可正常使用",
     "error_too_few_points": "边界至少需要 3 个点才能闭合",
+    "error_too_few_after_delete": "至少需要 3 个点才能闭合边界",
     "error_convert_failed": "坐标换算失败：未设参考原点",
+    "error_revalidation_failed": "候选资格重验证失败，已确认边界与现有评审状态保持不变",
     "unknown_campus": "未命名校区"
   },
   "orientation": {
@@ -328,6 +332,7 @@
     "report_naming_skipped": "未执行补名 {count} 项",
     "error_missing_input": "缺少已确认的方案边界，无法开始候选采集",
     "error_busy": "已有采集正在进行，请等待完成或取消后再试",
+    "error_invalid_boundary": "边界无效，无法重验证候选资格",
     "error_persistence": "采集数据保存失败，请重试",
     "error_audit": "采集体检失败",
     "error_expired": "本次采集已被取消",

@@ -4,6 +4,9 @@
 //! B5 foundation-mode 完成；朝向校验与保存经 F5 OrientationCalculator / B1
 //! Orientation；地图通道只负责显示与转交原始动作。状态与上下文见
 //! `super::workspace_boundary`（会话状态 / 共享上下文 / 几何与通知辅助）。
+// ignore-tidy-filelength: 工作区适配器承载 open/navigate/边界/朝向/地图 IPC 全
+// 部请求（workspace-restore 合流后短暂超 1000 行）；拆分需先立适配器拆分工单。
+// 失效里程碑：v2.1.0（2026-12-31），届时把地图 IPC 与边界动作拆出后消除。
 use std::collections::HashMap;
 
 use foundation_mode::{
@@ -16,8 +19,8 @@ use onboarding_tutorial::TutorialStep;
 use shared_domain_types::PlanId;
 
 use crate::presentation::{
-    ConfirmationPresentation, NavigationDecision, Presentation, PresentationAdapter, Progress,
-    Screen, WorkspacePageState, WorkspaceRequest,
+    ConfirmationPresentation, NavigationDecision, NotificationFact, Presentation,
+    PresentationAdapter, Progress, Screen, WorkspacePageState, WorkspaceRequest,
 };
 
 #[cfg(test)]
@@ -45,6 +48,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
             WorkspaceRequest::Leave { target } => self.leave(target),
             WorkspaceRequest::BoundaryCanvasClick { x, y } => self.boundary_canvas_click(x, y),
             WorkspaceRequest::BoundaryUndo => self.boundary_undo(),
+            WorkspaceRequest::BoundaryDeleteSelected => self.boundary_delete_selected(),
             WorkspaceRequest::BoundaryConfirm => self.boundary_confirm(),
             WorkspaceRequest::BoundaryReset => self.boundary_reset(),
             WorkspaceRequest::BoundaryRefresh => self.boundary_refresh(),
@@ -426,6 +430,16 @@ impl WorkspaceProductionAdapter {
         Presentation::ready(self.context.page())
     }
 
+    /// 抽屉"删除选中点"：地图可用时走 JS 桥接命令（JS 校验剩余点数并删除
+    /// 选中顶点后经 boundary_update/vertex_deselected 回传）；地图不可用时
+    /// 无可删对象，保持现状。
+    fn boundary_delete_selected(&mut self) -> Presentation<WorkspacePageState> {
+        if crate::map_webview::is_visible() {
+            crate::map_webview::evaluate_script("deleteSelectedVertexFromDrawer();");
+        }
+        Presentation::ready(self.context.page())
+    }
+
     fn boundary_confirm(&mut self) -> Presentation<WorkspacePageState> {
         // T34：地图可用时确认走抽屉按钮 → JS 桥接命令（JS 读取当前多边形/
         // 人工点序列后经 confirm_boundary IPC 回传，由 B5 校验并落库）。
@@ -473,18 +487,23 @@ impl WorkspaceProductionAdapter {
             )
         };
         let coordinates = serde_json::json!([gcj02.clone()]);
+        let boundary = shared_domain_types::Boundary {
+            r#type: "Polygon".to_owned(),
+            coordinates: coordinates.clone(),
+        };
         self.cache_confirmed_boundary(&gcj02);
         self.context
             .collection_flow
-            .confirm_boundary(shared_domain_types::Boundary {
-                r#type: "Polygon".to_owned(),
-                coordinates: coordinates.clone(),
-            });
+            .confirm_boundary(boundary.clone());
         self.context
             .export_flow
             .confirm_boundary("Polygon", coordinates);
         self.context.checkpoint_workspace_session();
-        Presentation::ready(self.context.page())
+        let mut presentation = Presentation::ready(self.context.page());
+        if let Some(notice) = self.revalidate_boundary_after_confirm(&boundary) {
+            presentation = presentation.with_notification(notice);
+        }
+        presentation
     }
 
     fn boundary_reset(&mut self) -> Presentation<WorkspacePageState> {
@@ -839,6 +858,31 @@ impl WorkspaceProductionAdapter {
                 }
                 Presentation::ready(self.context.page())
             }
+            // 顶点选中：抽屉"删除选中点"按钮可用（几何真相仍在地图 JS 侧）。
+            IpcMessage::VertexSelected { index, count } => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.point_count = count as i32;
+                    session.map_draw.status = MapDrawStatus::Editing;
+                    session.map_draw.selected_vertex = Some(index as i32);
+                }
+                Presentation::ready(self.context.page())
+            }
+            IpcMessage::VertexDeselected => {
+                {
+                    let mut session = self.context.session.borrow_mut();
+                    session.map_draw.selected_vertex = None;
+                }
+                Presentation::ready(self.context.page())
+            }
+            // 删除被拒绝（剩余点数 < 3）：明确提示，不破坏边界。
+            IpcMessage::DeleteVertexRejected { .. } => {
+                let l10n = self.l10n();
+                Presentation::failed(self.context.page()).with_notification(error_fact(
+                    &l10n,
+                    &l10n.t("boundary.error_too_few_after_delete"),
+                ))
+            }
             IpcMessage::BoundaryGeometryUpdate { .. } => Presentation::ready(self.context.page()),
             IpcMessage::ManualPoint { total, .. } => {
                 {
@@ -976,18 +1020,65 @@ impl WorkspaceProductionAdapter {
             // T34：确认后由 session.drawer（已确定态）接管点数/状态显示
             session.map_draw = MapDrawState::default();
         }
+        let boundary = shared_domain_types::Boundary {
+            r#type: boundary_type.to_owned(),
+            coordinates: coordinates.clone(),
+        };
         self.context
             .collection_flow
-            .confirm_boundary(shared_domain_types::Boundary {
-                r#type: boundary_type.to_owned(),
-                coordinates: coordinates.clone(),
-            });
+            .confirm_boundary(boundary.clone());
         self.context
             .export_flow
             .confirm_boundary(boundary_type, coordinates);
         self.cache_confirmed_boundary(&coords);
         self.context.checkpoint_workspace_session();
-        Presentation::ready(self.context.page())
+        let mut presentation = Presentation::ready(self.context.page());
+        if let Some(notice) = self.revalidate_boundary_after_confirm(&boundary) {
+            presentation = presentation.with_notification(notice);
+        }
+        presentation
+    }
+
+    /// 边界确认后触发本地候选资格重验证（D 工单）。
+    ///
+    /// 指纹相同（边界未变化）时不触发任何计算；失败只提示不阻断：已确认
+    /// 边界与现有评审状态保持不变（验收 7）。全程不联网。
+    fn revalidate_boundary_after_confirm(
+        &self,
+        boundary: &shared_domain_types::Boundary,
+    ) -> Option<NotificationFact> {
+        let plan_id = self.context.session.borrow().active_plan_id.clone()?;
+        let Ok(plan_id) = PlanId::parse(&plan_id) else {
+            return None;
+        };
+        match self
+            .context
+            .collection_flow
+            .revalidate_boundary_if_changed(&plan_id, boundary)
+        {
+            Ok(report) => {
+                if report.boundary_changed {
+                    log::info!(
+                        "边界候选资格本地重验证完成（plan={plan_id}）：examined={}，\
+                         isolated={}，reviewable={}，voided={}，pending={}",
+                        report.examined,
+                        report.newly_isolated.len(),
+                        report.newly_reviewable.len(),
+                        report.decisions_voided,
+                        report.decisions_reset_to_pending
+                    );
+                }
+                None
+            }
+            Err(error) => {
+                log::warn!("边界候选资格本地重验证失败（plan={plan_id}）: {error}");
+                let l10n = self.l10n();
+                Some(error_fact(
+                    &l10n,
+                    &l10n.t("boundary.error_revalidation_failed"),
+                ))
+            }
+        }
     }
 
     pub(crate) fn l10n(&self) -> std::cell::Ref<'_, Localization> {

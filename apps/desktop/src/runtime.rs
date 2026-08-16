@@ -256,6 +256,28 @@ impl ViewModelInjector {
         )
     }
 
+    /// 边界源与候选采集源双注入点（D 工单壳层验收：离线计数数据源 +
+    /// 罐头边界源，重验证期间网络请求数断言为 0）。
+    pub fn new_with_boundary_and_collection_source(
+        db: ShellDatabases,
+        file_system: Arc<dyn ExportFileSystem>,
+        boundary_source: BoundaryFetchSource,
+        collection_source: Arc<dyn data_acquisition::DataSource + Send + Sync>,
+    ) -> Result<Self> {
+        let (campus_search_ipc, campus_search_transport) =
+            crate::production::campus_search::campus_search_production_transport();
+        let overpass = Arc::new(OverpassClient::production());
+        Self::new_with_sources(
+            db,
+            file_system,
+            campus_search_ipc,
+            campus_search_transport,
+            collection_source,
+            boundary_source,
+            overpass,
+        )
+    }
+
     pub fn new_with_export_file_system(
         db: ShellDatabases,
         file_system: Arc<dyn ExportFileSystem>,

@@ -35,6 +35,43 @@ pub enum SourceGeometry {
     Polygon(Vec<(f64, f64)>),
 }
 
+impl SourceGeometry {
+    /// 从数据粮仓 `source_data.source_geometry`（本 crate 序列化格式）读回来源几何。
+    ///
+    /// 原始观测只封存来源证据（ADR-0040），重验证在本地从该字段还原几何，
+    /// 不需要重新联网拉取。
+    pub fn from_source_data(source_data: &serde_json::Value) -> Option<Self> {
+        let value = source_data.get("source_geometry")?;
+        match value.get("kind")?.as_str()? {
+            "point" => {
+                let pair = value.get("coordinates")?.as_array()?;
+                Some(Self::Point((
+                    pair.first()?.as_f64()?,
+                    pair.get(1)?.as_f64()?,
+                )))
+            }
+            "line_string" => Some(Self::LineString(parse_coordinate_pairs(
+                value.get("coordinates")?,
+            )?)),
+            "polygon" => Some(Self::Polygon(parse_coordinate_pairs(
+                value.get("coordinates")?,
+            )?)),
+            _ => None,
+        }
+    }
+}
+
+fn parse_coordinate_pairs(value: &serde_json::Value) -> Option<Vec<(f64, f64)>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|point| {
+            let pair = point.as_array()?;
+            Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
+        })
+        .collect()
+}
+
 /// 一个从数据源拉回的原始对象（带完整标签，等待 B13 归类）
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawEntity {
