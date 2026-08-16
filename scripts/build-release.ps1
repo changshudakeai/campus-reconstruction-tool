@@ -3,15 +3,15 @@
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
 #
-# 产物：dist\MCRebuild-V2.0.0-dev-portable.zip（含 exe 与可选资源目录）。
+# 产物：dist\MCRebuild-V2.0.0-portable.zip（含 exe 与可选资源目录）。
 # 运行：解压后双击 campus-rebuild-dev.exe；文案/主题资源随 exe 旁 resources/，
 #       删除 resources/ 也由编译期内嵌兜底（ADR-0005/0023）。
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Version = '2.0.0-dev'
+$Version = '2.0.0'
 $BuiltBin = 'campus-tool-dev.exe'
-$BinName = 'campus-rebuild-dev.exe'
+$BinName = 'campus-rebuild.exe'
 $DistDir = Join-Path $Root 'dist'
 $StageDir = Join-Path $DistDir "MCRebuild-V$Version"
 $ZipPath = Join-Path $DistDir "MCRebuild-V$Version-portable.zip"

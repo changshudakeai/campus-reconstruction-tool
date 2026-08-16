@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "collection-flow"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "coverage-audit",
  "data-acquisition",
@@ -1159,7 +1159,7 @@ checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
 
 [[package]]
 name = "coverage-audit"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "data-persistence",
  "localization",
@@ -1284,7 +1284,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "data-acquisition"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "data-persistence",
  "data-transformers",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "data-persistence"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "public-api",
@@ -1319,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "data-transformers"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "public-api",
  "serde",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-shell"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "export-console"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "data-persistence",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "export-flow"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "data-persistence",
  "export-console",
@@ -1981,7 +1981,7 @@ dependencies = [
 
 [[package]]
 name = "foundation-mode"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "geo",
  "public-api",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "gaode-client"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "public-api",
  "serde",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "generation-engine"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "manifest-generator",
  "public-api",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "geometry-validator"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "public-api",
  "thiserror 2.0.19",
@@ -2437,7 +2437,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "global-settings"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "data-persistence",
  "public-api",
@@ -3661,7 +3661,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "localization"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "log",
  "once_cell",
@@ -3736,7 +3736,7 @@ dependencies = [
 
 [[package]]
 name = "manifest-generator"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3940,7 +3940,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notification-center"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "log",
@@ -4441,7 +4441,7 @@ dependencies = [
 
 [[package]]
 name = "onboarding-tutorial"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "data-persistence",
@@ -4942,7 +4942,7 @@ dependencies = [
 
 [[package]]
 name = "project-management"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "data-persistence",
@@ -5299,7 +5299,7 @@ dependencies = [
 
 [[package]]
 name = "review-workbench"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "data-persistence",
  "localization",
@@ -5685,7 +5685,7 @@ dependencies = [
 
 [[package]]
 name = "shared-domain-types"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "public-api",
  "rustdoc-json",
@@ -6088,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "sponge-export"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "fastnbt",
@@ -6333,7 +6333,7 @@ checksum = "f18aa187839b2bdb1ad2fa35ead8c4c2976b64e4363c386d45ac0f7ee85c9233"
 
 [[package]]
 name = "theming"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "log",
  "public-api",
@@ -7969,7 +7969,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "2.0.0-dev"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.19.2",

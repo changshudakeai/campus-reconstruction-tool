@@ -63,7 +63,7 @@ members = [
     "apps/desktop",
 ]
 [workspace.package]
-version = "2.0.0-dev"
+version = "2.0.0"
 edition = "2021"
 
 # ── 依赖版本单点管理（执法清单 1.2）─────────────────────────────
