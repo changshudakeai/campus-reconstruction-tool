@@ -704,6 +704,24 @@ impl ReviewProductionAdapter {
             return Presentation::ready(self.empty_page())
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         };
+        // 评审台按当前已确认边界鉴别（本工单补充）：无指纹记录（旧数据）或
+        // 边界有变化时，用已存原始观测几何本地重验证（不联网），使评审台与
+        // B2 一致；失败只记日志，不阻断评审呈现（F5 保持只读 B2）。
+        if let Ok(plan_id) = PlanId::parse(&plan_id) {
+            if let Some(view) = self.context.export_flow.boundary_view() {
+                let boundary = shared_domain_types::Boundary {
+                    r#type: view.r#type,
+                    coordinates: view.coordinates,
+                };
+                if let Err(error) = self
+                    .context
+                    .collection_flow
+                    .revalidate_boundary_for_review(&plan_id, &boundary)
+                {
+                    log::warn!("评审台进入时本地边界重验证失败（plan={plan_id}）: {error}");
+                }
+            }
+        }
         let result = PlanId::parse(&plan_id)
             .map_err(|_| anyhow::anyhow!("invalid plan id"))
             .and_then(|plan_id| {

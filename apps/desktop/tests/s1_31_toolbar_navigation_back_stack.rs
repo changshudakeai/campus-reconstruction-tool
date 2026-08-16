@@ -106,6 +106,55 @@ impl TestApp {
         }
     }
 
+    /// 预置“上次打开方案”：启动即工作现场恢复，直接从零进入工作区。
+    fn restored_workspace() -> Self {
+        let window = AppWindow::new().expect("create AppWindow");
+        let center = NotificationCenter::init(PresenterRegistry::new());
+        center
+            .registry()
+            .set_presenter(ShellPresenter::install(&window));
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database_path = directory.path().join("s1-31-restore.db");
+        let mut injector =
+            ViewModelInjector::new(ShellDatabases::open(&database_path).expect("open databases"))
+                .expect("construct injector");
+        injector
+            .settings_mut()
+            .complete_first_run(&FirstRunSetup {
+                language: "zh-CN".into(),
+                minecraft_version: "26.1.2".into(),
+                acknowledged: true,
+            })
+            .expect("complete first run");
+        let campus = injector
+            .projects_mut()
+            .database()
+            .create_campus("验收校区")
+            .expect("create campus");
+        let campus_id = CampusId::parse(&campus.id).expect("parse campus id");
+        let plan_id = injector
+            .projects_mut()
+            .create_plan(&campus_id, "验收方案")
+            .expect("create plan");
+        injector
+            .settings_mut()
+            .remember_campus(&campus_id)
+            .expect("remember campus");
+        let plan_id_text = plan_id.to_string();
+        injector
+            .save_last_active_plan(Some(&plan_id_text))
+            .expect("记录上次打开方案");
+        let _runtime = assemble_application(&window, injector, Arc::clone(&center));
+
+        Self {
+            _directory: directory,
+            window,
+            _runtime,
+            plan_id: plan_id_text,
+        }
+    }
+
     fn open_plan(&self) {
         self.window
             .invoke_plan_list_card_clicked(self.plan_id.clone().into());
@@ -440,4 +489,28 @@ fn s1_31_toolbar_navigation_and_back_stack_contract() {
         "语言切换为中文",
     ));
     assert!(window.get_notice_unread_count() > 0, "未读角标仍保留");
+
+    // ── C.12：工作区从零进入（工作现场恢复）也必须可返回方案列表 ────
+    // （放在最后：新建窗口的 NotificationCenter::init 会替换全局实例，
+    //   不干扰上面基于全局中心的通知断言。）
+    let restored = TestApp::restored_workspace();
+    assert_eq!(
+        restored.window.get_active_screen(),
+        4,
+        "启动恢复上次打开方案（从零进入工作区）"
+    );
+    assert!(
+        restored.window.get_toolbar_back_visible(),
+        "工作区从零进入仍显示返回按钮（回落方案列表）"
+    );
+    restored.window.invoke_toolbar_back_clicked();
+    assert_eq!(
+        restored.window.get_active_screen(),
+        2,
+        "工作区返回当前校区方案列表"
+    );
+    assert!(
+        !restored.window.get_toolbar_back_visible(),
+        "方案列表无上一页时返回按钮隐藏"
+    );
 }

@@ -315,6 +315,7 @@ pub fn collection_flow::CollectionFlow::new_with_limits(db: alloc::sync::Arc<std
 pub fn collection_flow::CollectionFlow::page_view(&self) -> collection_flow::CollectionPageView
 pub fn collection_flow::CollectionFlow::report_view(&self) -> core::option::Option<collection_flow::CollectionReportView>
 pub fn collection_flow::CollectionFlow::reset_boundary(&self)
+pub fn collection_flow::CollectionFlow::revalidate_boundary_for_review(&self, plan_id: &shared_domain_types::id::PlanId, boundary: &shared_domain_types::boundary::Boundary) -> collection_flow::Result<collection_flow::BoundaryRevalidationReport>
 pub fn collection_flow::CollectionFlow::revalidate_boundary_if_changed(&self, plan_id: &shared_domain_types::id::PlanId, boundary: &shared_domain_types::boundary::Boundary) -> collection_flow::Result<collection_flow::BoundaryRevalidationReport>
 pub fn collection_flow::CollectionFlow::set_plan(&self, plan_id: &shared_domain_types::id::PlanId)
 pub fn collection_flow::CollectionFlow::start(&self) -> collection_flow::Result<collection_flow::CollectionOperation>

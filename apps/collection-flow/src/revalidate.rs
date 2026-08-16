@@ -1,7 +1,10 @@
 //! 边界变化后的本地候选资格重验证（D 工单，不联网）。
 //!
 //! 触发条件：用户确认的边界与"上次采集时使用的边界"指纹不同。尚无记录时
-//! 只补记当前边界指纹（旧数据/首次确认不重验证，避免历史投影被误隔离）。
+//! 由调用方选择策略（[`LegacyPolicy`]）：边界确认路径只补记当前边界指纹
+//! （旧数据/首次确认不重验证，避免历史投影被误隔离）；评审台进入路径则
+//! 对旧数据也执行一次本地重验证，使评审台按当前已确认边界鉴别（随后补记
+//! 指纹，边界未变化不再重复计算）。
 //! 计算完全本地：原始观测 `source_data.source_geometry` + 已确认边界
 //! 复用 F4 的 `parse_boundary` / `boundary_disposition` 纯函数与 B14 形状校验；
 //! 不调用 `fetch_raw_entities`，网络请求数为 0。
@@ -21,6 +24,17 @@ use geometry_validator::{
 use shared_domain_types::{Boundary, PlanId};
 
 use crate::error::{CollectionError, Result};
+
+/// 旧数据（无“上次采集时使用的边界”指纹记录）的处理策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegacyPolicy {
+    /// 只补记当前边界指纹，不重验证（边界确认路径的保守默认：避免历史投影
+    /// 因缺 source_geometry 被误隔离）。
+    RecordOnly,
+    /// 无记录也执行一次本地重验证（评审台进入路径：确保按当前已确认边界
+    /// 鉴别，使评审台与 B2 一致；随后即补记指纹，边界未变化不再重复计算）。
+    Revalidate,
+}
 
 /// 一次边界重验证的结果报告（含触发条件与逐类变化数量）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,25 +97,35 @@ pub(crate) fn run_boundary_revalidation(
     validator: &GeometryValidator,
     plan_id: &PlanId,
     boundary: &Boundary,
+    legacy_policy: LegacyPolicy,
 ) -> Result<BoundaryRevalidationReport> {
     let fingerprint = boundary_fingerprint(boundary);
     let stored = db.load_plan_collection_boundary(&plan_id.to_string())?;
-    let Some(stored) = stored else {
+    let mut stored = stored;
+    if stored.is_none() {
         // 没有记录（旧数据或首次确认）：只补记当前边界指纹，不触发重验证，
         // 避免把历史投影（可能缺 source_geometry）误判为隔离。
-        db.save_plan_collection_boundary(&plan_id.to_string(), &fingerprint)?;
-        return Ok(BoundaryRevalidationReport {
-            boundary_changed: false,
-            examined: 0,
-            newly_isolated: Vec::new(),
-            newly_reviewable: Vec::new(),
-            unchanged: 0,
-            decisions_voided: 0,
-            decisions_reset_to_pending: 0,
-            boundary_fingerprint: fingerprint,
-        });
-    };
-    if stored == fingerprint {
+        match legacy_policy {
+            LegacyPolicy::RecordOnly => {
+                db.save_plan_collection_boundary(&plan_id.to_string(), &fingerprint)?;
+                return Ok(BoundaryRevalidationReport {
+                    boundary_changed: false,
+                    examined: 0,
+                    newly_isolated: Vec::new(),
+                    newly_reviewable: Vec::new(),
+                    unchanged: 0,
+                    decisions_voided: 0,
+                    decisions_reset_to_pending: 0,
+                    boundary_fingerprint: fingerprint,
+                });
+            }
+            // 评审台进入：旧数据也按当前已确认边界鉴别（补记将在事务写入时完成）。
+            LegacyPolicy::Revalidate => {
+                stored = Some(String::new());
+            }
+        }
+    }
+    if stored.as_deref() == Some(fingerprint.as_str()) {
         return Ok(BoundaryRevalidationReport {
             boundary_changed: false,
             examined: 0,

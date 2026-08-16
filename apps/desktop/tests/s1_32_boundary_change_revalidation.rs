@@ -372,9 +372,40 @@ fn s1_32_boundary_change_revalidates_locally_without_network() {
         "无效边界不得改写边界指纹"
     );
     drop(db);
+
+    // ── 评审台进入时按当前已确认边界鉴别（本工单补充）──────────────
+    // 模拟旧版本遗留场景：指纹记录与当前边界不一致（旧数据无指纹、或换边界
+    // 后未重新确认）。重新进入评审台应触发一次本地重鉴别并纠正指纹，
+    // 评审台与 B2 保持一致，全程不联网。
+    {
+        let mut db = workspace.db.lock().expect("database lock");
+        db.save_plan_collection_boundary(&plan_id, "legacy-stale-fingerprint")
+            .expect("模拟旧数据指纹");
+        drop(db);
+    }
+    workspace.window.invoke_error_dialog_dismissed();
+    // 切到导出步再回评审步，走真实 ReviewRequest::Open。
+    workspace.window.invoke_workspace_step_clicked(4);
+    workspace.window.invoke_workspace_step_clicked(3);
+    {
+        let db = workspace.db.lock().expect("database lock");
+        assert_eq!(
+            db.load_plan_collection_boundary(&plan_id)
+                .expect("边界指纹")
+                .as_deref(),
+            Some(boundary_fingerprint(&shifted_boundary()).as_str()),
+            "评审台进入必须按当前已确认边界纠正指纹"
+        );
+        let reviewable = db
+            .list_reviewable_candidate_projections(&plan_id)
+            .expect("Reviewable API");
+        assert_eq!(reviewable.len(), 1, "评审台只显示当前边界内候选");
+        assert_eq!(reviewable[0].candidate_id, candidate_b);
+        drop(db);
+    }
     assert_eq!(
         workspace.network_calls.load(Ordering::SeqCst),
         0,
-        "全程网络请求数必须为 0"
+        "全程网络请求数必须为 0（含评审台进入重鉴别）"
     );
 }

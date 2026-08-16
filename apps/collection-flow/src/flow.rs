@@ -31,7 +31,7 @@ use shared_domain_types::{CandidateCategory, PlanId};
 use crate::error::{CollectionError, Result};
 use crate::input::CollectionInputStore;
 use crate::operation::CollectionOperation;
-use crate::revalidate::{run_boundary_revalidation, BoundaryRevalidationReport};
+use crate::revalidate::{run_boundary_revalidation, BoundaryRevalidationReport, LegacyPolicy};
 use crate::view::{
     CollectionFailure, CollectionFailureView, CollectionOutcome, CollectionPageView,
     CollectionReportView, CollectionStatus, CollectionSummary, PlanCollectionState,
@@ -131,7 +131,30 @@ impl CollectionFlow {
         boundary: &shared_domain_types::Boundary,
     ) -> Result<BoundaryRevalidationReport> {
         let mut db = self.db.lock().expect("collection database lock");
-        run_boundary_revalidation(&mut db, &self.validator, plan_id, boundary)
+        run_boundary_revalidation(
+            &mut db,
+            &self.validator,
+            plan_id,
+            boundary,
+            LegacyPolicy::RecordOnly,
+        )
+    }
+
+    /// 评审台进入时确保按当前已确认边界鉴别：无指纹记录（旧数据）也执行
+    /// 一次本地重验证并补记指纹；指纹相同则不触发任何计算。全程不联网。
+    pub fn revalidate_boundary_for_review(
+        &self,
+        plan_id: &PlanId,
+        boundary: &shared_domain_types::Boundary,
+    ) -> Result<BoundaryRevalidationReport> {
+        let mut db = self.db.lock().expect("collection database lock");
+        run_boundary_revalidation(
+            &mut db,
+            &self.validator,
+            plan_id,
+            boundary,
+            LegacyPolicy::Revalidate,
+        )
     }
 
     /// 提交一次完整"开始采集"意图；输入在 Start 返回前冻结。

@@ -405,7 +405,7 @@ impl ProductionEntries {
                 self.collection
                     .show(window, &self.center, CollectionRequest::Abandon);
                 if from_back {
-                    self.pop_and_navigate(window);
+                    self.navigate_back(window, target);
                 } else {
                     // 确认离开仍停留在工作区：正向跳转需把工作区压栈。
                     self.navigate_forward(window, target);
@@ -806,6 +806,8 @@ impl ProductionEntries {
         // 工作现场恢复：OpenPlan 内部已导航到上次停留步骤（A.1）；步骤 ③④⑤
         // 需要各自入口装载（评审进台/采集状态/导出页），与步骤点击路径一致。
         self.open_restored_step_entry(window);
+        // 工作区总是可返回（栈空时回落方案列表）：刷新返回按钮可见性。
+        self.refresh_toolbar_back(window);
     }
 
     /// 方案列表卡片单击打开工作区：成功切屏时把方案列表压栈（返回=方案列表）。
@@ -1056,14 +1058,17 @@ impl ProductionEntries {
     /// 历史栈返回（统一返回按钮）：工作区需先经离开安全判定；确认或允许
     /// 后弹出栈顶返回“进入当前页时的上一页”。
     pub(crate) fn go_back(&mut self, window: &AppWindow) {
-        if self.back_stack.is_empty() {
-            return;
-        }
-        let target = *self.back_stack.last().expect("栈顶存在");
+        let target = match self.back_stack.last().copied() {
+            Some(target) => target,
+            // 工作区从零进入（如启动“工作现场恢复”）没有历史栈条目，但仍
+            // 必须能返回当前校区方案列表（原“返回方案列表”按钮语义，s1_13）。
+            None if window.get_active_screen() == 4 => Screen::PlanList,
+            None => return,
+        };
         if window.get_active_screen() == 4 {
             self.leave_workspace(window, target, true);
         } else {
-            self.pop_and_navigate(window);
+            self.navigate_back(window, target);
         }
     }
 
@@ -1071,7 +1076,7 @@ impl ProductionEntries {
         let before = window.get_active_screen();
         if before != 4 {
             if from_back {
-                self.pop_and_navigate(window);
+                self.navigate_back(window, target);
             } else {
                 self.navigate_forward(window, target);
             }
@@ -1091,7 +1096,7 @@ impl ProductionEntries {
                     .show(window, &self.center, CollectionRequest::Abandon);
                 if from_back {
                     // 历史栈返回：弹出栈顶并导航（含目标页地图隐藏与渲染）。
-                    self.pop_and_navigate(window);
+                    self.navigate_back(window, target);
                 } else {
                     // Leave 呈现已把屏幕切到目标页：仍经目标入口渲染
                     // （通知中心/回收站/设置页负责隐藏地图），再记录来源页。
@@ -1132,13 +1137,14 @@ impl ProductionEntries {
         self.refresh_toolbar_back(window);
     }
 
-    /// 弹出栈顶并导航到“进入当前页时的上一页”；工作区经 [`WorkspaceRequest::Resume`]
+    /// 弹出栈顶并导航到“进入当前页时的上一页”；栈空时回落 `fallback`
+    /// （工作区从零进入时回落方案列表）。工作区经 [`WorkspaceRequest::Resume`]
     /// 复用内存会话（同一方案/步骤/未保存边界点），步骤 ③④⑤ 由对应入口装载。
-    fn pop_and_navigate(&mut self, window: &AppWindow) {
-        let Some(target) = self.back_stack.pop() else {
-            return;
-        };
-        self.navigate_to(window, target);
+    fn navigate_back(&mut self, window: &AppWindow, fallback: Screen) {
+        match self.back_stack.pop() {
+            Some(target) => self.navigate_to(window, target),
+            None => self.navigate_to(window, fallback),
+        }
         self.refresh_toolbar_back(window);
     }
 
@@ -1149,7 +1155,10 @@ impl ProductionEntries {
     }
 
     fn refresh_toolbar_back(&self, window: &AppWindow) {
-        window.set_toolbar_back_visible(!self.back_stack.is_empty());
+        // 工作区总是显示返回按钮（栈空时返回当前校区方案列表）；
+        // 其余页面仅在有上一页时显示（无上一页不显示返回，验收 C.13）。
+        let visible = !self.back_stack.is_empty() || window.get_active_screen() == 4;
+        window.set_toolbar_back_visible(visible);
     }
 
     /// 可进入历史栈的页面（首启向导不参与；校区选择作为入口页参与）。

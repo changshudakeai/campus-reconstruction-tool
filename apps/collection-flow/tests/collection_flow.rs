@@ -18,8 +18,9 @@ use data_acquisition::{
     DataSource, EnrichedEntities, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
 };
 use data_persistence::{
-    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibility, CandidateNameSource,
-    CandidateProjectionsApi, Database, RawObservationsApi, ReviewDecisionsApi,
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateDisplay, CandidateEligibility,
+    CandidateNameSource, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, RawObservation, RawObservationsApi, ReviewDecisionsApi,
 };
 use data_transformers::TagMap;
 use export_flow::{BoundaryExportFlow, StdExportFileSystem};
@@ -972,6 +973,160 @@ fn boundary_change_revalidates_candidates_locally_without_network() {
         "无效边界不得改变候选资格"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1, "全程网络请求数保持 1");
+}
+
+/// 旧数据（无“上次采集时使用的边界”指纹记录）的评审台进入场景：无记录也
+/// 必须按当前已确认边界本地鉴别一次，随后补记指纹；边界未变化不再重复计算；
+/// 全程不联网（网络请求数保持 0）。
+#[test]
+fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let source = Arc::new(CountingSource {
+        inner: Arc::new(FakeSource {
+            entities: vec![
+                building_point("A01", 116.4003, 39.9003),
+                building_point("B01", 116.4012, 39.9012),
+            ],
+        }),
+        calls: Arc::clone(&calls),
+    });
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+    let plan_key = plan_id.to_string();
+
+    // 模拟旧版本遗留状态：已有候选投影（A 在原边界内 Reviewable、B 在边界外
+    // Isolated），但“上次采集时使用的边界”指纹表为空（不经过采集发布）。
+    {
+        let mut database = db.lock().expect("database lock");
+        let observation_a = RawObservation::new(
+            &plan_key,
+            CandidateCategory::Building,
+            "way/1",
+            serde_json::json!({
+                "name": "教学楼A",
+                "tags": {"building": "school"},
+                "payload": {"id": "way/1"},
+                "source_geometry": {"kind": "point", "coordinates": [116.4003, 39.9003]},
+                "geometry_part_id": "point"
+            }),
+            "overpass",
+        );
+        let observation_b = RawObservation::new(
+            &plan_key,
+            CandidateCategory::Building,
+            "way/2",
+            serde_json::json!({
+                "name": "教学楼B",
+                "tags": {"building": "school"},
+                "payload": {"id": "way/2"},
+                "source_geometry": {"kind": "point", "coordinates": [116.4012, 39.9012]},
+                "geometry_part_id": "point"
+            }),
+            "overpass",
+        );
+        database
+            .write_raw_observations(&[observation_a.clone(), observation_b.clone()])
+            .expect("写入原始观测");
+        let batch = database
+            .prepare_candidate_batch(&plan_key)
+            .expect("prepare batch");
+        database
+            .write_candidate_projections(
+                &batch.id,
+                &[
+                    CandidateProjection::new(
+                        "cand-a",
+                        &plan_key,
+                        observation_a.id.clone(),
+                        "overpass",
+                        "way/1",
+                        "point",
+                        CandidateCategory::Building,
+                        CandidateDisplay::new("教学楼A", vec![]),
+                        CandidateShape::point(serde_json::json!([116.4003, 39.9003])),
+                        CandidateValidation::Retained,
+                        CandidateEligibility::Reviewable,
+                    ),
+                    CandidateProjection::new(
+                        "cand-b",
+                        &plan_key,
+                        observation_b.id.clone(),
+                        "overpass",
+                        "way/2",
+                        "point",
+                        CandidateCategory::Building,
+                        CandidateDisplay::new("教学楼B", vec![]),
+                        CandidateShape::point(serde_json::json!([116.4012, 39.9012])),
+                        CandidateValidation::Rejected,
+                        CandidateEligibility::Isolated,
+                    )
+                    .isolated_reason("outside_confirmed_plan_boundary"),
+                ],
+            )
+            .expect("写入候选投影");
+        database
+            .publish_candidate_batch(&batch.id)
+            .expect("发布批次");
+        assert_eq!(
+            database
+                .load_plan_collection_boundary(&plan_key)
+                .expect("读取指纹"),
+            None,
+            "旧数据指纹表必须为空"
+        );
+    }
+
+    // 评审台进入：按当前已确认边界（覆盖 B、排除 A）本地鉴别一次。
+    let shifted = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.4008, 39.9008],
+            [116.4018, 39.9008],
+            [116.4018, 39.9018],
+            [116.4008, 39.9018],
+            [116.4008, 39.9008]
+        ]]),
+    };
+    let report = flow
+        .revalidate_boundary_for_review(&plan_id, &shifted)
+        .expect("评审台进入重鉴别");
+    assert!(report.boundary_changed, "无指纹记录也必须执行本地重鉴别");
+    assert_eq!(report.examined, 2);
+    assert_eq!(
+        report.newly_isolated,
+        vec!["cand-a".to_owned()],
+        "A 跑到边界外"
+    );
+    assert_eq!(
+        report.newly_reviewable,
+        vec!["cand-b".to_owned()],
+        "B 新进入边界"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "评审台进入重鉴别不得联网");
+
+    // 指纹已补记；再次进入（边界未变化）不再重复计算。
+    {
+        let database = db.lock().expect("database lock");
+        assert_eq!(
+            database
+                .load_plan_collection_boundary(&plan_key)
+                .expect("读取指纹")
+                .as_deref(),
+            Some(boundary_fingerprint(&shifted).as_str()),
+            "重鉴别后必须补记当前边界指纹"
+        );
+        let reviewable = database
+            .list_reviewable_candidate_projections(&plan_key)
+            .expect("Reviewable API");
+        assert_eq!(reviewable.len(), 1, "评审台只显示边界内候选");
+        assert_eq!(reviewable[0].candidate_id, "cand-b");
+    }
+    let report = flow
+        .revalidate_boundary_for_review(&plan_id, &shifted)
+        .expect("再次进入");
+    assert!(!report.boundary_changed, "边界未变化不触发重复计算");
 }
 
 #[test]
