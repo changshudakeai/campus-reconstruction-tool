@@ -8,6 +8,7 @@
 
 import { Button, ComboBox, GroupBox, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { AppToolbar } from "toolbar.slint";
 import { SettingsWizard } from "settings_wizard.slint";
 import { CampusSelect, CampusData } from "campus_select.slint";
 import { PlanList, PlanCardData } from "plan_list.slint";
@@ -95,10 +96,40 @@ export component AppWindow inherits Window {
     callback settings-save-clicked();
     callback gaode-clear-clicked();
 
-    // ── 右上角工具栏（ADR-0027 §决定 - 四入口固定）───────────────
-    // 可见性由 active-screen 派生（屏 2/4/5/6 显示，0/1/3 隐藏），无需 Rust 注入
-    in property <string> toolbar-title;
-    // 四个图标按钮：公告栏 / 切换校区 / 回收站 / 设置
+    // ── 顶部工具栏（本工单重构：左=返回+上下文标题；右=通知/设置+溢出菜单）──
+    // 标题按当前屏计算：方案列表/校区选择/设置/通知中心/回收站/工作区（校区/方案名）
+    in property <string> toolbar-title:
+        root.active-screen == 1 ? root.campus-select-title
+        : root.active-screen == 2 ? root.plan-list-title
+        : root.active-screen == 3 ? root.settings-title
+        : root.active-screen == 4 ? root.workspace-context-label
+        : root.active-screen == 5 ? root.notice-board-title
+        : root.trash-page-title;
+    // 返回按钮可见性由 Rust 侧历史栈驱动（栈空时不显示，验收 C.13）
+    in-out property <bool> toolbar-back-visible;
+    in property <string> toolbar-back-label;
+    // 溢出菜单开合（in-out：契约测试可直接置位断言）
+    in-out property <bool> toolbar-overflow-open;
+    // 布局观测矩形（T34 同款契约断言：按钮可见、互不重叠、不越界）。
+    // 仅观测，不参与业务；固定按钮宽/间距 + 右缘对齐下的解析几何
+    // （工具栏宽度 = 窗口宽度），800/1000 逻辑宽下标题区充足、右簇恒为右缘。
+    in-out property <length> toolbar-back-rect-x: 16px;
+    in-out property <length> toolbar-back-rect-y: 12px;
+    in-out property <length> toolbar-back-rect-width: root.toolbar-back-visible ? 72px : 0px;
+    in-out property <length> toolbar-back-rect-height: 32px;
+    in-out property <length> toolbar-notice-rect-x: max(0px, root.width - 152px);
+    in-out property <length> toolbar-notice-rect-y: 12px;
+    in-out property <length> toolbar-notice-rect-width: 40px;
+    in-out property <length> toolbar-notice-rect-height: 32px;
+    in-out property <length> toolbar-settings-rect-x: max(0px, root.width - 104px);
+    in-out property <length> toolbar-settings-rect-y: 12px;
+    in-out property <length> toolbar-settings-rect-width: 40px;
+    in-out property <length> toolbar-settings-rect-height: 32px;
+    in-out property <length> toolbar-overflow-rect-x: max(0px, root.width - 56px);
+    in-out property <length> toolbar-overflow-rect-y: 12px;
+    in-out property <length> toolbar-overflow-rect-width: 40px;
+    in-out property <length> toolbar-overflow-rect-height: 32px;
+    // 两个常驻图标按钮 + 两个溢出菜单项（文案由 Rust 注入）
     in property <bool> notice-toolbar-button-visible;
     in property <string> notice-toolbar-label;
     // B7 铃铛未读角标（ADR-0021：点开即清零）
@@ -411,6 +442,7 @@ export component AppWindow inherits Window {
     callback diagnostic-actions-completed();
     callback settings-clicked();
     // ── T19B-9: 右上角工具栏回调 ─────────────────────
+    callback toolbar-back-clicked();
     callback notice-toolbar-button-clicked();
     callback switch-campus-toolbar-button-clicked();
     callback trash-toolbar-button-clicked();
@@ -457,6 +489,9 @@ export component AppWindow inherits Window {
     }
 
     if root.active-screen == 1: CampusSelect {
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
         title <=> root.campus-select-title;
         empty-list-text <=> root.campus-select-empty-list-text;
         settings-button-text <=> root.campus-select-settings-button-text;
@@ -476,6 +511,9 @@ export component AppWindow inherits Window {
     }
 
     if root.active-screen == 2: PlanList {
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
         title: root.plan-list-title;
         campus-name: root.plan-list-campus-name;
         create-button-text: root.plan-list-create-button-text;
@@ -502,16 +540,11 @@ export component AppWindow inherits Window {
 
 
     if root.active-screen == 3: VerticalLayout {
+        y: 56px;
+        height: parent.height - 56px;
         alignment: center;
         spacing: 16px;
         padding: 32px;
-
-        Text {
-            text: root.settings-title;
-            horizontal-alignment: center;
-            font-size: 20px;
-            color: Theme.text-primary;
-        }
 
         HorizontalLayout {
             alignment: center;
@@ -520,17 +553,6 @@ export component AppWindow inherits Window {
                 text: root.tutorial-replay-label;
                 clicked => {
                     root.replay-tutorial-clicked();
-                }
-            }
-        }
-
-        HorizontalLayout {
-            alignment: center;
-
-            Button {
-                text: root.settings-back-label;
-                clicked => {
-                    root.settings-back-clicked();
                 }
             }
         }
@@ -1016,6 +1038,9 @@ export component AppWindow inherits Window {
     }
     
     if root.active-screen == 5: NoticeBoard {
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
         title <=> root.notice-board-title;
         empty-list-text <=> root.notice-board-empty-list-text;
         archive-button-text <=> root.notice-board-archive-button-text;
@@ -1032,6 +1057,9 @@ export component AppWindow inherits Window {
     }
     
     if root.active-screen == 6: Trash {
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
         title <=> root.trash-page-title;
         empty-list-text <=> root.trash-page-empty-list-text;
         restore-button-text <=> root.trash-page-restore-button-text;
@@ -1046,141 +1074,31 @@ export component AppWindow inherits Window {
         
     }
 
-    // ── 顶部工具栏 (ADR-0027)───────────────────────────────
-    // 校区上下文内的屏才显示（方案列表/工作区/公告栏/回收站）
-    if root.active-screen == 2 || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: Rectangle {
-        y: 0;
-        height: 56px;
+    // ── 顶部工具栏（本工单重构：左=返回+上下文标题；右=通知/设置+溢出菜单）──
+    // 覆盖校区上下文全部页面（校区选择/方案列表/设置/工作区/通知中心/回收站），
+    // 首启向导（屏 0）不显示。
+    if root.active-screen == 1 || root.active-screen == 2 || root.active-screen == 3
+        || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: AppToolbar {
         width: parent.width;
-        background: Theme.surface;
-        border-color: Theme.separator;
-        
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            padding-left: 16px;
-            padding-right: 16px;
-            padding-top: 8px;
-            padding-bottom: 8px;
-            
-            // 工作区标题区左侧的层级返回入口；它不属于右侧四项辅助工具栏。
-            if root.active-screen == 4: Button {
-                text: root.workspace-back-to-plan-list-label;
-                clicked => { root.workspace-back-to-plan-list-clicked(); }
-            }
+        title: root.toolbar-title;
+        back-visible: root.toolbar-back-visible;
+        back-label: root.toolbar-back-label;
+        notice-visible: root.notice-toolbar-button-visible;
+        notice-label: root.notice-toolbar-label;
+        notice-unread-count: root.notice-unread-count;
+        settings-visible: root.settings-toolbar-button-visible;
+        settings-label: root.settings-toolbar-label;
+        trash-visible: root.trash-toolbar-button-visible;
+        trash-label: root.trash-toolbar-label;
+        switch-campus-visible: root.switch-campus-toolbar-button-visible;
+        switch-campus-label: root.switch-campus-toolbar-label;
+        overflow-open <=> root.toolbar-overflow-open;
 
-            Text {
-                text: root.toolbar-title;
-                font-size: 16px;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            
-            Rectangle { 
-                // 弹性间隔
-            }
-            
-            // 公告栏图标 + 文字标签 + 未读角标 (ADR-0021/0027)
-            if root.notice-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 64px;
-                alignment: center;
-                
-                Rectangle {
-                    preferred-width: 36px;
-                    preferred-height: 32px;
-                    
-                    Button {
-                        text: "📢";
-                        width: 100%;
-                        height: 100%;
-                        clicked => { root.notice-toolbar-button-clicked(); }
-                    }
-                    
-                    if root.notice-unread-count > 0: Rectangle {
-                        x: parent.width - 16px;
-                        y: -6px;
-                        width: 18px;
-                        height: 18px;
-                        border-radius: 9px;
-                        background: Theme.error;
-                        
-                        Text {
-                            text: root.notice-unread-count;
-                            color: Theme.text-inverse;
-                            font-size: 10px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-                
-                Text {
-                    text: root.notice-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 切换校区图标 + 文字标签
-            if root.switch-campus-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 70px;
-                alignment: center;
-                
-                Button {
-                    text: "🔄";
-                    clicked => { root.switch-campus-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.switch-campus-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 回收站图标 + 文字标签
-            if root.trash-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 65px;
-                alignment: center;
-                
-                Button {
-                    text: "🗑️";
-                    clicked => { root.trash-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.trash-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-            
-            // 设置图标 + 文字标签
-            if root.settings-toolbar-button-visible: HorizontalLayout {
-                spacing: 4px;
-                preferred-width: 55px;
-                alignment: center;
-                
-                Button {
-                    text: "⚙️";
-                    clicked => { root.settings-toolbar-button-clicked(); }
-                }
-                
-                Text {
-                    text: root.settings-toolbar-label;
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-            }
-        }
+        back-clicked => { root.toolbar-back-clicked(); }
+        notice-clicked => { root.notice-toolbar-button-clicked(); }
+        settings-clicked => { root.settings-toolbar-button-clicked(); }
+        trash-clicked => { root.trash-toolbar-button-clicked(); }
+        switch-campus-clicked => { root.switch-campus-toolbar-button-clicked(); }
     }
 
     // B7 普通提示 toast（ADR-0021：短暂弹出自动消失；warn 级分派触发）

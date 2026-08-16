@@ -124,6 +124,19 @@ impl Screen {
             Self::Trash => 6,
         }
     }
+
+    pub(crate) fn from_index(index: i32) -> Option<Self> {
+        Some(match index {
+            0 => Self::FirstRunSetup,
+            1 => Self::CampusSelect,
+            2 => Self::PlanList,
+            3 => Self::Settings,
+            4 => Self::Workspace,
+            5 => Self::Notifications,
+            6 => Self::Trash,
+            _ => return None,
+        })
+    }
 }
 
 /// 功能模块返回的导航决定；S1 只执行，不自行判断业务条件。

@@ -252,6 +252,23 @@ thread_local! {
     static REVIEW_PUSHED_SCRIPTS: std::cell::RefCell<Vec<String>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+    /// 地图可见性契约探针（本工单）：无真实 WebView 的测试环境用它模拟
+    /// “地图已显示”，[`hide`] 同步清除，使“离开工作区必须隐藏地图”可断言。
+    static MAP_VISIBLE_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 契约测试探针：无真实 WebView 的环境里模拟“地图已显示”。
+///
+/// [`hide`] 会同步清除该探针；真实 WebView 存在时以真实可见性为准。
+#[doc(hidden)]
+pub fn set_map_visible_probe(visible: bool) {
+    MAP_VISIBLE_PROBE.with(|s| s.set(visible));
+}
+
+/// 契约测试观测：地图 WebView 是否可见（探针 + 真实状态）。
+#[doc(hidden)]
+pub fn map_visible() -> bool {
+    is_visible() || MAP_VISIBLE_PROBE.with(|s| s.get())
 }
 
 /// 评审回推是否应执行：生产 = 活跃 WebView；契约测试可经探针模拟。
@@ -990,6 +1007,7 @@ pub(crate) fn hide() {
         state.load_timer = None;
         schedule_drop(&mut state);
     });
+    MAP_VISIBLE_PROBE.with(|s| s.set(false));
 }
 
 /// T36：地图加载失败标记——弹窗关闭不得自动重建（避免反复失败弹窗）。

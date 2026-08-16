@@ -16,8 +16,8 @@ pub use boundary_source::BoundaryFetchSource;
 pub use map_webview::MAP_LOAD_TIMEOUT_MARKER;
 #[doc(hidden)]
 pub use map_webview::{
-    reset_review_push_count, review_map_text_visible, review_push_count, review_pushed_scripts,
-    set_review_push_probe_visible, shutdown,
+    map_visible, reset_review_push_count, review_map_text_visible, review_push_count,
+    review_pushed_scripts, set_map_visible_probe, set_review_push_probe_visible, shutdown,
 };
 pub use presentation::{
     BoundaryViewState, CampusPlanPageState, CampusPlanPresentationEntry, CollectionPageState,

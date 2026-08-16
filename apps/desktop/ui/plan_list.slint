@@ -59,16 +59,9 @@ export component PlanList inherits Rectangle {
         spacing: 12px;
         padding: 24px;
 
-        // 顶部：标题行 + 当前校区名
+        // 顶部：操作行（标题由统一工具栏显示；本页保留“新建方案”）
         HorizontalLayout {
             spacing: 12px;
-
-            Text {
-                text: root.title;
-                font-size: 22px;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-            }
 
             Rectangle {
                 // 弹性间隔
@@ -197,15 +190,6 @@ export component PlanList inherits Rectangle {
             }
         }
 
-        // 底部：返回校区选择
-        HorizontalLayout {
-            alignment: start;
-
-            Button {
-                text: root.back-button-text;
-                clicked => { root.back-to-campus-clicked(); }
-            }
-        }
     }
 
     // 教程气泡浮层（F2：跟练引导气泡，ADR-0020/0028）

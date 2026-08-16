@@ -50,11 +50,7 @@ export component CampusSelect inherits Rectangle {
         spacing: 16px;
         padding: 24px;
 
-        Text {
-            text: root.title;
-            font-size: 24px;
-            horizontal-alignment: center;
-        }
+        // 标题由统一工具栏显示（左侧返回 + 上下文标题），本页不再重复。
 
         // 搜索行：输入 + 按钮（搜索只在显式触发时开始）
         HorizontalLayout {
@@ -184,17 +180,6 @@ export component CampusSelect inherits Rectangle {
                 font-size: 15px;
                 color: Theme.text-quaternary;
                 horizontal-alignment: center;
-            }
-        }
-
-        // 底部操作区
-        HorizontalLayout {
-            alignment: end;
-            spacing: 12px;
-
-            Button {
-                text: root.settings_button_text;
-                clicked => { root.settings-clicked(); }
             }
         }
     }

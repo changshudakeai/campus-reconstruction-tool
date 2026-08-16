@@ -864,6 +864,7 @@ impl ProductionEntries {
     pub(crate) fn select_campus(&mut self, window: &AppWindow, campus_id: String) {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
+        let before = window.get_active_screen();
         let presentation = self.campus_plan.show(
             window,
             &self.center,
@@ -871,6 +872,8 @@ impl ProductionEntries {
                 campus_id: campus_id.clone(),
             },
         );
+        // 选中校区进入方案列表：记录来源页（校区选择），使返回=校区选择。
+        self.record_forward_navigation(window, before);
         if matches!(
             presentation.operation(),
             crate::presentation::OperationState::NeedsConfirmation

@@ -41,6 +41,7 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
         record_entry_call(9);
         match request {
             WorkspaceRequest::OpenPlan { plan_id } => self.open_plan(&plan_id),
+            WorkspaceRequest::Resume => self.resume(),
             WorkspaceRequest::Navigate { step } => self.navigate(step),
             WorkspaceRequest::Leave { target } => self.leave(target),
             WorkspaceRequest::BoundaryCanvasClick { x, y } => self.boundary_canvas_click(x, y),

@@ -55,16 +55,9 @@ export component NoticeBoard inherits Rectangle {
         spacing: 16px;
         padding: 24px;
 
-        // 顶部标题行
+        // 顶部操作行（标题由统一工具栏显示）
         HorizontalLayout {
             spacing: 12px;
-
-            Text {
-                text: root.title;
-                font-size: 22px;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-            }
 
             Rectangle {
                 // 弹性间隔

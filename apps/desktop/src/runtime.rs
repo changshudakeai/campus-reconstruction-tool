@@ -408,8 +408,10 @@ impl ViewModelInjector {
         window.set_input_dialog_cancel_label(l10n.t("dialog.cancel_button").into());
         window.set_input_dialog_label(l10n.t("dialog.name_label").into());
 
-        // ── 右上角工具栏 + 公告栏页 + 回收站页文案 ────────────────────────
-        window.set_toolbar_title(l10n.t("app.welcome_title").into());
+        // ── 顶部工具栏 + 公告栏页 + 回收站页文案 ─────────────────────────
+        // 工具栏标题按当前屏由 main.slint 计算（不再由 Rust 注入）。
+        window.set_toolbar_back_label(l10n.t("toolbar.back").into());
+        window.set_toolbar_back_visible(false);
 
         // 公告栏页（Screen 5）文案
         window.set_notice_board_title(l10n.t("notice.page_title").into());
