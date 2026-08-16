@@ -32,6 +32,10 @@ export component AppToolbar inherits Rectangle {
     callback switch-campus-clicked();
 
     // 宽度由实例化方按父级宽度填充（main.slint）。
+    // 显式钉在父容器左上角：Slint 新语法下未指定 x/y 的子元素默认居中，
+    // 会导致工具栏被推到窗口中部（开发版回归：工具栏盖住内容）。
+    x: 0px;
+    y: 0px;
     height: 56px;
     background: Theme.surface;
 

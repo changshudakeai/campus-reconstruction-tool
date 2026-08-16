@@ -493,6 +493,7 @@ export component AppWindow inherits Window {
     }
 
     if root.active-screen == 1: CampusSelect {
+        x: 0px;
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
@@ -515,6 +516,7 @@ export component AppWindow inherits Window {
     }
 
     if root.active-screen == 2: PlanList {
+        x: 0px;
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
@@ -752,6 +754,10 @@ export component AppWindow inherits Window {
 
     // ── 屏 4：方案工作区（T19B-5B）──────────────────────
     if root.active-screen == 4: Rectangle {
+        // 全窗铺底（地图槽位/抽屉 y 以窗口为真源，见 workspace-map-slot-*）；
+        // 工具栏在其上覆盖（声明在后、置顶）。显式 x/y 防 Slint 默认居中。
+        x: 0px;
+        y: 0px;
         width: parent.width;
         height: parent.height;
         background: Theme.surface;
@@ -1046,6 +1052,7 @@ export component AppWindow inherits Window {
     }
     
     if root.active-screen == 5: NoticeBoard {
+        x: 0px;
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
@@ -1065,6 +1072,7 @@ export component AppWindow inherits Window {
     }
     
     if root.active-screen == 6: Trash {
+        x: 0px;
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
@@ -1087,6 +1095,9 @@ export component AppWindow inherits Window {
     // 首启向导（屏 0）不显示。
     if root.active-screen == 1 || root.active-screen == 2 || root.active-screen == 3
         || root.active-screen == 4 || root.active-screen == 5 || root.active-screen == 6: AppToolbar {
+        // 显式钉顶：Slint 新语法下无 x/y 的子元素默认居中（工具栏盖住内容回归的根因）
+        x: 0px;
+        y: 0px;
         width: parent.width;
         title: root.toolbar-title;
         back-visible: root.toolbar-back-visible;

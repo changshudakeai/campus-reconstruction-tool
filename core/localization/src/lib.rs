@@ -76,6 +76,9 @@ struct ResourceBundle {
     /// 应用级文本（首屏、设置页）
     #[serde(default)]
     pub app: HashMap<String, String>,
+    /// 顶部工具栏（返回/溢出菜单等，B 工单重构）
+    #[serde(default)]
+    pub toolbar: HashMap<String, String>,
     /// 全局设置与首次运行向导（ADR-0004，T19B-2）
     #[serde(default)]
     pub settings: HashMap<String, String>,
@@ -146,6 +149,7 @@ impl ResourceBundle {
             ("domain", self.domain),
             ("campus", self.campus),
             ("app", self.app),
+            ("toolbar", self.toolbar),
             ("settings", self.settings),
             ("plan", self.plan),
             ("review", self.review),
@@ -383,6 +387,18 @@ mod tests {
         assert_eq!(l10n.t("common.pending"), "等待中");
         assert!(
             !l10n.t("common.pending").starts_with("common."),
+            "键未注册时 l10n 会原样返回键名"
+        );
+    }
+
+    #[test]
+    fn toolbar_category_is_registered_into_flatten() {
+        // B 工单：toolbar.back 必须展平可查，返回按钮不得渲染成字面量键名
+        // （开发版回归：按钮显示 "toolbar.back" 的根因是分类未注册）。
+        let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+        assert_eq!(l10n.t("toolbar.back"), "← 返回");
+        assert!(
+            !l10n.t("toolbar.back").starts_with("toolbar."),
             "键未注册时 l10n 会原样返回键名"
         );
     }
