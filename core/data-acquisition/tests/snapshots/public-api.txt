@@ -700,6 +700,8 @@ impl<T> either::into_either::IntoEither for data_acquisition::pipeline::Collecti
 impl<T> typenum::type_operators::Same for data_acquisition::pipeline::CollectionReport
 pub type data_acquisition::pipeline::CollectionReport::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::pipeline::CollectionReport where T: ?core::marker::Sized
+pub fn data_acquisition::pipeline::boundary_disposition(geometry: core::option::Option<&data_acquisition::source::SourceGeometry>, boundary: &geo_types::geometry::multi_polygon::MultiPolygon<f64>) -> data_acquisition::pipeline::BoundaryDisposition
+pub fn data_acquisition::pipeline::parse_boundary(boundary: &shared_domain_types::boundary::Boundary) -> core::option::Option<geo_types::geometry::multi_polygon::MultiPolygon<f64>>
 pub mod data_acquisition::progress
 pub mod data_acquisition::progress::text_keys
 pub const data_acquisition::progress::text_keys::DIFF_ADDED: &str
@@ -1138,6 +1140,8 @@ pub mod data_acquisition::source
 pub data_acquisition::source::SourceGeometry::LineString(alloc::vec::Vec<(f64, f64)>)
 pub data_acquisition::source::SourceGeometry::Point((f64, f64))
 pub data_acquisition::source::SourceGeometry::Polygon(alloc::vec::Vec<(f64, f64)>)
+impl data_acquisition::source::SourceGeometry
+pub fn data_acquisition::source::SourceGeometry::from_source_data(source_data: &serde_json::value::Value) -> core::option::Option<Self>
 impl core::clone::Clone for data_acquisition::source::SourceGeometry
 pub fn data_acquisition::source::SourceGeometry::clone(&self) -> data_acquisition::source::SourceGeometry
 impl core::cmp::PartialEq for data_acquisition::source::SourceGeometry
@@ -1660,6 +1664,8 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub data_acquisition::SourceGeometry::LineString(alloc::vec::Vec<(f64, f64)>)
 pub data_acquisition::SourceGeometry::Point((f64, f64))
 pub data_acquisition::SourceGeometry::Polygon(alloc::vec::Vec<(f64, f64)>)
+impl data_acquisition::source::SourceGeometry
+pub fn data_acquisition::source::SourceGeometry::from_source_data(source_data: &serde_json::value::Value) -> core::option::Option<Self>
 impl core::clone::Clone for data_acquisition::source::SourceGeometry
 pub fn data_acquisition::source::SourceGeometry::clone(&self) -> data_acquisition::source::SourceGeometry
 impl core::cmp::PartialEq for data_acquisition::source::SourceGeometry
@@ -2418,7 +2424,9 @@ pub trait data_acquisition::NameEnricher: core::marker::Send + core::marker::Syn
 pub fn data_acquisition::NameEnricher::enrich_batch(&self, entities: &[data_acquisition::source::RawEntity], deadline: std::time::Instant) -> data_acquisition::source::BatchEnrichment
 impl data_acquisition::source::NameEnricher for data_acquisition::regeo::RegeoNamer
 pub fn data_acquisition::regeo::RegeoNamer::enrich_batch(&self, entities: &[data_acquisition::source::RawEntity], deadline: std::time::Instant) -> data_acquisition::source::BatchEnrichment
+pub fn data_acquisition::boundary_disposition(geometry: core::option::Option<&data_acquisition::source::SourceGeometry>, boundary: &geo_types::geometry::multi_polygon::MultiPolygon<f64>) -> data_acquisition::pipeline::BoundaryDisposition
 pub fn data_acquisition::category_text_key(category: shared_domain_types::category::CandidateCategory) -> &'static str
+pub fn data_acquisition::parse_boundary(boundary: &shared_domain_types::boundary::Boundary) -> core::option::Option<geo_types::geometry::multi_polygon::MultiPolygon<f64>>
 pub fn data_acquisition::parse_regeo_name(json: &str) -> core::option::Option<alloc::string::String>
 pub fn data_acquisition::polygon_centroid(geometry: &data_acquisition::source::SourceGeometry) -> core::option::Option<(f64, f64)>
 pub fn data_acquisition::stage_text_key(stage: data_acquisition::progress::CollectionStage) -> &'static str

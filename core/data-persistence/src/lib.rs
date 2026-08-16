@@ -28,6 +28,7 @@
 )]
 #![cfg_attr(not(test), warn(unreachable_pub))]
 
+mod boundary_revalidation;
 mod candidate_projections;
 mod database;
 mod entities;
@@ -41,6 +42,10 @@ mod review_drafts;
 mod trash;
 mod workspace_state;
 
+pub use boundary_revalidation::{
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibilityUpdate, DecisionVoid,
+    RevalidationWriteSummary, ReviewDecisionInvalidation, VoidedReviewDecision,
+};
 pub use candidate_projections::{
     CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateDisplay,
     CandidateEligibility, CandidateNameSource, CandidateProjection, CandidateProjectionsApi,

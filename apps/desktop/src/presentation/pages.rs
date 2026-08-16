@@ -270,6 +270,13 @@ pub struct BoundaryViewState {
     pub confirm_label: String,
     pub reset_label: String,
     pub refresh_label: String,
+    /// 抽屉"删除选中点"按钮文案
+    pub delete_selected_label: String,
+    /// 抽屉"删除选中点"按钮是否可用（有选中顶点时可用）
+    pub delete_selected_enabled: bool,
+    /// 已确认边界被再次编辑（拖拽/增删顶点）后为 true：确认按钮需重新可用，
+    /// 以便把调整后的顶点重新确认并覆盖落库。
+    pub edited_since_confirmed: bool,
     pub status: String,
     pub map_placeholder: String,
     pub is_determined: bool,
@@ -286,6 +293,11 @@ impl BoundaryViewState {
         window.set_workspace_boundary_confirm_label(self.confirm_label.clone().into());
         window.set_workspace_boundary_reset_label(self.reset_label.clone().into());
         window.set_workspace_boundary_refresh_label(self.refresh_label.clone().into());
+        window.set_workspace_boundary_delete_selected_label(
+            self.delete_selected_label.clone().into(),
+        );
+        window.set_workspace_boundary_delete_selected_enabled(self.delete_selected_enabled);
+        window.set_workspace_boundary_edited_since_confirmed(self.edited_since_confirmed);
         window.set_workspace_boundary_status(self.status.clone().into());
         window.set_workspace_boundary_map_placeholder(self.map_placeholder.clone().into());
         window.set_workspace_boundary_is_determined(self.is_determined);
@@ -362,6 +374,8 @@ pub enum WorkspaceRequest {
     BoundaryCanvasClick { x: f32, y: f32 },
     /// 撤销最后一个绘制点。
     BoundaryUndo,
+    /// 删除当前选中的边界顶点（地图编辑态；无选中时按钮禁用）。
+    BoundaryDeleteSelected,
     /// 边界闭合 + 有效性校验 + 保存（B5 状态机与校验）。
     BoundaryConfirm,
     /// 重置边界并清除已保存的方案边界。

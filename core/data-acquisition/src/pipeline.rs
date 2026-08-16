@@ -289,7 +289,8 @@ impl AcquisitionPipeline {
     }
 }
 
-fn boundary_disposition(
+/// 来源几何相对已确认方案边界的互斥结论（D 工单复用：边界变化后本地重算）。
+pub fn boundary_disposition(
     geometry: Option<&SourceGeometry>,
     boundary: &MultiPolygon<f64>,
 ) -> BoundaryDisposition {
@@ -340,7 +341,8 @@ fn boundary_disposition(
     }
 }
 
-fn parse_boundary(boundary: &Boundary) -> Option<MultiPolygon<f64>> {
+/// 解析已确认边界为 geo MultiPolygon；无效/无法解析返回 `None`。
+pub fn parse_boundary(boundary: &Boundary) -> Option<MultiPolygon<f64>> {
     let polygons = match boundary.r#type.as_str() {
         "Polygon" => vec![parse_polygon(&boundary.coordinates)?],
         "MultiPolygon" => boundary

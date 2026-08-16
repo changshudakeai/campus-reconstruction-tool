@@ -86,6 +86,16 @@ pub(crate) struct WorkspaceSessionState {
 pub(super) struct MapDrawState {
     pub(super) point_count: i32,
     pub(super) status: MapDrawStatus,
+    /// T 工单：当前选中的顶点索引（None = 未选中；抽屉"删除选中点"按钮
+    /// 只在选中后可用，几何真相仍在地图 JS 侧）。
+    pub(super) selected_vertex: Option<i32>,
+}
+
+impl MapDrawState {
+    /// 是否有选中的边界顶点（只有编辑态地图才可能有选中）。
+    pub(super) fn has_selected_vertex(&self) -> bool {
+        self.status == MapDrawStatus::Editing && self.selected_vertex.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -374,7 +384,13 @@ impl WorkspaceProductionContext {
                 MapDrawStatus::Drawing => {
                     l10n.t_with_array("boundary.status_drawing", &[&count.to_string()])
                 }
-                MapDrawStatus::Editing => l10n.t("boundary.status_editing"),
+                MapDrawStatus::Editing => {
+                    if session.map_draw.has_selected_vertex() {
+                        l10n.t("boundary.status_vertex_selected")
+                    } else {
+                        l10n.t("boundary.status_editing")
+                    }
+                }
                 MapDrawStatus::Idle => l10n.t("boundary.status_idle"),
             };
             (count, status)
@@ -389,6 +405,9 @@ impl WorkspaceProductionContext {
             };
             (vertices.len() as i32, status)
         };
+        // 已确认边界被再次编辑（地图侧拖拽/增删顶点后 map_draw 离开 Idle）时，
+        // 确认按钮必须重新可用，让用户把调整后的顶点重新确认并覆盖落库。
+        let edited_since_confirmed = is_closed && session.map_draw.status != MapDrawStatus::Idle;
         BoundaryViewState {
             points,
             path_commands,
@@ -398,6 +417,9 @@ impl WorkspaceProductionContext {
             confirm_label: l10n.t("boundary.confirm_button"),
             reset_label: l10n.t("boundary.reset_button"),
             refresh_label: l10n.t("boundary.refresh_button"),
+            delete_selected_label: l10n.t("boundary.delete_selected_button"),
+            delete_selected_enabled: session.map_draw.has_selected_vertex(),
+            edited_since_confirmed,
             status,
             map_placeholder: l10n.t("boundary.map_placeholder"),
             is_determined: is_closed,

@@ -831,6 +831,15 @@ impl ProductionEntries {
             .show(window, &self.center, WorkspaceRequest::BoundaryUndo);
     }
 
+    pub(crate) fn handle_boundary_delete_selected(&mut self, window: &AppWindow) {
+        self.supersede_diagnostic(window);
+        self.workspace.show(
+            window,
+            &self.center,
+            WorkspaceRequest::BoundaryDeleteSelected,
+        );
+    }
+
     pub(crate) fn handle_boundary_confirm(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         self.workspace
@@ -1354,6 +1363,14 @@ impl ProductionEntries {
         window.on_workspace_boundary_undo_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().handle_boundary_undo(&window);
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_boundary_delete_selected_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().handle_boundary_delete_selected(&window);
             }
         });
 

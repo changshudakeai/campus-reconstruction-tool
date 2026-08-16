@@ -65,10 +65,15 @@ const MIGRATIONS: &[Migration] = &[
         description: "工作现场恢复：方案级边界/朝向/步骤 + 上次打开方案 + 未封账评审草稿检查点",
         sql: include_str!("../migrations/009_add_workspace_session_state.sql"),
     },
+    Migration {
+        version: 10,
+        description: "边界变化后本地候选资格重验证：采集边界指纹 + 评审决定作废标注与历史",
+        sql: include_str!("../migrations/010_add_boundary_revalidation.sql"),
+    },
 ];
 
 /// 当前最新 schema 版本号
-pub const LATEST_SCHEMA_VERSION: u32 = 9;
+pub const LATEST_SCHEMA_VERSION: u32 = 10;
 
 /// 把数据库迁移到最新版本（幂等）
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {

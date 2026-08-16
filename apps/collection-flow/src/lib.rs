@@ -18,11 +18,13 @@ mod error;
 mod flow;
 mod input;
 mod operation;
+mod revalidate;
 mod view;
 
 pub use error::{CollectionError, Result};
 pub use flow::{CollectionFlow, CollectionRunLimits};
 pub use operation::CollectionOperation;
+pub use revalidate::BoundaryRevalidationReport;
 pub use view::{
     CollectionFailure, CollectionFailureView, CollectionOutcome, CollectionPageView,
     CollectionReportView, CollectionStatus, CollectionSummary,

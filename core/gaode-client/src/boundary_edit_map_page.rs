@@ -4,6 +4,10 @@
 //! 调研根因见 `docs/research/candidate-data-sources-and-naming.md` §4.2），
 //! JS 只发 `map_ready` 就绪信号并接收 `drawBoundaryGcj(GCJ-02 坐标)` 直接绘制。
 //! 人工调整：PolygonEditor 拖拽顶点 → IPC 回传更新坐标
+//! 顶点编辑增强（边界顶点编辑工单）：点击顶点 → 高亮选中（vertex_selected）；
+//! 选中后相邻两条边中点各出现 "+" 按钮，点击在对应边上插入新顶点并自动选中
+//! 新点；抽屉"删除选中点"经 deleteSelectedVertexFromDrawer 删除选中顶点，
+//! 剩余点数 < 3 时明确拒绝（delete_vertex_rejected）且不破坏边界。
 //! 人工圈画兜底：点击落点模式（沿用 T23 协议）
 //! T25: 同一页面扩展朝向模式 —— 已确认边界半透明显示，点击两点画参考线。
 //!
@@ -17,6 +21,9 @@
 //!
 //! **职责**: B3 高德客户端负责生成 HTML，壳层 WebView 加载渲染 —— 零业务计算
 //! 在壳内（ADR-0017）。
+// ignore-tidy-filelength: 边界编辑地图页单文件承载地图 HTML/JS（顶点编辑增强后
+// 超 1000 行）；拆分需先立地图页拆分工单。失效里程碑：v2.1.0（2026-12-31），
+// 届时把顶点编辑 JS 段拆出后消除。
 
 use crate::error::{Error, Result};
 
@@ -161,8 +168,9 @@ const ORIENTATION_SCRIPT: &str = r#"
     if (existingBoundaryCoords && existingBoundaryCoords.length > 0) {
       drawExistingBoundary(existingBoundaryCoords);
     }
-    map.off('click');
-    map.on('click', handleOrientationClick);
+    // 模式互斥：真实 AMap v2.0 的 off(type) 不带回调不会移除监听，
+    // 统一走 bindExclusiveClick（单一 dispatcher 换 activeClickHandler）。
+    window.bindExclusiveClick(handleOrientationClick);
   };
 
   // T40: Rust 侧"WebView 创建成功"回调调用的可靠激活通道（不依赖
@@ -251,6 +259,9 @@ const ORIENTATION_SCRIPT: &str = r#"
 ///    - `activateOrientationWhenReady`: Rust 侧创建成功回调调用的激活通道
 ///      （T40，不依赖 map_ready；SDK 未就绪时静默等待页面自动激活）
 ///    - `boundary_update`: 编辑后的多边形坐标 `{type:"boundary_update", coords:[lng,lat,...]}`
+///    - `vertex_selected`: 选中顶点 `{type:"vertex_selected", index, count}`
+///    - `vertex_deselected`: 取消选中 `{type:"vertex_deselected"}`
+///    - `delete_vertex_rejected`: 删除被拒绝（点数不足）`{type:"delete_vertex_rejected", reason}`
 ///    - `manual_point`: 人工圈画落点 `"lng,lat"`（含 total 供抽屉显示点数）
 ///    - `manual_cancel`: 撤销最后一点 `{type:"manual_cancel"}`
 ///    - `manual_clear`: 清空重画 `{type:"manual_clear"}`
@@ -368,9 +379,32 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   var manualPoints = [];   // 人工圈画的点序列
   var isEditMode = false;  // true = 编辑模式 (有 OSM 边界), false = 人工圈画模式
   var previewLine = null;  // Manual mode preview line
+  // ── 顶点编辑选中态（边界顶点编辑工单）──────────────────────────
+  var selectedVertexIndex = -1;  // 当前选中顶点索引；-1 = 未选中
+  var vertexHighlight = null;    // 选中顶点的高亮圆标
+  var midInsertMarkers = [];     // 相邻两条边中点的 "+" 按钮
+  var VERTEX_SELECT_PX = 16;     // 点击命中顶点的像素阈值
   var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};  // 校区锚点 (GCJ-02，来自高德 POI)
 
   var statusPanel = document.getElementById('status-panel');
+
+  // 模式互斥统一入口（真实 AMap v2.0 事件语义修复）：
+  // `map.off(type)` 不带回调函数不会移除任何监听（官方 off(type, fn) 按函数
+  // 移除；clearEvents(type) 虽能清空一类，但可能连带清掉 PolygonEditor 内部
+  // 在地图上注册的点击监听，破坏拖拽/加边）。因此采用单一 dispatcher：
+  // 地图上始终只挂 dispatchMapClick 这一个监听，模式切换只换
+  // activeClickHandler，既不残留旧模式监听，也不触碰 PolygonEditor 的监听。
+  var activeClickHandler = null;
+  function dispatchMapClick(e) {{
+    if (activeClickHandler) {{
+      activeClickHandler(e);
+    }}
+  }}
+  window.bindExclusiveClick = function(handler) {{
+    map.off('click', dispatchMapClick);
+    map.on('click', dispatchMapClick);
+    activeClickHandler = handler;
+  }};
 
   function setStatus(text, type) {{
     statusPanel.textContent = text;
@@ -473,7 +507,9 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
       strokeWeight: 3,
       fillOpacity: 0.3,
       fillColor: '#3498db',
-      editMode: editable
+      editMode: editable,
+      // 顶点编辑：多边形本体点击冒泡到地图，供"点击边界标记点选中"命中检测
+      bubble: true
     }});
 
     map.add(polygon);
@@ -482,9 +518,9 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
       polygonEditor = new AMap.PolygonEditor(map, polygon, {{
         template: {{
           dragging: true,
-          circleMarkerStyle: {{ fillColor: '#e74c3c', fillOpacity: 0.6, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, fontSize: '12px', fontColor: '#fff', borderRadius: '50%', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }},
-          vertexMarkerStyle: {{ fillColor: '#e74c3c', fillOpacity: 0.8, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, fontSize: '12px', fontColor: '#fff', borderRadius: '50%', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }},
-          interiorMarkerStyle: {{ fillColor: '#3498db', fillOpacity: 1, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, fontSize: '12px', fontColor: '#fff', borderRadius: '4px', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }}
+          circleMarkerStyle: {{ fillColor: '#e74c3c', fillOpacity: 0.6, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, bubble: true, fontSize: '12px', fontColor: '#fff', borderRadius: '50%', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }},
+          vertexMarkerStyle: {{ fillColor: '#e74c3c', fillOpacity: 0.8, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, bubble: true, fontSize: '12px', fontColor: '#fff', borderRadius: '50%', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }},
+          interiorMarkerStyle: {{ fillColor: '#3498db', fillOpacity: 1, strokeColor: '#fff', strokeWidth: 2, strokeOpacity: 0.9, strokeWeight: 2, cursor: 'pointer', clickable: true, bubble: true, fontSize: '12px', fontColor: '#fff', borderRadius: '4px', fontTextAlign: 'center', fontStrokeColor: '#fff', fontStrokeWidth: 1 }}
         }}
       }});
 
@@ -495,6 +531,11 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
       polygonEditor.on('adjust', function(e) {{ updateFromEditor(); }});
 
       polygonEditor.open();
+
+      // 顶点编辑：编辑态地图点击 → 按像素距离命中顶点选中/点击空白取消选中
+      window.bindExclusiveClick(editClickHandler);
+      selectedVertexIndex = -1;
+      removeVertexOverlays();
 
       setStatus('已加载 OSM 边界 — 拖动顶点可调整 · 经左侧抽屉确认提交', 'success');
     }} else {{
@@ -510,6 +551,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 
   // ========== T24: 编辑回调 ==========
   function updateFromEditor() {{
+    refreshVertexOverlays();
     if (polygon) {{
       var coords = normalizedPath();  // GCJ-02 [lng,lat]×N
       var payload = {{ type: 'boundary_update', coords: coords }};
@@ -519,6 +561,175 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     }}
   }}
 
+  // ========== 顶点编辑：选中 / 高亮 / 相邻边中点 "+" / 删除（边界顶点编辑工单）==========
+
+  // 编辑态地图点击：按像素距离命中最近的顶点 → 选中；否则取消选中
+  function editClickHandler(e) {{
+    if (!isEditMode || !polygon) {{ return; }}
+    var path = normalizedPath();
+    if (path.length < 3) {{ return; }}
+    if (typeof map.lngLatToContainer !== 'function') {{ clearVertexSelection(); return; }}
+    var clickPixel = map.lngLatToContainer(e.lnglat);
+    var best = -1;
+    var bestDistSq = Infinity;
+    for (var i = 0; i < path.length; i++) {{
+      var pixel = map.lngLatToContainer(new AMap.LngLat(path[i][0], path[i][1]));
+      var dx = pixel.x - clickPixel.x;
+      var dy = pixel.y - clickPixel.y;
+      var distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq) {{ bestDistSq = distSq; best = i; }}
+    }}
+    if (best >= 0 && Math.sqrt(bestDistSq) <= VERTEX_SELECT_PX) {{
+      selectVertex(best);
+    }} else {{
+      clearVertexSelection();
+    }}
+  }}
+
+  // 选中顶点：高亮 + 相邻两条边中点各出现 "+" 按钮，并回传 vertex_selected
+  function selectVertex(index) {{
+    selectedVertexIndex = index;
+    refreshVertexOverlays();
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{
+        type: 'vertex_selected',
+        index: index,
+        count: normalizedPath().length
+      }}));
+    }}
+  }}
+
+  // 取消选中：移除高亮与 "+" 按钮，回传 vertex_deselected
+  function clearVertexSelection() {{
+    if (selectedVertexIndex < 0 && vertexHighlight === null && midInsertMarkers.length === 0) {{
+      return;
+    }}
+    selectedVertexIndex = -1;
+    removeVertexOverlays();
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{ type: 'vertex_deselected' }}));
+    }}
+  }}
+
+  function removeVertexOverlays() {{
+    if (vertexHighlight) {{ map.remove(vertexHighlight); vertexHighlight = null; }}
+    midInsertMarkers.forEach(function(marker) {{ map.remove(marker); }});
+    midInsertMarkers = [];
+  }}
+
+  // 按当前选中态重绘高亮与 "+" 按钮（拖拽/增删点后同步跟随）
+  function refreshVertexOverlays() {{
+    removeVertexOverlays();
+    if (!isEditMode || selectedVertexIndex < 0 || !polygon) {{ return; }}
+    var path = normalizedPath();
+    var n = path.length;
+    if (n < 3 || selectedVertexIndex >= n) {{ selectedVertexIndex = -1; return; }}
+    var at = function(i) {{ var p = path[i]; return new AMap.LngLat(p[0], p[1]); }};
+
+    vertexHighlight = new AMap.CircleMarker({{
+      center: at(selectedVertexIndex),
+      radius: 10,
+      strokeColor: '#f39c12',
+      strokeWeight: 3,
+      strokeOpacity: 1,
+      fillColor: '#f1c40f',
+      fillOpacity: 0.95,
+      cursor: 'pointer',
+      zIndex: 200
+    }});
+    map.add(vertexHighlight);
+
+    // 选中点两端相邻的两条边中点各一个 "+" 按钮
+    var prev = (selectedVertexIndex - 1 + n) % n;
+    var next = (selectedVertexIndex + 1) % n;
+    addMidInsertMarker(prev, selectedVertexIndex);
+    addMidInsertMarker(selectedVertexIndex, next);
+  }}
+
+  // 在边 (fromIndex → fromIndex+1) 的中点放置 "+" 按钮，点击插入新顶点
+  function addMidInsertMarker(fromIndex, toIndex) {{
+    var path = normalizedPath();
+    var a = path[fromIndex];
+    var b = path[toIndex];
+    var mid = new AMap.LngLat((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+    var marker = new AMap.TextMarker({{
+      text: '+',
+      position: mid,
+      offset: new AMap.Pixel(-10, -10),
+      style: {{
+        backgroundColor: '#2ecc71',
+        borderColor: '#ffffff',
+        color: '#ffffff',
+        fontSize: '14px',
+        width: '20px',
+        height: '20px',
+        textAlign: 'center',
+        lineHeight: '20px',
+        cursor: 'pointer'
+      }},
+      zIndex: 300
+    }});
+    marker.on('click', function() {{ insertVertexAtEdge(fromIndex); }});
+    map.add(marker);
+    midInsertMarkers.push(marker);
+  }}
+
+  // 在 (fromIndex → fromIndex+1) 边的中点插入新顶点；新点自动选中，
+  // 可继续选中/拖动/插入（拖动由 PolygonEditor dragnode 事件接管）。
+  function insertVertexAtEdge(fromIndex) {{
+    if (selectedVertexIndex < 0) {{ return; }}
+    var path = normalizedPath();
+    var n = path.length;
+    if (n < 3 || fromIndex < 0 || fromIndex >= n) {{ return; }}
+    var toIndex = (fromIndex + 1) % n;
+    var a = path[fromIndex];
+    var b = path[toIndex];
+    var mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    var newPath = [];
+    for (var i = 0; i <= fromIndex; i++) {{ newPath.push(path[i]); }}
+    newPath.push(mid);
+    for (var j = fromIndex + 1; j < n; j++) {{ newPath.push(path[j]); }}
+    setPolygonPath(newPath);
+    selectVertex(fromIndex + 1);  // 新点可用、可继续选中/拖动/插入
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{ type: 'boundary_update', coords: newPath }}));
+    }}
+  }}
+
+  // 程序化替换多边形路径：关闭编辑器 → setPath → 重开 → 重绘选中叠加层
+  function setPolygonPath(coords) {{
+    var lngLats = coords.map(function(c) {{ return new AMap.LngLat(c[0], c[1]); }});
+    if (polygonEditor) {{ polygonEditor.close(); }}
+    polygon.setPath(lngLats);
+    if (polygonEditor) {{ polygonEditor.open(); }}
+    refreshVertexOverlays();
+  }}
+
+  // 抽屉"删除选中点"：有选中点时删除；剩余点数 < 3 时明确拒绝，不破坏边界
+  window.deleteSelectedVertexFromDrawer = function() {{
+    if (!isEditMode || selectedVertexIndex < 0 || !polygon) {{ return; }}
+    var path = normalizedPath();
+    if (path.length <= 3) {{
+      if (window.ipc && window.ipc.postMessage) {{
+        window.ipc.postMessage(JSON.stringify({{
+          type: 'delete_vertex_rejected',
+          reason: 'too_few_points'
+        }}));
+      }}
+      return;
+    }}
+    var index = selectedVertexIndex;
+    var newPath = [];
+    for (var i = 0; i < path.length; i++) {{ if (i !== index) {{ newPath.push(path[i]); }} }}
+    selectedVertexIndex = -1;
+    setPolygonPath(newPath);
+    removeVertexOverlays();
+    if (window.ipc && window.ipc.postMessage) {{
+      window.ipc.postMessage(JSON.stringify({{ type: 'vertex_deselected' }}));
+      window.ipc.postMessage(JSON.stringify({{ type: 'boundary_update', coords: newPath }}));
+    }}
+  }};
+
   // ========== T24: 人工圈画兜底 ==========
   function enableManualMode() {{
     if (polygon) {{ map.remove(polygon); polygon = null; }}
@@ -526,12 +737,13 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 
     isEditMode = false;
     manualPoints = [];
+    selectedVertexIndex = -1;
+    removeVertexOverlays();
 
     setStatus('人工圈画模式：点击地图添加控制点（操作在左侧抽屉）', 'error');
 
-    // 移除旧 click handler 防止累积
-    map.off('click');
-    map.on('click', function(e) {{ addManualPoint(e.lnglat); }});
+    // 模式互斥：只保留人工圈画模式的点击 handler（dispatcher 会换掉编辑态监听）
+    window.bindExclusiveClick(handleMapClick);
   }}
 
   // T24/T34: 地图点击落点入口（人工圈画模式；供页面自身点击处理与
@@ -587,6 +799,10 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     if (polygonEditor) {{ polygonEditor.close(); polygonEditor = null; }}
     if (previewLine) {{ map.remove(previewLine); previewLine = null; }}
     isEditMode = false;
+    selectedVertexIndex = -1;
+    removeVertexOverlays();
+    // 清空重画后进入人工圈画模式：点击落点（模式互斥绑定，防止编辑态残留）
+    window.bindExclusiveClick(handleMapClick);
     setStatus('已清空，点击地图重新绘制（操作在左侧抽屉）', 'error');
     if (window.ipc && window.ipc.postMessage) {{
       window.ipc.postMessage(JSON.stringify({{ type: 'manual_clear' }}));
@@ -814,6 +1030,113 @@ mod tests {
         assert!(!html.contains("showEditControls"));
         assert!(!html.contains("showManualControls"));
         assert!(!html.contains("showAreaControls"));
+    }
+
+    #[test]
+    fn html_exposes_vertex_editing_selection_and_delete_bridge() {
+        // 顶点编辑：选中/取消选中/删除拒绝 IPC 与抽屉"删除选中点"桥接命令。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(
+            html.contains("deleteSelectedVertexFromDrawer"),
+            "抽屉删除选中点按钮需要 JS 桥接命令"
+        );
+        assert!(html.contains("type: 'vertex_selected'"));
+        assert!(html.contains("type: 'vertex_deselected'"));
+        assert!(html.contains("type: 'delete_vertex_rejected'"));
+        assert!(html.contains("selectedVertexIndex"));
+    }
+
+    #[test]
+    fn html_selected_vertex_shows_adjacent_midpoint_plus_buttons_only_when_selected() {
+        // 选中后相邻两条边中点才出现 "+" 按钮；未选中时无叠加层。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(
+            html.contains("addMidInsertMarker(prev, selectedVertexIndex)")
+                && html.contains("addMidInsertMarker(selectedVertexIndex, next)"),
+            "选中点两端相邻的两条边必须各有一个中点 '+' 按钮"
+        );
+        assert!(
+            html.contains("if (!isEditMode || selectedVertexIndex < 0 || !polygon) { return; }")
+                || html.contains("refreshVertexOverlays"),
+            "未选中/非编辑态不得绘制 '+' 按钮"
+        );
+        assert!(html.contains("marker.on('click'"));
+        assert!(html.contains("insertVertexAtEdge"));
+        assert!(
+            html.contains("new AMap.TextMarker"),
+            "中点 '+' 按钮使用 TextMarker 叠加"
+        );
+    }
+
+    #[test]
+    fn html_delete_vertex_guards_three_points_and_posts_rejected_payload() {
+        // 删除前剩余点数 <= 3 时拒绝并回传 delete_vertex_rejected，不修改路径。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("path.length <= 3"));
+        assert!(html.contains("delete_vertex_rejected"));
+        assert!(html.contains("reason: 'too_few_points'"));
+    }
+
+    #[test]
+    fn html_edit_mode_click_selects_nearest_vertex_within_threshold() {
+        // 编辑态地图点击按像素距离命中顶点选中；点击空白取消选中。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("editClickHandler"));
+        assert!(html.contains("lngLatToContainer"));
+        assert!(html.contains("VERTEX_SELECT_PX"));
+        assert!(html.contains("selectVertex(best)"));
+        assert!(html.contains("clearVertexSelection()"));
+    }
+
+    #[test]
+    fn html_mode_click_binding_uses_single_dispatcher_without_bare_off_or_clearevents() {
+        // 严重 bug 回归：OSM 边界抓取失败进入人工圈画后，若重新获取成功进入
+        // 编辑态，旧模式点击监听不得残留（否则点击地图会同时触发 manual_point）。
+        // 真实 AMap v2.0 的 off(type) 不带回调不生效，clearEvents 又可能清掉
+        // PolygonEditor 内部监听，因此必须走 bindExclusiveClick + dispatcher。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(
+            html.contains("window.bindExclusiveClick = function(handler)"),
+            "模式互斥必须统一经 bindExclusiveClick 绑定"
+        );
+        assert!(
+            html.contains("function dispatchMapClick(e)"),
+            "必须存在单一 dispatcher 转发当前模式点击"
+        );
+        assert!(
+            html.contains("map.off('click', dispatchMapClick)"),
+            "解除绑定必须按具体函数移除（AMap v2.0 off(type) 无参不生效）"
+        );
+        assert!(
+            !html.contains("map.off('click');") && !html.contains("map.off('click')"),
+            "不得再出现无回调的裸 map.off('click')"
+        );
+        assert!(
+            !html.contains("map.clearEvents("),
+            "不得用 clearEvents('click') 清空一类监听（会波及 PolygonEditor 内部监听）"
+        );
+        assert!(
+            html.contains("window.bindExclusiveClick(handleMapClick)")
+                && html.contains("window.bindExclusiveClick(editClickHandler)"),
+            "人工圈画与编辑态都必须经 bindExclusiveClick 切换"
+        );
+    }
+
+    #[test]
+    fn html_editor_markers_and_polygon_bubble_clicks_to_map() {
+        // 顶点/内部标记与多边形本体点击冒泡到地图，供选中命中检测。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("bubble: true"));
+        assert!(
+            html.matches("bubble: true").count() >= 4,
+            "多边形 + 三种编辑器标记样式都应冒泡点击"
+        );
     }
 
     #[test]

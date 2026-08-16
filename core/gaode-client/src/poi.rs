@@ -267,6 +267,26 @@ mod tests {
     }
 
     #[test]
+    fn vertex_editing_ipc_messages_parse_correctly() {
+        let selected =
+            parse_ipc_message(r#"{"type":"vertex_selected","index":2,"count":5}"#).unwrap();
+        assert_eq!(selected, IpcMessage::VertexSelected { index: 2, count: 5 });
+        assert_eq!(
+            parse_ipc_message(r#"{"type":"vertex_deselected"}"#).unwrap(),
+            IpcMessage::VertexDeselected
+        );
+        let rejected =
+            parse_ipc_message(r#"{"type":"delete_vertex_rejected","reason":"too_few_points"}"#)
+                .unwrap();
+        assert_eq!(
+            rejected,
+            IpcMessage::DeleteVertexRejected {
+                reason: "too_few_points".to_owned()
+            }
+        );
+    }
+
+    #[test]
     fn invalid_object_and_array_locations_are_skipped() {
         // 对象/数组格式同样执行范围校验与缺失校验，坏数据不进候选。
         let json = response_with(
@@ -307,6 +327,12 @@ pub enum IpcMessage {
     OsmElements { elements: Vec<OsmElement> },
     /// 编辑后的多边形坐标 (boundary_update: GCJ-02 坐标数组)
     BoundaryUpdate { coords: Vec<[f64; 2]> },
+    /// 用户选中一个边界顶点 (vertex_selected: index + 当前点数)
+    VertexSelected { index: u32, count: u32 },
+    /// 用户取消选中 (vertex_deselected)
+    VertexDeselected,
+    /// 删除选中顶点被拒绝（剩余点数不足）(delete_vertex_rejected)
+    DeleteVertexRejected { reason: String },
     /// 人工圈画落点 (manual_point: WGS-84 单个点；total 供抽屉 ① 显示点数)
     ManualPoint { lon: f64, lat: f64, total: u32 },
     /// 撤销上一个点 (manual_cancel)
@@ -371,6 +397,9 @@ pub struct OsmMember {
 /// - JSON 含 `type="error"` → [`IpcMessage::Error`]
 /// - JSON 含 `type="osm_elements"` → [`IpcMessage::OsmElements`]
 /// - JSON 含 `type="boundary_update"` → [`IpcMessage::BoundaryUpdate`]
+/// - JSON 含 `type="vertex_selected"` → [`IpcMessage::VertexSelected`]
+/// - JSON 含 `type="vertex_deselected"` → [`IpcMessage::VertexDeselected`]
+/// - JSON 含 `type="delete_vertex_rejected"` → [`IpcMessage::DeleteVertexRejected`]
 /// - JSON 含 `type="manual_point"` → [`IpcMessage::ManualPoint`]
 /// - JSON 含 `type="manual_cancel"` → [`IpcMessage::ManualCancel`]
 /// - JSON 含 `type="manual_clear"` → [`IpcMessage::ManualClear`]
@@ -459,6 +488,38 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                         }
                         return Ok(IpcMessage::ConfirmBoundary {
                             coords: payload.coords,
+                        });
+                    }
+                }
+                "vertex_selected" => {
+                    #[derive(Deserialize)]
+                    struct VertexSelectedPayload {
+                        #[serde(default)]
+                        index: Option<u32>,
+                        #[serde(default)]
+                        count: Option<u32>,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<VertexSelectedPayload>(msg) {
+                        if let Some(index) = payload.index {
+                            return Ok(IpcMessage::VertexSelected {
+                                index,
+                                count: payload.count.unwrap_or(0),
+                            });
+                        }
+                    }
+                }
+                "vertex_deselected" => {
+                    return Ok(IpcMessage::VertexDeselected);
+                }
+                "delete_vertex_rejected" => {
+                    #[derive(Deserialize)]
+                    struct DeleteVertexRejectedPayload {
+                        #[serde(default)]
+                        reason: String,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<DeleteVertexRejectedPayload>(msg) {
+                        return Ok(IpcMessage::DeleteVertexRejected {
+                            reason: payload.reason,
                         });
                     }
                 }

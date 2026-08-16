@@ -17,8 +17,9 @@ use data_acquisition::{
     SourceGeometry,
 };
 use data_persistence::{
-    CandidateBatchSummary, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservationsApi,
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateBatchSummary, CandidateDisplay,
+    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
+    CandidateValidation, Database, RawObservationsApi,
 };
 use geometry_validator::{
     CandidateGeometry, GeometryShape, GeometryValidation, GeometryValidator, ValidationDisposition,
@@ -30,6 +31,7 @@ use shared_domain_types::{CandidateCategory, PlanId};
 use crate::error::{CollectionError, Result};
 use crate::input::CollectionInputStore;
 use crate::operation::CollectionOperation;
+use crate::revalidate::{run_boundary_revalidation, BoundaryRevalidationReport};
 use crate::view::{
     CollectionFailure, CollectionFailureView, CollectionOutcome, CollectionPageView,
     CollectionReportView, CollectionStatus, CollectionSummary, PlanCollectionState,
@@ -118,6 +120,18 @@ impl CollectionFlow {
     /// 重置边界：用户重置圈画后采集输入同步失效。
     pub fn reset_boundary(&self) {
         self.input.reset_boundary();
+    }
+
+    /// 边界确认后触发本地资格重验证（D 工单）：确认边界与"上次采集时
+    /// 使用的边界"指纹不同时，用已存原始观测几何本地重算候选资格并
+    /// 单事务落库；相同（或无候选）时不触发任何计算。全程不联网。
+    pub fn revalidate_boundary_if_changed(
+        &self,
+        plan_id: &PlanId,
+        boundary: &shared_domain_types::Boundary,
+    ) -> Result<BoundaryRevalidationReport> {
+        let mut db = self.db.lock().expect("collection database lock");
+        run_boundary_revalidation(&mut db, &self.validator, plan_id, boundary)
     }
 
     /// 提交一次完整"开始采集"意图；输入在 Start 返回前冻结。
@@ -503,6 +517,12 @@ impl CollectionWorker {
             .map_err(CollectionError::Persistence)?;
         db.publish_candidate_batch(&candidate_batch.id)
             .map_err(CollectionError::Persistence)?;
+        // D 工单：把本次采集使用的边界指纹绑定到方案（重验证触发依据）。
+        db.save_plan_collection_boundary(
+            &self.request.plan_id.to_string(),
+            &boundary_fingerprint(&self.request.boundary),
+        )
+        .map_err(CollectionError::Persistence)?;
         let batch_summary = db
             .candidate_batch_summary(&candidate_batch.id)
             .map_err(CollectionError::Persistence)?;

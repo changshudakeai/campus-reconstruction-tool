@@ -18,19 +18,38 @@ use data_acquisition::{
     DataSource, EnrichedEntities, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
 };
 use data_persistence::{
-    CandidateNameSource, CandidateProjectionsApi, Database, RawObservationsApi,
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibility, CandidateNameSource,
+    CandidateProjectionsApi, Database, RawObservationsApi, ReviewDecisionsApi,
 };
 use data_transformers::TagMap;
 use export_flow::{BoundaryExportFlow, StdExportFileSystem};
 use global_settings::SettingsManager;
 use localization::{Language, Localization};
 use project_management::PlanContextView;
-use shared_domain_types::{Boundary, PlanId};
+use shared_domain_types::{Boundary, CandidateCategory, PlanId, ReviewState};
 
 /// 罐头数据源：固定返回预置对象（离线测试替身，ADR-0013 可插拔缝）。
 #[derive(Debug, Clone)]
 struct FakeSource {
     entities: Vec<RawEntity>,
+}
+
+/// 计数数据源：委托内部数据源并统计 `fetch_raw_entities` 调用次数
+/// （D 工单验收：重验证期间网络请求数必须为 0）。
+struct CountingSource {
+    inner: Arc<dyn DataSource + Send + Sync>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl DataSource for CountingSource {
+    fn source_tag(&self) -> &str {
+        self.inner.source_tag()
+    }
+
+    fn fetch_raw_entities(&self, boundary: &Boundary) -> data_acquisition::Result<Vec<RawEntity>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.fetch_raw_entities(boundary)
+    }
 }
 
 fn putuo_boundary_gcj02() -> Boundary {
@@ -777,6 +796,182 @@ fn busy_start_is_rejected_until_finish() {
     flow.set_plan(&plan_id);
     let _second_ok = flow.start().expect("完成后可再次开始");
     blocking.release();
+}
+
+#[test]
+fn boundary_change_revalidates_candidates_locally_without_network() {
+    // D 工单验收：已有采集结果的方案上改边界并确认 → 网络请求数不增加、
+    // 边界外候选隔离且旧评审决定作废标注、新进入候选回到待定、
+    // 边界未变不重验证、无效边界报错不破坏状态。
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let source = Arc::new(CountingSource {
+        inner: Arc::new(FakeSource {
+            entities: vec![
+                building_point("A01", 116.4003, 39.9003),
+                building_point("B01", 116.4012, 39.9012),
+            ],
+        }),
+        calls: Arc::clone(&calls),
+    });
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+
+    // 首次采集（唯一一次联网）：A 在边界内 → Reviewable；B 在边界外 → Isolated。
+    let mut operation = flow.start().expect("Start");
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(5)).expect("采集终态");
+    assert!(matches!(outcome, CollectionOutcome::Succeeded(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "只有一次初始采集联网");
+
+    let plan_key = plan_id.to_string();
+    let database = db.lock().expect("database lock");
+    assert_eq!(
+        database
+            .load_plan_collection_boundary(&plan_key)
+            .expect("读取采集边界指纹"),
+        Some(boundary_fingerprint(&boundary())),
+        "采集发布必须绑定本次使用的边界指纹"
+    );
+    let reviewable = database
+        .list_reviewable_candidate_projections(&plan_key)
+        .expect("Reviewable API");
+    assert_eq!(reviewable.len(), 1, "原边界下只有 A 可评审");
+    let a_id = reviewable[0].candidate_id.clone();
+    assert_eq!(reviewable[0].display.title, "教学楼A01");
+    drop(database);
+
+    // 给 A 写入一条已封账"保留"决定（作废标注的验证对象）。
+    {
+        let mut database = db.lock().expect("database lock");
+        database
+            .batch_update_review_decisions(&[data_persistence::ReviewDecision::new(
+                plan_key.clone(),
+                CandidateCategory::Building,
+                a_id.clone(),
+                ReviewState::Keep,
+            )])
+            .expect("写入保留决定");
+    }
+
+    // 换边界：新框覆盖 B、排除 A。
+    let new_boundary = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.4008, 39.9008],
+            [116.4018, 39.9008],
+            [116.4018, 39.9018],
+            [116.4008, 39.9018],
+            [116.4008, 39.9008]
+        ]]),
+    };
+    let report = flow
+        .revalidate_boundary_if_changed(&plan_id, &new_boundary)
+        .expect("重验证");
+    assert!(report.boundary_changed, "指纹不同必须触发重验证");
+    assert_eq!(report.examined, 2);
+    assert_eq!(report.newly_isolated, vec![a_id.clone()], "A 跑到边界外");
+    assert_eq!(report.newly_reviewable.len(), 1, "B 新进入边界回到可评审");
+    assert_eq!(report.decisions_voided, 1, "A 的旧保留决定必须作废标注");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "重验证不得联网");
+
+    let database = db.lock().expect("database lock");
+    let all = database
+        .list_current_candidate_projections(&plan_key)
+        .expect("全量投影");
+    let a = all
+        .iter()
+        .find(|projection| projection.candidate_id == a_id)
+        .expect("A 投影仍在（不物理删除）");
+    assert_eq!(a.eligibility, CandidateEligibility::Isolated);
+    assert_eq!(
+        a.isolation_reason.as_deref(),
+        Some("outside_confirmed_plan_boundary")
+    );
+    let b = all
+        .iter()
+        .find(|projection| projection.display.title == "教学楼B01")
+        .expect("B 投影");
+    assert_eq!(b.eligibility, CandidateEligibility::Reviewable);
+    assert_eq!(
+        database
+            .list_reviewable_candidate_projections(&plan_key)
+            .expect("Reviewable API")
+            .len(),
+        1,
+        "评审台只读 B2：B 进入、A 消失"
+    );
+    let voided = database
+        .list_voided_review_decisions(&plan_key)
+        .expect("作废标注");
+    assert_eq!(voided.len(), 1);
+    assert_eq!(voided[0].candidate_id, a_id);
+    assert_eq!(voided[0].review_state, ReviewState::Keep, "原决定状态可查");
+    let history = database
+        .list_review_decision_invalidations(&plan_key)
+        .expect("作废历史");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].previous_state, ReviewState::Keep);
+    assert!(
+        history[0].reason.contains("outside"),
+        "作废原因按新边界结论标注：{}",
+        history[0].reason
+    );
+    let (pending, keep, remove) = database.count_review_states(&plan_key).expect("三态计数");
+    assert_eq!((pending, keep, remove), (0, 0, 0), "作废决定不参与计数");
+    assert_eq!(
+        database
+            .load_plan_collection_boundary(&plan_key)
+            .expect("指纹"),
+        Some(boundary_fingerprint(&new_boundary)),
+        "重验证后记录最新边界指纹"
+    );
+    drop(database);
+
+    // 边界未变：第二次确认不触发重验证（无多余计算/写库）。
+    let again = flow
+        .revalidate_boundary_if_changed(&plan_id, &new_boundary)
+        .expect("同边界重验证");
+    assert!(!again.boundary_changed, "边界未变不得触发重验证");
+    assert_eq!(again.examined, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let database = db.lock().expect("database lock");
+    assert_eq!(
+        database
+            .list_review_decision_invalidations(&plan_key)
+            .expect("作废历史")
+            .len(),
+        1,
+        "未变化不得产生新的作废记录"
+    );
+    drop(database);
+
+    // 无效边界：明确报错，不破坏已确认边界与评审状态。
+    let invalid = Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[[116.4000, 39.9000], [116.4010, 39.9000]]]),
+    };
+    assert!(matches!(
+        flow.revalidate_boundary_if_changed(&plan_id, &invalid),
+        Err(CollectionError::InvalidBoundary)
+    ));
+    let database = db.lock().expect("database lock");
+    assert_eq!(
+        database
+            .load_plan_collection_boundary(&plan_key)
+            .expect("指纹不变"),
+        Some(boundary_fingerprint(&new_boundary)),
+        "无效边界不得改写指纹/状态"
+    );
+    assert_eq!(
+        database
+            .list_reviewable_candidate_projections(&plan_key)
+            .expect("Reviewable API")
+            .len(),
+        1,
+        "无效边界不得改变候选资格"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "全程网络请求数保持 1");
 }
 
 #[test]

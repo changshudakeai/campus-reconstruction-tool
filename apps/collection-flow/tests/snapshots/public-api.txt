@@ -5,6 +5,7 @@ pub collection_flow::CollectionError::Audit(coverage_audit::error::Error)
 pub collection_flow::CollectionError::BackgroundTask
 pub collection_flow::CollectionError::Busy
 pub collection_flow::CollectionError::Expired
+pub collection_flow::CollectionError::InvalidBoundary
 pub collection_flow::CollectionError::MissingInput
 pub collection_flow::CollectionError::Persistence(data_persistence::error::Error)
 impl collection_flow::CollectionError
@@ -151,6 +152,61 @@ impl<T> either::into_either::IntoEither for collection_flow::CollectionStatus
 impl<T> typenum::type_operators::Same for collection_flow::CollectionStatus
 pub type collection_flow::CollectionStatus::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::CollectionStatus where T: ?core::marker::Sized
+pub struct collection_flow::BoundaryRevalidationReport
+pub collection_flow::BoundaryRevalidationReport::boundary_changed: bool
+pub collection_flow::BoundaryRevalidationReport::boundary_fingerprint: alloc::string::String
+pub collection_flow::BoundaryRevalidationReport::decisions_reset_to_pending: usize
+pub collection_flow::BoundaryRevalidationReport::decisions_voided: usize
+pub collection_flow::BoundaryRevalidationReport::examined: usize
+pub collection_flow::BoundaryRevalidationReport::newly_isolated: alloc::vec::Vec<alloc::string::String>
+pub collection_flow::BoundaryRevalidationReport::newly_reviewable: alloc::vec::Vec<alloc::string::String>
+pub collection_flow::BoundaryRevalidationReport::unchanged: usize
+impl core::clone::Clone for collection_flow::BoundaryRevalidationReport
+pub fn collection_flow::BoundaryRevalidationReport::clone(&self) -> collection_flow::BoundaryRevalidationReport
+impl core::cmp::Eq for collection_flow::BoundaryRevalidationReport
+impl core::cmp::PartialEq for collection_flow::BoundaryRevalidationReport
+pub fn collection_flow::BoundaryRevalidationReport::eq(&self, other: &collection_flow::BoundaryRevalidationReport) -> bool
+impl core::fmt::Debug for collection_flow::BoundaryRevalidationReport
+pub fn collection_flow::BoundaryRevalidationReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for collection_flow::BoundaryRevalidationReport
+impl core::marker::Freeze for collection_flow::BoundaryRevalidationReport
+impl core::marker::Send for collection_flow::BoundaryRevalidationReport
+impl core::marker::Sync for collection_flow::BoundaryRevalidationReport
+impl core::marker::Unpin for collection_flow::BoundaryRevalidationReport
+impl core::panic::unwind_safe::RefUnwindSafe for collection_flow::BoundaryRevalidationReport
+impl core::panic::unwind_safe::UnwindSafe for collection_flow::BoundaryRevalidationReport
+impl<G1, G2> geo::algorithm::within::Within<G2> for collection_flow::BoundaryRevalidationReport where G2: geo::algorithm::contains::Contains<G1>
+pub fn collection_flow::BoundaryRevalidationReport::is_within(&self, b: &G2) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for collection_flow::BoundaryRevalidationReport where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn collection_flow::BoundaryRevalidationReport::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for collection_flow::BoundaryRevalidationReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for collection_flow::BoundaryRevalidationReport where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for collection_flow::BoundaryRevalidationReport where U: core::convert::From<T>
+pub fn collection_flow::BoundaryRevalidationReport::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for collection_flow::BoundaryRevalidationReport where U: core::convert::Into<T>
+pub type collection_flow::BoundaryRevalidationReport::Error = core::convert::Infallible
+pub fn collection_flow::BoundaryRevalidationReport::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for collection_flow::BoundaryRevalidationReport where U: core::convert::TryFrom<T>
+pub type collection_flow::BoundaryRevalidationReport::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn collection_flow::BoundaryRevalidationReport::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for collection_flow::BoundaryRevalidationReport where T: core::clone::Clone
+pub type collection_flow::BoundaryRevalidationReport::Owned = T
+pub fn collection_flow::BoundaryRevalidationReport::clone_into(&self, target: &mut T)
+pub fn collection_flow::BoundaryRevalidationReport::to_owned(&self) -> T
+impl<T> core::any::Any for collection_flow::BoundaryRevalidationReport where T: 'static + ?core::marker::Sized
+pub fn collection_flow::BoundaryRevalidationReport::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for collection_flow::BoundaryRevalidationReport where T: ?core::marker::Sized
+pub fn collection_flow::BoundaryRevalidationReport::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for collection_flow::BoundaryRevalidationReport where T: ?core::marker::Sized
+pub fn collection_flow::BoundaryRevalidationReport::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for collection_flow::BoundaryRevalidationReport where T: core::clone::Clone
+pub unsafe fn collection_flow::BoundaryRevalidationReport::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for collection_flow::BoundaryRevalidationReport
+pub fn collection_flow::BoundaryRevalidationReport::from(t: T) -> T
+impl<T> either::into_either::IntoEither for collection_flow::BoundaryRevalidationReport
+impl<T> typenum::type_operators::Same for collection_flow::BoundaryRevalidationReport
+pub type collection_flow::BoundaryRevalidationReport::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for collection_flow::BoundaryRevalidationReport where T: ?core::marker::Sized
 pub struct collection_flow::CollectionFailure
 pub collection_flow::CollectionFailure::diagnostic: alloc::string::String
 pub collection_flow::CollectionFailure::notification: core::option::Option<notification_center::message::Notification>
@@ -259,6 +315,7 @@ pub fn collection_flow::CollectionFlow::new_with_limits(db: alloc::sync::Arc<std
 pub fn collection_flow::CollectionFlow::page_view(&self) -> collection_flow::CollectionPageView
 pub fn collection_flow::CollectionFlow::report_view(&self) -> core::option::Option<collection_flow::CollectionReportView>
 pub fn collection_flow::CollectionFlow::reset_boundary(&self)
+pub fn collection_flow::CollectionFlow::revalidate_boundary_if_changed(&self, plan_id: &shared_domain_types::id::PlanId, boundary: &shared_domain_types::boundary::Boundary) -> collection_flow::Result<collection_flow::BoundaryRevalidationReport>
 pub fn collection_flow::CollectionFlow::set_plan(&self, plan_id: &shared_domain_types::id::PlanId)
 pub fn collection_flow::CollectionFlow::start(&self) -> collection_flow::Result<collection_flow::CollectionOperation>
 impl core::clone::Clone for collection_flow::CollectionFlow

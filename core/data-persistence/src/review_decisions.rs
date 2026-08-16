@@ -24,7 +24,7 @@ pub trait ReviewDecisionsApi {
     /// 列出方案下的全部评审终态（按稳定候选 ID 排序）。
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>>;
 
-    /// 统计方案下各三态的条数，返回 (待定, 保留, 剔除)
+    /// 统计方案下各三态的条数（不含已作废标注的决定），返回 (待定, 保留, 剔除)
     fn count_review_states(&self, plan_id: &str) -> Result<(usize, usize, usize)>;
 }
 
@@ -60,7 +60,7 @@ impl ReviewDecisionsApi for Database {
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>> {
         let mut stmt = self.conn.prepare(
             "SELECT plan_id, category, candidate_id, review_state, reviewer_id, updated_at
-             FROM review_decisions WHERE plan_id = ?1
+             FROM review_decisions WHERE plan_id = ?1 AND voided = 0
              ORDER BY candidate_id",
         )?;
         let mut rows = stmt.query(params![plan_id])?;
@@ -82,7 +82,7 @@ impl ReviewDecisionsApi for Database {
     fn count_review_states(&self, plan_id: &str) -> Result<(usize, usize, usize)> {
         let mut stmt = self.conn.prepare(
             "SELECT review_state, COUNT(*) FROM review_decisions
-             WHERE plan_id = ?1 GROUP BY review_state",
+             WHERE plan_id = ?1 AND voided = 0 GROUP BY review_state",
         )?;
         let mut rows = stmt.query(params![plan_id])?;
         let (mut pending, mut keep, mut remove) = (0usize, 0usize, 0usize);

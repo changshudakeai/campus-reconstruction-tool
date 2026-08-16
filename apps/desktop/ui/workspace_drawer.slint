@@ -27,8 +27,14 @@ export component WorkspaceDrawer inherits Rectangle {
     in property <string> boundary-undo-label;
     in property <string> boundary-reset-label;
     in property <string> boundary-refresh-label;
+    in property <string> boundary-delete-selected-label;
+    in property <bool> boundary-delete-selected-enabled;
+    // 已确认边界被再次编辑后为 true：确认按钮重新可用，可把调整后的
+    // 顶点重新确认并覆盖落库。
+    in property <bool> boundary-edited-since-confirmed;
     in property <string> boundary-confirm-label;
     callback boundary-undo-clicked();
+    callback boundary-delete-selected-clicked();
     callback boundary-reset-clicked();
     callback boundary-refresh-clicked();
     callback boundary-confirm-clicked();
@@ -127,9 +133,15 @@ export component WorkspaceDrawer inherits Rectangle {
                     clicked => { root.boundary-refresh-clicked(); }
                 }
                 Button {
+                    text: root.boundary-delete-selected-label;
+                    enabled: root.boundary-delete-selected-enabled;
+                    clicked => { root.boundary-delete-selected-clicked(); }
+                }
+                Button {
                     text: root.boundary-confirm-label;
                     primary: true;
-                    enabled: root.boundary-point-count >= 3 && !root.boundary-is-determined;
+                    enabled: root.boundary-point-count >= 3
+                        && (!root.boundary-is-determined || root.boundary-edited-since-confirmed);
                     clicked => { root.boundary-confirm-clicked(); }
                 }
             }
