@@ -1,4 +1,5 @@
-# T05 - A: Deny 红项处理（wry 传递依赖 MPL-2.0 豁免）
+# T05 - A: Deny 红项处理（wry 传递依赖 MPL-2.0 豁免）
+
 
 **Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
 
@@ -93,9 +94,9 @@ All dependencies from known registries.
 ### Step 3: 测试现有构建
 ```bash
 cargo build --workspace --release
-# 确保没有编译错误（MPL-2.0 许可不影响编译）
+# 确保没有编译错误（MPL-2.0 许可不影响编译）
 
-**Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
+
 ```
 
 ### Step 4: 提交代码

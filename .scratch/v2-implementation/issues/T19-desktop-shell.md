@@ -10,7 +10,7 @@
 
 **Blocked by:** T01/T02/T03（三层锁 + 共享类型 + 文本外置先行完成）、T04-T18（功能模块全部就绪）
 
-**Status**: phase1-complete（CI 修复后重新核实，见 apps/desktop/STATUS.md；原 Phase1 提交 f2b7b47 从未过编译，已重写为可运行最小壳）
+**Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
 **Phase2-pending**: [待办任务清单](#待办接线债务-t19b)
 
 - [x] desktop-shell crate 立项并定义根 .slint 入口文件 ✅ Phase1

@@ -1,4 +1,5 @@
-# T05: Campus Search & Anchor Persistence（校区搜索与锚点持久化）
+# T05: Campus Search & Anchor Persistence（校区搜索与锚点持久化）
+
 
 **Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
 
@@ -89,15 +90,15 @@
 
 ### Step 1: Schema 变更
 ```bash
-# Create migration script
+# Create migration script
 
-**Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
+
 cd New-branch-v2/core/data-persistence/migrations
 touch 003_add_anchor_columns_to_campuses.sql
 
-# Edit the file
+# Edit the file
 
-**Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
+
 cat > 003_add_anchor_columns_to_campuses.sql << 'EOF'
 -- MCRebuild V2 数据库迁移脚本 v3 — 校区锚点列
 --

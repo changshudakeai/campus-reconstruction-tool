@@ -1,4 +1,5 @@
-# T26 — injector.rs 拆分（架构债，另立）
+# T26 — injector.rs 拆分（架构债，另立）
+
 
 **Status:** historical（2026-08-17 v2.0.0 发布收口；不具独立开工权）
 
@@ -15,7 +16,6 @@ injector.rs 在 T19B-5B 期间超过 1000 行 tidy 红线（当时用豁免注�
 **Blocked by：** 建议排在 T25 之后（高德批次还会持续改动 injector.rs，
 提前拆分会反复冲突）。
 
-**Status：** backlog
 
 ## 验收标准（排期时细化）
 
