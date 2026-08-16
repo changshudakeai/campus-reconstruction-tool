@@ -834,31 +834,35 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     window.invoke_settings_toolbar_button_clicked();
     assert_eq!(window.get_active_screen(), 3, "失败后其他页面仍可继续使用");
 
-    // 设置页返回必须经校区与方案入口刷新，且不残留上一页面状态
+    // 设置页返回 = 返回进入设置页时的上一页（此处为通知中心），且不残留状态
     window.invoke_settings_back_clicked();
     assert_eq!(
         window.get_active_screen(),
-        1,
-        "设置页返回必须回到校区选择页"
+        5,
+        "设置页返回必须回到进入设置页时的上一页（通知中心）"
     );
-    assert_eq!(
-        window.get_campus_select_model().row_count(),
-        1,
-        "返回校区页必须从校区与方案入口刷新完整列表"
+    assert!(
+        (0..window.get_notice_board_model().row_count()).any(|index| {
+            window
+                .get_notice_board_model()
+                .row_data(index)
+                .is_some_and(|notice| notice.body.as_str() == "原功能模块失败内容")
+        }),
+        "返回通知中心必须刷新完整公告列表（含刚发布的失败记录）"
     );
     assert!(
         !window.get_confirm_dialog_visible(),
-        "返回校区页必须清除确认窗"
+        "返回通知中心必须清除确认窗"
     );
     assert_eq!(
         window.get_operation_state(),
         OperationPresentationState::Ready,
-        "返回校区页不得残留上一页面操作状态"
+        "返回通知中心不得残留上一页面操作状态"
     );
     assert_eq!(
         window.get_diagnostic_operation_state(),
         OperationPresentationState::Ready,
-        "返回校区页不得残留诊断处理中状态"
+        "返回通知中心不得残留诊断处理中状态"
     );
 
     let panicking_action =

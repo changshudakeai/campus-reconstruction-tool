@@ -37,6 +37,7 @@ mod workspace_adapter;
 mod workspace_boundary;
 mod workspace_boundary_fetch;
 mod workspace_leave;
+mod workspace_resume;
 
 use campus_plan_trash::{CampusPlanProductionAdapter, CampusPlanRequest, TrashProductionAdapter};
 use campus_search::CampusSearchController;
@@ -104,6 +105,8 @@ enum PendingConfirmation {
     /// 离开边界页的确认（S1-05：确认后按目标页导航）
     LeaveWorkspace {
         target: Screen,
+        /// 是否为历史栈返回：确认后弹出栈顶而不是把当前页压栈。
+        from_back: bool,
     },
     /// 修改朝向的重算确认（S1-05：确认后应用待定角度）
     OrientationRecalc,
@@ -152,6 +155,9 @@ pub(crate) struct ProductionEntries {
     campus_search_poll_timer: slint::Timer,
     /// T36：采集失败弹窗“重试”按钮文案（B6 文本键解析后注入）
     collection_retry_label: String,
+    /// 页面导航历史栈（“从哪儿进、从哪儿出”）：栈顶即当前页的返回目标。
+    /// 呈现层导航状态，不持有业务数据（ADR-0037）。
+    back_stack: Vec<Screen>,
 }
 
 impl ProductionEntries {
@@ -239,6 +245,7 @@ impl ProductionEntries {
             campus_search_ipc,
             campus_search_poll_timer: slint::Timer::default(),
             collection_retry_label,
+            back_stack: Vec::new(),
         }
     }
 
@@ -253,6 +260,8 @@ impl ProductionEntries {
     pub(crate) fn show_startup(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
+        // 启动着陆是“从零进入”：历史栈清空，任何着陆页都不显示返回按钮。
+        self.clear_back_stack(window);
         // 工作现场恢复（A.1）：启动时若存在"上次打开方案"且方案仍在，
         // 直接恢复该方案的工作区（含步骤/边界/朝向）；方案已删除或数据
         // 读取失败时清除标记并回落正常启动流程，绝不伪造恢复。
@@ -286,6 +295,9 @@ impl ProductionEntries {
     pub(crate) fn complete_first_run(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
         crate::map_webview::hide();
+        // 首启向导完成后进入校区选择属于“从零进入”：清空历史栈，
+        // 校区选择页无返回按钮（验收 C.9/C.13）。
+        self.clear_back_stack(window);
         let request = StartupRequest::CompleteFirstRun {
             language: window.get_wizard_language().to_string(),
             minecraft_version: window.get_wizard_version().to_string(),
@@ -377,9 +389,12 @@ impl ProductionEntries {
             }
             PendingConfirmation::GoToSettings => {
                 crate::map_webview::hide();
+                // 从工作区边界页经确认进入设置：记录来源以便返回。
+                let before = window.get_active_screen();
                 self.show_settings(window);
+                self.record_forward_navigation(window, before);
             }
-            PendingConfirmation::LeaveWorkspace { target } => {
+            PendingConfirmation::LeaveWorkspace { target, from_back } => {
                 // 与直接离开（NavigationDecision::Show）等价：离开工作区会使当前
                 // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                 self.export_poll_timer.stop();
@@ -389,7 +404,12 @@ impl ProductionEntries {
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.collection
                     .show(window, &self.center, CollectionRequest::Abandon);
-                self.navigate_to(window, target);
+                if from_back {
+                    self.pop_and_navigate(window);
+                } else {
+                    // 确认离开仍停留在工作区：正向跳转需把工作区压栈。
+                    self.navigate_forward(window, target);
+                }
             }
             PendingConfirmation::OrientationRecalc => {
                 self.workspace
@@ -404,11 +424,13 @@ impl ProductionEntries {
                     .show(window, &self.center, ReviewRequest::ConfirmSuggestionApply);
             }
             PendingConfirmation::ConfirmCampusSelection { poi_id } => {
+                let before = window.get_active_screen();
                 self.campus_plan.show(
                     window,
                     &self.center,
                     CampusPlanRequest::ConfirmSelectCampus { poi_id },
                 );
+                self.record_forward_navigation(window, before);
             }
             PendingConfirmation::RetryCampusSearch { query } => {
                 window.set_campus_search_text(query.into());
@@ -761,6 +783,10 @@ impl ProductionEntries {
 
     pub(crate) fn show_notifications(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
+        // 通知中心页不承载地图：离开工作区/校区搜索页时必须隐藏地图 WebView，
+        // 否则原生子窗口会盖住通知中心页面（“点不动”根因，与 show_trash/
+        // show_settings/show_plan_list 同一纪律）。
+        crate::map_webview::hide();
         self.notification
             .show(window, &self.center, NotificationRequest::Open);
     }
@@ -780,6 +806,13 @@ impl ProductionEntries {
         // 工作现场恢复：OpenPlan 内部已导航到上次停留步骤（A.1）；步骤 ③④⑤
         // 需要各自入口装载（评审进台/采集状态/导出页），与步骤点击路径一致。
         self.open_restored_step_entry(window);
+    }
+
+    /// 方案列表卡片单击打开工作区：成功切屏时把方案列表压栈（返回=方案列表）。
+    pub(crate) fn open_workspace_plan_from_plan_list(&mut self, window: &AppWindow, plan_id: &str) {
+        let before = window.get_active_screen();
+        self.open_workspace_plan(window, plan_id);
+        self.record_forward_navigation(window, before);
     }
 
     /// 恢复步骤落在 ③采集/④评审/⑤导出时，由对应入口呈现页面。
@@ -1014,10 +1047,34 @@ impl ProductionEntries {
         );
     }
 
-    /// 离开工作区前先经功能入口判定；需要确认时挂起目标页等待确认。
+    /// 工具栏/页面正向跳转离开工作区前先经功能入口判定；需要确认时挂起
+    /// 目标页等待确认。确认或允许后把当前页压栈（从哪儿进、从哪儿出）。
     pub(crate) fn leave_workspace_then(&mut self, window: &AppWindow, target: Screen) {
-        if window.get_active_screen() != 4 {
-            self.navigate_to(window, target);
+        self.leave_workspace(window, target, false);
+    }
+
+    /// 历史栈返回（统一返回按钮）：工作区需先经离开安全判定；确认或允许
+    /// 后弹出栈顶返回“进入当前页时的上一页”。
+    pub(crate) fn go_back(&mut self, window: &AppWindow) {
+        if self.back_stack.is_empty() {
+            return;
+        }
+        let target = *self.back_stack.last().expect("栈顶存在");
+        if window.get_active_screen() == 4 {
+            self.leave_workspace(window, target, true);
+        } else {
+            self.pop_and_navigate(window);
+        }
+    }
+
+    fn leave_workspace(&mut self, window: &AppWindow, target: Screen, from_back: bool) {
+        let before = window.get_active_screen();
+        if before != 4 {
+            if from_back {
+                self.pop_and_navigate(window);
+            } else {
+                self.navigate_forward(window, target);
+            }
             return;
         }
         let presentation =
@@ -1032,17 +1089,72 @@ impl ProductionEntries {
                     .show(window, &self.center, ExportPresentationRequest::Abandon);
                 self.collection
                     .show(window, &self.center, CollectionRequest::Abandon);
-                self.navigate_to(window, screen);
+                if from_back {
+                    // 历史栈返回：弹出栈顶并导航（含目标页地图隐藏与渲染）。
+                    self.pop_and_navigate(window);
+                } else {
+                    // Leave 呈现已把屏幕切到目标页：仍经目标入口渲染
+                    // （通知中心/回收站/设置页负责隐藏地图），再记录来源页。
+                    self.navigate_to(window, screen);
+                    self.record_forward_navigation(window, before);
+                }
             }
             // 必须停留：功能入口已呈现当前页，不导航
             NavigationDecision::Blocked => {}
             NavigationDecision::Stay => {
                 if presentation.operation() == &OperationState::NeedsConfirmation {
                     self.pending_confirmation =
-                        Some(PendingConfirmation::LeaveWorkspace { target });
+                        Some(PendingConfirmation::LeaveWorkspace { target, from_back });
                 }
             }
         }
+    }
+
+    /// 正向导航：把当前页压栈后跳转目标页（目标屏可被功能入口改写）。
+    fn navigate_forward(&mut self, window: &AppWindow, target: Screen) {
+        let before = window.get_active_screen();
+        self.navigate_to(window, target);
+        self.record_forward_navigation(window, before);
+    }
+
+    /// 屏幕实际切换后记录“进入目标页时的来源页”，压入历史栈。
+    fn record_forward_navigation(&mut self, window: &AppWindow, before: i32) {
+        let after = window.get_active_screen();
+        if before == after {
+            return;
+        }
+        let (Some(from), Some(to)) = (Screen::from_index(before), Screen::from_index(after)) else {
+            return;
+        };
+        if Self::stackable(from) && Self::stackable(to) && from != to {
+            self.back_stack.push(from);
+        }
+        self.refresh_toolbar_back(window);
+    }
+
+    /// 弹出栈顶并导航到“进入当前页时的上一页”；工作区经 [`WorkspaceRequest::Resume`]
+    /// 复用内存会话（同一方案/步骤/未保存边界点），步骤 ③④⑤ 由对应入口装载。
+    fn pop_and_navigate(&mut self, window: &AppWindow) {
+        let Some(target) = self.back_stack.pop() else {
+            return;
+        };
+        self.navigate_to(window, target);
+        self.refresh_toolbar_back(window);
+    }
+
+    /// 启动着陆/首启完成等“从零进入”路径：清空历史栈，不显示返回按钮。
+    fn clear_back_stack(&mut self, window: &AppWindow) {
+        self.back_stack.clear();
+        self.refresh_toolbar_back(window);
+    }
+
+    fn refresh_toolbar_back(&self, window: &AppWindow) {
+        window.set_toolbar_back_visible(!self.back_stack.is_empty());
+    }
+
+    /// 可进入历史栈的页面（首启向导不参与；校区选择作为入口页参与）。
+    fn stackable(screen: Screen) -> bool {
+        !matches!(screen, Screen::FirstRunSetup)
     }
 
     fn navigate_to(&mut self, window: &AppWindow, target: Screen) {
@@ -1052,7 +1164,14 @@ impl ProductionEntries {
             Screen::Trash => self.show_trash(window),
             Screen::Notifications => self.show_notifications(window),
             Screen::PlanList => self.show_plan_list(window),
-            _ => {}
+            Screen::Workspace => {
+                // 历史栈返回工作区：复用当前内存会话原样重绘（Resume），
+                // 步骤 ③④⑤ 的页面/地图由对应入口装载。
+                self.workspace
+                    .show(window, &self.center, WorkspaceRequest::Resume);
+                self.open_restored_step_entry(window);
+            }
+            Screen::FirstRunSetup => {}
         }
     }
 
@@ -1154,7 +1273,8 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_settings_back_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().show_campus_select(&window);
+                // 旧“设置返回”并入统一返回按钮：按历史栈返回。
+                shared.borrow_mut().go_back(&window);
             }
         });
 
@@ -1220,7 +1340,9 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_campus_select_settings_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().show_settings(&window);
+                shared
+                    .borrow_mut()
+                    .navigate_forward(&window, Screen::Settings);
             }
         });
 
@@ -1267,7 +1389,8 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_plan_list_back_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().show_campus_select(&window);
+                // 旧“返回校区选择”并入统一返回按钮：按历史栈返回。
+                shared.borrow_mut().go_back(&window);
             }
         });
 
@@ -1324,7 +1447,9 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_plan_list_card_clicked(move |plan_id| {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().open_workspace_plan(&window, &plan_id);
+                shared
+                    .borrow_mut()
+                    .open_workspace_plan_from_plan_list(&window, &plan_id);
             }
         });
 
@@ -1342,9 +1467,8 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_workspace_back_to_plan_list_clicked(move || {
             if let Some(window) = weak.upgrade() {
-                shared
-                    .borrow_mut()
-                    .leave_workspace_then(&window, Screen::PlanList);
+                // 旧“返回方案列表”语义并入统一返回按钮：按历史栈返回。
+                shared.borrow_mut().go_back(&window);
             }
         });
 
@@ -1696,6 +1820,14 @@ impl ProductionEntries {
         }));
 
         // ── 右上角工具栏（S1-05：离开工作区先经功能入口判定）──────────────
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_toolbar_back_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                shared.borrow_mut().go_back(&window);
+            }
+        });
+
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
         window.on_notice_toolbar_button_clicked(move || {

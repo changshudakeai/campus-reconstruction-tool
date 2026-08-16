@@ -1,0 +1,161 @@
+// 顶部工具栏（本工单重构）：
+//   左 = 返回按钮（历史栈非空时显示）+ 上下文标题（当前页名；工作区为 校区/方案名）
+//   右 = 高频操作：通知（保留未读角标）、设置（图标按钮常驻）
+//        低频操作：回收站、切换校区 → "…" 溢出菜单（菜单项带文字标签，
+//        对齐 Windows CommandBar SecondaryCommands 与 Material 顶部栏约定）
+// 五步步骤条保持现状（ADR-0027/research 建议 6），本组件不承载业务逻辑。
+
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component AppToolbar inherits Rectangle {
+    // ── 文案属性（全部由 Rust 侧 l10n 注入，ADR-0005）──
+    in property <string> title;
+    in property <bool> back-visible;
+    in property <string> back-label;
+    in property <int> notice-unread-count;
+    in property <bool> notice-visible;
+    in property <string> notice-label;
+    in property <bool> settings-visible;
+    in property <string> settings-label;
+    in property <bool> trash-visible;
+    in property <string> trash-label;
+    in property <bool> switch-campus-visible;
+    in property <string> switch-campus-label;
+    // 溢出菜单开合（in-out：契约测试可直接置位断言；轻点别处自动关闭）
+    in-out property <bool> overflow-open;
+
+    callback back-clicked();
+    callback notice-clicked();
+    callback settings-clicked();
+    callback trash-clicked();
+    callback switch-campus-clicked();
+
+    // 宽度由实例化方按父级宽度填充（main.slint）。
+    height: 56px;
+    background: Theme.surface;
+
+    HorizontalLayout {
+        spacing: 8px;
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+
+        // 左：返回按钮（历史栈为空时不显示，验收 C.13）
+        if root.back-visible: back-btn := Button {
+            text: root.back-label;
+            width: 72px;
+            height: 32px;
+            clicked => {
+                root.back-clicked();
+            }
+        }
+
+        // 左：上下文标题（当前页名；工作区 = 校区/方案名）
+        Text {
+            text: root.title;
+            font-size: 16px;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-alignment: left;
+            overflow: elide;
+        }
+
+        Rectangle {
+            // 弹性间隔：标题与右侧操作区之间
+        }
+
+        // 右：通知（图标常驻 + 未读角标，ADR-0021）
+        if root.notice-visible: notice-cell := Rectangle {
+            width: 40px;
+            height: 32px;
+
+            notice-btn := Button {
+                text: "📢";
+                width: 100%;
+                height: 100%;
+                clicked => { root.notice-clicked(); }
+            }
+
+            if root.notice-unread-count > 0: Rectangle {
+                x: parent.width - 16px;
+                y: -6px;
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: Theme.error;
+
+                Text {
+                    text: root.notice-unread-count;
+                    color: Theme.text-inverse;
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 右：设置（图标常驻）
+        if root.settings-visible: settings-btn := Button {
+            text: "⚙️";
+            width: 40px;
+            height: 32px;
+            clicked => { root.settings-clicked(); }
+        }
+
+        // 右："…" 溢出菜单（回收站 / 切换校区，带文字标签）
+        overflow-btn := Button {
+            text: "···";
+            width: 40px;
+            height: 32px;
+            clicked => { root.overflow-open = !root.overflow-open; }
+        }
+
+    }
+
+    // 溢出菜单（对齐 CommandBar SecondaryCommands：菜单项带文字标签）。
+    // 覆盖式面板位于工具栏下方右缘；选择菜单项或点击工具栏其它区域即关闭。
+    if root.overflow-open: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+
+        // 捕获菜单面板之外的工具栏区域点击（轻点关闭）
+        TouchArea {
+            clicked => { root.overflow-open = false; }
+        }
+
+        Rectangle {
+            x: parent.width - 192px;
+            y: 48px;
+            width: 176px;
+            background: Theme.surface;
+            border-radius: 4px;
+            border-color: Theme.separator;
+            border-width: 1px;
+
+            menu-layout := VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+
+                if root.trash-visible: Button {
+                    text: root.trash-label;
+                    clicked => {
+                        root.overflow-open = false;
+                        root.trash-clicked();
+                    }
+                }
+
+                if root.switch-campus-visible: Button {
+                    text: root.switch-campus-label;
+                    clicked => {
+                        root.overflow-open = false;
+                        root.switch-campus-clicked();
+                    }
+                }
+            }
+        }
+    }
+}

@@ -27,7 +27,8 @@ pub struct ToolbarPageState {
 
 impl ToolbarPageState {
     fn render(&self, window: &AppWindow) {
-        window.set_toolbar_title(self.title.clone().into());
+        // 标题已改由 main.slint 按当前屏计算（方案列表/校区选择/设置/通知中心/
+        // 回收站/工作区=校区/方案名），不再由页面状态注入。
         window.set_notice_toolbar_button_visible(self.notice_visible);
         window.set_notice_toolbar_label(self.notice_label.clone().into());
         window.set_switch_campus_toolbar_button_visible(self.switch_campus_visible);
@@ -366,6 +367,9 @@ impl OrientationViewState {
 pub enum WorkspaceRequest {
     /// 从方案列表打开方案工作区（新方案首次打开即第①步，ADR-0027 第 6 轮）。
     OpenPlan { plan_id: String },
+    /// 历史栈返回工作区：复用当前内存会话原样重绘（同一方案/步骤/未保存
+    /// 边界点），不重新打开方案；地图按当前步骤重建。
+    Resume,
     /// 点击步骤（或“下一步”）：功能入口返回允许进入 / 条件不足 / 需要确认。
     Navigate { step: i32 },
     /// 离开工作区：S1 只提交目标；功能入口判断可以离开、需要确认或必须停留。

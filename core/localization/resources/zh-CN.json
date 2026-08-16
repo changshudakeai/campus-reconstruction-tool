@@ -408,10 +408,13 @@
     "block_not_in_version": "用料表中查不到目标版本的方块，已终止导出"
   },
   "messages": {
-    "notification_center": "公告栏",
+    "notification_center": "通知中心",
     "source_tag": "来源：{source}",
     "copy": "复制",
     "retention_notice": "保留最近 200 条或 30 天，先到为准"
+  },
+  "toolbar": {
+    "back": "← 返回"
   },
   "time": {
     "just_now": "刚刚",
@@ -435,7 +438,7 @@
     "step_pending_notice": "（待 Phase 2 Step B/C 实现）"
   },
   "notice": {
-    "page_title": "公告栏",
+    "page_title": "通知中心",
     "empty_list": "暂无公告",
     "date_today": "今天",
     "date_yesterday": "昨天",
