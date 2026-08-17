@@ -35,7 +35,7 @@ V2 是对 v1.x 的彻底重写，核心目标是：**轻便、高效、好维护
 
 全部主线 M1–M5 与 A–H 工单已完成并验收；`main` 已推送并打 `v2.0.0` tag。
 产品真相见 [`docs/product-baseline.md`](docs/product-baseline.md)；架构决策见
-`docs/adr/`（0001–0044）；施工与发布状态见
+`docs/adr/`（0001–0045）；施工与发布状态见
 `.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`；项目总结与
 经验教训见 [`project_summary.md`](project_summary.md)。
 
@@ -141,8 +141,14 @@ cargo run -p desktop-shell --bin campus-tool-dev
 
 ## 验证与质量门禁
 
-Windows 本地通过自动缓存治理入口按顺序运行；它会隔离各 worktree 的 target，
-并自动回收旧缓存，详见
+Windows 本地验证按“开发循环定向验证 → 工单按风险扩圈 → PR/版本一次完整兜底”
+分级执行；不得在每个小改动后机械重复全套。`cargo xtask timings` 只在依赖图、
+crate 拓扑、构建配置或明确的编译性能风险变化时本地运行，版本候选再统一运行。
+详细触发矩阵见 [`AGENTS.md`](AGENTS.md) 和
+[`docs/developer-guide/enforcement.md`](docs/developer-guide/enforcement.md)。
+
+需要完整收口时，通过自动缓存治理入口按顺序运行；它会隔离各 worktree 的
+target 并自动回收旧缓存，详见
 [`docs/developer-guide/cargo-cache-discipline.md`](docs/developer-guide/cargo-cache-discipline.md)：
 
 ```powershell
@@ -228,3 +234,7 @@ GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask
 | [ADR-0039](docs/adr/0039-non-shell-application-flow-modules.md) | 跨功能完整操作使用非 S1 应用流程模块 |
 | [ADR-0040](docs/adr/0040-review-candidate-projection-and-eligibility.md) | 原始观测与评审候选分层，以候选资格控制评审和导出 |
 | [ADR-0041](docs/adr/0041-boundary-only-export-and-default-north.md) | 方案边界是唯一导出前置，未设置朝向时默认地图正北 |
+| [ADR-0042](docs/adr/0042-export-flow-boundary-only-application-flow.md) | 边界直出由独立应用流程完整负责 |
+| [ADR-0043](docs/adr/0043-enhanced-export-application-flow.md) | 增强导出由独立应用流程完整负责 |
+| [ADR-0044](docs/adr/0044-global-navigation-and-top-toolbar.md) | 全局返回历史栈与顶部工具栏布局 |
+| [ADR-0045](docs/adr/0045-one-continuous-map-session.md) | 一个方案只使用一段连续地图会话 |

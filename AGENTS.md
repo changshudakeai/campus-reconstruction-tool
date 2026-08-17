@@ -39,14 +39,50 @@
 2. **配置集中**（ADR-0009/0011）：标签映射表、类目筛选规则集中定义，禁止散落硬编码。
 3. **禁止抢跑**：未经 ADR 确认的功能不得实施；基于猜测的代码宁缺毋滥。
 
-## 本地验证流程（提交前必跑）
+## 本地验证流程（按改动风险分级）
 
 Windows 本地所有 Cargo 命令使用 `scripts/cargo-managed.ps1`，由它隔离各
 worktree 的 target，并在总缓存达到 24 GiB 时自动回收到 16 GiB。30 GiB 是
 容量预算，不是人为报错门禁。完整规则见
 `docs/developer-guide/cargo-cache-discipline.md`。
 
-### 全套门禁命令（按顺序执行）
+### 三层验证纪律
+
+1. **开发循环（默认）**：只跑能直接证明当前改动的最小测试目标；Rust 改动再跑
+   受影响 crate 的 Clippy，Rust 格式改动通过 cargo-managed 包装脚本跑
+   `fmt --all --check`。测试失败后
+   必须继续在这一层修复，禁止反复跑全量门禁碰运气。
+2. **工单收口（按风险扩圈）**：同 crate 私有重构跑该 crate 全部测试；跨 crate
+   流程、公共接口、正式数据/schema、共享领域类型、构建脚本或架构规则变化，才
+   升级到对应的 workspace/xtask/依赖门禁。
+3. **PR、合并与版本收口（完整兜底）**：最后一次代码改动后运行一次全套门禁。
+   每项证据绑定 `HEAD + 该门禁受检范围的 tracked/untracked diff fingerprint`；完整
+   门禁才绑定整个 diff。范围未变时不得重复运行；后续改动只使受影响的证据失效，
+   先重跑受影响项，最终收口时再补一次全套。
+
+纯 Markdown/说明文档改动默认只跑 `git diff --check` 并人工核对链接与事实；若
+改的是门禁、CI、Cargo、ADR/产品基线等治理文件，则追加该文件直接控制的专项
+检查。不得因为“准备提交”自动把纯文档改动升级为本地全套 Cargo 门禁。
+
+### 专项门禁触发条件
+
+| 门禁 | 本地必须运行的改动 | 可不运行的典型改动 |
+|------|--------------------|--------------------|
+| 定向测试 / crate 测试 | 相关行为、状态、错误路径或 crate 内部实现 | 纯文档 |
+| workspace tests | 跨 crate 流程、共享类型、公共 API、schema/正式数据、测试基础设施；PR/版本收口 | 单 crate 私有机械重构的开发循环 |
+| fmt | Rust 源码改动 | 纯 Markdown/JSON/YAML |
+| Clippy | Rust 源码；开发循环优先 `-p <crate> --all-targets`，收口再 workspace | 纯文档 |
+| machete | `Cargo.toml` 依赖增删、feature/成员变化；完整收口 | 不涉及依赖声明的源码/文档改动 |
+| deny | `Cargo.toml`、`Cargo.lock`、依赖来源/许可证策略变化；完整收口 | 不涉及依赖图的私有重构 |
+| `xtask tidy` | 文件规模豁免、模块文档、源码布局或 tidy 规则变化 | 普通函数内部改动 |
+| `xtask arch` | crate 成员、依赖边、白名单、公共 API 快照规则或架构执法变化 | 同 crate 私有文件搬分 |
+| `xtask timings` | crate 拓扑、依赖/feature、`Cargo.toml`/`Cargo.lock`、`build.rs`、宏/泛型生成、编译配置变化，或明确怀疑编译回归；版本候选 | 纯文档、文案、测试断言、小函数整理、同 crate 文件搬分 |
+
+每张工单必须写明“定向验证”“升级门禁触发项”和“最终收口证据”。Agent 报告门禁
+时必须分别列出实际命令与结果，不得用“全绿”代替证据，也不得把未触发的门禁写成
+已运行。
+
+### 全套门禁命令（仅完整收口，按顺序执行）
 
 ```powershell
 # 1. 依赖分析（第一道门，检测未使用依赖）
@@ -69,7 +105,7 @@ worktree 的 target，并在总缓存达到 24 GiB 时自动回收到 16 GiB。3
 .\scripts\cargo-managed.ps1 -- xtask timings     # 编译时间预算报告
 ```
 
-### 验证流程说明
+### 全套门禁说明
 
 | 步骤 | 命令 | 作用 | 失败后果 |
 |------|------|------|----------|
@@ -91,6 +127,10 @@ worktree 的 target，并在总缓存达到 24 GiB 时自动回收到 16 GiB。3
 完整 CI 流程见 `.github/workflows/ci.yml`，包含 7 个并行 job：
 - `rustfmt` / `clippy` / `test` / `xtask` / `timings` / `machete` / `dependencies`
 - 聚合 job `conclusion` 作为唯一的 required status check（分支保护规则）
+
+CI 当前仍在每次 PR 更新、merge queue 与 `main` push 上运行完整兜底；本地分级
+验证的目的，是避免 Agent 在一个工单的每个微小编辑后重复执行同一套全量门禁，
+不是用定向测试替代合并前的最终证据。
 
 **注意**：PowerShell 中执行多条命令需用分号 `;` 分隔，不可使用 `&&`。
 

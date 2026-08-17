@@ -12,16 +12,61 @@
 | CI 层 | `xtask`（tidy + 架构测试 + 编译时间预算）、`deny.toml`、cargo-machete、public-api 快照、`.github/workflows/ci.yml` | CI 红灯，进不了主干 |
 | 流程层 | 分支保护 ruleset（required check = `conclusion`）、`.github/CODEOWNERS`、豁免留痕纪律 | 无守门人批准无法合并 |
 
-## 本地怎么跑（提交前自查）
+## 本地怎么跑（按风险分级）
+
+本地验证不是“每次保存后跑全套”。每项验证证据绑定
+`HEAD + 该门禁受检范围的 tracked/untracked diff fingerprint`（包含该范围内的暂存区、
+工作区及未跟踪文件内容）；完整门禁才绑定整个 diff。受检范围未变且已有全绿结果时
+不得重复；无关文档或其他 crate 的变化不作废定向证据。代码继续变化后，先只重跑受
+影响项，PR/合并或版本收口时再在最后一次代码改动后跑一套完整门禁。
+
+### 1. 开发循环：最小反馈环
+
+- 纯文档：`git diff --check` + 人工核对链接、命令和事实。
+- 单 crate 私有实现：具体回归测试或
+  `.\scripts\cargo-managed.ps1 -- test -p <crate>`，再运行
+  `.\scripts\cargo-managed.ps1 -- clippy -p <crate> --all-targets -- -D warnings`；
+  Rust 改动补 `.\scripts\cargo-managed.ps1 -- fmt --all --check`。
+- 桌面交互：只跑受影响的 `s1_*` 测试目标与其直接业务 crate 测试；真实
+  WebView/DPI/联网行为仍需对应人工验收，workspace 绿灯不能替代。
+
+失败后继续收紧到最小复现并修复，不得通过重复运行 workspace/timings 消耗时间。
+
+### 2. 工单收口：按改动升级
+
+| 改动 | 收口验证 |
+|------|----------|
+| 同 crate 私有文件搬分、函数整理 | 该 crate 全部测试 + 该 crate Clippy + fmt；若触碰行数豁免再跑 `xtask tidy` |
+| 跨 crate 流程、共享类型、公共 API、schema/正式数据 | 受影响定向测试 + workspace tests；公共 API 快照必须显形 |
+| Cargo 依赖/feature/workspace 成员 | workspace tests + Clippy + machete + deny + `xtask arch` |
+| tidy/arch/CI/治理规则 | 对应 xtask 单测与子命令；必要时 workspace tests |
+| PR、合并、版本候选 | 最后一次代码改动后完整门禁一次 |
+
+### 3. timings 的独立触发规则
+
+`.\scripts\cargo-managed.ps1 -- xtask timings` 会构建除 xtask 外的整个
+workspace `--all-targets`，因此不是
+功能正确性回归，也不是普通文件拆分的日常反馈。仅在以下情况本地运行：
+
+- crate 新增/删除/合并，或 workspace 成员、依赖边、feature 改变；
+- `Cargo.toml`、`Cargo.lock`、`build.rs`、编译 profile、宏/泛型代码生成发生变化；
+- 定向构建已显示异常重编译/编译耗时回归；
+- 发布候选或专门的编译性能验收。
+
+纯文档、UI 文案、测试断言、小函数整理、同 crate 内文件搬分不触发 timings。
+单编译单元超过 120 秒仍按 ADR-0017 发告警；构建或报告生成失败属于工具执行失败，
+必须如实报告，但不得把未超预算误写成“性能门禁失败”。
+
+### 完整收口命令参考
 
 ```powershell
-cargo fmt --all              # 格式（CI 用 --check 阻断）
-cargo clippy --workspace --all-targets   # 本地 warn 档；CI 加 -D warnings 提为 deny 档
-cargo test --workspace       # 含执法测试：tidy 全量扫描 + 架构断言
-cargo xtask tidy             # 单独跑规模红线/模块文档/半成品禁令
-cargo xtask arch             # 单独跑架构测试（违规信息带"哪条边为什么不行"）
-cargo xtask timings          # 编译时间预算（>2 分钟的编译单元发告警）
-cargo xtask dev-shortcut     # 构建并更新桌面"校园复刻工具 - 开发版"（ADR-0014）
+.\scripts\cargo-managed.ps1 -- fmt --all              # 格式（CI 用 --check 阻断）
+.\scripts\cargo-managed.ps1 -- clippy --workspace --all-targets   # 本地 warn 档；CI 加 -D warnings 提为 deny 档
+.\scripts\cargo-managed.ps1 -- test --workspace       # 含执法测试：tidy 全量扫描 + 架构断言
+.\scripts\cargo-managed.ps1 -- xtask tidy             # 单独跑规模红线/模块文档/半成品禁令
+.\scripts\cargo-managed.ps1 -- xtask arch             # 单独跑架构测试（违规信息带"哪条边为什么不行"）
+.\scripts\cargo-managed.ps1 -- xtask timings          # 编译时间预算（>2 分钟的编译单元发告警）
+.\scripts\cargo-managed.ps1 -- xtask dev-shortcut     # 构建并更新桌面"校园复刻工具 - 开发版"（ADR-0014）
 ```
 
 ## 模块健康检查（取代 crate 文件数硬上限）
@@ -31,7 +76,8 @@ crate 的 `src/` 文件数量不设硬上限。文件多不等于职责散乱，
 1. **职责内聚**：改动能用该 crate 的一句职责完整解释；无关变化拆到所属模块。
 2. **公共 API 大小**：任何 public-api 快照变化必须在 PR 中说明新增公开面的使用者和必要性；内部实现默认私有。
 3. **依赖扇出**：`cargo metadata` 中新增直接边必须命中白名单；横向边还需记录为什么应用流程或能力端口不足。
-4. **编译时间**：运行 `cargo xtask timings`；单编译单元超过 2 分钟发出告警并检查重依赖、泛型膨胀或职责过宽。
+4. **编译时间**：只有命中上文第 3 节的编译成本触发项时才运行 timings；公共 API
+   变化本身不自动触发。单编译单元超过 2 分钟时检查重依赖、泛型膨胀或职责过宽。
 5. **单文件规模**：1000 行继续作为带理由豁免的警戒线，但不得为凑行数破坏内聚性。
 
 内聚性没有可靠的纯计数阈值，因此由上述可执行信号和代码评审共同判断，不再用“最多十个源文件”替代设计判断。
@@ -88,7 +134,8 @@ fn public_api() {
         .build()
         .unwrap();
     // 快照不一致 = 测试失败；确认变更合理后用
-    // `UPDATE_SNAPSHOTS=yes cargo test` 更新快照并把 diff 提交评审。
+    // PowerShell 设置 UPDATE_SNAPSHOTS=yes 后，通过 cargo-managed 包装脚本运行测试，
+    // 更新快照并把 diff 提交评审。
     api.assert_eq_or_update("tests/snapshots/public-api.txt");
 }
 ```
