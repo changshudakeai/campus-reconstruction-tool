@@ -1,10 +1,10 @@
 ---
-# export-console Public API Snapshot
+# export-console Public API Review Inventory
 #
-# 本文件记录 F9 导出控制台的公开 API 结构
-# 任何增删都会在此文件中体现，PR diff 可见
+# 本文件是 F9 导出控制台公开 API 的人工评审清单，不是 rustdoc 自动生成的完备快照。
+# 关键构造契约由 tests/public_api.rs 直接编译调用；本清单用于评审接口意图与 diff。
 #
-# 最后更新: 2026-07-26 (T07 实施)
+# 最后更新: 2026-08-17 (T42 导出请求接口收束)
 
 ## Text Keys (pub mod text_keys)
 
@@ -21,11 +21,14 @@ CANCEL_BUTTON = "app.cancel_button"
 
 ## Structures
 
-pub struct BoundaryExportRequest { pub boundary: Option<shared_domain_types::Boundary>, pub boundary_confirmed: bool, pub orientation: Option<shared_domain_types::Orientation>, pub schematic_path: PathBuf, pub manifest_path: PathBuf }
+pub struct ExportPlanContext { .. }
+pub struct ExportPlanState { .. }
+pub struct ExportArtifactTargets { .. }
+pub struct BoundaryExportRequest { .. }
 pub struct BoundaryExportResult { pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub manifest: manifest_generator::FoundationManifest, pub cleanup_warning: Option<String>, pub schematic_dimensions: [usize; 3] }
 pub struct BoundaryExportOperation { .. }
 pub struct BoundaryExportPort { .. }
-pub struct EnhancedExportRequest { pub boundary: Option<shared_domain_types::Boundary>, pub boundary_confirmed: bool, pub orientation: Option<shared_domain_types::Orientation>, pub schematic_path: PathBuf, pub manifest_path: PathBuf, pub summary: CandidateExportSummary, pub kept_candidate_ids: Vec<String> }
+pub struct EnhancedExportRequest { .. }
 pub struct CandidateExportSummary { pub candidate_projection_count: usize, pub review_decision_count: usize, pub keep_total: usize, pub keep_by_category: Vec<(shared_domain_types::CandidateCategory, usize)>, pub pending_count: usize, pub remove_count: usize }
 pub struct KeptCandidateProjection { pub candidate_id: String, pub category: shared_domain_types::CandidateCategory, pub display_title: String, pub tags: Vec<(String, String)>, pub shape_kind: String, pub coordinates: serde_json::Value, pub reviewable: bool }
 pub struct EnhancedExportPort { .. }
@@ -79,7 +82,7 @@ Error::CandidateEligibility(String)
 Error::CandidateFactsMismatch(String)
 
 impl EnhancedExportRequest {
-    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>, summary: CandidateExportSummary, kept_candidate_ids: Vec<String>) -> Self
+    pub fn new(context: ExportPlanContext, state: ExportPlanState, targets: ExportArtifactTargets, summary: CandidateExportSummary, kept_candidate_ids: Vec<String>) -> Self
 }
 
 impl EnhancedExportPort {
@@ -124,8 +127,19 @@ impl ExportRequest {
 }
 
 impl BoundaryExportRequest {
-    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self
-    pub fn from_plan_info(plan: manifest_generator::PlanInfo, boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>, schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self
+    pub fn new(context: ExportPlanContext, state: ExportPlanState, targets: ExportArtifactTargets) -> Self
+}
+
+impl ExportPlanContext {
+    pub fn new(campus_name: impl Into<String>, plan_id: shared_domain_types::PlanId, plan_name: impl Into<String>, minecraft_version: impl Into<String>) -> Self
+}
+
+impl ExportPlanState {
+    pub fn new(boundary: Option<shared_domain_types::Boundary>, boundary_confirmed: bool, orientation: Option<shared_domain_types::Orientation>) -> Self
+}
+
+impl ExportArtifactTargets {
+    pub fn new(schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self
 }
 
 impl BoundaryExportOperation {

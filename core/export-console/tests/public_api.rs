@@ -1,13 +1,14 @@
 //! F9 公开 API 快照测试（执法清单 2.5）
 //!
-//! 任何公开类型的增删都会反映在本测试与 snapshots/public-api.txt 中，
-//! PR diff 可见。附带 B6 国际化验收：本 crate 产出的全部文本键必须在
+//! 本测试编译调用关键公开契约；snapshots/public-api.txt 是配套的人工评审清单，
+//! 不是 rustdoc 自动生成的完备快照。附带 B6 国际化验收：本 crate 产出的全部文本键必须在
 //! zh-CN.json 中逐条可解析（ADR-0005，文案外置）。
 
 use export_console::{
     adapt_to_voxel_model, text_keys, CandidateExportSummary, EnhancedExportRequest, Error,
-    ExportConsole, ExportProgressView, ExportRequest, ExportStage, KeptCandidateProjection,
-    MockExportConsole, MockSealGate, NavigationTarget, ProgressTracker, SealGate,
+    ExportArtifactTargets, ExportConsole, ExportPlanContext, ExportPlanState, ExportProgressView,
+    ExportRequest, ExportStage, KeptCandidateProjection, MockExportConsole, MockSealGate,
+    NavigationTarget, ProgressTracker, SealGate,
 };
 use generation_engine::{BlockModel, BlockPosition};
 use shared_domain_types::{CandidateCategory, PlanId};
@@ -107,20 +108,13 @@ fn public_api_types_exist() {
         pending_count: 1,
         remove_count: 0,
     };
-    let enhanced = EnhancedExportRequest::new(
-        "校区",
-        plan_id,
-        "方案",
-        "26.1.2",
-        None,
-        false,
-        None,
-        "campus.schem",
-        "manifest.json",
+    let _enhanced = EnhancedExportRequest::new(
+        ExportPlanContext::new("校区", plan_id, "方案", "26.1.2"),
+        ExportPlanState::new(None, false, None),
+        ExportArtifactTargets::new("campus.schem", "manifest.json"),
         summary,
         vec!["keep/b1".to_owned()],
     );
-    assert_eq!(enhanced.kept_candidate_ids.len(), 1);
     let projection = KeptCandidateProjection {
         candidate_id: "keep/b1".to_owned(),
         category: CandidateCategory::Building,

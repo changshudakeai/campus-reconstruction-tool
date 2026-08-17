@@ -7,8 +7,8 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use export_console::{
-    BoundaryExportInput, BoundaryExportRequest, Error, ExportConsole, ExportFileKind,
-    ExportFileSystem, MockSealGate,
+    BoundaryExportInput, BoundaryExportRequest, Error, ExportArtifactTargets, ExportConsole,
+    ExportFileKind, ExportFileSystem, ExportPlanContext, ExportPlanState, MockSealGate,
 };
 use manifest_generator::MaterialTable;
 use shared_domain_types::{Boundary, PlanId};
@@ -305,15 +305,9 @@ fn boundary() -> Boundary {
 
 fn request(dir: &Path) -> BoundaryExportRequest {
     BoundaryExportRequest::new(
-        "测试校区",
-        PlanId::generate(),
-        "发布故障方案",
-        "26.1.2",
-        Some(boundary()),
-        true,
-        None,
-        dir.join("schematic.schem"),
-        dir.join("manifest.json"),
+        ExportPlanContext::new("测试校区", PlanId::generate(), "发布故障方案", "26.1.2"),
+        ExportPlanState::new(Some(boundary()), true, None),
+        ExportArtifactTargets::new(dir.join("schematic.schem"), dir.join("manifest.json")),
     )
 }
 
@@ -614,24 +608,25 @@ fn start_freezes_request_before_return_when_boundary_changes_after_start() {
     let input = Arc::new(StartFreezeInput {
         initial: request(first_dir.path()),
         changed: BoundaryExportRequest::new(
-            "????",
-            PlanId::generate(),
-            "???????",
-            "26.1.2",
-            Some(Boundary {
-                r#type: "Polygon".to_owned(),
-                coordinates: serde_json::json!([[
-                    [116.0000, 39.0000],
-                    [116.0100, 39.0000],
-                    [116.0100, 39.0010],
-                    [116.0000, 39.0010],
-                    [116.0000, 39.0000]
-                ]]),
-            }),
-            true,
-            None,
-            changed_dir.path().join("schematic.schem"),
-            changed_dir.path().join("manifest.json"),
+            ExportPlanContext::new("????", PlanId::generate(), "???????", "26.1.2"),
+            ExportPlanState::new(
+                Some(Boundary {
+                    r#type: "Polygon".to_owned(),
+                    coordinates: serde_json::json!([[
+                        [116.0000, 39.0000],
+                        [116.0100, 39.0000],
+                        [116.0100, 39.0010],
+                        [116.0000, 39.0010],
+                        [116.0000, 39.0000]
+                    ]]),
+                }),
+                true,
+                None,
+            ),
+            ExportArtifactTargets::new(
+                changed_dir.path().join("schematic.schem"),
+                changed_dir.path().join("manifest.json"),
+            ),
         ),
         start_returned: Arc::clone(&start_returned),
         load_started: Arc::clone(&load_started),

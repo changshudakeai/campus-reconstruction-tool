@@ -187,7 +187,7 @@ impl<G: SealGate> ExportConsole<G> {
         }
         self.progress = ProgressTracker::new();
         self.state = State::Exporting;
-        let plan_id = request.plan.plan_id.to_string();
+        let plan_id = request.context.plan.plan_id.to_string();
         match self.boundary_export.export(&request, &self.progress) {
             Ok(result) => {
                 self.state = State::Completed;

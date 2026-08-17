@@ -47,7 +47,8 @@ mod views;
 
 pub use boundary_export::{
     BoundaryExportInput, BoundaryExportOperation, BoundaryExportPort, BoundaryExportRequest,
-    BoundaryExportResult, ExportFileKind, ExportFileSystem, StdExportFileSystem,
+    BoundaryExportResult, ExportArtifactTargets, ExportFileKind, ExportFileSystem,
+    ExportPlanContext, ExportPlanState, StdExportFileSystem,
 };
 pub use console::ExportConsole;
 pub use data::{ExportRequest, ExportStage, ExportSummary};

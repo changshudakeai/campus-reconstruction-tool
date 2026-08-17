@@ -96,67 +96,90 @@ pub trait BoundaryExportInput: Send + Sync {
     fn load_request(&self) -> Result<BoundaryExportRequest>;
 }
 
-/// F9 完整导出入口的一次请求。
+/// 导出开始前冻结的方案与目标版本上下文。
 #[derive(Debug, Clone)]
-pub struct BoundaryExportRequest {
-    /// 方案与全局版本信息（B17 直接复用的方案信息）。
+pub struct ExportPlanContext {
     pub(crate) plan: PlanInfo,
-    /// 方案边界；None 表示没有取得边界。
-    pub boundary: Option<Boundary>,
-    /// 边界是否已经通过用户确认。
-    pub boundary_confirmed: bool,
-    /// 用户自定义朝向；None 由本用例决定为地图正北。
-    pub orientation: Option<Orientation>,
-    /// 最终 `.schem` 目标路径。
-    pub schematic_path: PathBuf,
-    /// 最终 manifest 目标路径。
-    pub manifest_path: PathBuf,
 }
 
-impl BoundaryExportRequest {
-    /// 创建一次边界直出请求。
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the F9 request keeps all export inputs explicit at the stable capability port \
-                  (ADR-0042); expiry: v2.1.0 (2026-12-31), narrow when request inputs are grouped"
-    )]
+impl ExportPlanContext {
+    /// 创建导出所需的稳定方案上下文。
     pub fn new(
         campus_name: impl Into<String>,
         plan_id: PlanId,
         plan_name: impl Into<String>,
         minecraft_version: impl Into<String>,
-        boundary: Option<Boundary>,
-        boundary_confirmed: bool,
-        orientation: Option<Orientation>,
-        schematic_path: impl Into<PathBuf>,
-        manifest_path: impl Into<PathBuf>,
     ) -> Self {
         Self {
             plan: PlanInfo::new(campus_name, plan_id, plan_name, minecraft_version),
+        }
+    }
+}
+
+/// 导出开始前冻结的方案空间状态。
+#[derive(Debug, Clone)]
+pub struct ExportPlanState {
+    /// 方案边界；None 表示没有取得边界。
+    pub(crate) boundary: Option<Boundary>,
+    /// 边界是否已经通过用户确认。
+    pub(crate) boundary_confirmed: bool,
+    /// 用户自定义朝向；None 由完整用例决定为地图正北。
+    pub(crate) orientation: Option<Orientation>,
+}
+
+impl ExportPlanState {
+    /// 创建方案空间状态。
+    pub fn new(
+        boundary: Option<Boundary>,
+        boundary_confirmed: bool,
+        orientation: Option<Orientation>,
+    ) -> Self {
+        Self {
             boundary,
             boundary_confirmed,
             orientation,
+        }
+    }
+}
+
+/// 一次导出的双文件最终目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportArtifactTargets {
+    /// 最终 `.schem` 目标路径。
+    pub(crate) schematic_path: PathBuf,
+    /// 最终 manifest 目标路径。
+    pub(crate) manifest_path: PathBuf,
+}
+
+impl ExportArtifactTargets {
+    /// 创建必须成对发布的导出目标。
+    pub fn new(schematic_path: impl Into<PathBuf>, manifest_path: impl Into<PathBuf>) -> Self {
+        Self {
             schematic_path: schematic_path.into(),
             manifest_path: manifest_path.into(),
         }
     }
+}
 
-    /// 供已经持有 B17 `PlanInfo` 的 F9 测试/内部调用使用。
-    pub fn from_plan_info(
-        plan: PlanInfo,
-        boundary: Option<Boundary>,
-        boundary_confirmed: bool,
-        orientation: Option<Orientation>,
-        schematic_path: impl Into<PathBuf>,
-        manifest_path: impl Into<PathBuf>,
+/// F9 完整导出入口的一次请求。
+#[derive(Debug, Clone)]
+pub struct BoundaryExportRequest {
+    pub(crate) context: ExportPlanContext,
+    pub(crate) state: ExportPlanState,
+    pub(crate) targets: ExportArtifactTargets,
+}
+
+impl BoundaryExportRequest {
+    /// 创建一次边界直出请求。
+    pub fn new(
+        context: ExportPlanContext,
+        state: ExportPlanState,
+        targets: ExportArtifactTargets,
     ) -> Self {
         Self {
-            plan,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path: schematic_path.into(),
-            manifest_path: manifest_path.into(),
+            context,
+            state,
+            targets,
         }
     }
 }
@@ -235,8 +258,8 @@ impl BoundaryExportUseCase {
         request: &BoundaryExportRequest,
         progress: &ProgressTracker,
     ) -> Result<BoundaryExportResult> {
-        let staged_schematic = staged_path(&request.schematic_path, "schem")?;
-        let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
+        let staged_schematic = staged_path(&request.targets.schematic_path, "schem")?;
+        let staged_manifest = staged_path(&request.targets.manifest_path, "manifest")?;
         guarded_export(
             self.file_system.as_ref(),
             progress,
@@ -256,14 +279,15 @@ impl BoundaryExportUseCase {
         staged_manifest: &Path,
     ) -> Result<BoundaryExportResult> {
         let boundary = request
+            .state
             .boundary
             .as_ref()
             .ok_or(Error::Boundary(BoundaryError::Missing))?;
-        if !request.boundary_confirmed {
+        if !request.state.boundary_confirmed {
             return Err(Error::Boundary(BoundaryError::NotConfirmed));
         }
         let contract = version_contract(
-            request.plan.minecraft_version.as_str(),
+            request.context.plan.minecraft_version.as_str(),
             &self.material_table,
         )?;
         self.material_table
@@ -275,13 +299,13 @@ impl BoundaryExportUseCase {
                 })
             })?;
         validate_targets(
-            &request.schematic_path,
-            &request.manifest_path,
+            &request.targets.schematic_path,
+            &request.targets.manifest_path,
             self.file_system.as_ref(),
         )?;
 
         // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
-        let (orientation, degree, source) = match request.orientation {
+        let (orientation, degree, source) = match request.state.orientation {
             Some(orientation) => (
                 orientation,
                 orientation.degree(),
@@ -307,9 +331,9 @@ impl BoundaryExportUseCase {
 
         // B17：不伪造候选投影、评审决定或保留候选，manifest 如实记录全为零。
         let actual_plan = PlanInfo::new(
-            request.plan.campus_name.clone(),
-            request.plan.plan_id,
-            request.plan.plan_name.clone(),
+            request.context.plan.campus_name.clone(),
+            request.context.plan.plan_id,
+            request.context.plan.plan_name.clone(),
             contract.version,
         );
         let manifest = ManifestGenerator::new()
@@ -326,15 +350,19 @@ impl BoundaryExportUseCase {
 
         write_and_publish(
             self.file_system.as_ref(),
-            &request.schematic_path,
-            &request.manifest_path,
-            &manifest,
-            &model,
-            contract,
+            PublicationTargets {
+                schematic: &request.targets.schematic_path,
+                manifest: &request.targets.manifest_path,
+                staged_schematic,
+                staged_manifest,
+            },
+            PublicationPayload {
+                manifest: &manifest,
+                model: &model,
+                contract,
+                schematic_dimensions: [footprint.width_blocks, 1, footprint.length_blocks],
+            },
             progress,
-            staged_schematic,
-            staged_manifest,
-            [footprint.width_blocks, 1, footprint.length_blocks],
         )
     }
 }
@@ -376,35 +404,42 @@ where
     result
 }
 
+/// 必须成对发布的最终路径与 staging 路径。
+pub(crate) struct PublicationTargets<'a> {
+    pub(crate) schematic: &'a Path,
+    pub(crate) manifest: &'a Path,
+    pub(crate) staged_schematic: &'a Path,
+    pub(crate) staged_manifest: &'a Path,
+}
+
+/// 双文件发布所需的已生成内容。
+pub(crate) struct PublicationPayload<'a> {
+    pub(crate) manifest: &'a FoundationManifest,
+    pub(crate) model: &'a BlockModel,
+    pub(crate) contract: ExportVersionContract,
+    pub(crate) schematic_dimensions: [usize; 3],
+}
+
 /// 双文件落盘尾段（B17 staging → B4 staging → 发布），边界直出与增强导出共用。
-#[allow(
-    clippy::too_many_arguments,
-    reason = "双文件落盘尾段的受控输入在稳定端口显式展开（ADR-0042/0043）；\
-              失效里程碑：v2.1.0（2026-12-31），届时按发布对分组为小型结构后收窄"
-)]
 pub(crate) fn write_and_publish(
     file_system: &dyn ExportFileSystem,
-    schematic_path: &Path,
-    manifest_path: &Path,
-    manifest: &FoundationManifest,
-    model: &BlockModel,
-    contract: ExportVersionContract,
+    targets: PublicationTargets<'_>,
+    payload: PublicationPayload<'_>,
     progress: &ProgressTracker,
-    staged_schematic: &Path,
-    staged_manifest: &Path,
-    schematic_dimensions: [usize; 3],
 ) -> Result<BoundaryExportResult> {
     // B17 先写入 staging；只有 B4 与最终双文件发布都成功才返回成功。
-    let manifest_parent = manifest_path
+    let manifest_parent = targets
+        .manifest
         .parent()
         .ok_or_else(|| invalid_target("manifest 没有父目录"))?;
-    let manifest_filename = staged_manifest
+    let manifest_filename = targets
+        .staged_manifest
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| invalid_target("manifest 临时文件名无效"))?;
     ManifestGenerator::new()
         .write_to_file_with(
-            manifest,
+            payload.manifest,
             manifest_parent,
             manifest_filename,
             |path, bytes| file_system.write(path, bytes),
@@ -414,10 +449,10 @@ pub(crate) fn write_and_publish(
 
     // B4：复用 Sponge 编码器，经 F9 的受控文件端口写 staging。
     pipeline::export_schematic_staged_with_file_system(
-        model,
-        staged_schematic,
-        &manifest.plan_name,
-        contract.schematic_profile,
+        payload.model,
+        targets.staged_schematic,
+        &payload.manifest.plan_name,
+        payload.contract.schematic_profile,
         file_system,
         progress,
     )?;
@@ -425,18 +460,18 @@ pub(crate) fn write_and_publish(
 
     let cleanup_warning = publish_pair(
         file_system,
-        staged_schematic,
-        schematic_path,
-        staged_manifest,
-        manifest_path,
+        targets.staged_schematic,
+        targets.schematic,
+        targets.staged_manifest,
+        targets.manifest,
     )?;
     progress.finish();
     Ok(BoundaryExportResult {
-        schematic_path: schematic_path.to_owned(),
-        manifest_path: manifest_path.to_owned(),
-        manifest: manifest.clone(),
+        schematic_path: targets.schematic.to_owned(),
+        manifest_path: targets.manifest.to_owned(),
+        manifest: payload.manifest.clone(),
         cleanup_warning,
-        schematic_dimensions,
+        schematic_dimensions: payload.schematic_dimensions,
     })
 }
 

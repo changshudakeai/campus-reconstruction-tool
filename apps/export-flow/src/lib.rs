@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use data_persistence::Database;
 use export_console::{
     BoundaryError, BoundaryExportInput, BoundaryExportPort, BoundaryExportRequest,
-    EnhancedExportInput, EnhancedExportPort, EnhancedExportRequest,
+    EnhancedExportInput, EnhancedExportPort, EnhancedExportRequest, ExportArtifactTargets,
+    ExportPlanContext, ExportPlanState,
 };
 pub use export_console::{
     BoundaryExportOperation, BoundaryExportResult, Error, ExportFileKind, ExportFileSystem,
@@ -24,18 +25,13 @@ mod candidates;
 
 use candidates::ExportCandidateStore;
 
-/// 边界直出与增强导出共用的基础输入片段（Start 前冻结）。
-type BaseExportParts = (
-    String,
-    PlanId,
-    String,
-    String,
-    Option<Boundary>,
-    bool,
-    Option<Orientation>,
-    std::path::PathBuf,
-    std::path::PathBuf,
-);
+/// 边界直出与增强导出共用的完整输入快照（Start 前冻结）。
+struct FrozenExportInput {
+    plan_key: String,
+    context: ExportPlanContext,
+    state: ExportPlanState,
+    targets: ExportArtifactTargets,
+}
 
 /// Boundary data needed by the map presentation; the formal F9 request stays private to this flow.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,27 +152,11 @@ impl ExportInputSnapshot {
 
 impl BoundaryExportInput for ExportInputStore {
     fn load_request(&self) -> Result<BoundaryExportRequest> {
-        let (
-            campus_name,
-            plan_id,
-            plan_name,
-            minecraft_version,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path,
-            manifest_path,
-        ) = self.snapshot_parts()?;
+        let frozen = self.freeze_input()?;
         Ok(BoundaryExportRequest::new(
-            campus_name,
-            plan_id,
-            plan_name,
-            minecraft_version,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path,
-            manifest_path,
+            frozen.context,
+            frozen.state,
+            frozen.targets,
         ))
     }
 }
@@ -187,30 +167,13 @@ impl EnhancedExportInput for ExportInputStore {
             .candidate_store
             .as_ref()
             .ok_or(Error::InvalidState("增强导出未配置候选存储（B2 连接）"))?;
-        let (
-            campus_name,
-            plan_id,
-            plan_name,
-            minecraft_version,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path,
-            manifest_path,
-        ) = self.snapshot_parts()?;
-        let plan_key = plan_id.to_string();
-        let summary = store.seal_summary(&plan_key)?;
-        let kept_candidate_ids = store.kept_candidate_ids(&plan_key)?;
+        let frozen = self.freeze_input()?;
+        let summary = store.seal_summary(&frozen.plan_key)?;
+        let kept_candidate_ids = store.kept_candidate_ids(&frozen.plan_key)?;
         Ok(EnhancedExportRequest::new(
-            campus_name,
-            plan_id,
-            plan_name,
-            minecraft_version,
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path,
-            manifest_path,
+            frozen.context,
+            frozen.state,
+            frozen.targets,
             summary,
             kept_candidate_ids,
         ))
@@ -218,7 +181,7 @@ impl EnhancedExportInput for ExportInputStore {
 }
 
 impl ExportInputStore {
-    fn snapshot_parts(&self) -> Result<BaseExportParts> {
+    fn freeze_input(&self) -> Result<FrozenExportInput> {
         let snapshot = self
             .snapshot
             .lock()
@@ -251,17 +214,24 @@ impl ExportInputStore {
             ));
         };
         let plan_stem = plan_id.to_string();
-        Ok((
-            snapshot.campus_name,
-            plan_id,
-            snapshot.plan_name,
-            minecraft_version,
-            snapshot.boundary,
-            snapshot.boundary_confirmed,
-            orientation,
-            export_location.join(format!("{plan_stem}.schem")),
-            export_location.join(format!("{plan_stem}.foundation_manifest.json")),
-        ))
+        Ok(FrozenExportInput {
+            plan_key: plan_stem.clone(),
+            context: ExportPlanContext::new(
+                snapshot.campus_name,
+                plan_id,
+                snapshot.plan_name,
+                minecraft_version,
+            ),
+            state: ExportPlanState::new(
+                snapshot.boundary,
+                snapshot.boundary_confirmed,
+                orientation,
+            ),
+            targets: ExportArtifactTargets::new(
+                export_location.join(format!("{plan_stem}.schem")),
+                export_location.join(format!("{plan_stem}.foundation_manifest.json")),
+            ),
+        })
     }
 
     fn active_plan_id(&self) -> Option<String> {

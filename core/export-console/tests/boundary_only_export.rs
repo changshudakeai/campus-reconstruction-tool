@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use export_console::{
-    BoundaryError, BoundaryExportRequest, Error, ExportConsole, MockSealGate, VersionError,
+    BoundaryError, BoundaryExportRequest, Error, ExportArtifactTargets, ExportConsole,
+    ExportPlanContext, ExportPlanState, MockSealGate, VersionError,
 };
 use manifest_generator::{FoundationManifest, ManifestOrientationSource};
 use shared_domain_types::{Boundary, Orientation, PlanId};
@@ -30,15 +31,12 @@ fn request(
     confirmed: bool,
 ) -> BoundaryExportRequest {
     BoundaryExportRequest::new(
-        "测试校区",
-        PlanId::generate(),
-        "边界直出方案",
-        "26.1.2",
-        boundary,
-        confirmed,
-        orientation,
-        dir.join("campus.schem"),
-        dir.join("foundation_manifest.json"),
+        ExportPlanContext::new("测试校区", PlanId::generate(), "边界直出方案", "26.1.2"),
+        ExportPlanState::new(boundary, confirmed, orientation),
+        ExportArtifactTargets::new(
+            dir.join("campus.schem"),
+            dir.join("foundation_manifest.json"),
+        ),
     )
 }
 
@@ -158,15 +156,12 @@ fn unsupported_target_version_is_rejected_without_fallback() {
 
     let error = console
         .export_confirmed_boundary(BoundaryExportRequest::new(
-            "测试校区",
-            PlanId::generate(),
-            "不支持版本方案",
-            "1.20.4",
-            Some(boundary()),
-            true,
-            None,
-            dir.path().join("campus.schem"),
-            dir.path().join("foundation_manifest.json"),
+            ExportPlanContext::new("测试校区", PlanId::generate(), "不支持版本方案", "1.20.4"),
+            ExportPlanState::new(Some(boundary()), true, None),
+            ExportArtifactTargets::new(
+                dir.path().join("campus.schem"),
+                dir.path().join("foundation_manifest.json"),
+            ),
         ))
         .expect_err("不支持版本不得静默回退到其他用料表");
 

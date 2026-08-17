@@ -4,7 +4,6 @@
 //! 只消费应用流程从 B2 读取的“封账后状态为保留”的稳定候选标识，并按同一份
 //! 规范化候选投影生成初始校园内容。F9 不依赖 F5，也不查询原始观测。
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
@@ -21,11 +20,12 @@ use manifest_generator::{
     CandidateFacts, CategoryCount, ExportKind, ManifestGenerator, ManifestOrientation,
     ManifestOrientationSource, MaterialTable, PlanInfo,
 };
-use shared_domain_types::{Boundary, CandidateCategory, Orientation};
+use shared_domain_types::{CandidateCategory, Orientation};
 
 use crate::boundary_export::{
     guarded_export, staged_path, validate_targets, version_contract, write_and_publish,
-    ActiveTaskGuard, BoundaryExportOperation, BoundaryExportResult, ExportFileSystem,
+    ActiveTaskGuard, BoundaryExportOperation, BoundaryExportResult, ExportArtifactTargets,
+    ExportFileSystem, ExportPlanContext, ExportPlanState, PublicationPayload, PublicationTargets,
 };
 use crate::data::ExportStage;
 use crate::error::{BoundaryError, Error, Result, VersionError};
@@ -54,8 +54,8 @@ impl EnhancedExportUseCase {
         reader: &dyn CandidateExportReader,
         progress: &ProgressTracker,
     ) -> Result<BoundaryExportResult> {
-        let staged_schematic = staged_path(&request.schematic_path, "schem")?;
-        let staged_manifest = staged_path(&request.manifest_path, "manifest")?;
+        let staged_schematic = staged_path(&request.targets.schematic_path, "schem")?;
+        let staged_manifest = staged_path(&request.targets.manifest_path, "manifest")?;
         guarded_export(
             self.file_system.as_ref(),
             progress,
@@ -76,14 +76,15 @@ impl EnhancedExportUseCase {
         staged_manifest: &std::path::Path,
     ) -> Result<BoundaryExportResult> {
         let boundary = request
+            .state
             .boundary
             .as_ref()
             .ok_or(Error::Boundary(BoundaryError::Missing))?;
-        if !request.boundary_confirmed {
+        if !request.state.boundary_confirmed {
             return Err(Error::Boundary(BoundaryError::NotConfirmed));
         }
         let contract = version_contract(
-            request.plan.minecraft_version.as_str(),
+            request.context.plan.minecraft_version.as_str(),
             &self.material_table,
         )?;
         self.material_table
@@ -95,8 +96,8 @@ impl EnhancedExportUseCase {
                 })
             })?;
         validate_targets(
-            &request.schematic_path,
-            &request.manifest_path,
+            &request.targets.schematic_path,
+            &request.targets.manifest_path,
             self.file_system.as_ref(),
         )?;
         if request.summary.keep_total != request.kept_candidate_ids.len() {
@@ -107,7 +108,7 @@ impl EnhancedExportUseCase {
             )));
         }
 
-        let (orientation, degree, source) = match request.orientation {
+        let (orientation, degree, source) = match request.state.orientation {
             Some(orientation) => (
                 orientation,
                 orientation.degree(),
@@ -132,7 +133,7 @@ impl EnhancedExportUseCase {
             engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
         progress.report_percent(20);
 
-        let plan_key = request.plan.plan_id.to_string();
+        let plan_key = request.context.plan.plan_id.to_string();
         let mut generated = 0usize;
         for candidate_id in &request.kept_candidate_ids {
             let projection = reader
@@ -170,9 +171,9 @@ impl EnhancedExportUseCase {
         }
 
         let actual_plan = PlanInfo::new(
-            request.plan.campus_name.clone(),
-            request.plan.plan_id,
-            request.plan.plan_name.clone(),
+            request.context.plan.campus_name.clone(),
+            request.context.plan.plan_id,
+            request.context.plan.plan_name.clone(),
             contract.version,
         );
         let keep_decisions: Vec<(CandidateCategory, bool)> = request
@@ -208,15 +209,19 @@ impl EnhancedExportUseCase {
 
         write_and_publish(
             self.file_system.as_ref(),
-            &request.schematic_path,
-            &request.manifest_path,
-            &manifest,
-            &model,
-            contract,
+            PublicationTargets {
+                schematic: &request.targets.schematic_path,
+                manifest: &request.targets.manifest_path,
+                staged_schematic,
+                staged_manifest,
+            },
+            PublicationPayload {
+                manifest: &manifest,
+                model: &model,
+                contract,
+                schematic_dimensions: dimensions,
+            },
             progress,
-            staged_schematic,
-            staged_manifest,
-            dimensions,
         )
     }
 }
@@ -273,17 +278,9 @@ pub trait CandidateExportReader: Send + Sync {
 /// 增强导出的完整输入（Start 返回前冻结）。
 #[derive(Debug, Clone)]
 pub struct EnhancedExportRequest {
-    pub(crate) plan: PlanInfo,
-    /// 方案边界；None 表示没有取得边界。
-    pub boundary: Option<Boundary>,
-    /// 边界是否已经通过用户确认。
-    pub boundary_confirmed: bool,
-    /// 用户自定义朝向；None 由本用例决定为地图正北。
-    pub orientation: Option<Orientation>,
-    /// 最终 `.schem` 目标路径。
-    pub schematic_path: PathBuf,
-    /// 最终 manifest 目标路径。
-    pub manifest_path: PathBuf,
+    pub(crate) context: ExportPlanContext,
+    pub(crate) state: ExportPlanState,
+    pub(crate) targets: ExportArtifactTargets,
     /// 封账摘要（应用流程从 B2 读取后传入）。
     pub summary: CandidateExportSummary,
     /// 封账后状态为保留的稳定候选标识。
@@ -292,31 +289,17 @@ pub struct EnhancedExportRequest {
 
 impl EnhancedExportRequest {
     /// 创建一次增强导出请求。
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "增强导出输入在稳定能力端口显式展开（ADR-0043），与 M1 请求同一纪律；\
-                  失效里程碑：v2.1.0（2026-12-31），届时如引入按语义分组的请求输入则收窄"
-    )]
     pub fn new(
-        campus_name: impl Into<String>,
-        plan_id: shared_domain_types::PlanId,
-        plan_name: impl Into<String>,
-        minecraft_version: impl Into<String>,
-        boundary: Option<Boundary>,
-        boundary_confirmed: bool,
-        orientation: Option<Orientation>,
-        schematic_path: impl Into<PathBuf>,
-        manifest_path: impl Into<PathBuf>,
+        context: ExportPlanContext,
+        state: ExportPlanState,
+        targets: ExportArtifactTargets,
         summary: CandidateExportSummary,
         kept_candidate_ids: Vec<String>,
     ) -> Self {
         Self {
-            plan: PlanInfo::new(campus_name, plan_id, plan_name, minecraft_version),
-            boundary,
-            boundary_confirmed,
-            orientation,
-            schematic_path: schematic_path.into(),
-            manifest_path: manifest_path.into(),
+            context,
+            state,
+            targets,
             summary,
             kept_candidate_ids,
         }

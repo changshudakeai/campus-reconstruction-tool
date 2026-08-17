@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use export_console::{
     BoundaryExportOperation, CandidateExportReader, CandidateExportSummary, EnhancedExportInput,
-    EnhancedExportPort, EnhancedExportRequest, Error, ExportFileKind, ExportFileSystem,
-    KeptCandidateProjection, StdExportFileSystem,
+    EnhancedExportPort, EnhancedExportRequest, Error, ExportArtifactTargets, ExportFileKind,
+    ExportFileSystem, ExportPlanContext, ExportPlanState, KeptCandidateProjection,
+    StdExportFileSystem,
 };
 use manifest_generator::{ExportKind, FoundationManifest};
 use shared_domain_types::{Boundary, CandidateCategory, PlanId};
@@ -153,15 +154,12 @@ fn request(
     kept_ids: Vec<String>,
 ) -> EnhancedExportRequest {
     EnhancedExportRequest::new(
-        "测试校区",
-        PlanId::generate(),
-        "增强导出方案",
-        "26.1.2",
-        Some(boundary()),
-        true,
-        None,
-        dir.join("campus.schem"),
-        dir.join("foundation_manifest.json"),
+        ExportPlanContext::new("测试校区", PlanId::generate(), "增强导出方案", "26.1.2"),
+        ExportPlanState::new(Some(boundary()), true, None),
+        ExportArtifactTargets::new(
+            dir.join("campus.schem"),
+            dir.join("foundation_manifest.json"),
+        ),
         summary,
         kept_ids,
     )
