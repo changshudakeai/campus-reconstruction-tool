@@ -59,7 +59,7 @@ export struct ReviewCandidateData {
     suggestion-reason: string,
 }
 
-/// 左侧评审抽屉：类别标签 + 选中候选详情 + 可滚动候选列表 +
+/// 左侧评审抽屉：类别标签 + 可滚动候选列表 +
 /// 三态/批量/暂停/封账（操作行固定于抽屉底部，T33 大量候选下仍可达）。
 export component ReviewDrawer inherits Rectangle {
     in property <string> title;
@@ -78,15 +78,6 @@ export component ReviewDrawer inherits Rectangle {
     in property <string> page-next-label;
     in property <string> selected-count-label;
     in property <bool> bulk-buttons-visible;
-    // 选中候选详情（名称/类别/标签与属性/来源/状态）。
-    in property <bool> detail-visible;
-    in property <string> detail-title;
-    in property <string> detail-category-label;
-    in property <string> detail-tags-label;
-    in property <[string]> detail-tags;
-    in property <string> detail-source-label;
-    in property <string> detail-source;
-    in property <string> detail-state-label;
     in property <string> set-keep-label;
     in property <string> set-reject-label;
     in property <string> set-pending-label;
@@ -263,56 +254,6 @@ export component ReviewDrawer inherits Rectangle {
                 font-size: 11px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
-            }
-
-            // 选中候选详情（高亮候选；未命名标题由 Rust 侧拼装）。
-            if root.detail-visible: Rectangle {
-                background: Theme.highlight;
-                border-color: Theme.separator;
-                border-width: 1px;
-                border-radius: 6px;
-                VerticalLayout {
-                    padding: 8px;
-                    spacing: 4px;
-                    Text {
-                        text: root.detail-title;
-                        font-size: 13px;
-                        font-weight: 700;
-                        color: Theme.text-primary;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.detail-category-label;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.detail-tags-label;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                    }
-                    for tag in root.detail-tags:
-                        Text {
-                            text: tag;
-                            font-size: 12px;
-                            color: Theme.text-primary;
-                            wrap: word-wrap;
-                        }
-                    Text {
-                        text: root.detail-source-label;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.detail-state-label;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                    }
-                }
             }
 
             // 候选卡片：可滚动（滚轮由 ScrollView 原生处理；键盘经 FocusScope

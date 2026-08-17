@@ -301,15 +301,9 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     assert_eq!(window.get_review_cards().row_count(), 1);
     assert_eq!(card_state_key(&window, 0), "pending");
 
-    // T38：点卡片 → 高亮 + 选中详情（名称/类别/标签与属性/来源/状态）
+    // 点卡片只联动高亮；展开详情卡已移除，候选列表保留完整评审入口。
     window.invoke_review_category_clicked(0);
     window.invoke_review_card_highlight_clicked(reviewable[0].clone().into());
-    assert!(window.get_review_detail_visible(), "高亮候选必须显示详情");
-    assert_eq!(window.get_review_detail_title().as_str(), "教学楼0");
-    assert!(
-        window.get_review_detail_source_label().contains("overpass"),
-        "详情必须给出候选来源"
-    );
     assert!(
         window
             .get_review_cards()
@@ -321,16 +315,10 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
 
     // T38：卡片"定位到地图"→ 高亮同一候选（地图中心跳转由地图页 JS 负责）
     window.invoke_review_locate_clicked(reviewable[3].clone().into());
-    assert_eq!(
-        window.get_review_detail_title().as_str(),
-        "未命名建筑 #way/b3",
-        "定位后详情必须切换并显示未命名标题"
-    );
-    assert!(
-        window
-            .get_review_cards()
-            .row_data(3)
-            .expect("定位候选卡片必须存在")
-            .highlighted
-    );
+    let located = window
+        .get_review_cards()
+        .row_data(3)
+        .expect("定位候选卡片必须存在");
+    assert_eq!(located.title.as_str(), "未命名建筑 #way/b3");
+    assert!(located.highlighted);
 }
