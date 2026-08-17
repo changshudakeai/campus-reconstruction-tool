@@ -204,31 +204,13 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         "用户切换开关后地图文字状态必须在当前评审会话内保持"
     );
 
-    // 2a. 点地图对象 → 高亮对应卡片 + 选中详情
+    // 2a. 点地图对象 → 高亮对应卡片；不再展开占空间的详情卡。
     window.invoke_workspace_map_ipc(
         format!(
             r#"{{"type":"review_object_clicked","candidate_id":"{}"}}"#,
             reviewable[0]
         )
         .into(),
-    );
-    assert!(
-        window.get_review_detail_visible(),
-        "地图对象点击必须显示详情"
-    );
-    assert_eq!(window.get_review_detail_title().as_str(), "教学楼0");
-    assert!(
-        window.get_review_detail_source_label().contains("overpass"),
-        "详情必须显示来源"
-    );
-    assert!(
-        window.get_review_detail_tags().row_count() > 0
-            && window
-                .get_review_detail_tags()
-                .row_data(0)
-                .expect("标签行存在")
-                .contains("building=yes"),
-        "详情必须显示标签与属性"
     );
     assert!(
         window
@@ -239,24 +221,17 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         "地图对象点击后对应卡片必须高亮（双向联动）"
     );
 
-    // 2b. "定位到地图" → 高亮另一候选（未命名显示"未命名建筑 #id"）
+    // 2b. "定位到地图" → 高亮另一候选（未命名标题仍显示在候选卡片）。
     window.invoke_review_locate_clicked(reviewable[1].clone().into());
-    assert_eq!(
-        window.get_review_detail_title().as_str(),
-        "未命名建筑 #way/b1",
-        "定位后详情必须切换到未命名候选并显示回退标识"
-    );
-    assert!(
-        window
-            .get_review_cards()
-            .row_data(1)
-            .expect("定位候选卡片存在")
-            .highlighted
-    );
+    let located = window
+        .get_review_cards()
+        .row_data(1)
+        .expect("定位候选卡片存在");
+    assert_eq!(located.title.as_str(), "未命名建筑 #way/b1");
+    assert!(located.highlighted);
 
     // 2c. 点卡片 → 高亮（地图↔卡片共用同一份高亮状态）
     window.invoke_review_card_highlight_clicked(reviewable[2].clone().into());
-    assert_eq!(window.get_review_detail_title().as_str(), "图书馆");
     assert!(
         window
             .get_review_cards()
@@ -265,33 +240,19 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
             .highlighted
     );
 
-    // 3. 标注规则：剔除 → 卡片保留 + 详情显示"剔除"；可从卡片改回"保留"
+    // 3. 标注规则：剔除后卡片保留，可直接从卡片改回"保留"。
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "remove".into());
     assert_eq!(
         card_state_key(&window, 0),
         "remove",
         "剔除后卡片仍保留（地图隐藏由地图页 JS 执行）"
     );
-    // 详情面板跟随高亮候选：把 b0 置为高亮后，详情如实显示"剔除"
     window.invoke_review_card_highlight_clicked(reviewable[0].clone().into());
-    assert!(
-        window
-            .get_review_detail_state_label()
-            .contains(l10n.t("review.reject").as_str()),
-        "详情必须如实显示剔除状态"
-    );
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
     assert_eq!(
         card_state_key(&window, 0),
         "keep",
         "剔除候选可从卡片改回保留"
-    );
-    // b0 仍为高亮候选：改回后详情如实显示"保留"
-    assert!(
-        window
-            .get_review_detail_state_label()
-            .contains(l10n.t("review.keep").as_str()),
-        "改回后详情必须显示保留"
     );
 
     // 4a. 单候选绘制失败 → B7 通俗弹窗，但不误判整张地图不可用。
