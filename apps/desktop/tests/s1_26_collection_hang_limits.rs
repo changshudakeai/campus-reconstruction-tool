@@ -9,7 +9,9 @@ use data_persistence::CampusCrudApi;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use data_acquisition::{DataSource, OverpassDataSource, RegeoNamer};
+use data_acquisition::{
+    CollectionStage, DataSource, DeadlineOverpassTransport, OverpassDataSource, RegeoNamer,
+};
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
 };
@@ -66,8 +68,12 @@ fn unnamed_polygons_payload(count: usize) -> String {
 
 fn slow_regeo_source() -> Arc<dyn DataSource + Send + Sync> {
     let payload = unnamed_polygons_payload(20);
-    let overpass_transport =
-        Box::new(move |_boundary: &shared_domain_types::Boundary| Ok(payload.clone()));
+    let overpass_transport: DeadlineOverpassTransport = Box::new(move |_, _, on_stage| {
+        on_stage(CollectionStage::RetryingSource);
+        let (_sender, receiver) = std::sync::mpsc::channel::<()>();
+        let _ = receiver.recv_timeout(Duration::from_millis(500));
+        Ok(payload.clone())
+    });
     // 慢/挂起 regeo：每次调用睡满超时（5s）后失败
     let regeo_transport = Box::new(|_: &str, timeout: Duration| {
         let (_tx, rx) = std::sync::mpsc::channel::<()>();
@@ -78,7 +84,10 @@ fn slow_regeo_source() -> Arc<dyn DataSource + Send + Sync> {
         regeo_transport,
         Box::new(|| Some("web-key".to_owned())),
     ));
-    Arc::new(OverpassDataSource::new(overpass_transport).with_name_enricher(Some(namer)))
+    Arc::new(
+        OverpassDataSource::with_deadline_transport(overpass_transport)
+            .with_name_enricher(Some(namer)),
+    )
 }
 
 fn setup_window(source: Arc<dyn DataSource + Send + Sync>) -> (AppWindow, Localization) {
@@ -132,7 +141,7 @@ fn setup_window(source: Arc<dyn DataSource + Send + Sync>) -> (AppWindow, Locali
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
     window.invoke_workspace_map_ipc(
-        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.44,39.90],[116.44,39.905],[116.40,39.905]]}"#.into(),
+        r#"{"type":"confirm_boundary","coords":[[121.39,31.19],[121.44,31.19],[121.44,31.22],[121.39,31.22]]}"#.into(),
     );
     window.invoke_workspace_step_clicked(2);
     (window, l10n)
@@ -151,6 +160,20 @@ fn s1_26_slow_regeo_shows_stage_elapsed_and_cancel() {
         window.get_collection_stage_label().as_str(),
         l10n.t("collection.stage_fetching"),
         "启动后先呈现“拉取数据”阶段"
+    );
+
+    let switching = l10n.t("collection.stage_retrying_source");
+    pump_until(&window, Duration::from_secs(2), move |window| {
+        window.get_collection_stage_label().as_str() == switching.as_str()
+    });
+    assert_eq!(
+        window.get_collection_stage_label().as_str(),
+        l10n.t("collection.stage_retrying_source"),
+        "自动切换备用节点必须作为当前阶段呈现给用户"
+    );
+    assert!(
+        window.get_collection_cancel_visible(),
+        "切换节点期间 UI 仍可交互并允许取消"
     );
 
     // 补名阶段：慢 regeo 挂起时页面持续显示阶段 + 已用时长，不冻结

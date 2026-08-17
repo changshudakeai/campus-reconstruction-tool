@@ -7,7 +7,7 @@
 //! 3. overpass-api.de / kumi 不给浏览器 CORS 头 → 一律 Rust 侧直连，
 //!    不再依赖 WebView fetch。
 //!
-//! 端点按 de → kumi → mail.ru 回退，每端点超时 [`OVERPASS_HTTP_TIMEOUT`]；
+//! 端点按本次运行健康度顺序回退并有限重试，每端点超时 [`OVERPASS_HTTP_TIMEOUT`]；
 //! Nominatim 按 OSMF 政策 ≤1 次/秒并带 User-Agent。
 //!
 //! 校区边界自动获取级联（ADR-0029 + T31）：
@@ -15,13 +15,23 @@
 //! 失败回退 Overpass `amenity=university|college|school` 锚点近域查询；
 //! 再失败回退 `landuse=education`；均无数据 → 人工圈画兜底（由调用方决定）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use data_transformers::{ClassifyEngine, TransformError};
 use gaode_client::{convert_coords_wgs84_to_gcj02, BoundarySorter, OsmElement, OsmMember};
-use shared_domain_types::Boundary;
+
+mod query;
+mod reliability;
+
+use query::campus_object_query_shards;
+pub use query::{
+    bbox_around, boundary_bbox, campus_objects_query, element_by_id_query, landuse_education_query,
+    university_query,
+};
+use reliability::{
+    FailureKind, ReliableExecutor, RequestFailure, RequestTransport, RetryPolicy, RunHealth,
+};
 
 /// Overpass 公共端点（按 de → kumi → mail.ru 顺序回退；上海网络实测见调研 §4.1）
 pub const OVERPASS_ENDPOINTS: [&str; 3] = [
@@ -30,15 +40,23 @@ pub const OVERPASS_ENDPOINTS: [&str; 3] = [
     "https://maps.mail.ru/osm/tools/overpass",
 ];
 
-/// 每端点 HTTP 超时（工单：12s → 5s）
-pub const OVERPASS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 单次公共节点请求预算。大型 `out geom` 查询需要给服务端现实执行时间。
+pub const OVERPASS_HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 
-/// 整体查询截止（工单：≤15s；三端点 5s × 3 恰好封顶）
-pub const OVERPASS_QUERY_DEADLINE: Duration = Duration::from_secs(15);
+/// 单个边界查询的整体预算；候选分片由 A1 传入更大的用户操作总体截止。
+pub const OVERPASS_QUERY_DEADLINE: Duration = Duration::from_secs(90);
+
+/// 校区边界整条级联（校名解析 + by-id + 近域兜底）的统一总体预算。
+pub const BOUNDARY_FETCH_DEADLINE: Duration = Duration::from_secs(150);
 
 /// Overpass 服务端超时（秒；必须比客户端超时小，避免客户端已放弃后公共端点
-/// 仍继续占用算力——25s > 5s 的历史值正是“公共端点负载起伏”的一个自制造因）。
-pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 4;
+/// 仍继续占用算力——服务端 20s < 客户端 25s）。
+pub const OVERPASS_SERVER_TIMEOUT_SECS: u32 = 20;
+
+const OVERPASS_MAX_ROUNDS: u8 = 2;
+const OVERPASS_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+const OVERPASS_TRANSIENT_COOLDOWN: Duration = Duration::from_secs(1);
+const OVERPASS_OVERLOADED_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// 边界获取的阶段（分阶段耗时记录与用户可见反馈用，工单 workspace-restore B.8/B.9）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,25 +163,49 @@ pub struct NominatimMatch {
 /// “时快时慢”的主要来源；同一会话内记住最近成功端点，后续查询优先试它，
 /// 避免每次都在已知慢的端点上空等一个超时周期。
 pub struct OverpassClient {
-    transport: HttpTransport,
+    executor: ReliableExecutor,
     /// 会话内端点尝试顺序（最近成功端点前置；初始为 [`OVERPASS_ENDPOINTS`] 原序）
     order: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl OverpassClient {
-    /// 生产传输：ureq 直连，每请求 [`OVERPASS_HTTP_TIMEOUT`]
+    /// 生产传输：复用一个 ureq Agent/TLS 连接池，以 POST 请求体发送查询。
     pub fn production() -> Self {
+        let order = Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec()));
+        let agent = ureq_agent().expect("Overpass TLS client must initialize");
         Self {
-            transport: ureq_transport(),
-            order: Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec())),
+            executor: ReliableExecutor::new(
+                reliability::production_transport(agent),
+                Arc::clone(&order),
+                production_retry_policy(),
+            ),
+            order,
         }
     }
 
-    /// 测试注入
+    /// 兼容测试注入。生产路径不使用此 GET 形态 seam。
     pub fn with_transport(transport: HttpTransport) -> Self {
+        let order = Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec()));
+        let transport: RequestTransport = Arc::new(move |request, timeout| {
+            let url = format!("{}/api/interpreter?{}", request.endpoint, request.body);
+            transport(&url, timeout).map_err(|message| classify_legacy_failure(&message))
+        });
         Self {
-            transport,
-            order: Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec())),
+            executor: ReliableExecutor::new(
+                transport,
+                Arc::clone(&order),
+                production_retry_policy(),
+            ),
+            order,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_request_transport_and_policy(transport: RequestTransport, policy: RetryPolicy) -> Self {
+        let order = Arc::new(Mutex::new(OVERPASS_ENDPOINTS.to_vec()));
+        Self {
+            executor: ReliableExecutor::new(transport, Arc::clone(&order), policy),
+            order,
         }
     }
 
@@ -189,95 +231,161 @@ impl OverpassClient {
         stage: FetchStage,
         on_progress: &dyn Fn(FetchProgress),
     ) -> std::result::Result<String, String> {
-        let mut errors: Vec<String> = Vec::new();
-        let overall_deadline = Instant::now() + OVERPASS_QUERY_DEADLINE;
+        self.query_with_fallback_progress_until(
+            query,
+            stage,
+            Instant::now() + OVERPASS_QUERY_DEADLINE,
+            on_progress,
+        )
+    }
+
+    fn query_with_fallback_progress_until(
+        &self,
+        query: &str,
+        stage: FetchStage,
+        deadline: Instant,
+        on_progress: &dyn Fn(FetchProgress),
+    ) -> std::result::Result<String, String> {
+        let mut health = RunHealth::default();
+        self.query_with_fallback_progress_until_with_health(
+            query,
+            stage,
+            deadline,
+            &mut health,
+            on_progress,
+        )
+    }
+
+    fn query_with_fallback_progress_until_with_health(
+        &self,
+        query: &str,
+        stage: FetchStage,
+        deadline: Instant,
+        health: &mut RunHealth,
+        on_progress: &dyn Fn(FetchProgress),
+    ) -> std::result::Result<String, String> {
         let started = Instant::now();
-        let endpoints = self.endpoint_order();
-        let total = endpoints.len() as u32;
-        for (index, endpoint) in endpoints.iter().enumerate() {
-            let remaining = overall_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                errors.push(format!(
-                    "端点 {endpoint} 跳过：整体查询已到 {OVERPASS_QUERY_DEADLINE:?} 截止"
-                ));
-                break;
-            }
-            on_progress(FetchProgress {
-                stage,
-                attempt: index as u32 + 1,
-                total_attempts: total,
-                elapsed_secs: started.elapsed().as_secs(),
-            });
-            let timeout = OVERPASS_HTTP_TIMEOUT.min(remaining);
-            let url = format!("{endpoint}/api/interpreter?data={}", encode_query(query));
-            let started = Instant::now();
-            match (self.transport)(&url, timeout) {
-                Ok(body) if is_error_body(&body) => {
-                    log::info!(
-                        "Overpass 端点 {endpoint} 返回错误页，耗时 {:?}: {}",
-                        started.elapsed(),
-                        first_error_line(&body)
-                    );
-                    errors.push(format!(
-                        "端点 {endpoint} 返回错误页: {}",
-                        first_error_line(&body)
-                    ));
-                }
-                Ok(body) => {
-                    log::info!(
-                        "Overpass 端点 {endpoint} 成功，耗时 {:?}",
-                        started.elapsed()
-                    );
-                    // 自适应排序：最近成功的端点前置，后续查询优先尝试
-                    if let Ok(mut order) = self.order.lock() {
-                        if let Some(position) =
-                            order.iter().position(|candidate| candidate == endpoint)
-                        {
-                            let endpoint = order.remove(position);
-                            order.insert(0, endpoint);
+        self.executor
+            .query(query, deadline, health, &|attempt, total, _| {
+                on_progress(FetchProgress {
+                    stage,
+                    attempt,
+                    total_attempts: total,
+                    elapsed_secs: started.elapsed().as_secs(),
+                });
+            })
+    }
+
+    /// 按有界子查询获取六类校园对象。各分片顺序执行并共享本次运行节点健康；
+    /// 已成功分片只保留在内存，不会因后续分片重试而重复下载。
+    pub fn query_campus_objects(
+        &self,
+        bbox: (f64, f64, f64, f64),
+        deadline: Instant,
+        on_retry: &dyn Fn(),
+    ) -> std::result::Result<String, String> {
+        let shards = campus_object_query_shards(bbox)
+            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
+        let mut health = RunHealth::default();
+        let mut elements = Vec::new();
+        let mut identities = BTreeSet::new();
+        for shard in shards {
+            let body =
+                self.executor
+                    .query(&shard.query, deadline, &mut health, &|attempt, _, _| {
+                        if attempt > 1 {
+                            on_retry();
                         }
-                    }
-                    return Ok(body);
-                }
-                Err(message) => {
-                    log::info!(
-                        "Overpass 端点 {endpoint} 不可达，耗时 {:?}: {message}",
-                        started.elapsed()
-                    );
-                    errors.push(format!("端点 {endpoint} 不可达: {message}"));
+                    })?;
+            let value: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|error| format!("成功响应解析失败：{error}"))?;
+            for element in value
+                .get("elements")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let identity = (
+                    element
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    element
+                        .get("id")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_default(),
+                );
+                if identities.insert(identity) {
+                    elements.push(element.clone());
                 }
             }
         }
-        if errors.is_empty() {
-            Err("Overpass 端点列表为空".to_owned())
-        } else {
-            Err(errors.join("；"))
-        }
+        serde_json::to_string(&serde_json::json!({ "elements": elements }))
+            .map_err(|error| format!("合并 Overpass 子查询失败：{error}"))
+    }
+}
+
+fn production_retry_policy() -> RetryPolicy {
+    RetryPolicy {
+        request_timeout: OVERPASS_HTTP_TIMEOUT,
+        max_rounds: OVERPASS_MAX_ROUNDS,
+        retry_backoff: OVERPASS_RETRY_BACKOFF,
+        transient_cooldown: OVERPASS_TRANSIENT_COOLDOWN,
+        overloaded_cooldown: OVERPASS_OVERLOADED_COOLDOWN,
+    }
+}
+
+fn classify_legacy_failure(message: &str) -> RequestFailure {
+    let lower = message.to_ascii_lowercase();
+    let kind = if lower.contains("429") {
+        FailureKind::RateLimited
+    } else if lower.contains("504") {
+        FailureKind::GatewayTimeout
+    } else if lower.contains("timeout") || message.contains("超时") || message.contains("挂起")
+    {
+        FailureKind::Timeout
+    } else {
+        FailureKind::Connection
+    };
+    RequestFailure {
+        kind,
+        message: message.to_owned(),
     }
 }
 
 /// Nominatim 客户端：校名 → 校区元素（OSMF 政策：≤1 次/秒、带 User-Agent）
 pub struct NominatimClient {
     transport: HttpTransport,
+    endpoint: String,
+    cache: Mutex<BTreeMap<String, Option<NominatimMatch>>>,
+    last_request: Option<Mutex<Option<Instant>>>,
 }
 
 impl NominatimClient {
     /// 生产传输：ureq 直连，调用前按政策休眠 1 秒
     pub fn production() -> Self {
         Self {
-            transport: Box::new(|url: &str, timeout: Duration| {
-                // OSMF 政策 ≤1 次/秒：用 recv_timeout 等待 1 秒
-                // （std::thread::sleep 被 clippy 禁用——无卡顿铁律；调用方均在后台线程）。
-                let (_, rx) = std::sync::mpsc::channel::<()>();
-                let _ = rx.recv_timeout(Duration::from_secs(1));
-                ureq_transport()(url, timeout)
-            }),
+            transport: ureq_transport(),
+            endpoint: NOMINATIM_ENDPOINT.to_owned(),
+            cache: Mutex::new(BTreeMap::new()),
+            last_request: Some(Mutex::new(None)),
         }
     }
 
     /// 测试注入（不要求休眠）
     pub fn with_transport(transport: HttpTransport) -> Self {
-        Self { transport }
+        Self::with_endpoint_and_transport(NOMINATIM_ENDPOINT, transport)
+    }
+
+    /// 可切换的 Nominatim 兼容服务 seam；调用方仍须遵守所选服务政策。
+    pub fn with_endpoint_and_transport(endpoint: &str, transport: HttpTransport) -> Self {
+        Self {
+            transport,
+            endpoint: endpoint.trim_end_matches('/').to_owned(),
+            cache: Mutex::new(BTreeMap::new()),
+            last_request: None,
+        }
     }
 
     /// 解析校名：先精确查询，无校区命中时去掉括号后缀再查一次。
@@ -286,18 +394,78 @@ impl NominatimClient {
         &self,
         campus_name: &str,
     ) -> std::result::Result<Option<NominatimMatch>, String> {
+        self.resolve_campus_until(campus_name, Instant::now() + Duration::from_secs(45))
+    }
+
+    fn resolve_campus_until(
+        &self,
+        campus_name: &str,
+        deadline: Instant,
+    ) -> std::result::Result<Option<NominatimMatch>, String> {
+        if let Some(cached) = self
+            .cache
+            .lock()
+            .expect("nominatim cache lock")
+            .get(campus_name)
+            .cloned()
+        {
+            return Ok(cached);
+        }
         for candidate in campus_name_candidates(campus_name) {
             let url = format!(
-                "{NOMINATIM_ENDPOINT}?q={}&format=json&limit=5",
+                "{}?q={}&format=json&limit=5",
+                self.endpoint,
                 encode_query(&candidate)
             );
-            let body = (self.transport)(&url, Duration::from_secs(15))?;
-            let results = parse_nominatim_results(&body);
-            if let Some(matched) = results.into_iter().find(is_campus_like) {
-                return Ok(Some(matched));
+            let mut last_error = None;
+            for _ in 0..2 {
+                self.wait_for_rate_limit(deadline)?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("Nominatim 校名解析达到边界获取总体截止".to_owned());
+                }
+                match (self.transport)(&url, Duration::from_secs(15).min(remaining)) {
+                    Ok(body) => match parse_nominatim_results_checked(&body) {
+                        Ok(results) => {
+                            if let Some(matched) = results.into_iter().find(is_campus_like) {
+                                self.cache
+                                    .lock()
+                                    .expect("nominatim cache lock")
+                                    .insert(campus_name.to_owned(), Some(matched.clone()));
+                                return Ok(Some(matched));
+                            }
+                            last_error = None;
+                            break;
+                        }
+                        Err(error) => last_error = Some(error),
+                    },
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            if let Some(error) = last_error {
+                return Err(format!("Nominatim 请求或响应失败：{error}"));
             }
         }
         Ok(None)
+    }
+
+    fn wait_for_rate_limit(&self, deadline: Instant) -> std::result::Result<(), String> {
+        let Some(last_request) = &self.last_request else {
+            return Ok(());
+        };
+        let mut last = last_request.lock().expect("nominatim rate limit lock");
+        if let Some(previous) = *last {
+            let required = Duration::from_secs(1).saturating_sub(previous.elapsed());
+            if required > deadline.saturating_duration_since(Instant::now()) {
+                return Err("Nominatim 限速等待将超过边界获取总体截止".to_owned());
+            }
+            if !required.is_zero() {
+                let (_sender, receiver) = std::sync::mpsc::channel::<()>();
+                let _ = receiver.recv_timeout(required);
+            }
+        }
+        *last = Some(Instant::now());
+        Ok(())
     }
 }
 
@@ -350,6 +518,8 @@ impl CampusBoundaryFetcher {
         on_progress: &dyn Fn(FetchProgress),
     ) -> CampusBoundaryResult {
         let fetch_started = Instant::now();
+        let overall_deadline = fetch_started + BOUNDARY_FETCH_DEADLINE;
+        let mut overpass_health = RunHealth::default();
         on_progress(FetchProgress {
             stage: FetchStage::CampusName,
             attempt: 0,
@@ -357,7 +527,9 @@ impl CampusBoundaryFetcher {
             elapsed_secs: 0,
         });
         // 1. Nominatim 校名 → 元素 ID → Overpass 按 ID 拉取
-        let campus_name_result = self.nominatim.resolve_campus(campus_name);
+        let campus_name_result = self
+            .nominatim
+            .resolve_campus_until(campus_name, overall_deadline);
         log::info!(
             "边界获取阶段 校名解析 完成，耗时 {:?}",
             fetch_started.elapsed()
@@ -365,11 +537,16 @@ impl CampusBoundaryFetcher {
         match campus_name_result {
             Ok(Some(matched)) => {
                 let query = element_by_id_query(&matched.osm_type, matched.osm_id);
-                match self.overpass.as_ref().query_with_fallback_progress(
-                    &query,
-                    FetchStage::ByElementId,
-                    on_progress,
-                ) {
+                match self
+                    .overpass
+                    .as_ref()
+                    .query_with_fallback_progress_until_with_health(
+                        &query,
+                        FetchStage::ByElementId,
+                        overall_deadline,
+                        &mut overpass_health,
+                        on_progress,
+                    ) {
                     Ok(body) => {
                         if let Some(best) = select_best(&body, anchor_lon, anchor_lat, campus_name)
                         {
@@ -388,6 +565,8 @@ impl CampusBoundaryFetcher {
                             anchor_lat,
                             campus_name,
                             format!("边界 by-ID 查询失败：{message}"),
+                            overall_deadline,
+                            &mut overpass_health,
                             on_progress,
                         );
                     }
@@ -401,6 +580,8 @@ impl CampusBoundaryFetcher {
                     anchor_lat,
                     campus_name,
                     format!("校名解析失败：{message}"),
+                    overall_deadline,
+                    &mut overpass_health,
                     on_progress,
                 );
             }
@@ -413,6 +594,8 @@ impl CampusBoundaryFetcher {
             campus_name,
             BoundarySourceKind::OverpassAmenity,
             FetchStage::Amenity,
+            overall_deadline,
+            &mut overpass_health,
             on_progress,
         ) {
             Some(result) => result,
@@ -433,12 +616,19 @@ impl CampusBoundaryFetcher {
         campus_name: &str,
         source: BoundarySourceKind,
         stage: FetchStage,
+        deadline: Instant,
+        health: &mut RunHealth,
         on_progress: &dyn Fn(FetchProgress),
     ) -> Option<CampusBoundaryResult> {
         match self
             .overpass
-            .query_with_fallback_progress(query, stage, on_progress)
-        {
+            .query_with_fallback_progress_until_with_health(
+                query,
+                stage,
+                deadline,
+                health,
+                on_progress,
+            ) {
             Ok(body) => select_best(&body, anchor_lon, anchor_lat, campus_name).map(|best| {
                 CampusBoundaryResult::AutoSelected {
                     name: best.name,
@@ -463,17 +653,25 @@ impl CampusBoundaryFetcher {
 }
 
 /// Nominatim 失败后按级联继续：amenity 近域 → landuse=education → NotFound/Unreachable
+#[allow(
+    clippy::too_many_arguments,
+    reason = "级联回退需要保留锚点、首段错误、统一截止、运行健康和 UI 进度上下文"
+)]
 fn fallback_after_error(
     overpass: &OverpassClient,
     anchor_lon: f64,
     anchor_lat: f64,
     campus_name: &str,
     first_error: String,
+    deadline: Instant,
+    health: &mut RunHealth,
     on_progress: &dyn Fn(FetchProgress),
 ) -> CampusBoundaryResult {
-    let amenity = overpass.query_with_fallback_progress(
+    let amenity = overpass.query_with_fallback_progress_until_with_health(
         &university_query(bbox_around(anchor_lon, anchor_lat, 1500.0)),
         FetchStage::Amenity,
+        deadline,
+        health,
         on_progress,
     );
     match amenity {
@@ -486,9 +684,11 @@ fn fallback_after_error(
                     candidate_count: best.candidate_count,
                 };
             }
-            let landuse = overpass.query_with_fallback_progress(
+            let landuse = overpass.query_with_fallback_progress_until_with_health(
                 &landuse_education_query(bbox_around(anchor_lon, anchor_lat, 1500.0)),
                 FetchStage::Landuse,
+                deadline,
+                health,
                 on_progress,
             );
             match landuse {
@@ -671,180 +871,6 @@ pub fn elements_to_gcj02(mut elements: Vec<OsmElement>) -> Vec<OsmElement> {
     elements
 }
 
-/// union 写法（避免 `|` 正则被新版 Overpass 拒绝）：way/relation × university/college/school
-pub fn university_query(bbox: (f64, f64, f64, f64)) -> String {
-    let (south, west, north, east) = bbox;
-    format!(
-        "[out:json][timeout:{t}];(way[\"amenity\"=\"university\"]({s},{w},{n},{e});way[\"amenity\"=\"college\"]({s},{w},{n},{e});way[\"amenity\"=\"school\"]({s},{w},{n},{e});relation[\"amenity\"=\"university\"]({s},{w},{n},{e});relation[\"amenity\"=\"college\"]({s},{w},{n},{e});relation[\"amenity\"=\"school\"]({s},{w},{n},{e}););out geom;",
-        t = OVERPASS_SERVER_TIMEOUT_SECS,
-        s = south,
-        w = west,
-        n = north,
-        e = east
-    )
-}
-
-/// 按元素 ID 拉取（Nominatim 解析结果 → Overpass 取边界）
-pub fn element_by_id_query(osm_type: &str, osm_id: i64) -> String {
-    format!(
-        "[out:json][timeout:{t}];{osm_type}({osm_id});out geom;",
-        t = OVERPASS_SERVER_TIMEOUT_SECS
-    )
-}
-
-/// landuse=education 兜底（union：way + relation）
-pub fn landuse_education_query(bbox: (f64, f64, f64, f64)) -> String {
-    let (south, west, north, east) = bbox;
-    format!(
-        "[out:json][timeout:{t}];(way[\"landuse\"=\"education\"]({s},{w},{n},{e});relation[\"landuse\"=\"education\"]({s},{w},{n},{e}););out geom;",
-        t = OVERPASS_SERVER_TIMEOUT_SECS,
-        s = south,
-        w = west,
-        n = north,
-        e = east
-    )
-}
-
-/// 六类校园对象粗查询：selector 由 B13 集中标签规则生成。
-///
-/// 查询规划只决定某条集中规则适合请求 node / way / relation 中的哪些几何载体，
-/// 不复制类别归属。`historic=*`、`power=*`、`man_made=*` 这类无形态约束的宽规则
-/// 不直接进入在线粗查询；若对象因其它受支持 selector 被拉回，最终分类仍由 B13
-/// 唯一裁决。bbox 只缩小传输范围，不提供候选资格。
-pub fn campus_objects_query(
-    bbox: (f64, f64, f64, f64),
-) -> std::result::Result<String, TransformError> {
-    let engine = ClassifyEngine::with_default_mapping()?;
-    let (south, west, north, east) = bbox;
-    let mut clauses = BTreeSet::new();
-    for rule in &engine.config().rules {
-        // OSM 对 building=* 明确定义为建筑/构筑物粗族；用集中“建筑”规则条目
-        // 识别该族，避免只枚举当前已知 value 而漏掉新值。最终互斥类别仍由
-        // 同一个 ClassifyEngine 裁决，不在查询层另建分类表。
-        if rule.category_tkey == "collection.category_building" {
-            let selector = "[\"building\"]";
-            for element_kind in ["way", "relation"] {
-                clauses.insert(format!(
-                    "{element_kind}{selector}({south},{west},{north},{east});"
-                ));
-            }
-        }
-        for pattern in &rule.tags {
-            let Some((key, value)) = pattern.as_str().split_once('=') else {
-                continue;
-            };
-            let selector = overpass_tag_selector(key, value);
-            for element_kind in overpass_element_kinds(key, value) {
-                clauses.insert(format!(
-                    "{element_kind}{selector}({south},{west},{north},{east});"
-                ));
-            }
-        }
-    }
-    Ok(format!(
-        "[out:json][timeout:{OVERPASS_SERVER_TIMEOUT_SECS}];({});out geom;",
-        clauses.into_iter().collect::<String>()
-    ))
-}
-
-fn overpass_tag_selector(key: &str, value: &str) -> String {
-    if value == "*" {
-        format!("[\"{key}\"]")
-    } else if let Some(prefix) = value.strip_suffix('*') {
-        format!("[\"{key}\"~\"^{prefix}\"]")
-    } else {
-        format!("[\"{key}\"=\"{value}\"]")
-    }
-}
-
-fn overpass_element_kinds(key: &str, value: &str) -> &'static [&'static str] {
-    match (key, value) {
-        // 点对象：只有标签语义本身明确落在点上时才请求 node。
-        ("natural", "tree") | ("barrier", "gate") => &["node"],
-        // 喷泉既可能是点，也可能有真实面轮廓。
-        ("amenity", "fountain") => &["node", "way", "relation"],
-        // 线对象：路线 relation 不是可直接验证的道路/铁路/水路线形。
-        ("highway" | "railway" | "waterway", _) => &["way"],
-        ("barrier", "wall" | "fence") | ("natural", "tree_row") => &["way"],
-        // 面对象：不为明显面对象生成无意义 node selector。
-        ("building" | "landuse" | "leisure" | "sport" | "water", _) => &["way", "relation"],
-        ("natural", "water" | "wood" | "scrub") => &["way", "relation"],
-        // 形态过宽，缺少进一步过滤；保持集中分类规则不变但不拉取全域噪声。
-        ("historic" | "power" | "man_made", _) => &[],
-        _ => &[],
-    }
-}
-
-/// 以锚点为中心、给定半径（米）的 WGS-84 包围盒（south, west, north, east）
-pub fn bbox_around(lon: f64, lat: f64, radius_m: f64) -> (f64, f64, f64, f64) {
-    let lat_delta = radius_m / 111_320.0;
-    let lon_delta = radius_m / (111_320.0 * lat.to_radians().cos().abs().max(0.01));
-    (
-        lat - lat_delta,
-        lon - lon_delta,
-        lat + lat_delta,
-        lon + lon_delta,
-    )
-}
-
-/// 方案边界（GCJ-02）→ 查询包围盒；`margin_deg` 为外扩余量。
-/// 说明：边界为 GCJ-02，Overpass 查询窗口为 WGS-84——工单禁止 GCJ→WGS 反向，
-/// 采用“GCJ 边界包围盒 + 外扩余量（默认 ~0.01°≈1km，覆盖 GCJ 偏移 ~500m）”的
-/// 查询窗口口径，候选再经 WGS→GCJ 进入应用坐标系。
-pub fn boundary_bbox(boundary: &Boundary, margin_deg: f64) -> Option<(f64, f64, f64, f64)> {
-    let mut south = f64::MAX;
-    let mut west = f64::MAX;
-    let mut north = f64::MIN;
-    let mut east = f64::MIN;
-    let mut any = false;
-    let rings: Vec<&serde_json::Value> = match boundary.r#type.as_str() {
-        "Polygon" => boundary
-            .coordinates
-            .as_array()
-            .map(|rings| rings.iter().collect())
-            .unwrap_or_default(),
-        "MultiPolygon" => boundary
-            .coordinates
-            .as_array()
-            .map(|polys| {
-                polys
-                    .iter()
-                    .filter_map(|poly| poly.as_array())
-                    .flatten()
-                    .collect()
-            })
-            .unwrap_or_default(),
-        _ => return None,
-    };
-    for ring in rings {
-        let Some(points) = ring.as_array() else {
-            continue;
-        };
-        for point in points {
-            let Some(pair) = point.as_array() else {
-                continue;
-            };
-            let (Some(lon), Some(lat)) = (
-                pair.first().and_then(serde_json::Value::as_f64),
-                pair.get(1).and_then(serde_json::Value::as_f64),
-            ) else {
-                continue;
-            };
-            south = south.min(lat);
-            west = west.min(lon);
-            north = north.max(lat);
-            east = east.max(lon);
-            any = true;
-        }
-    }
-    any.then_some((
-        south - margin_deg,
-        west - margin_deg,
-        north + margin_deg,
-        east + margin_deg,
-    ))
-}
-
 /// 校名候选：精确名 → 去括号后缀的基础名（高德校区名常带“(闵行本部校区)”后缀）
 pub fn campus_name_candidates(name: &str) -> Vec<String> {
     let mut candidates = vec![name.to_owned()];
@@ -869,13 +895,16 @@ fn strip_parenthetical_suffix(name: &str) -> String {
 
 /// 解析 Nominatim JSON 结果
 pub fn parse_nominatim_results(json: &str) -> Vec<NominatimMatch> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
-    let Some(results) = value.as_array() else {
-        return Vec::new();
-    };
-    results
+    parse_nominatim_results_checked(json).unwrap_or_default()
+}
+
+fn parse_nominatim_results_checked(json: &str) -> std::result::Result<Vec<NominatimMatch>, String> {
+    let value = serde_json::from_str::<serde_json::Value>(json)
+        .map_err(|error| format!("JSON 解析失败：{error}"))?;
+    let results = value
+        .as_array()
+        .ok_or_else(|| "响应顶层不是数组".to_owned())?;
+    Ok(results
         .iter()
         .filter_map(|item| {
             let osm_type = item.get("osm_type")?.as_str()?.to_owned();
@@ -904,7 +933,7 @@ pub fn parse_nominatim_results(json: &str) -> Vec<NominatimMatch> {
                     .to_owned(),
             })
         })
-        .collect()
+        .collect())
 }
 
 fn is_campus_like(matched: &NominatimMatch) -> bool {
@@ -929,30 +958,34 @@ pub fn encode_query(value: &str) -> String {
     out
 }
 
-fn is_error_body(body: &str) -> bool {
-    body.contains("parse error")
-        || body.contains("Runtime error")
-        || body.trim_start().starts_with("<html")
-}
-
 fn first_error_line(body: &str) -> String {
     body.lines()
-        .find(|line| line.contains("parse error") || line.contains("Error"))
+        .find(|line| {
+            let normalized = line.to_ascii_lowercase();
+            normalized.contains("parse error") || normalized.contains("error")
+        })
         .unwrap_or_default()
         .trim()
         .to_owned()
 }
 
-/// 生产 HTTP 传输（ureq；每请求独立 Agent 以携带超时与 UA）
+fn ureq_agent() -> std::result::Result<ureq::Agent, String> {
+    let tls = native_tls::TlsConnector::new().map_err(|error| error.to_string())?;
+    Ok(ureq::AgentBuilder::new()
+        .user_agent(USER_AGENT)
+        .tls_connector(Arc::new(tls))
+        .build())
+}
+
+/// Nominatim 生产 HTTP 传输（复用同一个 ureq Agent/连接池）。
 fn ureq_transport() -> HttpTransport {
-    Box::new(|url: &str, timeout: Duration| {
-        let tls = native_tls::TlsConnector::new().map_err(|error| error.to_string())?;
-        let agent = ureq::AgentBuilder::new()
+    let agent = ureq_agent().expect("Nominatim TLS client must initialize");
+    Box::new(move |url: &str, timeout: Duration| {
+        let response = agent
+            .get(url)
             .timeout(timeout)
-            .user_agent(USER_AGENT)
-            .tls_connector(Arc::new(tls))
-            .build();
-        let response = agent.get(url).call().map_err(|error| error.to_string())?;
+            .call()
+            .map_err(|error| error.to_string())?;
         response.into_string().map_err(|error| error.to_string())
     })
 }

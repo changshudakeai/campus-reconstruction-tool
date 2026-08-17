@@ -122,6 +122,7 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
     keys.extend(
         [
             CollectionStage::FetchingData,
+            CollectionStage::RetryingSource,
             CollectionStage::Naming,
             CollectionStage::Writing,
             CollectionStage::Finished,

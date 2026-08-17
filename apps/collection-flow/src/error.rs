@@ -49,6 +49,9 @@ impl CollectionError {
             Self::Acquisition(data_acquisition::AcquisitionError::SourceUnreachable { .. }) => {
                 "error.data_source_unreachable"
             }
+            Self::Acquisition(data_acquisition::AcquisitionError::DeadlineExceeded) => {
+                "collection.error_deadline"
+            }
             Self::Acquisition(_) => "collection.error_failed",
             Self::Persistence(_) => "collection.error_persistence",
             Self::Audit(_) => "collection.error_audit",

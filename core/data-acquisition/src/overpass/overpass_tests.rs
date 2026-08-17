@@ -3,18 +3,54 @@
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use crate::overpass::*;
+    use shared_domain_types::Boundary;
 
     fn bbox() -> (f64, f64, f64, f64) {
         (31.0, 121.4, 31.1, 121.5)
     }
 
+    fn test_retry_policy() -> RetryPolicy {
+        RetryPolicy {
+            request_timeout: Duration::from_secs(1),
+            max_rounds: 2,
+            retry_backoff: Duration::ZERO,
+            transient_cooldown: Duration::ZERO,
+            overloaded_cooldown: Duration::from_secs(60),
+        }
+    }
+
+    fn request_failure(kind: FailureKind, message: &str) -> RequestFailure {
+        RequestFailure {
+            kind,
+            message: message.to_owned(),
+        }
+    }
+
+    fn recording_production_client() -> (OverpassClient, Arc<Mutex<Vec<String>>>) {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let paths_for_transport = Arc::clone(&paths);
+        let real = reliability::production_transport(ureq_agent().expect("TLS agent"));
+        let transport: RequestTransport = Arc::new(move |request, timeout| {
+            paths_for_transport
+                .lock()
+                .unwrap()
+                .push(request.endpoint.to_owned());
+            real(request, timeout)
+        });
+        (
+            OverpassClient::with_request_transport_and_policy(transport, production_retry_policy()),
+            paths,
+        )
+    }
+
     #[test]
     fn endpoint_limits_are_bounded_per_ticket() {
-        assert_eq!(OVERPASS_HTTP_TIMEOUT, Duration::from_secs(5));
-        assert_eq!(OVERPASS_QUERY_DEADLINE, Duration::from_secs(15));
+        assert_eq!(OVERPASS_HTTP_TIMEOUT, Duration::from_secs(25));
+        assert_eq!(OVERPASS_QUERY_DEADLINE, Duration::from_secs(90));
     }
 
     #[test]
@@ -64,12 +100,57 @@ mod tests {
         });
         assert!(result.is_err());
         let events = progress.into_inner();
-        assert_eq!(events.len(), OVERPASS_ENDPOINTS.len());
+        assert!(events.len() <= OVERPASS_ENDPOINTS.len() * usize::from(OVERPASS_MAX_ROUNDS));
         for (index, event) in events.iter().enumerate() {
             assert_eq!(event.stage, FetchStage::ByElementId);
             assert_eq!(event.attempt, index as u32 + 1);
-            assert_eq!(event.total_attempts, OVERPASS_ENDPOINTS.len() as u32);
+            assert_eq!(
+                event.total_attempts,
+                (OVERPASS_ENDPOINTS.len() * usize::from(OVERPASS_MAX_ROUNDS)) as u32
+            );
         }
+    }
+
+    #[test]
+    fn boundary_cascade_keeps_failed_endpoint_cold_between_queries() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_transport = Arc::clone(&calls);
+        let transport: RequestTransport = Arc::new(move |request, _| {
+            let mut calls = calls_for_transport.lock().unwrap();
+            calls.push(request.endpoint);
+            match calls.len() {
+                1 => Err(request_failure(FailureKind::RateLimited, "繁忙")),
+                2 => Ok(r#"{"elements":[]}"#.to_owned()),
+                3 => Err(request_failure(FailureKind::Connection, "断开")),
+                _ => Ok(r#"{"elements":[{"type":"way","id":2,"tags":{"name":"示例大学"},"geometry":[{"lat":31.02,"lon":121.42},{"lat":31.03,"lon":121.43},{"lat":31.02,"lon":121.44},{"lat":31.02,"lon":121.42}]}]}"#.to_owned()),
+            }
+        });
+        let overpass = OverpassClient::with_request_transport_and_policy(
+            transport,
+            RetryPolicy {
+                max_rounds: 1,
+                ..test_retry_policy()
+            },
+        );
+        let nominatim = NominatimClient::with_transport(Box::new(|_, _| {
+            Ok(r#"[{"osm_type":"way","osm_id":1,"class":"amenity","type":"university","display_name":"示例大学"}]"#.to_owned())
+        }));
+        let fetcher = CampusBoundaryFetcher::with_clients(overpass, nominatim);
+
+        assert!(matches!(
+            fetcher.fetch_campus("示例大学", 121.43, 31.025),
+            CampusBoundaryResult::AutoSelected { .. }
+        ));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                OVERPASS_ENDPOINTS[0],
+                OVERPASS_ENDPOINTS[1],
+                OVERPASS_ENDPOINTS[1],
+                OVERPASS_ENDPOINTS[2],
+            ],
+            "by-id 中被 429 冷却的 de 不得在 amenity 查询立刻重试"
+        );
     }
 
     #[test]
@@ -111,14 +192,23 @@ mod tests {
     #[test]
     fn three_endpoints_all_hang_respect_overall_query_deadline() {
         // 注入“三端点全挂 Overpass transport”：每个端点睡满超时后失败。
-        // 整体查询必须 ≤ 15s 截止并返回包含全部端点的结构化错误。
-        let transport = Box::new(|_: &str, timeout: Duration| {
+        // 测试策略把预算压到毫秒级，验证整体截止并保留全部端点诊断。
+        let transport: RequestTransport = Arc::new(|_, timeout: Duration| {
             // 无卡顿铁律禁用 std::thread::sleep；用 recv_timeout 等满超时
             let (_tx, rx) = std::sync::mpsc::channel::<()>();
             let _ = rx.recv_timeout(timeout);
-            Err("模拟端点挂起".to_owned())
+            Err(request_failure(FailureKind::Timeout, "模拟端点挂起"))
         });
-        let client = OverpassClient::with_transport(transport);
+        let client = OverpassClient::with_request_transport_and_policy(
+            transport,
+            RetryPolicy {
+                request_timeout: Duration::from_millis(10),
+                max_rounds: 1,
+                retry_backoff: Duration::ZERO,
+                transient_cooldown: Duration::ZERO,
+                overloaded_cooldown: Duration::ZERO,
+            },
+        );
         let started = Instant::now();
         let result = client.query_with_fallback(&university_query(bbox()));
         let elapsed = started.elapsed();
@@ -131,7 +221,7 @@ mod tests {
             );
         }
         assert!(
-            elapsed <= OVERPASS_QUERY_DEADLINE + Duration::from_secs(1),
+            elapsed <= Duration::from_secs(1),
             "整体查询不得超过截止时间：{elapsed:?}"
         );
     }
@@ -188,6 +278,193 @@ mod tests {
     }
 
     #[test]
+    fn campus_object_queries_split_transport_without_losing_six_category_selectors() {
+        let shards = campus_object_query_shards(bbox()).expect("集中标签规则必须能生成有界子查询");
+        assert!(
+            (3..=5).contains(&shards.len()),
+            "大型校园查询应拆成少量真实重试单元，得到 {} 个",
+            shards.len()
+        );
+        let combined = shards
+            .iter()
+            .map(|shard| shard.query.as_str())
+            .collect::<String>();
+        for selector in [
+            "way[\"building\"=\"school\"]",
+            "way[\"highway\"]",
+            "way[\"natural\"=\"water\"]",
+            "way[\"landuse\"=\"grass\"]",
+            "way[\"leisure\"=\"pitch\"]",
+            "way[\"barrier\"=\"wall\"]",
+        ] {
+            assert!(
+                combined.contains(selector),
+                "拆分后丢失六类集中规则 selector {selector}"
+            );
+        }
+        assert!(shards.iter().all(|shard| {
+            shard.query.contains("out geom")
+                && shard
+                    .query
+                    .contains(&format!("[timeout:{OVERPASS_SERVER_TIMEOUT_SECS}]"))
+        }));
+    }
+
+    #[test]
+    fn campus_subqueries_use_post_bodies_and_retain_success_while_retrying_failed_shard() {
+        let calls = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let calls_for_transport = Arc::clone(&calls);
+        let per_body_calls = Arc::new(Mutex::new(
+            std::collections::BTreeMap::<String, usize>::new(),
+        ));
+        let per_body_for_transport = Arc::clone(&per_body_calls);
+        let transport: RequestTransport = Arc::new(move |request, _| {
+            calls_for_transport
+                .lock()
+                .unwrap()
+                .push((request.endpoint.to_owned(), request.body.clone()));
+            let mut counts = per_body_for_transport.lock().unwrap();
+            let shard_number = counts.len() + usize::from(!counts.contains_key(&request.body));
+            let count = counts.entry(request.body.clone()).or_default();
+            *count += 1;
+            let is_second_shard = shard_number == 2;
+            if is_second_shard && *count < 3 {
+                Err(request_failure(FailureKind::Timeout, "模拟前两节点超时"))
+            } else {
+                Ok(format!(
+                    r#"{{"elements":[{{"type":"way","id":{}}}]}}"#,
+                    shard_number
+                ))
+            }
+        });
+        let client =
+            OverpassClient::with_request_transport_and_policy(transport, test_retry_policy());
+
+        let body = client
+            .query_campus_objects(bbox(), Instant::now() + Duration::from_secs(5), &|| {})
+            .expect("前两节点失败后第三节点应完成失败分片，其余成功分片不重下");
+
+        assert!(body.contains("elements"));
+        let counts = per_body_calls.lock().unwrap();
+        assert_eq!(counts.values().filter(|count| **count == 1).count(), 3);
+        assert_eq!(counts.values().filter(|count| **count == 3).count(), 1);
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls[..4]
+                .iter()
+                .map(|(endpoint, _)| endpoint.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                OVERPASS_ENDPOINTS[0],
+                OVERPASS_ENDPOINTS[0],
+                OVERPASS_ENDPOINTS[1],
+                OVERPASS_ENDPOINTS[2]
+            ],
+            "失败分片必须顺序尝试前两节点，并由第三节点成功"
+        );
+        for (endpoint, form_body) in calls.iter() {
+            assert!(!endpoint.contains("data="), "查询不得进入长 URL");
+            assert!(form_body.starts_with("data="), "查询必须进入 POST 表单体");
+        }
+    }
+
+    #[test]
+    fn rate_limit_and_gateway_timeout_cool_nodes_for_later_shards() {
+        let endpoints = Arc::new(Mutex::new(Vec::<String>::new()));
+        let endpoints_for_transport = Arc::clone(&endpoints);
+        let transport: RequestTransport = Arc::new(move |request, _| {
+            endpoints_for_transport
+                .lock()
+                .unwrap()
+                .push(request.endpoint.to_owned());
+            if request.endpoint == OVERPASS_ENDPOINTS[0] {
+                Err(request_failure(
+                    FailureKind::RateLimited,
+                    "Too Many Requests",
+                ))
+            } else if request.endpoint == OVERPASS_ENDPOINTS[1] {
+                Err(request_failure(
+                    FailureKind::GatewayTimeout,
+                    "Gateway Timeout",
+                ))
+            } else {
+                Ok(r#"{"elements":[]}"#.to_owned())
+            }
+        });
+        let client =
+            OverpassClient::with_request_transport_and_policy(transport, test_retry_policy());
+
+        client
+            .query_campus_objects(bbox(), Instant::now() + Duration::from_secs(5), &|| {})
+            .unwrap();
+
+        let endpoints = endpoints.lock().unwrap();
+        assert_eq!(&endpoints[..3], &OVERPASS_ENDPOINTS.map(str::to_owned));
+        assert!(
+            endpoints[3..]
+                .iter()
+                .all(|endpoint| endpoint == OVERPASS_ENDPOINTS[2]),
+            "429/504 节点冷却后，后续成功分片应优先健康节点：{endpoints:?}"
+        );
+    }
+
+    #[test]
+    fn failure_diagnostics_distinguish_429_504_error_page_and_parse_failure() {
+        let cases = [
+            (
+                FailureKind::RateLimited,
+                "HTTP 429 节点限流",
+                "Too Many Requests",
+            ),
+            (
+                FailureKind::GatewayTimeout,
+                "HTTP 504 节点超时",
+                "Gateway Timeout",
+            ),
+        ];
+        for (kind, expected, message) in cases {
+            let transport: RequestTransport =
+                Arc::new(move |_, _| Err(request_failure(kind, message)));
+            let client = OverpassClient::with_request_transport_and_policy(
+                transport,
+                RetryPolicy {
+                    max_rounds: 1,
+                    ..test_retry_policy()
+                },
+            );
+            let error = client.query_with_fallback("q").unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+
+        let error_page: RequestTransport =
+            Arc::new(|_, _| Ok("<html><body>Runtime error: overloaded</body></html>".to_owned()));
+        let client = OverpassClient::with_request_transport_and_policy(
+            error_page,
+            RetryPolicy {
+                max_rounds: 1,
+                ..test_retry_policy()
+            },
+        );
+        assert!(client
+            .query_with_fallback("q")
+            .unwrap_err()
+            .contains("服务端错误页"));
+
+        let malformed: RequestTransport = Arc::new(|_, _| Ok("not-json".to_owned()));
+        let client = OverpassClient::with_request_transport_and_policy(
+            malformed,
+            RetryPolicy {
+                max_rounds: 1,
+                ..test_retry_policy()
+            },
+        );
+        assert!(client
+            .query_with_fallback("q")
+            .unwrap_err()
+            .contains("响应解析失败"));
+    }
+
+    #[test]
     fn landuse_query_uses_union() {
         let query = landuse_education_query(bbox());
         assert!(!query.contains('|'));
@@ -203,17 +480,14 @@ mod tests {
     }
 
     #[test]
-    fn query_url_uses_data_parameter() {
+    fn post_body_uses_data_parameter() {
         let query = university_query(bbox());
-        let url = format!(
-            "https://overpass-api.de/api/interpreter?data={}",
-            encode_query(&query)
-        );
+        let body = format!("data={}", encode_query(&query));
         assert!(
-            url.contains("?data=%5Bout%3Ajson%5D"),
-            "data= 参数必须存在: {url}"
+            body.starts_with("data=%5Bout%3Ajson%5D"),
+            "POST 请求体必须从 data= 查询参数开始: {body}"
         );
-        assert!(url.contains("%3A"), "查询体必须百分号编码");
+        assert!(body.contains("%3A"), "查询体必须百分号编码");
     }
 
     #[test]
@@ -308,6 +582,32 @@ mod tests {
         assert_eq!(matched.osm_id, 288249651);
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 2, "先精确查询，失败后去括号再查");
+    }
+
+    #[test]
+    fn nominatim_reuses_confirmed_resolution_and_rejects_malformed_payload() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_transport = Arc::clone(&calls);
+        let client = NominatimClient::with_transport(Box::new(move |_, _| {
+            calls_for_transport.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(r#"[{"osm_type":"way","osm_id":288249651,"class":"amenity","type":"university","display_name":"上海交通大学"}]"#.to_owned())
+        }));
+
+        client.resolve_campus("上海交通大学").unwrap();
+        client.resolve_campus("上海交通大学").unwrap();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "同一运行中已确认的校名解析必须复用，避免重复请求公共 Nominatim"
+        );
+
+        let malformed = NominatimClient::with_transport(Box::new(|_, _| {
+            Ok("<html>upstream overloaded</html>".to_owned())
+        }));
+        assert!(
+            malformed.resolve_campus("示例大学").is_err(),
+            "服务端错误页/坏 JSON 不能伪装成未找到"
+        );
     }
 
     #[test]
@@ -468,8 +768,15 @@ mod tests {
     /// → Nominatim → by-id → WGS→GCJ → 排序 → 自动选中。
     #[test]
     #[ignore = "真实网络：仅用于 T31 实施窗口实测证据"]
+    #[allow(
+        clippy::disallowed_macros,
+        clippy::print_stderr,
+        reason = "显式运行的 ignored live test 需要把耗时与实际节点路径写入验收日志"
+    )]
     fn live_shanghai_jiaotong_boundary_fetch() {
-        let fetcher = CampusBoundaryFetcher::production();
+        let (overpass, paths) = recording_production_client();
+        let fetcher = CampusBoundaryFetcher::with_clients(overpass, NominatimClient::production());
+        let started = Instant::now();
         let outcome = fetcher.fetch_campus("上海交通大学(闵行本部校区)", 121.433, 31.028);
         match outcome {
             CampusBoundaryResult::AutoSelected {
@@ -486,18 +793,33 @@ mod tests {
                     "LIVE_OK name={name} source={source} candidates={candidate_count} points={}",
                     gcj02.len()
                 );
+                eprintln!(
+                    "LIVE_BOUNDARY elapsed={:?} path={:?} name={} points={} candidates={}",
+                    started.elapsed(),
+                    paths.lock().unwrap(),
+                    name,
+                    gcj02.len(),
+                    candidate_count
+                );
             }
             other => panic!("真实链路未自动选中：{other:?}"),
         }
     }
 
     /// 真实采集链路冒烟（不进 CI；T31 交接证据）：
-    /// OverpassDataSource（生产 transport：union building=* + 端点回退）
+    /// OverpassDataSource（生产 transport：六类四分片 + 有限重试/健康排序）
     /// 对交大闵行边界实拉 → 面候选 > 0、OSM name 优先、WGS→GCJ 已转。
     #[test]
-    #[ignore = "真实网络：仅用于 T31 实施窗口实测证据"]
-    fn live_building_collection_via_overpass_source() {
-        use crate::source::{DataSource, OverpassDataSource, SourceGeometry};
+    #[ignore = "真实网络：采集可靠性修复多轮实测证据"]
+    #[allow(
+        clippy::disallowed_macros,
+        clippy::print_stderr,
+        reason = "显式运行的 ignored live test 需要把耗时与实际节点路径写入验收日志"
+    )]
+    fn live_campus_object_collection_via_reliable_overpass_source() {
+        use crate::source::{
+            DataSource, DeadlineOverpassTransport, OverpassDataSource, SourceGeometry,
+        };
         use shared_domain_types::Boundary;
 
         let boundary = Boundary {
@@ -510,17 +832,21 @@ mod tests {
                 [121.42, 31.02]
             ]]),
         };
-        let transport = Box::new(move |b: &Boundary| {
+        let (client, paths) = recording_production_client();
+        let started = Instant::now();
+        let transport: DeadlineOverpassTransport = Box::new(move |b: &Boundary, deadline, _| {
             let bbox = boundary_bbox(b, 0.01).ok_or_else(|| "无包围盒".to_owned())?;
-            let query = campus_objects_query(bbox)
-                .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
-            OverpassClient::production()
-                .query_with_fallback(&query)
+            client
+                .query_campus_objects(bbox, deadline, &|| {})
                 .map_err(|message| format!("采集查询失败：{message}"))
         });
-        let source = OverpassDataSource::new(transport);
+        let source = OverpassDataSource::with_deadline_transport(transport);
         let entities = source
-            .fetch_raw_entities(&boundary)
+            .fetch_raw_entities_until(
+                &boundary,
+                Instant::now() + Duration::from_secs(220),
+                &|_| {},
+            )
             .expect("真实采集必须成功");
         let polygons = entities
             .iter()
@@ -545,6 +871,14 @@ mod tests {
         assert!(
             polygons >= named / 2,
             "采集报告应同时具备面候选与名称：polygons={polygons} named={named}"
+        );
+        eprintln!(
+            "LIVE_CANDIDATES elapsed={:?} path={:?} total={} polygons={} named={}",
+            started.elapsed(),
+            paths.lock().unwrap(),
+            entities.len(),
+            polygons,
+            named
         );
     }
 

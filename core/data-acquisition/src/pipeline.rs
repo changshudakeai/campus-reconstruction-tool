@@ -174,14 +174,20 @@ impl AcquisitionPipeline {
         source: &dyn DataSource,
         deadline: Instant,
     ) -> Result<AcquisitionBatch> {
-        let _ = deadline;
         if boundary.is_empty() {
             return Err(AcquisitionError::EmptyBoundary);
         }
         let confirmed_boundary =
             parse_boundary(boundary).ok_or(AcquisitionError::InvalidBoundary)?;
+        if Instant::now() >= deadline {
+            return Err(AcquisitionError::DeadlineExceeded);
+        }
         self.emit_stage(CollectionStage::FetchingData);
-        let entities = source.fetch_raw_entities(boundary)?;
+        let entities =
+            source.fetch_raw_entities_until(boundary, deadline, &|stage| self.emit_stage(stage))?;
+        if Instant::now() >= deadline {
+            return Err(AcquisitionError::DeadlineExceeded);
+        }
         let dispositions = entities
             .iter()
             .map(|entity| {
@@ -401,6 +407,8 @@ mod tests {
     use super::*;
     use crate::source::RawEntity;
     use data_transformers::TagMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn run_deadline() -> Instant {
@@ -419,6 +427,21 @@ mod tests {
 
         fn fetch_raw_entities(&self, _boundary: &Boundary) -> Result<Vec<RawEntity>> {
             Ok(self.entities.clone())
+        }
+    }
+
+    struct CountingSource {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl DataSource for CountingSource {
+        fn source_tag(&self) -> &str {
+            "counting"
+        }
+
+        fn fetch_raw_entities(&self, _boundary: &Boundary) -> Result<Vec<RawEntity>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
         }
     }
 
@@ -464,6 +487,29 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, AcquisitionError::EmptyBoundary));
+    }
+
+    #[test]
+    fn expired_overall_deadline_stops_before_source_fetch() {
+        let pipeline = AcquisitionPipeline::new().unwrap();
+        let mut db = Database::open_in_memory().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let source = CountingSource {
+            calls: Arc::clone(&calls),
+        };
+
+        let error = pipeline
+            .acquire_batch(
+                &mut db,
+                &PlanId::generate(),
+                &boundary(),
+                &source,
+                Instant::now(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, AcquisitionError::DeadlineExceeded));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -21,9 +21,9 @@ pub type BoundaryFetchSource =
 
 /// 生产边界源：共享 Overpass 客户端（会话内端点自适应排序跨查询生效）。
 pub(crate) fn production_boundary_source(overpass: Arc<OverpassClient>) -> BoundaryFetchSource {
+    let fetcher = Arc::new(CampusBoundaryFetcher::production_with_overpass(overpass));
     Arc::new(move |campus_name, anchor_lon, anchor_lat, on_progress| {
-        CampusBoundaryFetcher::production_with_overpass(Arc::clone(&overpass))
-            .fetch_campus_with_progress(campus_name, anchor_lon, anchor_lat, on_progress)
+        fetcher.fetch_campus_with_progress(campus_name, anchor_lon, anchor_lat, on_progress)
     })
 }
 

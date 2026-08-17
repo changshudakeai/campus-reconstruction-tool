@@ -22,6 +22,7 @@ use gaode_client::{
 use shared_domain_types::Boundary;
 
 use crate::error::{AcquisitionError, Result};
+use crate::progress::CollectionStage;
 
 /// 数据源明确提供的几何，不由 F4 根据标签或类别推测。
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +167,22 @@ pub trait DataSource {
     /// 查询指定边界内的原始对象（带完整标签）
     fn fetch_raw_entities(&self, boundary: &Boundary) -> Result<Vec<RawEntity>>;
 
+    /// 带本次用户操作总体截止和进度反馈的拉取入口。
+    ///
+    /// 旧适配器默认在调用前检查截止并复用原接口；联网适配器必须覆写并把截止
+    /// 继续传到每个网络请求，不能只在调用前做一次表面检查。
+    fn fetch_raw_entities_until(
+        &self,
+        boundary: &Boundary,
+        deadline: Instant,
+        _on_stage: &dyn Fn(CollectionStage),
+    ) -> Result<Vec<RawEntity>> {
+        if Instant::now() >= deadline {
+            return Err(AcquisitionError::DeadlineExceeded);
+        }
+        self.fetch_raw_entities(boundary)
+    }
+
     /// 批量补名（T36）：默认不补名；有补名能力的数据源覆写。
     ///
     /// `deadline` 为本次采集运行的整体截止时刻：有界并发补名必须在该时刻
@@ -214,6 +231,13 @@ pub type BridgeTransport =
 /// 可注入的 Overpass `out geom` 传输；生产网络由外部适配器提供。
 pub type OverpassTransport = BridgeTransport;
 
+/// 能真正消费总体截止、并在自动切换公共节点时上报阶段的 Overpass 传输 seam。
+pub type DeadlineOverpassTransport = Box<
+    dyn Fn(&Boundary, Instant, &dyn Fn(CollectionStage)) -> std::result::Result<String, String>
+        + Send
+        + Sync,
+>;
+
 /// 批量补名结果（与入参实体对齐）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchEnrichment {
@@ -241,7 +265,7 @@ pub trait NameEnricher: Send + Sync {
 
 /// OSM/Overpass 来源适配器，保留 node/way 的原始几何，不拼接 relation。
 pub struct OverpassDataSource {
-    transport: OverpassTransport,
+    transport: DeadlineOverpassTransport,
     name_enricher: Option<Arc<dyn NameEnricher>>,
     last_enrichment_partial: AtomicBool,
 }
@@ -249,6 +273,15 @@ pub struct OverpassDataSource {
 impl OverpassDataSource {
     pub const SOURCE_TAG: &'static str = "overpass";
     pub fn new(transport: OverpassTransport) -> Self {
+        Self {
+            transport: Box::new(move |boundary, _deadline, _on_stage| transport(boundary)),
+            name_enricher: None,
+            last_enrichment_partial: AtomicBool::new(false),
+        }
+    }
+
+    /// 生产与可靠性测试使用：总体截止贯穿实际请求，自动切换节点可见。
+    pub fn with_deadline_transport(transport: DeadlineOverpassTransport) -> Self {
         Self {
             transport,
             name_enricher: None,
@@ -268,11 +301,28 @@ impl DataSource for OverpassDataSource {
         Self::SOURCE_TAG
     }
     fn fetch_raw_entities(&self, boundary: &Boundary) -> Result<Vec<RawEntity>> {
-        let payload =
-            (self.transport)(boundary).map_err(|message| AcquisitionError::SourceUnreachable {
+        self.fetch_raw_entities_until(
+            boundary,
+            Instant::now() + std::time::Duration::from_secs(300),
+            &|_| {},
+        )
+    }
+
+    fn fetch_raw_entities_until(
+        &self,
+        boundary: &Boundary,
+        deadline: Instant,
+        on_stage: &dyn Fn(CollectionStage),
+    ) -> Result<Vec<RawEntity>> {
+        if Instant::now() >= deadline {
+            return Err(AcquisitionError::DeadlineExceeded);
+        }
+        let payload = (self.transport)(boundary, deadline, on_stage).map_err(|message| {
+            AcquisitionError::SourceUnreachable {
                 source_tag: Self::SOURCE_TAG.to_owned(),
                 message,
-            })?;
+            }
+        })?;
         let value: serde_json::Value = serde_json::from_str(&payload).map_err(|error| {
             AcquisitionError::Source(gaode_client::Error::MalformedResponse(error.to_string()))
         })?;

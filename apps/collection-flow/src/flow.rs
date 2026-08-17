@@ -41,17 +41,17 @@ use crate::view::{
 /// 单次采集运行的时间预算（T36：总体截止 + 本地收尾余量）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CollectionRunLimits {
-    /// 单次采集运行总体截止（默认 60s；超限立即结束并如实标注部分未命名）
+    /// 单次大型采集运行总体截止（默认 240s）
     pub overall_deadline: Duration,
-    /// 为本地写库/发布预留的尾部余量（默认 10s；补名必须在其前停止派发）
+    /// 为本地写库/发布预留的尾部余量（默认 20s；联网阶段必须在其前停止）
     pub local_tail_margin: Duration,
 }
 
 impl Default for CollectionRunLimits {
     fn default() -> Self {
         Self {
-            overall_deadline: Duration::from_secs(60),
-            local_tail_margin: Duration::from_secs(10),
+            overall_deadline: Duration::from_secs(240),
+            local_tail_margin: Duration::from_secs(20),
         }
     }
 }
@@ -469,7 +469,7 @@ impl CollectionWorker {
     }
 
     /// 完整采集链：F4 采集批次 → B2 原始观测落库 → B14 点线面验证 →
-    /// B2 候选投影原子发布 → F7 覆盖体检 → 组装报告并解锁评审。
+    /// F7 覆盖体检 → B2 候选投影原子发布 → 组装报告并解锁评审。
     fn run_inner(&self) -> Result<CollectionSummary> {
         // T36：总体截止与阶段上报（拉取数据 / 补名 / 写库）。
         let overall_deadline = Instant::now() + self.limits.overall_deadline;
@@ -509,11 +509,15 @@ impl CollectionWorker {
             )
             .map_err(CollectionError::Acquisition)?;
 
+        ensure_before_deadline(overall_deadline)?;
+
         // 2. B2：原始观测落库（数据粮仓，只写不删）。
         notify_stage(CollectionStage::Writing);
         let written = db
             .write_raw_observations(&batch.raw_observations)
             .map_err(CollectionError::Persistence)?;
+
+        ensure_before_deadline(overall_deadline)?;
 
         // 3. B14：点/线/面逐对象验证（隔离不阻断同批其它对象）。
         let validation = self.validator.validate_batch(
@@ -529,17 +533,11 @@ impl CollectionWorker {
         let naming =
             self.enrich_reviewable_building_names(&mut batch, &validation, enrich_deadline)?;
 
-        // 4. B2：只提交来源/验证事实；稳定身份、真正缺失继承、决定失效、
-        //    当前批次指针与边界指纹由候选投影 lifecycle module 原子发布。
-        let projection_drafts = build_projection_drafts(&batch, &validation);
-        let batch_summary = db
-            .publish_candidate_batch(
-                &batch.plan_id,
-                &boundary_fingerprint(&self.request.boundary),
-                &projection_drafts,
-            )
-            .map_err(CollectionError::Persistence)?;
+        ensure_before_deadline(overall_deadline)?;
 
+        // 4. 先完成 F7 覆盖体检。候选发布必须是最后一个可能改变“当前完整
+        //    批次”的动作；体检或截止失败时上一完整批次保持当前。
+        let projection_drafts = build_projection_drafts(&batch, &validation);
         // 5. F7：覆盖体检（安静哨兵；事实变体返回合并疑点窗，弹窗事实由
         //    A1 汇总后交给 S1/B7 在 UI 线程呈现）。
         let counts = category_counts(&batch);
@@ -555,7 +553,19 @@ impl CollectionWorker {
             )
             .map_err(CollectionError::Audit)?;
 
-        // 6. 组装页面/报告/评审解锁（只有全部完成后才返回成功）。
+        ensure_before_deadline(overall_deadline)?;
+
+        // 6. B2：稳定身份、真正缺失继承、决定失效、当前批次指针与边界
+        //    指纹一次原子发布。此后只组装内存视图，不再有可失败外部步骤。
+        let batch_summary = db
+            .publish_candidate_batch(
+                &batch.plan_id,
+                &boundary_fingerprint(&self.request.boundary),
+                &projection_drafts,
+            )
+            .map_err(CollectionError::Persistence)?;
+
+        // 7. 组装页面/报告/评审解锁（只有全部完成后才返回成功）。
         let report = CollectionReport {
             plan_id: batch.plan_id.clone(),
             source_tag: batch.source_tag.clone(),
@@ -656,6 +666,16 @@ impl CollectionWorker {
             issue_lines: audit_view.issue_lines,
             no_issues_line: audit_view.no_issues_line,
         }
+    }
+}
+
+fn ensure_before_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        Err(CollectionError::Acquisition(
+            data_acquisition::AcquisitionError::DeadlineExceeded,
+        ))
+    } else {
+        Ok(())
     }
 }
 

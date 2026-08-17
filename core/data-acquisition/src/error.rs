@@ -19,6 +19,10 @@ pub enum AcquisitionError {
     #[error("已确认方案边界无法解析，候选采集已停止")]
     InvalidBoundary,
 
+    /// 本次采集的总体截止已到；不得继续发起外部请求或发布候选批次。
+    #[error("候选采集已达到总体时间上限")]
+    DeadlineExceeded,
+
     /// 数据源传输层不可达（网络、桥接失败等）
     #[error("数据源 {source_tag} 不可达：{message}")]
     SourceUnreachable {

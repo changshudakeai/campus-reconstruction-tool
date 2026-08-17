@@ -1,6 +1,7 @@
 pub mod data_acquisition
 pub mod data_acquisition::error
 #[non_exhaustive] pub enum data_acquisition::error::AcquisitionError
+pub data_acquisition::error::AcquisitionError::DeadlineExceeded
 pub data_acquisition::error::AcquisitionError::EmptyBoundary
 pub data_acquisition::error::AcquisitionError::InvalidBoundary
 pub data_acquisition::error::AcquisitionError::Persistence(data_persistence::error::Error)
@@ -223,7 +224,7 @@ pub fn data_acquisition::overpass::CampusBoundaryFetcher::fetch_campus_with_prog
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::production() -> Self
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::production_with_overpass(overpass: alloc::sync::Arc<data_acquisition::overpass::OverpassClient>) -> Self
 pub fn data_acquisition::overpass::CampusBoundaryFetcher::with_clients(overpass: data_acquisition::overpass::OverpassClient, nominatim: data_acquisition::overpass::NominatimClient) -> Self
-impl core::marker::Freeze for data_acquisition::overpass::CampusBoundaryFetcher
+impl !core::marker::Freeze for data_acquisition::overpass::CampusBoundaryFetcher
 impl core::marker::Send for data_acquisition::overpass::CampusBoundaryFetcher
 impl core::marker::Sync for data_acquisition::overpass::CampusBoundaryFetcher
 impl core::marker::Unpin for data_acquisition::overpass::CampusBoundaryFetcher
@@ -305,8 +306,9 @@ pub struct data_acquisition::overpass::NominatimClient
 impl data_acquisition::overpass::NominatimClient
 pub fn data_acquisition::overpass::NominatimClient::production() -> Self
 pub fn data_acquisition::overpass::NominatimClient::resolve_campus(&self, campus_name: &str) -> core::result::Result<core::option::Option<data_acquisition::overpass::NominatimMatch>, alloc::string::String>
+pub fn data_acquisition::overpass::NominatimClient::with_endpoint_and_transport(endpoint: &str, transport: data_acquisition::overpass::HttpTransport) -> Self
 pub fn data_acquisition::overpass::NominatimClient::with_transport(transport: data_acquisition::overpass::HttpTransport) -> Self
-impl core::marker::Freeze for data_acquisition::overpass::NominatimClient
+impl !core::marker::Freeze for data_acquisition::overpass::NominatimClient
 impl core::marker::Send for data_acquisition::overpass::NominatimClient
 impl core::marker::Sync for data_acquisition::overpass::NominatimClient
 impl core::marker::Unpin for data_acquisition::overpass::NominatimClient
@@ -389,6 +391,7 @@ pub struct data_acquisition::overpass::OverpassClient
 impl data_acquisition::overpass::OverpassClient
 pub fn data_acquisition::overpass::OverpassClient::endpoint_order(&self) -> alloc::vec::Vec<&'static str>
 pub fn data_acquisition::overpass::OverpassClient::production() -> Self
+pub fn data_acquisition::overpass::OverpassClient::query_campus_objects(&self, bbox: (f64, f64, f64, f64), deadline: std::time::Instant, on_retry: &dyn core::ops::function::Fn()) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn data_acquisition::overpass::OverpassClient::query_with_fallback(&self, query: &str) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn data_acquisition::overpass::OverpassClient::query_with_fallback_progress(&self, query: &str, stage: data_acquisition::overpass::FetchStage, on_progress: &dyn core::ops::function::Fn(data_acquisition::overpass::FetchProgress)) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn data_acquisition::overpass::OverpassClient::with_transport(transport: data_acquisition::overpass::HttpTransport) -> Self
@@ -422,6 +425,7 @@ impl<T> either::into_either::IntoEither for data_acquisition::overpass::Overpass
 impl<T> typenum::type_operators::Same for data_acquisition::overpass::OverpassClient
 pub type data_acquisition::overpass::OverpassClient::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_acquisition::overpass::OverpassClient where T: ?core::marker::Sized
+pub const data_acquisition::overpass::BOUNDARY_FETCH_DEADLINE: core::time::Duration
 pub const data_acquisition::overpass::NOMINATIM_ENDPOINT: &str
 pub const data_acquisition::overpass::OVERPASS_ENDPOINTS: [&str; 3]
 pub const data_acquisition::overpass::OVERPASS_HTTP_TIMEOUT: core::time::Duration
@@ -716,6 +720,7 @@ pub enum data_acquisition::progress::CollectionStage
 pub data_acquisition::progress::CollectionStage::FetchingData
 pub data_acquisition::progress::CollectionStage::Finished
 pub data_acquisition::progress::CollectionStage::Naming
+pub data_acquisition::progress::CollectionStage::RetryingSource
 pub data_acquisition::progress::CollectionStage::Writing
 impl core::clone::Clone for data_acquisition::progress::CollectionStage
 pub fn data_acquisition::progress::CollectionStage::clone(&self) -> data_acquisition::progress::CollectionStage
@@ -1331,11 +1336,13 @@ pub struct data_acquisition::source::OverpassDataSource
 impl data_acquisition::source::OverpassDataSource
 pub const data_acquisition::source::OverpassDataSource::SOURCE_TAG: &'static str
 pub fn data_acquisition::source::OverpassDataSource::new(transport: data_acquisition::source::OverpassTransport) -> Self
+pub fn data_acquisition::source::OverpassDataSource::with_deadline_transport(transport: data_acquisition::source::DeadlineOverpassTransport) -> Self
 pub fn data_acquisition::source::OverpassDataSource::with_name_enricher(self, enricher: core::option::Option<alloc::sync::Arc<dyn data_acquisition::source::NameEnricher>>) -> Self
 impl data_acquisition::source::DataSource for data_acquisition::source::OverpassDataSource
 pub fn data_acquisition::source::OverpassDataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::source::OverpassDataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::source::OverpassDataSource::source_tag(&self) -> &str
 impl !core::marker::Freeze for data_acquisition::source::OverpassDataSource
 impl core::marker::Send for data_acquisition::source::OverpassDataSource
@@ -1426,6 +1433,7 @@ pub trait data_acquisition::source::DataSource
 pub fn data_acquisition::source::DataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, _deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::source::DataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::source::DataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::source::DataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, _on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::source::DataSource::source_tag(&self) -> &str
 impl data_acquisition::source::DataSource for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
@@ -1434,12 +1442,14 @@ impl data_acquisition::source::DataSource for data_acquisition::source::Overpass
 pub fn data_acquisition::source::OverpassDataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::source::OverpassDataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::source::OverpassDataSource::source_tag(&self) -> &str
 pub trait data_acquisition::source::NameEnricher: core::marker::Send + core::marker::Sync
 pub fn data_acquisition::source::NameEnricher::enrich_batch(&self, entities: &[data_acquisition::source::RawEntity], deadline: std::time::Instant) -> data_acquisition::source::BatchEnrichment
 impl data_acquisition::source::NameEnricher for data_acquisition::regeo::RegeoNamer
 pub fn data_acquisition::regeo::RegeoNamer::enrich_batch(&self, entities: &[data_acquisition::source::RawEntity], deadline: std::time::Instant) -> data_acquisition::source::BatchEnrichment
 pub type data_acquisition::source::BridgeTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&shared_domain_types::boundary::Boundary) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
+pub type data_acquisition::source::DeadlineOverpassTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&shared_domain_types::boundary::Boundary, std::time::Instant, &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
 pub type data_acquisition::source::OverpassTransport = data_acquisition::source::BridgeTransport
 pub mod data_acquisition::text_keys
 pub const data_acquisition::text_keys::DIFF_ADDED: &str
@@ -1451,6 +1461,7 @@ pub const data_acquisition::text_keys::PROGRESS_FETCHING: &str
 pub const data_acquisition::text_keys::PROGRESS_TITLE: &str
 pub const data_acquisition::text_keys::SOURCE_GAODE: &str
 #[non_exhaustive] pub enum data_acquisition::AcquisitionError
+pub data_acquisition::AcquisitionError::DeadlineExceeded
 pub data_acquisition::AcquisitionError::EmptyBoundary
 pub data_acquisition::AcquisitionError::InvalidBoundary
 pub data_acquisition::AcquisitionError::Persistence(data_persistence::error::Error)
@@ -1559,6 +1570,7 @@ pub enum data_acquisition::CollectionStage
 pub data_acquisition::CollectionStage::FetchingData
 pub data_acquisition::CollectionStage::Finished
 pub data_acquisition::CollectionStage::Naming
+pub data_acquisition::CollectionStage::RetryingSource
 pub data_acquisition::CollectionStage::Writing
 impl core::clone::Clone for data_acquisition::progress::CollectionStage
 pub fn data_acquisition::progress::CollectionStage::clone(&self) -> data_acquisition::progress::CollectionStage
@@ -2222,11 +2234,13 @@ pub struct data_acquisition::OverpassDataSource
 impl data_acquisition::source::OverpassDataSource
 pub const data_acquisition::source::OverpassDataSource::SOURCE_TAG: &'static str
 pub fn data_acquisition::source::OverpassDataSource::new(transport: data_acquisition::source::OverpassTransport) -> Self
+pub fn data_acquisition::source::OverpassDataSource::with_deadline_transport(transport: data_acquisition::source::DeadlineOverpassTransport) -> Self
 pub fn data_acquisition::source::OverpassDataSource::with_name_enricher(self, enricher: core::option::Option<alloc::sync::Arc<dyn data_acquisition::source::NameEnricher>>) -> Self
 impl data_acquisition::source::DataSource for data_acquisition::source::OverpassDataSource
 pub fn data_acquisition::source::OverpassDataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::source::OverpassDataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::source::OverpassDataSource::source_tag(&self) -> &str
 impl !core::marker::Freeze for data_acquisition::source::OverpassDataSource
 impl core::marker::Send for data_acquisition::source::OverpassDataSource
@@ -2411,6 +2425,7 @@ pub trait data_acquisition::DataSource
 pub fn data_acquisition::DataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, _deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::DataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::DataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::DataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, _on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::DataSource::source_tag(&self) -> &str
 impl data_acquisition::source::DataSource for data_acquisition::source::GaodeDataSource
 pub fn data_acquisition::source::GaodeDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
@@ -2419,6 +2434,7 @@ impl data_acquisition::source::DataSource for data_acquisition::source::Overpass
 pub fn data_acquisition::source::OverpassDataSource::enrich(&self, entities: alloc::vec::Vec<data_acquisition::source::RawEntity>, deadline: std::time::Instant) -> data_acquisition::error::Result<data_acquisition::source::EnrichedEntities>
 pub fn data_acquisition::source::OverpassDataSource::enrichment_partial(&self) -> bool
 pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities(&self, boundary: &shared_domain_types::boundary::Boundary) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
+pub fn data_acquisition::source::OverpassDataSource::fetch_raw_entities_until(&self, boundary: &shared_domain_types::boundary::Boundary, deadline: std::time::Instant, on_stage: &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> data_acquisition::error::Result<alloc::vec::Vec<data_acquisition::source::RawEntity>>
 pub fn data_acquisition::source::OverpassDataSource::source_tag(&self) -> &str
 pub trait data_acquisition::NameEnricher: core::marker::Send + core::marker::Sync
 pub fn data_acquisition::NameEnricher::enrich_batch(&self, entities: &[data_acquisition::source::RawEntity], deadline: std::time::Instant) -> data_acquisition::source::BatchEnrichment
@@ -2431,6 +2447,7 @@ pub fn data_acquisition::parse_regeo_name(json: &str) -> core::option::Option<al
 pub fn data_acquisition::polygon_centroid(geometry: &data_acquisition::source::SourceGeometry) -> core::option::Option<(f64, f64)>
 pub fn data_acquisition::stage_text_key(stage: data_acquisition::progress::CollectionStage) -> &'static str
 pub type data_acquisition::BridgeTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&shared_domain_types::boundary::Boundary) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
+pub type data_acquisition::DeadlineOverpassTransport = alloc::boxed::Box<(dyn core::ops::function::Fn(&shared_domain_types::boundary::Boundary, std::time::Instant, &dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage)) -> core::result::Result<alloc::string::String, alloc::string::String> + core::marker::Send + core::marker::Sync)>
 pub type data_acquisition::OverpassTransport = data_acquisition::source::BridgeTransport
 pub type data_acquisition::Result<T> = core::result::Result<T, data_acquisition::error::AcquisitionError>
 pub type data_acquisition::StageListener = alloc::boxed::Box<(dyn core::ops::function::Fn(data_acquisition::progress::CollectionStage) + core::marker::Send + core::marker::Sync)>

@@ -14,8 +14,9 @@ use collection_flow::{
     CollectionStatus,
 };
 use data_acquisition::{
-    overpass::{boundary_bbox, campus_objects_query, OverpassClient},
-    DataSource, EnrichedEntities, OverpassDataSource, RawEntity, RegeoNamer, SourceGeometry,
+    overpass::{boundary_bbox, OverpassClient},
+    DataSource, DeadlineOverpassTransport, EnrichedEntities, OverpassDataSource, RawEntity,
+    RegeoNamer, SourceGeometry,
 };
 use data_persistence::{
     boundary_fingerprint, BoundaryRevalidationApi, CandidateDisplay, CandidateEligibility,
@@ -259,6 +260,28 @@ impl DataSource for FailingSource {
             source_tag: "failing".to_owned(),
             message: "测试用网络不可达".to_owned(),
         })
+    }
+}
+
+struct FirstRunSucceedsSource {
+    calls: AtomicUsize,
+    entities: Vec<RawEntity>,
+}
+
+impl DataSource for FirstRunSucceedsSource {
+    fn source_tag(&self) -> &str {
+        "first-run-only"
+    }
+
+    fn fetch_raw_entities(&self, _boundary: &Boundary) -> data_acquisition::Result<Vec<RawEntity>> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(self.entities.clone())
+        } else {
+            Err(data_acquisition::AcquisitionError::SourceUnreachable {
+                source_tag: self.source_tag().to_owned(),
+                message: "模拟重采集最终失败".to_owned(),
+            })
+        }
     }
 }
 
@@ -1174,6 +1197,59 @@ fn failed_run_does_not_leave_a_report() {
 }
 
 #[test]
+fn failed_recollection_keeps_previous_complete_candidate_batch_current() {
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let source = Arc::new(FirstRunSucceedsSource {
+        calls: AtomicUsize::new(0),
+        entities: vec![road_line("R-previous")],
+    });
+    let flow = flow(Arc::clone(&db), source);
+    let plan_id = PlanId::generate();
+    seed_plan(&flow, &plan_id);
+
+    let mut first = flow.start().expect("首次 Start");
+    assert!(matches!(
+        wait_for_terminal(&mut first, Duration::from_secs(5)),
+        Ok(CollectionOutcome::Succeeded(_))
+    ));
+    let plan_key = plan_id.to_string();
+    let (revision_before, candidates_before) = {
+        let database = db.lock().expect("db lock");
+        (
+            database
+                .current_candidate_batch_revision(&plan_key)
+                .expect("revision")
+                .expect("首次完整批次"),
+            database
+                .list_reviewable_candidate_projections(&plan_key)
+                .expect("首次候选"),
+        )
+    };
+
+    let mut second = flow.start().expect("重采集 Start");
+    assert!(matches!(
+        wait_for_terminal(&mut second, Duration::from_secs(5)),
+        Ok(CollectionOutcome::Failed(_))
+    ));
+
+    let database = db.lock().expect("db lock");
+    assert_eq!(
+        database
+            .current_candidate_batch_revision(&plan_key)
+            .expect("revision after failure")
+            .expect("旧完整批次仍应存在"),
+        revision_before
+    );
+    assert_eq!(
+        database
+            .list_reviewable_candidate_projections(&plan_key)
+            .expect("candidates after failure"),
+        candidates_before,
+        "最终失败不得覆盖上一份完整候选"
+    );
+}
+
+#[test]
 fn page_view_reflects_fetching_while_running() {
     let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
     let blocking = Arc::new(BlockingSource::new());
@@ -1294,37 +1370,46 @@ fn slow_regeo_enrichment_respects_overall_deadline_with_partial_feedback() {
 
 #[test]
 fn three_endpoint_hang_overpass_fails_within_overall_deadline() {
-    // T36 验收 2：注入“三端点全挂 Overpass transport”（每端点 5s 超时），
-    // 断言 ≤ 整体查询截止（15s，远小于运行总体截止 60s）并结构化失败。
+    // 注入“三端点全挂 Overpass transport”，断言 A1 的总体截止真正进入网络请求，
+    // 而不是仅作为界面声明存在。
     let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
     let client = OverpassClient::with_transport(Box::new(|_: &str, timeout: Duration| {
         let (_tx, rx) = std::sync::mpsc::channel::<()>();
         let _ = rx.recv_timeout(timeout);
         Err("模拟 Overpass 端点挂起".to_owned())
     }));
-    let overpass_transport = Box::new(move |boundary: &Boundary| {
-        let bbox = boundary_bbox(boundary, 0.01).ok_or_else(|| "边界包围盒失败".to_owned())?;
-        let query = campus_objects_query(bbox)
-            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
-        client
-            .query_with_fallback(&query)
-            .map_err(|message| format!("Overpass 采集查询失败：{message}"))
-    });
-    let source: Arc<dyn DataSource + Send + Sync> =
-        Arc::new(OverpassDataSource::new(overpass_transport));
-    let flow = flow(Arc::clone(&db), source);
+    let overpass_transport: DeadlineOverpassTransport =
+        Box::new(move |boundary: &Boundary, deadline, on_stage| {
+            let bbox = boundary_bbox(boundary, 0.01).ok_or_else(|| "边界包围盒失败".to_owned())?;
+            client
+                .query_campus_objects(bbox, deadline, &|| {
+                    on_stage(data_acquisition::CollectionStage::RetryingSource)
+                })
+                .map_err(|message| format!("Overpass 采集查询失败：{message}"))
+        });
+    let source: Arc<dyn DataSource + Send + Sync> = Arc::new(
+        OverpassDataSource::with_deadline_transport(overpass_transport),
+    );
+    let flow = flow_with_limits(
+        Arc::clone(&db),
+        source,
+        CollectionRunLimits {
+            overall_deadline: Duration::from_secs(2),
+            local_tail_margin: Duration::ZERO,
+        },
+    );
     let plan_id = PlanId::generate();
     seed_plan(&flow, &plan_id);
 
     let started = Instant::now();
     let mut operation = flow.start().expect("Start");
-    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(20))
+    let outcome = wait_for_terminal(&mut operation, Duration::from_secs(4))
         .expect("三端点全挂必须在运行截止前结构化失败");
     let elapsed = started.elapsed();
 
     assert!(
-        elapsed < Duration::from_secs(20),
-        "整体查询不得超过整体截止（验收 ≤15s + 余量），实际 {elapsed:?}"
+        elapsed < Duration::from_secs(3),
+        "网络请求必须服从 A1 两秒总体截止，实际 {elapsed:?}"
     );
     let CollectionOutcome::Failed(failure) = outcome else {
         panic!("三端点全挂必须结构化失败，不得出现假成功产物");

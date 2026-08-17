@@ -5,8 +5,10 @@
 
 use std::sync::Arc;
 
-use data_acquisition::overpass::{boundary_bbox, campus_objects_query, OverpassClient};
-use data_acquisition::{NameEnricher, OverpassDataSource, OverpassTransport, RegeoNamer};
+use data_acquisition::overpass::{boundary_bbox, OverpassClient};
+use data_acquisition::{
+    CollectionStage, DeadlineOverpassTransport, NameEnricher, OverpassDataSource, RegeoNamer,
+};
 use data_persistence::{AppSettingKey, AppSettingsApi, Database};
 use shared_domain_types::Boundary;
 
@@ -14,25 +16,26 @@ use super::DEV_DB_FILE;
 
 /// 生产候选数据源：F4 `DataSource` 适配器（OSM/Overpass，T31）。
 ///
-/// - Overpass 传输走 **Rust 侧直连**（端点 de → kumi → mail.ru 回退、
-///   失败返回结构化 `SourceUnreachable`），不再依赖 WebView fetch/CORS；
-/// - 候选建筑查询为 union 写法 `building=*`（面几何 + name/building:levels 标签）；
+/// - Overpass 传输走 **Rust 侧直连**（四个六类分片顺序执行、节点健康排序、
+///   有限退避重试，失败返回结构化 `SourceUnreachable`），不再依赖 WebView fetch/CORS；
+/// - selector 由 B13 集中分类规则生成，不复制六类标签表；
 /// - 命名两级：OSM `name` 优先；缺名关键建筑由 regeo 补名并缓存
 ///   （Web 服务 Key 只经设置页录入，这里按数据库路径实时读取）。
 pub(super) fn production_collection_source(
     overpass: Arc<OverpassClient>,
 ) -> Arc<dyn data_acquisition::DataSource + Send + Sync> {
-    let transport: OverpassTransport = Box::new(move |boundary: &Boundary| {
-        // 边界为 GCJ-02；工单禁止 GCJ→WGS 反向，查询窗口用“边界包围盒 +
-        // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
-        let bbox =
-            boundary_bbox(boundary, 0.01).ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
-        let query = campus_objects_query(bbox)
-            .map_err(|error| format!("集中标签规则无法生成采集查询：{error}"))?;
-        overpass
-            .query_with_fallback(&query)
-            .map_err(|message| format!("Overpass 采集查询失败：{message}"))
-    });
+    let transport: DeadlineOverpassTransport =
+        Box::new(move |boundary: &Boundary, deadline, on_stage| {
+            // 边界为 GCJ-02；工单禁止 GCJ→WGS 反向，查询窗口用“边界包围盒 +
+            // ~1km 外扩余量”覆盖 GCJ 偏移（见 data-acquisition::overpass::boundary_bbox）。
+            let bbox = boundary_bbox(boundary, 0.01)
+                .ok_or_else(|| "边界坐标无法计算查询包围盒".to_owned())?;
+            overpass
+                .query_campus_objects(bbox, deadline, &|| {
+                    on_stage(CollectionStage::RetryingSource)
+                })
+                .map_err(|message| format!("Overpass 采集查询失败：{message}"))
+        });
     // regeo Web 服务 Key 提供器：只经设置页录入（B2 app_settings），实时读取。
     let key_provider: data_acquisition::regeo::KeyProvider = Box::new(move || {
         Database::open(DEV_DB_FILE)
@@ -59,5 +62,5 @@ pub(super) fn production_collection_source(
         };
     let namer = Arc::new(RegeoNamer::production(key_provider, cache));
     let enricher: Option<Arc<dyn NameEnricher>> = Some(namer);
-    Arc::new(OverpassDataSource::new(transport).with_name_enricher(enricher))
+    Arc::new(OverpassDataSource::with_deadline_transport(transport).with_name_enricher(enricher))
 }

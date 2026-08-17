@@ -13,6 +13,8 @@ use crate::pipeline::CollectionReport;
 pub enum CollectionStage {
     /// 从数据源拉取原始对象（Overpass 等）
     FetchingData,
+    /// 当前公共节点繁忙/超时，正在顺序切换备用节点继续拉取。
+    RetryingSource,
     /// 缺名关键建筑补名（regeo 有界并发）
     Naming,
     /// 原始观察落库 / 候选投影发布
@@ -25,6 +27,7 @@ pub enum CollectionStage {
 pub fn stage_text_key(stage: CollectionStage) -> &'static str {
     match stage {
         CollectionStage::FetchingData => "collection.stage_fetching",
+        CollectionStage::RetryingSource => "collection.stage_retrying_source",
         CollectionStage::Naming => "collection.stage_naming",
         CollectionStage::Writing => "collection.stage_writing",
         CollectionStage::Finished => "collection.stage_finished",
