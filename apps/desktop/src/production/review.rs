@@ -1,13 +1,8 @@
 //! 评审呈现适配器：S1 只转发一次完整评审意图，并呈现 F5 工作台返回的页面状态与通知。
-// ignore-tidy-filelength: 轻量建议辅助（建议筛选/一键应用/撤销上一批）并入既有评审呈现适配器，
-// 保持 S1"只转发完整意图"接缝的内聚（本文件不含功能模块呈现翻译之外的业务）。失效里程碑：
-// v2.1.0（2026-12-31），届时将建议相关呈现翻译拆入独立模块后消除
 
 use super::collection::COLLECTION_CATEGORY_KEYS;
 use super::review_draft::{checkpoint_review, restore_review_draft_if_unsealed};
-use super::review_map::{
-    map_object_json, push_full_visible_sync, visible_review_set_for, ReviewMapSync,
-};
+use super::review_map::ReviewMapSync;
 use super::workspace_boundary::WorkspaceProductionContext;
 use crate::presentation::{
     ConfirmationPresentation, NavigationDecision, NotificationFact, Presentation,
@@ -44,11 +39,11 @@ const REVIEW_CATEGORY_ORDER: [CandidateCategory; 6] = [
 pub(crate) struct ReviewProductionAdapter {
     pub(crate) context: WorkspaceProductionContext,
     /// T39：评审地图回推同步状态（全量只推一次，之后增量只推对应候选）。
-    map_sync: Rc<RefCell<ReviewMapSync>>,
+    pub(super) map_sync: Rc<RefCell<ReviewMapSync>>,
 }
 
 /// T39：评审候选列表分页页大小（Slint 无虚拟化；50–100 内取 60）。
-const REVIEW_PAGE_SIZE: usize = 60;
+pub(super) const REVIEW_PAGE_SIZE: usize = 60;
 
 impl ReviewProductionAdapter {
     pub(crate) fn new(context: WorkspaceProductionContext) -> Self {
@@ -344,128 +339,6 @@ impl ReviewProductionAdapter {
                 serde_json::json!({ "id": title }),
             )
         }
-    }
-
-    /// 把 F5 当前**可见集合**（当前类别 + 当前分页）的候选标注与高亮同步到
-    /// 评审地图（T39/T41）。
-    ///
-    /// 分类/翻页变化触发一次 `setReviewCandidates`（清旧 overlay + 画新集合），
-    /// 同页内的 state/highlight 变更才走 `updateReviewCandidate` /
-    /// `highlightReviewCandidate` 增量路径。地图会话不接受命令时不更新本代已应用状态。
-    fn sync_review_map(&self) {
-        let injector = self.context.injector();
-        let injector = injector.borrow();
-        let Some(workbench) = injector.review() else {
-            return;
-        };
-        let view = workbench.view();
-        let visible = visible_review_set_for(&self.context, &view, REVIEW_PAGE_SIZE);
-        drop(injector);
-
-        let mut sync = self.map_sync.borrow_mut();
-        let full_needed =
-            sync.pushed_visible != Some((visible.active_category_index, visible.page_index));
-        if full_needed {
-            let _ = push_full_visible_sync(&visible, &mut sync);
-            sync.full_push_scheduled = false;
-            return;
-        }
-
-        for object in &visible.objects {
-            let state = object.state.to_identifier().to_string();
-            if sync.pushed_states.get(&object.candidate_id) != Some(&state) {
-                if crate::map_session::command(crate::map_session::MapCommand::ReviewUpdate(
-                    map_object_json(object),
-                )) == crate::map_session::MapCommandResult::Unavailable
-                {
-                    sync.full_push_scheduled = false;
-                    return;
-                }
-                sync.pushed_states
-                    .insert(object.candidate_id.clone(), state);
-            }
-        }
-        let highlighted = visible
-            .objects
-            .iter()
-            .find(|object| object.highlighted)
-            .map(|object| object.candidate_id.clone());
-        if sync.pushed_highlight != highlighted {
-            let command = crate::map_session::MapCommand::ReviewHighlight(highlighted.clone());
-            if crate::map_session::command(command)
-                == crate::map_session::MapCommandResult::Unavailable
-            {
-                sync.full_push_scheduled = false;
-                return;
-            }
-            sync.pushed_highlight = highlighted;
-        }
-        sync.full_push_scheduled = false;
-    }
-
-    /// map_ready 后的全量推送：在事件循环安全上下文排定一次，按当前可见集合
-    /// 生成脚本（IPC 回调栈内不执行 WebView2 脚本调用，T35/T38 纪律）。
-    fn schedule_review_map_full_push(&self) {
-        {
-            let mut sync = self.map_sync.borrow_mut();
-            if sync.full_push_scheduled {
-                return;
-            }
-            sync.full_push_scheduled = true;
-        }
-        let context = self.context.clone();
-        let map_sync = Rc::clone(&self.map_sync);
-        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
-            let injector = context.injector();
-            let injector = injector.borrow();
-            let Some(workbench) = injector.review() else {
-                map_sync.borrow_mut().full_push_scheduled = false;
-                return;
-            };
-            let view = workbench.view();
-            let visible = visible_review_set_for(&context, &view, REVIEW_PAGE_SIZE);
-            drop(injector);
-            let mut sync = map_sync.borrow_mut();
-            let visible_key = (visible.active_category_index, visible.page_index);
-            if sync.pushed_visible == Some(visible_key) {
-                // 该可见集合已由用户操作路径内联推送（测试无事件循环或生产
-                // 1ms 窗口内用户先操作）：不再重复推一次。
-                sync.full_push_scheduled = false;
-                return;
-            }
-            let _ = push_full_visible_sync(&visible, &mut sync);
-            sync.full_push_scheduled = false;
-        });
-    }
-
-    /// 创建评审地图（候选不再内嵌 HTML；无密钥/锚点时跳过，抽屉仍可操作）。
-    /// 候选标注在页面 map_ready 后由 Rust 按当前可见集合推送。
-    fn show_review_map(&self) {
-        let Some((keys, anchor)) = self.context.map_credentials() else {
-            return;
-        };
-        if keys.0.is_empty() {
-            return;
-        }
-        let injector = self.context.injector();
-        let injector = injector.borrow();
-        let map_text_label = injector.l10n().t("review.map_text_toggle");
-        drop(injector);
-        self.map_sync.borrow_mut().reset_applied();
-        let plan_id = self
-            .context
-            .active_plan_id()
-            .unwrap_or_else(|| "__adopted_workspace__".to_owned());
-        crate::map_session::present(
-            self.context.window.clone(),
-            crate::map_session::MapDisplayIntent::Review {
-                plan_id,
-                api_key: keys.0,
-                security_key: keys.1,
-                anchor,
-                map_text_label,
-            },
-        );
     }
 
     /// 封账后的导出摘要文案（保留/待定/剔除计数 + 按类别保留明细）。
