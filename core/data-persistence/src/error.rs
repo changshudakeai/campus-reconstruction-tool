@@ -57,6 +57,10 @@ pub enum Error {
     /// 候选批次不在允许状态，不能写入或发布。
     #[error("候选批次操作被拒：{0}")]
     CandidateBatchRejected(String),
+
+    /// 评审页打开后候选批次已经变化，旧页面不得把旧决定写回新生命周期。
+    #[error("候选投影版本已变化：期望 {expected}，当前 {actual}")]
+    StaleCandidateProjectionRevision { expected: String, actual: String },
 }
 
 /// B2 持久化层结果别名

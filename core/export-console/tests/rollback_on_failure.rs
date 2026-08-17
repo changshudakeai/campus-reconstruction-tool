@@ -8,18 +8,16 @@
 use std::sync::{Arc, Mutex};
 
 use data_persistence::{
-    CandidateDisplay, CandidateEligibility, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation, Database, RawObservation, RawObservationsApi,
+    CandidateDisplay, CandidateProjectionDraft, CandidateProjectionsApi, CandidateShape,
+    CandidateSourceIdentity, Database, RawObservation, RawObservationsApi, ReviewableValidation,
 };
 use export_console::{ExportConsole, ExportRequest, NavigationTarget, SealGate};
 use generation_engine::{BlockModel, BlockPosition};
 use review_workbench::{CandidateKey, CommandOutcome, ReviewWorkbench, StateChange};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 
-const CANDIDATE_ID: &str = "overpass:way/1:outer";
-
-/// 写入一条原始观测并发布对应 Reviewable 候选投影，返回 (db, plan_id)。
-fn seed_database() -> (Database, PlanId) {
+/// 写入一条原始观测并发布对应 Reviewable 候选投影，返回稳定候选身份。
+fn seed_database() -> (Database, PlanId, String) {
     let mut db = Database::open_in_memory().expect("内存库可打开");
     let plan_id = PlanId::generate();
     let observation = RawObservation::new(
@@ -31,16 +29,8 @@ fn seed_database() -> (Database, PlanId) {
     );
     db.write_raw_observations(std::slice::from_ref(&observation))
         .expect("观测写入成功");
-    let batch = db
-        .prepare_candidate_batch(&plan_id.to_string())
-        .expect("候选批次准备成功");
-    let projection = CandidateProjection::new(
-        CANDIDATE_ID,
-        plan_id.to_string(),
-        observation.id,
-        "overpass",
-        "way/1",
-        "outer",
+    let draft = CandidateProjectionDraft::reviewable(
+        CandidateSourceIdentity::new("overpass", "way/1", "outer"),
         CandidateCategory::Building,
         CandidateDisplay::new("教学楼", vec![("name".to_owned(), "教学楼".to_owned())]),
         CandidateShape::polygon(serde_json::json!([
@@ -49,38 +39,41 @@ fn seed_database() -> (Database, PlanId) {
             [121.4, 31.3],
             [121.4, 31.2]
         ])),
-        CandidateValidation::Retained,
-        CandidateEligibility::Reviewable,
+        ReviewableValidation::Retained,
     );
-    db.write_candidate_projections(&batch.id, &[projection])
-        .expect("候选投影写入成功");
-    db.publish_candidate_batch(&batch.id)
-        .expect("候选批次发布成功");
-    (db, plan_id)
+    db.publish_candidate_batch(&plan_id.to_string(), "rollback-fixture-boundary", &[draft])
+        .expect("候选批次原子发布成功");
+    let candidate_id = db
+        .list_current_candidate_projections(&plan_id.to_string())
+        .expect("读取当前候选")
+        .pop()
+        .expect("候选存在")
+        .candidate_id;
+    (db, plan_id, candidate_id)
 }
 
 /// 组装缝 5 导出请求（保留 1 项建筑、待定 0 项）
-fn export_request(plan_id: &PlanId) -> ExportRequest {
+fn export_request(plan_id: &PlanId, candidate_id: &str) -> ExportRequest {
     ExportRequest::new(
         plan_id.to_string(),
         vec![(CandidateCategory::Building, 1)],
         1,
         0,
         0,
-        vec![format!("Building/{CANDIDATE_ID}")],
+        vec![format!("Building/{candidate_id}")],
     )
 }
 
 /// 单元验收点：seal_export → 评审终态被标记为封账（Done）且不可再改
 #[test]
 fn seal_marks_review_done_and_immutable() {
-    let (mut db, plan_id) = seed_database();
+    let (mut db, plan_id, candidate_id) = seed_database();
 
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
     assert!(!workbench.is_sealed());
 
     // 把候选改为保留后封账
-    let key = CandidateKey::new(CANDIDATE_ID);
+    let key = CandidateKey::new(candidate_id);
     workbench
         .submit(StateChange::single(key.clone(), ReviewState::Keep))
         .unwrap();
@@ -121,7 +114,7 @@ impl SealGate for WorkbenchSealGate {
 /// 集成验收点：导出失败 → 封账失效 + 评审状态可恢复（回滚语义验证）
 #[test]
 fn export_failure_rolls_back_seal_and_review_is_editable_again() {
-    let (db, plan_id) = seed_database();
+    let (db, plan_id, candidate_id) = seed_database();
     let db = Arc::new(Mutex::new(db));
     let sealed_workbench = Arc::new(Mutex::new(None));
 
@@ -132,7 +125,9 @@ fn export_failure_rolls_back_seal_and_review_is_editable_again() {
     let mut console = ExportConsole::new(gate);
 
     // 缝 5：递交请求 → 确认 → 封账生效（评审入口禁用）
-    console.load_request(export_request(&plan_id)).unwrap();
+    console
+        .load_request(export_request(&plan_id, &candidate_id))
+        .unwrap();
     console.confirm_export().unwrap();
     assert!(console.is_exporting());
     assert!(sealed_workbench
@@ -162,7 +157,7 @@ fn export_failure_rolls_back_seal_and_review_is_editable_again() {
     let db_guard = db.lock().unwrap();
     let mut workbench = ReviewWorkbench::load(&db_guard, &plan_id).unwrap();
     assert!(!workbench.is_sealed());
-    let key = CandidateKey::new(CANDIDATE_ID);
+    let key = CandidateKey::new(candidate_id);
     let outcome = workbench
         .submit(StateChange::single(key, ReviewState::Pending))
         .expect("回滚后评审状态必须可改");
@@ -172,7 +167,7 @@ fn export_failure_rolls_back_seal_and_review_is_editable_again() {
 /// 集成验收点：导出成功 → 封账保持 + 跳转导出完成页 + .schem 合法
 #[test]
 fn export_success_keeps_seal_and_yields_completed_target() {
-    let (db, plan_id) = seed_database();
+    let (db, plan_id, candidate_id) = seed_database();
     let db = Arc::new(Mutex::new(db));
     let sealed_workbench = Arc::new(Mutex::new(None));
 
@@ -182,7 +177,9 @@ fn export_success_keeps_seal_and_yields_completed_target() {
     };
     let mut console = ExportConsole::new(gate);
 
-    console.load_request(export_request(&plan_id)).unwrap();
+    console
+        .load_request(export_request(&plan_id, &candidate_id))
+        .unwrap();
     console.confirm_export().unwrap();
 
     // 缝 6：一栋按规则起的楼落进 .schem（贯穿弹剧本第四步的最小样本）

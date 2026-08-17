@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -21,7 +21,7 @@ use desktop_shell::{
 use gaode_client::{build_review_map_page_html, ReviewMapPageConfig};
 use global_settings::{FirstRunSetup, SettingsManager};
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::winit_030::WinitWindowAccessor;
 use slint::ComponentHandle;
 
@@ -208,9 +208,7 @@ impl SpyDriver {
     }
 }
 
-const CANDIDATE_ID: &str = "overpass:way/review-spy:outer";
-
-fn seed_review_candidate(database: &mut Database, plan_id: &str) {
+fn seed_review_candidate(database: &mut Database, plan_id: &str) -> String {
     let observation = RawObservation::new(
         plan_id,
         CandidateCategory::Building,
@@ -221,16 +219,12 @@ fn seed_review_candidate(database: &mut Database, plan_id: &str) {
     database
         .write_raw_observations(std::slice::from_ref(&observation))
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let projection = CandidateProjection::new(
-        CANDIDATE_ID,
-        plan_id,
-        &observation.id,
-        &observation.data_source_tag,
-        &observation.entity_id,
-        "default",
+    let draft = CandidateProjectionDraft::reviewable(
+        CandidateSourceIdentity::new(
+            &observation.data_source_tag,
+            &observation.entity_id,
+            "default",
+        ),
         observation.entity_type,
         CandidateDisplay::new(
             "评审接缝夹具",
@@ -242,22 +236,37 @@ fn seed_review_candidate(database: &mut Database, plan_id: &str) {
             [121.0, 31.1],
             [121.0, 31.0]
         ])),
-        CandidateValidation::Retained,
-        CandidateEligibility::Reviewable,
+        ReviewableValidation::Retained,
     );
     database
-        .write_candidate_projections(&batch.id, &[projection])
-        .expect("写入候选投影");
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &[draft])
+        .expect("原子发布候选批次");
     database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .next()
+        .expect("评审候选必须存在")
+        .candidate_id
+}
+
+fn review_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.91]
+        ]]),
+    })
 }
 
 fn capture_production_review_scripts(
     window: &AppWindow,
     center: &Arc<NotificationCenter>,
     database_path: &std::path::Path,
-) -> desktop_shell::ApplicationRuntime {
+) -> (desktop_shell::ApplicationRuntime, String) {
     let mut injector =
         ViewModelInjector::new(ShellDatabases::open(database_path).expect("open databases"))
             .expect("construct injector");
@@ -292,10 +301,10 @@ fn capture_production_review_scripts(
     settings
         .set_gaode_security_key("testsecuritykey1234567890")
         .expect("save test security key");
-    {
+    let candidate_id = {
         let mut database = injector.projects().database();
-        seed_review_candidate(&mut database, &plan_id.to_string());
-    }
+        seed_review_candidate(&mut database, &plan_id.to_string())
+    };
 
     let runtime = assemble_application(window, injector, Arc::clone(center));
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
@@ -306,7 +315,7 @@ fn capture_production_review_scripts(
     );
     window.invoke_workspace_step_clicked(3);
     window.invoke_workspace_map_status_changed(true);
-    runtime
+    (runtime, candidate_id)
 }
 
 #[test]
@@ -325,7 +334,8 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
         .set_presenter(ShellPresenter::install(&capture_window));
     let directory = tempfile::tempdir().expect("temporary directory");
     let database_path = directory.path().join("review-map-js-spy.db");
-    let runtime = capture_production_review_scripts(&capture_window, &center, &database_path);
+    let (runtime, candidate_id) =
+        capture_production_review_scripts(&capture_window, &center, &database_path);
 
     desktop_shell::set_review_push_probe_visible(true);
     desktop_shell::reset_review_push_count();
@@ -340,7 +350,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
     );
 
     desktop_shell::reset_review_push_count();
-    capture_window.invoke_review_card_state_clicked(CANDIDATE_ID.into(), "keep".into());
+    capture_window.invoke_review_card_state_clicked(candidate_id.clone().into(), "keep".into());
     let update_scripts = desktop_shell::review_pushed_scripts();
     assert!(
         update_scripts
@@ -351,7 +361,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
     production_scripts.extend(update_scripts);
 
     desktop_shell::reset_review_push_count();
-    capture_window.invoke_review_locate_clicked(CANDIDATE_ID.into());
+    capture_window.invoke_review_locate_clicked(candidate_id.clone().into());
     let locate_scripts = desktop_shell::review_pushed_scripts();
     assert!(
         locate_scripts
@@ -362,7 +372,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
     production_scripts.extend(locate_scripts);
 
     desktop_shell::reset_review_push_count();
-    capture_window.invoke_review_card_state_clicked(CANDIDATE_ID.into(), "pending".into());
+    capture_window.invoke_review_card_state_clicked(candidate_id.clone().into(), "pending".into());
     let pending_scripts = desktop_shell::review_pushed_scripts();
     assert!(
         pending_scripts
@@ -372,7 +382,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
     );
 
     desktop_shell::reset_review_push_count();
-    capture_window.invoke_review_card_state_clicked(CANDIDATE_ID.into(), "remove".into());
+    capture_window.invoke_review_card_state_clicked(candidate_id.clone().into(), "remove".into());
     let mut removed_scripts = desktop_shell::review_pushed_scripts();
     assert!(
         removed_scripts
@@ -381,7 +391,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
         "必须捕获生产适配器生成的剔除增量脚本"
     );
     desktop_shell::reset_review_push_count();
-    capture_window.invoke_review_locate_clicked(CANDIDATE_ID.into());
+    capture_window.invoke_review_locate_clicked(candidate_id.clone().into());
     removed_scripts.extend(desktop_shell::review_pushed_scripts());
     desktop_shell::set_review_push_probe_visible(false);
     drop(runtime);
@@ -621,7 +631,7 @@ fn review_map_js_spy_asserts_center_zoom_overlay_highlight_and_text_toggle() {
     );
     let drawing_failure = drawing_failure.expect("checked above");
     assert!(
-        !drawing_failure.contains(CANDIDATE_ID)
+        !drawing_failure.contains(&candidate_id)
             && !drawing_failure.contains("coordinates")
             && !drawing_failure.contains("private"),
         "绘制失败 IPC 不得泄露候选 ID、坐标或原始异常详情：{drawing_failure}"

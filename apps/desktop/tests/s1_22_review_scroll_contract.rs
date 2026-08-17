@@ -13,16 +13,16 @@
 use std::sync::Arc;
 
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
 };
 use global_settings::FirstRunSetup;
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::Model;
 use slint::{ComponentHandle, LogicalPosition};
@@ -51,26 +51,20 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
     database
         .write_raw_observations(&observations)
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let mut drafts = Vec::new();
     for observation in &observations {
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let display = CandidateDisplay::new(
             observation.source_data["tags"]["name"]
                 .as_str()
                 .unwrap_or(&observation.entity_id),
             vec![("source".to_owned(), observation.data_source_tag.clone())],
         );
-        projections.push(CandidateProjection::new(
-            &candidate_id,
-            plan_id,
-            &observation.id,
-            &observation.data_source_tag,
-            &observation.entity_id,
-            "default",
+        drafts.push(CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new(
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+            ),
             observation.entity_type,
             display,
             CandidateShape::polygon(serde_json::json!([
@@ -79,18 +73,30 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
                 [121.4, 31.3],
                 [121.4, 31.2]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
+            ReviewableValidation::Retained,
         ));
-        reviewable.push(candidate_id);
     }
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
     database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
-    reviewable
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| projection.candidate_id)
+        .collect()
+}
+
+fn review_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.91]
+        ]]),
+    })
 }
 
 fn open_plan_and_review(

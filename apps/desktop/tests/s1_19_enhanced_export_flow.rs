@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi, ReviewDecision, ReviewDecisionsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewDecision, ReviewDecisionsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ApplicationRuntime, OperationPresentationState,
@@ -17,7 +17,7 @@ use desktop_shell::{
 use global_settings::FirstRunSetup;
 use manifest_generator::ExportKind;
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory, PlanId, ReviewState};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory, PlanId, ReviewState};
 use slint::ComponentHandle;
 
 /// 真实发布候选投影 + 封账写回：2 保留建筑 + 1 待定 + 1 剔除 + 1 隔离。
@@ -55,13 +55,9 @@ fn seed_sealed_review(database: &mut Database, plan_id: &str) {
     database
         .write_raw_observations(&observations)
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let mut drafts = Vec::new();
+    let mut reviewable_sources = Vec::new();
     for observation in &observations {
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let display = if observation.entity_type == CandidateCategory::Building {
             CandidateDisplay::new(
                 observation.source_data["tags"]["name"]
@@ -77,13 +73,12 @@ fn seed_sealed_review(database: &mut Database, plan_id: &str) {
                 vec![],
             )
         };
-        projections.push(CandidateProjection::new(
-            &candidate_id,
-            plan_id,
-            &observation.id,
-            &observation.data_source_tag,
-            &observation.entity_id,
-            "default",
+        drafts.push(CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new(
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+            ),
             observation.entity_type,
             display,
             CandidateShape::polygon(serde_json::json!([
@@ -92,61 +87,87 @@ fn seed_sealed_review(database: &mut Database, plan_id: &str) {
                 [116.0005, 39.0005],
                 [116.0001, 39.0001]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
+            ReviewableValidation::Retained,
         ));
-        reviewable.push(candidate_id);
+        reviewable_sources.push(observation.entity_id.clone());
     }
-    projections.push(
-        CandidateProjection::new(
-            "overpass:way/iso:outer",
-            plan_id,
-            "raw-iso",
-            "overpass",
-            "way/iso",
-            "default",
+    let isolated_observation = RawObservation::new(
+        plan_id,
+        CandidateCategory::Building,
+        "way/iso",
+        serde_json::json!({ "tags": { "name": "隔离建筑" } }),
+        "overpass",
+    );
+    database
+        .write_raw_observations(std::slice::from_ref(&isolated_observation))
+        .expect("写入隔离原始观测");
+    drafts.push(
+        CandidateProjectionDraft::isolated(
+            CandidateSourceIdentity::new("overpass", "way/iso", "default"),
             CandidateCategory::Building,
             CandidateDisplay::new("隔离建筑", vec![]),
             CandidateShape::point(serde_json::json!([])),
-            CandidateValidation::Rejected,
-            CandidateEligibility::Isolated,
+            "missing_source_geometry",
         )
-        .isolated_reason("missing_source_geometry"),
+        .expect("隔离事实必须合法"),
     );
+    let published = database
+        .publish_candidate_batch(plan_id, &export_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
+    let ids_by_source = database
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| (projection.source_entity_id, projection.candidate_id))
+        .collect::<std::collections::HashMap<_, _>>();
+    let reviewable = reviewable_sources
+        .into_iter()
+        .map(|source| ids_by_source[&source].clone())
+        .collect::<Vec<_>>();
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
-    database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
-    database
-        .batch_update_review_decisions(&[
-            ReviewDecision::new(
-                plan_id,
-                CandidateCategory::Building,
-                &reviewable[0],
-                ReviewState::Keep,
-            ),
-            ReviewDecision::new(
-                plan_id,
-                CandidateCategory::Building,
-                &reviewable[1],
-                ReviewState::Keep,
-            ),
-            ReviewDecision::new(
-                plan_id,
-                CandidateCategory::Road,
-                &reviewable[2],
-                ReviewState::Pending,
-            ),
-            ReviewDecision::new(
-                plan_id,
-                CandidateCategory::Water,
-                &reviewable[3],
-                ReviewState::Remove,
-            ),
-        ])
+        .batch_update_review_decisions_at_revision(
+            plan_id,
+            &published.batch.id,
+            &[
+                ReviewDecision::new(
+                    plan_id,
+                    CandidateCategory::Building,
+                    &reviewable[0],
+                    ReviewState::Keep,
+                ),
+                ReviewDecision::new(
+                    plan_id,
+                    CandidateCategory::Building,
+                    &reviewable[1],
+                    ReviewState::Keep,
+                ),
+                ReviewDecision::new(
+                    plan_id,
+                    CandidateCategory::Road,
+                    &reviewable[2],
+                    ReviewState::Pending,
+                ),
+                ReviewDecision::new(
+                    plan_id,
+                    CandidateCategory::Water,
+                    &reviewable[3],
+                    ReviewState::Remove,
+                ),
+            ],
+        )
         .expect("封账写回");
+}
+
+fn export_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.0, 39.0],
+            [116.001, 39.0],
+            [116.001, 39.001],
+            [116.0, 39.001]
+        ]]),
+    })
 }
 
 struct TestApp {

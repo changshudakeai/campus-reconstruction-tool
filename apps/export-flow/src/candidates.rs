@@ -6,9 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use data_persistence::{
-    CandidateEligibility, CandidateProjectionsApi, Database, ReviewDecisionsApi,
-};
+use data_persistence::{CandidateProjectionsApi, Database, ReviewDecisionsApi};
 use export_console::{
     CandidateExportReader, CandidateExportSummary, Error, KeptCandidateProjection,
 };
@@ -60,11 +58,11 @@ impl ExportCandidateStore {
     /// 封账后状态为保留的稳定候选标识（B2 review_decisions 终态）。
     pub(crate) fn kept_candidate_ids(&self, plan_id: &str) -> Result<Vec<String>, Error> {
         let db = self.db.lock().map_err(lock_error)?;
-        let decisions = db.list_review_decisions(plan_id).map_err(read_error)?;
-        Ok(decisions
+        Ok(db
+            .list_kept_candidate_projections(plan_id)
+            .map_err(read_error)?
             .into_iter()
-            .filter(|decision| decision.review_state.is_keep())
-            .map(|decision| decision.candidate_id)
+            .map(|projection| projection.candidate_id)
             .collect())
     }
 }
@@ -77,7 +75,7 @@ impl CandidateExportReader for ExportCandidateStore {
     ) -> Result<Option<KeptCandidateProjection>, Error> {
         let db = self.db.lock().map_err(lock_error)?;
         let projection = db
-            .get_current_candidate_projection(plan_id, candidate_id)
+            .get_kept_candidate_projection(plan_id, candidate_id)
             .map_err(read_error)?;
         Ok(projection.map(|projection| KeptCandidateProjection {
             candidate_id: projection.candidate_id,
@@ -86,7 +84,7 @@ impl CandidateExportReader for ExportCandidateStore {
             tags: projection.display.tags,
             shape_kind: projection.shape.kind,
             coordinates: projection.shape.coordinates,
-            reviewable: projection.eligibility == CandidateEligibility::Reviewable,
+            reviewable: true,
         }))
     }
 }

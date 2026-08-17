@@ -14,9 +14,9 @@
 
 use data_acquisition::{boundary_disposition, parse_boundary, SourceGeometry};
 use data_persistence::{
-    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibility,
-    CandidateEligibilityUpdate, CandidateProjectionsApi, Database, DecisionVoid,
-    RawObservationsApi, RevalidationWriteSummary,
+    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibility, CandidateProjectionsApi,
+    CandidateRevalidationFact, CandidateShape, CandidateValidation, Database, RawObservationsApi,
+    ReviewableValidation,
 };
 use geometry_validator::{
     CandidateGeometry, GeometryShape, GeometryValidator, ValidationDisposition,
@@ -146,9 +146,7 @@ pub(crate) fn run_boundary_revalidation(
         .map(|observation| (observation.id.as_str(), observation))
         .collect();
 
-    let mut eligibility_updates: Vec<CandidateEligibilityUpdate> = Vec::new();
-    let mut voids: Vec<DecisionVoid> = Vec::new();
-    let mut reset_to_pending: Vec<String> = Vec::new();
+    let mut facts = Vec::with_capacity(projections.len());
     let mut newly_isolated = Vec::new();
     let mut newly_reviewable = Vec::new();
     let mut unchanged = 0usize;
@@ -160,9 +158,20 @@ pub(crate) fn run_boundary_revalidation(
         let disposition = boundary_disposition(geometry.as_ref(), &multipolygon);
         let new_eligibility;
         let new_reason;
+        let fact;
         match disposition {
             data_acquisition::BoundaryDisposition::Inside => {
-                if projection.eligibility == CandidateEligibility::Reviewable {
+                if projection.eligibility() == CandidateEligibility::Reviewable {
+                    let validation = if projection.validation() == CandidateValidation::Repaired {
+                        ReviewableValidation::Repaired
+                    } else {
+                        ReviewableValidation::Retained
+                    };
+                    facts.push(CandidateRevalidationFact::reviewable(
+                        projection.candidate_id.clone(),
+                        projection.shape.clone(),
+                        validation,
+                    ));
                     unchanged += 1;
                     continue;
                 }
@@ -177,65 +186,106 @@ pub(crate) fn run_boundary_revalidation(
                         .into_iter()
                         .find(|item| item.candidate_id == projection.candidate_id)
                 });
-                match outcome.map(|item| item.disposition) {
-                    Some(ValidationDisposition::Retained)
-                    | Some(ValidationDisposition::Repaired) => {
+                match outcome {
+                    Some(item)
+                        if matches!(
+                            item.disposition,
+                            ValidationDisposition::Retained | ValidationDisposition::Repaired
+                        ) =>
+                    {
                         new_eligibility = CandidateEligibility::Reviewable;
                         new_reason = None;
+                        let validation =
+                            if matches!(item.disposition, ValidationDisposition::Repaired) {
+                                ReviewableValidation::Repaired
+                            } else {
+                                ReviewableValidation::Retained
+                            };
+                        let shape = item
+                            .geometry
+                            .as_ref()
+                            .map(shape_from_candidate)
+                            .unwrap_or_else(|| projection.shape.clone());
+                        fact = CandidateRevalidationFact::reviewable(
+                            projection.candidate_id.clone(),
+                            shape,
+                            validation,
+                        );
                     }
-                    Some(ValidationDisposition::Rejected(_)) => {
+                    Some(_) | None => {
                         new_eligibility = CandidateEligibility::Isolated;
                         new_reason = Some("invalid_source_geometry".to_owned());
-                    }
-                    None | Some(_) => {
-                        new_eligibility = CandidateEligibility::Isolated;
-                        new_reason = Some("invalid_source_geometry".to_owned());
+                        fact = CandidateRevalidationFact::isolated(
+                            projection.candidate_id.clone(),
+                            projection.shape.clone(),
+                            "invalid_source_geometry",
+                        )
+                        .expect("静态非空隔离原因");
                     }
                 }
                 if new_eligibility == CandidateEligibility::Reviewable {
                     newly_reviewable.push(projection.candidate_id.clone());
-                    reset_to_pending.push(projection.candidate_id.clone());
                 }
             }
             data_acquisition::BoundaryDisposition::Outside
-            | data_acquisition::BoundaryDisposition::Crosses
-            | data_acquisition::BoundaryDisposition::Invalid => {
+            | data_acquisition::BoundaryDisposition::Crosses => {
                 new_eligibility = CandidateEligibility::Isolated;
                 new_reason = Some(isolation_reason(disposition).to_owned());
-                if projection.eligibility == CandidateEligibility::Reviewable {
+                fact = match projection.validation() {
+                    CandidateValidation::Retained => CandidateRevalidationFact::isolated_validated(
+                        projection.candidate_id.clone(),
+                        projection.shape.clone(),
+                        ReviewableValidation::Retained,
+                        isolation_reason(disposition),
+                    ),
+                    CandidateValidation::Repaired => CandidateRevalidationFact::isolated_validated(
+                        projection.candidate_id.clone(),
+                        projection.shape.clone(),
+                        ReviewableValidation::Repaired,
+                        isolation_reason(disposition),
+                    ),
+                    CandidateValidation::Rejected => CandidateRevalidationFact::isolated(
+                        projection.candidate_id.clone(),
+                        projection.shape.clone(),
+                        isolation_reason(disposition),
+                    ),
+                }
+                .expect("静态非空隔离原因");
+                if projection.eligibility() == CandidateEligibility::Reviewable {
                     newly_isolated.push(projection.candidate_id.clone());
-                    voids.push(DecisionVoid {
-                        candidate_id: projection.candidate_id.clone(),
-                        reason: format!("boundary_changed:{}", isolation_reason(disposition)),
-                    });
-                } else if projection.isolation_reason.as_deref() != new_reason.as_deref() {
+                } else if projection.isolation_reason() != new_reason.as_deref() {
                     // 仍在边界外/相交：隔离原因可能随新边界细化（如 outside→crosses）。
-                    eligibility_updates.push(CandidateEligibilityUpdate {
-                        candidate_id: projection.candidate_id.clone(),
-                        eligibility: CandidateEligibility::Isolated,
-                        isolation_reason: new_reason.clone(),
-                    });
-                    continue;
                 } else {
+                    facts.push(fact);
+                    unchanged += 1;
+                    continue;
+                }
+            }
+            data_acquisition::BoundaryDisposition::Invalid => {
+                new_eligibility = CandidateEligibility::Isolated;
+                new_reason = Some(isolation_reason(disposition).to_owned());
+                fact = CandidateRevalidationFact::isolated(
+                    projection.candidate_id.clone(),
+                    projection.shape.clone(),
+                    isolation_reason(disposition),
+                )
+                .expect("静态非空隔离原因");
+                if projection.eligibility() == CandidateEligibility::Reviewable {
+                    newly_isolated.push(projection.candidate_id.clone());
+                } else if projection.isolation_reason() == new_reason.as_deref()
+                    && projection.validation() == CandidateValidation::Rejected
+                {
+                    facts.push(fact);
                     unchanged += 1;
                     continue;
                 }
             }
         }
-        eligibility_updates.push(CandidateEligibilityUpdate {
-            candidate_id: projection.candidate_id.clone(),
-            eligibility: new_eligibility,
-            isolation_reason: new_reason,
-        });
+        let _ = (new_eligibility, new_reason);
+        facts.push(fact);
     }
 
-    let summary: RevalidationWriteSummary = db.apply_boundary_revalidation(
-        &plan_id.to_string(),
-        &eligibility_updates,
-        &voids,
-        &reset_to_pending,
-        &fingerprint,
-    )?;
+    let summary = db.publish_candidate_revalidation(&plan_id.to_string(), &fingerprint, &facts)?;
     Ok(BoundaryRevalidationReport {
         boundary_changed: true,
         examined: projections.len(),
@@ -246,4 +296,15 @@ pub(crate) fn run_boundary_revalidation(
         decisions_reset_to_pending: summary.decisions_reset_to_pending,
         boundary_fingerprint: fingerprint,
     })
+}
+
+fn shape_from_candidate(geometry: &CandidateGeometry) -> CandidateShape {
+    match &geometry.shape {
+        GeometryShape::Point(_) => CandidateShape::point(serde_json::json!(geometry.coordinates)),
+        GeometryShape::LineString(_) => {
+            CandidateShape::line_string(serde_json::json!(geometry.coordinates))
+        }
+        GeometryShape::Polygon => CandidateShape::polygon(serde_json::json!(geometry.coordinates)),
+        _ => CandidateShape::point(serde_json::json!([])),
+    }
 }

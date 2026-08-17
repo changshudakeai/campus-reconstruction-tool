@@ -7,13 +7,13 @@
 
 use data_acquisition::overpass::{BoundarySourceKind, CampusBoundaryResult};
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservationsApi,
-    ReviewDraftApi, WorkspaceStateApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservationsApi,
+    ReviewDraftApi, ReviewableValidation, WorkspaceStateApi,
 };
 use global_settings::FirstRunSetup;
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory, PlanId};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory, PlanId};
 use slint::{ComponentHandle, Model};
 use std::path::Path;
 use std::path::PathBuf;
@@ -63,26 +63,22 @@ fn seed_review_candidates(database_path: &std::path::Path, plan_id: &PlanId) -> 
     database
         .write_raw_observations(&observations)
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(&plan_id.to_string())
-        .expect("准备候选批次");
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let plan_key = plan_id.to_string();
+    let mut drafts = Vec::new();
+    let mut reviewable_sources = Vec::new();
     for observation in &observations {
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let display = CandidateDisplay::new(
             observation.source_data["tags"]["name"]
                 .as_str()
                 .unwrap_or(&observation.entity_id),
             vec![("source".to_owned(), observation.data_source_tag.clone())],
         );
-        projections.push(CandidateProjection::new(
-            &candidate_id,
-            plan_id.to_string(),
-            &observation.id,
-            &observation.data_source_tag,
-            &observation.entity_id,
-            "default",
+        drafts.push(CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new(
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+            ),
             observation.entity_type,
             display,
             CandidateShape::polygon(serde_json::json!([
@@ -91,18 +87,35 @@ fn seed_review_candidates(database_path: &std::path::Path, plan_id: &PlanId) -> 
                 [121.4, 31.3],
                 [121.4, 31.2]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
+            ReviewableValidation::Retained,
         ));
-        reviewable.push(candidate_id);
+        reviewable_sources.push(observation.entity_id.clone());
     }
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
-    database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
-    reviewable
+        .publish_candidate_batch(&plan_key, &workspace_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
+    let ids_by_source = database
+        .list_reviewable_candidate_projections(&plan_key)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| (projection.source_entity_id, projection.candidate_id))
+        .collect::<std::collections::HashMap<_, _>>();
+    reviewable_sources
+        .into_iter()
+        .map(|source| ids_by_source[&source].clone())
+        .collect()
+}
+
+fn workspace_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [121.40, 31.20],
+            [121.41, 31.20],
+            [121.41, 31.21],
+            [121.40, 31.21]
+        ]]),
+    })
 }
 
 struct RestartHarness {

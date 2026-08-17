@@ -19,8 +19,9 @@ use data_acquisition::{
 };
 use data_persistence::{
     boundary_fingerprint, BoundaryRevalidationApi, CandidateDisplay, CandidateEligibility,
-    CandidateNameSource, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservation, RawObservationsApi, ReviewDecisionsApi,
+    CandidateNameSource, CandidateProjectionDraft, CandidateProjectionsApi, CandidateShape,
+    CandidateSourceIdentity, Database, RawObservation, RawObservationsApi, ReviewDecisionsApi,
+    ReviewableValidation,
 };
 use data_transformers::TagMap;
 use export_flow::{BoundaryExportFlow, StdExportFileSystem};
@@ -393,7 +394,7 @@ fn start_success_persists_raw_and_publishes_candidates_and_unlocks_review() {
         .expect("读取可评审候选");
     assert_eq!(reviewable.len(), 3, "点/线/面全部通过验证进入候选池");
     assert!(
-        reviewable.iter().all(|projection| projection.eligibility
+        reviewable.iter().all(|projection| projection.eligibility()
             == data_persistence::CandidateEligibility::Reviewable),
         "全部候选应具有 Reviewable 资格"
     );
@@ -845,13 +846,21 @@ fn boundary_change_revalidates_candidates_locally_without_network() {
     // 给 A 写入一条已封账"保留"决定（作废标注的验证对象）。
     {
         let mut database = db.lock().expect("database lock");
+        let revision = database
+            .current_candidate_batch_revision(&plan_key)
+            .expect("读取候选 revision")
+            .expect("当前批次存在");
         database
-            .batch_update_review_decisions(&[data_persistence::ReviewDecision::new(
-                plan_key.clone(),
-                CandidateCategory::Building,
-                a_id.clone(),
-                ReviewState::Keep,
-            )])
+            .batch_update_review_decisions_at_revision(
+                &plan_key,
+                &revision,
+                &[data_persistence::ReviewDecision::new(
+                    plan_key.clone(),
+                    CandidateCategory::Building,
+                    a_id.clone(),
+                    ReviewState::Keep,
+                )],
+            )
             .expect("写入保留决定");
     }
 
@@ -884,16 +893,16 @@ fn boundary_change_revalidates_candidates_locally_without_network() {
         .iter()
         .find(|projection| projection.candidate_id == a_id)
         .expect("A 投影仍在（不物理删除）");
-    assert_eq!(a.eligibility, CandidateEligibility::Isolated);
+    assert_eq!(a.eligibility(), CandidateEligibility::Isolated);
     assert_eq!(
-        a.isolation_reason.as_deref(),
+        a.isolation_reason(),
         Some("outside_confirmed_plan_boundary")
     );
     let b = all
         .iter()
         .find(|projection| projection.display.title == "教学楼B01")
         .expect("B 投影");
-    assert_eq!(b.eligibility, CandidateEligibility::Reviewable);
+    assert_eq!(b.eligibility(), CandidateEligibility::Reviewable);
     assert_eq!(
         database
             .list_reviewable_candidate_projections(&plan_key)
@@ -914,12 +923,16 @@ fn boundary_change_revalidates_candidates_locally_without_network() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].previous_state, ReviewState::Keep);
     assert!(
-        history[0].reason.contains("outside"),
-        "作废原因按新边界结论标注：{}",
+        history[0].reason.contains("boundary_change"),
+        "作废原因必须标明由边界变化触发：{}",
         history[0].reason
     );
     let (pending, keep, remove) = database.count_review_states(&plan_key).expect("三态计数");
-    assert_eq!((pending, keep, remove), (0, 0, 0), "作废决定不参与计数");
+    assert_eq!(
+        (pending, keep, remove),
+        (1, 0, 0),
+        "A 的旧 Keep 已作废，B 新进入边界后以待定参与当前计数"
+    );
     assert_eq!(
         database
             .load_plan_collection_boundary(&plan_key)
@@ -975,11 +988,11 @@ fn boundary_change_revalidates_candidates_locally_without_network() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "全程网络请求数保持 1");
 }
 
-/// 旧数据（无“上次采集时使用的边界”指纹记录）的评审台进入场景：无记录也
-/// 必须按当前已确认边界本地鉴别一次，随后补记指纹；边界未变化不再重复计算；
+/// 旧数据（记录的采集边界 revision 已过时）的评审台进入场景：必须按当前
+/// 已确认边界本地鉴别一次，随后补记指纹；边界未变化不再重复计算；
 /// 全程不联网（网络请求数保持 0）。
 #[test]
-fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
+fn collection_with_outdated_fingerprint_revalidates_on_review_entry() {
     let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
     let calls = Arc::new(AtomicUsize::new(0));
     let source = Arc::new(CountingSource {
@@ -997,7 +1010,8 @@ fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
     let plan_key = plan_id.to_string();
 
     // 模拟旧版本遗留状态：已有候选投影（A 在原边界内 Reviewable、B 在边界外
-    // Isolated），但“上次采集时使用的边界”指纹表为空（不经过采集发布）。
+    // Isolated），记录的采集边界指纹与当前已确认边界不同。
+    let (candidate_a, candidate_b);
     {
         let mut database = db.lock().expect("database lock");
         let observation_a = RawObservation::new(
@@ -1029,52 +1043,50 @@ fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
         database
             .write_raw_observations(&[observation_a.clone(), observation_b.clone()])
             .expect("写入原始观测");
-        let batch = database
-            .prepare_candidate_batch(&plan_key)
-            .expect("prepare batch");
         database
-            .write_candidate_projections(
-                &batch.id,
+            .publish_candidate_batch(
+                &plan_key,
+                "legacy-boundary-fingerprint",
                 &[
-                    CandidateProjection::new(
-                        "cand-a",
-                        &plan_key,
-                        observation_a.id.clone(),
-                        "overpass",
-                        "way/1",
-                        "point",
+                    CandidateProjectionDraft::reviewable(
+                        CandidateSourceIdentity::new("overpass", "way/1", "point"),
                         CandidateCategory::Building,
                         CandidateDisplay::new("教学楼A", vec![]),
                         CandidateShape::point(serde_json::json!([116.4003, 39.9003])),
-                        CandidateValidation::Retained,
-                        CandidateEligibility::Reviewable,
+                        ReviewableValidation::Retained,
                     ),
-                    CandidateProjection::new(
-                        "cand-b",
-                        &plan_key,
-                        observation_b.id.clone(),
-                        "overpass",
-                        "way/2",
-                        "point",
+                    CandidateProjectionDraft::isolated(
+                        CandidateSourceIdentity::new("overpass", "way/2", "point"),
                         CandidateCategory::Building,
                         CandidateDisplay::new("教学楼B", vec![]),
                         CandidateShape::point(serde_json::json!([116.4012, 39.9012])),
-                        CandidateValidation::Rejected,
-                        CandidateEligibility::Isolated,
+                        "outside_confirmed_plan_boundary",
                     )
-                    .isolated_reason("outside_confirmed_plan_boundary"),
+                    .expect("隔离事实合法"),
                 ],
             )
-            .expect("写入候选投影");
-        database
-            .publish_candidate_batch(&batch.id)
-            .expect("发布批次");
+            .expect("原子发布候选批次");
+        let current = database
+            .list_current_candidate_projections(&plan_key)
+            .expect("读取当前候选");
+        candidate_a = current
+            .iter()
+            .find(|projection| projection.source_entity_id == "way/1")
+            .expect("A 候选")
+            .candidate_id
+            .clone();
+        candidate_b = current
+            .iter()
+            .find(|projection| projection.source_entity_id == "way/2")
+            .expect("B 候选")
+            .candidate_id
+            .clone();
         assert_eq!(
             database
                 .load_plan_collection_boundary(&plan_key)
                 .expect("读取指纹"),
-            None,
-            "旧数据指纹表必须为空"
+            Some("legacy-boundary-fingerprint".to_owned()),
+            "夹具必须通过 lifecycle interface 留下旧边界 revision"
         );
     }
 
@@ -1092,16 +1104,12 @@ fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
     let report = flow
         .revalidate_boundary_for_review(&plan_id, &shifted)
         .expect("评审台进入重鉴别");
-    assert!(report.boundary_changed, "无指纹记录也必须执行本地重鉴别");
+    assert!(report.boundary_changed, "指纹变化必须执行本地重鉴别");
     assert_eq!(report.examined, 2);
-    assert_eq!(
-        report.newly_isolated,
-        vec!["cand-a".to_owned()],
-        "A 跑到边界外"
-    );
+    assert_eq!(report.newly_isolated, vec![candidate_a], "A 跑到边界外");
     assert_eq!(
         report.newly_reviewable,
-        vec!["cand-b".to_owned()],
+        vec![candidate_b.clone()],
         "B 新进入边界"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "评审台进入重鉴别不得联网");
@@ -1121,7 +1129,7 @@ fn legacy_collection_without_fingerprint_revalidates_on_review_entry() {
             .list_reviewable_candidate_projections(&plan_key)
             .expect("Reviewable API");
         assert_eq!(reviewable.len(), 1, "评审台只显示边界内候选");
-        assert_eq!(reviewable[0].candidate_id, "cand-b");
+        assert_eq!(reviewable[0].candidate_id, candidate_b);
     }
     let report = flow
         .revalidate_boundary_for_review(&plan_id, &shifted)

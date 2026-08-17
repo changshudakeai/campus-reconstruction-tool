@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -15,7 +15,7 @@ use desktop_shell::{
 use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::Model;
 
 /// 种子：3 栋有名称可评审建筑 + 1 栋未命名可评审建筑 + 1 条可评审道路 +
@@ -66,29 +66,24 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
         .write_raw_observations(&observations)
         .expect("写入原始观测");
 
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let mut drafts = Vec::new();
+    let mut reviewable_sources = Vec::new();
     for observation in &observations {
         if observation.entity_id == "way/raw-only" {
             continue;
         }
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let display = CandidateDisplay::new(
             observation.source_data["tags"]["name"]
                 .as_str()
                 .unwrap_or(&observation.entity_id),
             vec![("source".to_owned(), observation.data_source_tag.clone())],
         );
-        projections.push(CandidateProjection::new(
-            &candidate_id,
-            plan_id,
-            &observation.id,
-            &observation.data_source_tag,
-            &observation.entity_id,
-            "default",
+        drafts.push(CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new(
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+            ),
             observation.entity_type,
             display,
             CandidateShape::polygon(serde_json::json!([
@@ -97,10 +92,9 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
                 [121.4, 31.3],
                 [121.4, 31.2]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
+            ReviewableValidation::Retained,
         ));
-        reviewable.push(candidate_id);
+        reviewable_sources.push(observation.entity_id.clone());
     }
 
     // Isolated 投影：资格边界（ADR-0040）——绝不进入 F5 评审页。
@@ -114,26 +108,41 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
     database
         .write_raw_observations(std::slice::from_ref(&isolated_observation))
         .expect("写入隔离观测");
-    projections.push(CandidateProjection::new(
-        "overpass:way/isolated:outer",
-        plan_id,
-        &isolated_observation.id,
-        "overpass",
-        "way/isolated",
-        "default",
-        CandidateCategory::Building,
-        CandidateDisplay::new("隔离观测", Vec::new()),
-        CandidateShape::point(serde_json::json!([121.4, 31.2])),
-        CandidateValidation::Rejected,
-        CandidateEligibility::Isolated,
-    ));
+    drafts.push(
+        CandidateProjectionDraft::isolated(
+            CandidateSourceIdentity::new("overpass", "way/isolated", "default"),
+            CandidateCategory::Building,
+            CandidateDisplay::new("隔离观测", Vec::new()),
+            CandidateShape::point(serde_json::json!([121.4, 31.2])),
+            "invalid_source_geometry",
+        )
+        .expect("隔离事实必须合法"),
+    );
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
-    database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
-    reviewable
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
+    let ids_by_source = database
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| (projection.source_entity_id, projection.candidate_id))
+        .collect::<std::collections::HashMap<_, _>>();
+    reviewable_sources
+        .into_iter()
+        .map(|source| ids_by_source[&source].clone())
+        .collect()
+}
+
+fn review_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.91]
+        ]]),
+    })
 }
 
 fn card_state_key(window: &AppWindow, index: usize) -> String {

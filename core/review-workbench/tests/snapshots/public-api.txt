@@ -123,6 +123,9 @@ pub review_workbench::Error::SessionIo(alloc::string::String)
 pub review_workbench::Error::SessionPlanMismatch
 pub review_workbench::Error::SessionPlanMismatch::expected: alloc::string::String
 pub review_workbench::Error::SessionPlanMismatch::found: alloc::string::String
+pub review_workbench::Error::SessionRevisionMismatch
+pub review_workbench::Error::SessionRevisionMismatch::expected: alloc::string::String
+pub review_workbench::Error::SessionRevisionMismatch::found: alloc::string::String
 impl core::convert::From<data_persistence::error::Error> for review_workbench::Error
 pub fn review_workbench::Error::from(source: data_persistence::error::Error) -> Self
 impl core::error::Error for review_workbench::Error

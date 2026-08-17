@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use data_persistence::CandidateNameSource;
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi, ReviewDecisionsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewDecisionsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -14,7 +14,7 @@ use desktop_shell::{
 use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::Model;
 
 /// 种子：5 栋可评审建筑 + 1 条可评审道路。
@@ -39,26 +39,21 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
     database
         .write_raw_observations(&observations)
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let mut drafts = Vec::new();
+    let mut reviewable_sources = Vec::new();
     for observation in &observations {
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let display = CandidateDisplay::new(
             observation.source_data["tags"]["name"]
                 .as_str()
                 .unwrap_or(&observation.entity_id),
             vec![("source".to_owned(), observation.data_source_tag.clone())],
         );
-        projections.push(CandidateProjection::new(
-            &candidate_id,
-            plan_id,
-            &observation.id,
-            &observation.data_source_tag,
-            &observation.entity_id,
-            "default",
+        drafts.push(CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new(
+                &observation.data_source_tag,
+                &observation.entity_id,
+                "default",
+            ),
             observation.entity_type,
             display,
             CandidateShape::polygon(serde_json::json!([
@@ -67,18 +62,23 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
                 [121.4, 31.3],
                 [121.4, 31.2]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
+            ReviewableValidation::Retained,
         ));
-        reviewable.push(candidate_id);
+        reviewable_sources.push(observation.entity_id.clone());
     }
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
-    database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
-    reviewable
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
+    let ids_by_source = database
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| (projection.source_entity_id, projection.candidate_id))
+        .collect::<std::collections::HashMap<_, _>>();
+    reviewable_sources
+        .into_iter()
+        .map(|source| ids_by_source[&source].clone())
+        .collect()
 }
 
 fn card_state_key(window: &AppWindow, index: usize) -> String {
@@ -142,48 +142,43 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
     database
         .write_raw_observations(&observations)
         .expect("写入建议夹具原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备建议夹具候选批次");
-
-    let mut projections = Vec::new();
-    let mut reviewable = Vec::new();
+    let mut drafts = Vec::new();
+    let mut reviewable_sources = Vec::new();
     for (index, observation) in observations.iter().enumerate() {
-        let candidate_id = format!("overpass:{}:outer", observation.entity_id);
         let (title, tags, validation, name_source) = match index {
             // b0 干净 → 建议保留
             0 => (
                 "教学楼甲".to_owned(),
                 vec![("building".to_owned(), "school".to_owned())],
-                CandidateValidation::Retained,
+                ReviewableValidation::Retained,
                 CandidateNameSource::Osm,
             ),
             // b1 干净 → 建议保留
             1 => (
                 "教学楼乙".to_owned(),
                 vec![("building".to_owned(), "school".to_owned())],
-                CandidateValidation::Retained,
+                ReviewableValidation::Retained,
                 CandidateNameSource::Osm,
             ),
             // b2 未命名 → 建议人工确认（未命名）
             2 => (
                 observation.entity_id.clone(),
                 vec![("building".to_owned(), "yes".to_owned())],
-                CandidateValidation::Retained,
+                ReviewableValidation::Retained,
                 CandidateNameSource::Unnamed,
             ),
             // b3 与 b0 同来源实体 + 同几何 → 重复投影 → 建议剔除
             3 => (
                 "教学楼甲".to_owned(),
                 vec![("building".to_owned(), "school".to_owned())],
-                CandidateValidation::Retained,
+                ReviewableValidation::Retained,
                 CandidateNameSource::Osm,
             ),
             // b4 几何自动修复 → 建议人工确认（形状经修复）
             _ => (
                 "实验楼".to_owned(),
                 vec![("building".to_owned(), "lab".to_owned())],
-                CandidateValidation::Repaired,
+                ReviewableValidation::Repaired,
                 CandidateNameSource::Osm,
             ),
         };
@@ -194,31 +189,53 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
         };
         // b3 与 b0 同来源实体 + 同几何（重复投影）；其余互不重叠。
         let geometry_offset = if index == 3 { 0.0 } else { index as f64 * 0.2 };
-        projections.push(
-            CandidateProjection::new(
-                &candidate_id,
-                plan_id,
-                &observation.id,
-                &observation.data_source_tag,
-                source_entity_id,
-                "default",
+        let geometry_part_id = if index == 3 { "duplicate" } else { "default" };
+        drafts.push(
+            CandidateProjectionDraft::reviewable(
+                CandidateSourceIdentity::new(
+                    &observation.data_source_tag,
+                    source_entity_id,
+                    geometry_part_id,
+                ),
                 observation.entity_type,
                 CandidateDisplay::new(title, tags),
                 CandidateShape::polygon(ring(geometry_offset)),
                 validation,
-                CandidateEligibility::Reviewable,
             )
             .with_name_source(name_source),
         );
-        reviewable.push(candidate_id);
+        reviewable_sources.push((source_entity_id.to_owned(), geometry_part_id.to_owned()));
     }
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入建议夹具候选投影");
-    database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布建议夹具候选批次");
-    reviewable
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &drafts)
+        .expect("原子发布建议夹具候选批次");
+    let ids_by_source = database
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法建议候选")
+        .into_iter()
+        .map(|projection| {
+            (
+                (projection.source_entity_id, projection.geometry_part_id),
+                projection.candidate_id,
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    reviewable_sources
+        .into_iter()
+        .map(|source| ids_by_source[&source].clone())
+        .collect()
+}
+
+fn review_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.91]
+        ]]),
+    })
 }
 
 /// 进入指定方案的评审步：方案列表点卡 → 边界确认 → 评审步。
@@ -351,14 +368,15 @@ fn run_suggestion_contract(
     window.invoke_review_suggestion_filter_clicked(2); // 关闭"建议保留"
     window.invoke_review_suggestion_filter_clicked(4); // 开启"建议剔除"
     assert_eq!(window.get_review_cards().row_count(), 1);
-    assert_eq!(
-        window
-            .get_review_cards()
-            .row_data(0)
-            .unwrap()
-            .candidate_id
-            .to_string(),
-        reviewable[3]
+    let duplicate_candidate = window
+        .get_review_cards()
+        .row_data(0)
+        .unwrap()
+        .candidate_id
+        .to_string();
+    assert!(
+        duplicate_candidate == reviewable[0] || duplicate_candidate == reviewable[3],
+        "建议剔除必须指向同来源同几何的重复对之一"
     );
     window.invoke_review_apply_suggestions_clicked();
     assert!(window.get_confirm_dialog_visible());

@@ -12,8 +12,7 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 /// 当前写出版本；读取器同时兼容仍按稳定 candidate_id 对回的 v2。
-const SNAPSHOT_FORMAT_VERSION: u32 = 3;
-const COMPATIBLE_SNAPSHOT_FORMAT_VERSION: u32 = 2;
+const SNAPSHOT_FORMAT_VERSION: u32 = 4;
 
 /// 快照里的一条候选状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +32,9 @@ pub(crate) struct SessionSnapshot {
     pub(crate) version: u32,
     /// 所属方案 ID（恢复时防串档）
     pub(crate) plan_id: String,
+    /// 保存时的候选投影 revision；旧格式没有该字段，恢复时必须拒绝状态回放。
+    #[serde(default)]
+    pub(crate) projection_revision: Option<String>,
     /// 当前激活的类别抽屉
     pub(crate) active_category: CandidateCategory,
     /// 全部候选的状态与勾选
@@ -43,12 +45,14 @@ impl SessionSnapshot {
     /// 创建快照（版本号自动填当前格式版本）
     pub(crate) fn new(
         plan_id: String,
+        projection_revision: Option<String>,
         active_category: CandidateCategory,
         entries: Vec<SessionEntry>,
     ) -> Self {
         Self {
             version: SNAPSHOT_FORMAT_VERSION,
             plan_id,
+            projection_revision,
             active_category,
             entries,
         }
@@ -67,10 +71,7 @@ impl SessionSnapshot {
             std::fs::read_to_string(path).map_err(|err| Error::SessionIo(err.to_string()))?;
         let snapshot: Self =
             serde_json::from_str(&json).map_err(|err| Error::SessionCorrupt(err.to_string()))?;
-        if !matches!(
-            snapshot.version,
-            COMPATIBLE_SNAPSHOT_FORMAT_VERSION | SNAPSHOT_FORMAT_VERSION
-        ) {
+        if !matches!(snapshot.version, 2 | 3 | SNAPSHOT_FORMAT_VERSION) {
             return Err(Error::SessionCorrupt(format!(
                 "不支持的会话文件版本 {}（当前 {SNAPSHOT_FORMAT_VERSION}）",
                 snapshot.version
@@ -94,6 +95,7 @@ mod tests {
     fn snapshot_roundtrips_through_json() {
         let snapshot = SessionSnapshot::new(
             "plan-1".to_owned(),
+            Some("batch-1".to_owned()),
             CandidateCategory::Sports,
             vec![SessionEntry {
                 candidate_id: "overpass:way/1:outer".to_owned(),
@@ -104,6 +106,7 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.plan_id, "plan-1");
+        assert_eq!(restored.projection_revision.as_deref(), Some("batch-1"));
         assert_eq!(restored.active_category, CandidateCategory::Sports);
         assert_eq!(
             SessionSnapshot::parse_state(&restored.entries[0]).unwrap(),

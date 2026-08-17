@@ -16,9 +16,9 @@ use data_acquisition::overpass::{BoundarySourceKind, CampusBoundaryResult};
 use data_acquisition::{DataSource, RawEntity};
 use data_persistence::{
     boundary_fingerprint, BoundaryRevalidationApi, CampusCrudApi, CandidateDisplay,
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservation, RawObservationsApi, ReviewDecision,
-    ReviewDecisionsApi,
+    CandidateEligibility, CandidateProjectionDraft, CandidateProjectionsApi, CandidateShape,
+    CandidateSourceIdentity, Database, RawObservation, RawObservationsApi, ReviewDecision,
+    ReviewDecisionsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, ShellDatabases, ShellPresenter, ViewModelInjector,
@@ -197,52 +197,50 @@ fn seed_collection_results(
     );
     db.write_raw_observations(&[observation_a.clone(), observation_b.clone()])
         .expect("write raw observations");
-    let batch = db.prepare_candidate_batch(plan_id).expect("prepare batch");
-    db.write_candidate_projections(
-        &batch.id,
-        &[
-            CandidateProjection::new(
-                "cand-a",
-                plan_id,
-                observation_a.id.clone(),
-                "overpass",
-                "way/1",
-                "point",
-                CandidateCategory::Building,
-                CandidateDisplay::new("教学楼A", vec![]),
-                CandidateShape::point(serde_json::json!([116.4003, 39.9003])),
-                CandidateValidation::Retained,
-                CandidateEligibility::Reviewable,
-            ),
-            CandidateProjection::new(
-                "cand-b",
-                plan_id,
-                observation_b.id.clone(),
-                "overpass",
-                "way/2",
-                "point",
-                CandidateCategory::Building,
-                CandidateDisplay::new("教学楼B", vec![]),
-                CandidateShape::point(serde_json::json!([116.4012, 39.9012])),
-                CandidateValidation::Rejected,
-                CandidateEligibility::Isolated,
-            )
-            .isolated_reason("outside_confirmed_plan_boundary"),
-        ],
-    )
-    .expect("write candidate projections");
-    db.publish_candidate_batch(&batch.id)
-        .expect("publish batch");
-    db.save_plan_collection_boundary(plan_id, &boundary_fingerprint(&original_boundary()))
-        .expect("record collection boundary fingerprint");
-    db.batch_update_review_decisions(&[ReviewDecision::new(
+    let drafts = [
+        CandidateProjectionDraft::reviewable(
+            CandidateSourceIdentity::new("overpass", "way/1", "point"),
+            CandidateCategory::Building,
+            CandidateDisplay::new("教学楼A", vec![]),
+            CandidateShape::point(serde_json::json!([116.4003, 39.9003])),
+            ReviewableValidation::Retained,
+        ),
+        CandidateProjectionDraft::isolated(
+            CandidateSourceIdentity::new("overpass", "way/2", "point"),
+            CandidateCategory::Building,
+            CandidateDisplay::new("教学楼B", vec![]),
+            CandidateShape::point(serde_json::json!([116.4012, 39.9012])),
+            "outside_confirmed_plan_boundary",
+        )
+        .expect("隔离事实必须合法"),
+    ];
+    let published = db
+        .publish_candidate_batch(
+            plan_id,
+            &boundary_fingerprint(&original_boundary()),
+            &drafts,
+        )
+        .expect("atomically publish candidate batch");
+    let ids_by_source = db
+        .list_current_candidate_projections(plan_id)
+        .expect("read current candidate projections")
+        .into_iter()
+        .map(|projection| (projection.source_entity_id, projection.candidate_id))
+        .collect::<std::collections::HashMap<_, _>>();
+    let candidate_a = ids_by_source["way/1"].clone();
+    let candidate_b = ids_by_source["way/2"].clone();
+    db.batch_update_review_decisions_at_revision(
         plan_id,
-        CandidateCategory::Building,
-        "cand-a",
-        ReviewState::Keep,
-    )])
+        &published.batch.id,
+        &[ReviewDecision::new(
+            plan_id,
+            CandidateCategory::Building,
+            &candidate_a,
+            ReviewState::Keep,
+        )],
+    )
     .expect("write keep decision");
-    ("cand-a".to_owned(), "cand-b".to_owned())
+    (candidate_a, candidate_b)
 }
 
 #[test]
@@ -275,16 +273,16 @@ fn s1_32_boundary_change_revalidates_locally_without_network() {
         .iter()
         .find(|projection| projection.candidate_id == candidate_a)
         .expect("A 投影保留");
-    assert_eq!(a.eligibility, CandidateEligibility::Isolated);
+    assert_eq!(a.eligibility(), CandidateEligibility::Isolated);
     assert_eq!(
-        a.isolation_reason.as_deref(),
+        a.isolation_reason(),
         Some("outside_confirmed_plan_boundary")
     );
     let b = all
         .iter()
         .find(|projection| projection.candidate_id == candidate_b)
         .expect("B 投影");
-    assert_eq!(b.eligibility, CandidateEligibility::Reviewable);
+    assert_eq!(b.eligibility(), CandidateEligibility::Reviewable);
 
     // 评审台（只读 B2）：A 不再出现，B 进入。
     let reviewable = db
@@ -299,18 +297,17 @@ fn s1_32_boundary_change_revalidates_locally_without_network() {
     assert_eq!(voided.len(), 1);
     assert_eq!(voided[0].candidate_id, candidate_a);
     assert_eq!(voided[0].review_state, ReviewState::Keep);
-    assert!(voided[0]
-        .voided_reason
-        .as_deref()
-        .unwrap_or_default()
-        .contains("boundary_changed"));
+    assert_eq!(
+        voided[0].voided_reason.as_deref(),
+        Some("candidate_became_isolated_after_boundary_change")
+    );
     let history = db
         .list_review_decision_invalidations(&plan_id)
         .expect("作废历史");
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].previous_state, ReviewState::Keep);
     let (pending, keep, remove) = db.count_review_states(&plan_id).expect("三态计数");
-    assert_eq!((pending, keep, remove), (0, 0, 0));
+    assert_eq!((pending, keep, remove), (1, 0, 0));
     assert_eq!(
         db.load_plan_collection_boundary(&plan_id)
             .expect("边界指纹")

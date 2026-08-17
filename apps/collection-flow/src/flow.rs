@@ -17,9 +17,9 @@ use data_acquisition::{
     SourceGeometry,
 };
 use data_persistence::{
-    boundary_fingerprint, BoundaryRevalidationApi, CandidateBatchSummary, CandidateDisplay,
-    CandidateEligibility, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, RawObservationsApi,
+    boundary_fingerprint, CandidateBatchSummary, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservationsApi,
+    ReviewableValidation,
 };
 use geometry_validator::{
     CandidateGeometry, GeometryShape, GeometryValidation, GeometryValidator, ValidationDisposition,
@@ -529,25 +529,15 @@ impl CollectionWorker {
         let naming =
             self.enrich_reviewable_building_names(&mut batch, &validation, enrich_deadline)?;
 
-        // 4. B2：候选投影批次原子发布（构建 → 写入 → 继承缺失 → 发布）。
-        let candidate_batch = db
-            .prepare_candidate_batch(&batch.plan_id)
-            .map_err(CollectionError::Persistence)?;
-        let projections = build_projections(&batch, &validation);
-        db.write_candidate_projections(&candidate_batch.id, &projections)
-            .map_err(CollectionError::Persistence)?;
-        db.carry_forward_missing_candidate_projections(&candidate_batch.id)
-            .map_err(CollectionError::Persistence)?;
-        db.publish_candidate_batch(&candidate_batch.id)
-            .map_err(CollectionError::Persistence)?;
-        // D 工单：把本次采集使用的边界指纹绑定到方案（重验证触发依据）。
-        db.save_plan_collection_boundary(
-            &self.request.plan_id.to_string(),
-            &boundary_fingerprint(&self.request.boundary),
-        )
-        .map_err(CollectionError::Persistence)?;
+        // 4. B2：只提交来源/验证事实；稳定身份、真正缺失继承、决定失效、
+        //    当前批次指针与边界指纹由候选投影 lifecycle module 原子发布。
+        let projection_drafts = build_projection_drafts(&batch, &validation);
         let batch_summary = db
-            .candidate_batch_summary(&candidate_batch.id)
+            .publish_candidate_batch(
+                &batch.plan_id,
+                &boundary_fingerprint(&self.request.boundary),
+                &projection_drafts,
+            )
             .map_err(CollectionError::Persistence)?;
 
         // 5. F7：覆盖体检（安静哨兵；事实变体返回合并疑点窗，弹窗事实由
@@ -725,10 +715,10 @@ fn candidate_geometry(draft: &CandidateDraft) -> Option<CandidateGeometry> {
 }
 
 /// 把 B14 验证结果转成 B2 候选投影（Reviewable/Isolated 资格，ADR-0040）。
-fn build_projections(
+fn build_projection_drafts(
     batch: &AcquisitionBatch,
     validation: &GeometryValidation,
-) -> Vec<CandidateProjection> {
+) -> Vec<CandidateProjectionDraft> {
     batch
         .candidate_drafts
         .iter()
@@ -738,56 +728,68 @@ fn build_projections(
 
 fn projection_for(
     draft: &CandidateDraft,
-    batch: &AcquisitionBatch,
+    _batch: &AcquisitionBatch,
     validation: &GeometryValidation,
-) -> CandidateProjection {
+) -> CandidateProjectionDraft {
     let outcome = validation
         .outcomes
         .iter()
         .find(|item| item.candidate_id == draft.raw_observation_id);
     let display = CandidateDisplay::new(draft.name.clone(), display_tags(&draft.source_data));
-    let common = |shape: CandidateShape,
-                  validation_flag: CandidateValidation,
-                  eligibility: CandidateEligibility| {
-        CandidateProjection::new(
-            uuid::Uuid::new_v4().to_string(),
-            batch.plan_id.clone(),
-            draft.raw_observation_id.clone(),
-            draft.data_source_tag.clone(),
-            draft.source_entity_id.clone(),
-            draft.geometry_part_id.clone(),
-            draft.category,
-            display.clone(),
-            shape,
-            validation_flag,
-            eligibility,
+    let source = || {
+        CandidateSourceIdentity::new(
+            &draft.data_source_tag,
+            &draft.source_entity_id,
+            &draft.geometry_part_id,
         )
-        .with_name_source(draft.name_source)
+    };
+    let isolated = |shape: CandidateShape, reason: &str| {
+        CandidateProjectionDraft::isolated(source(), draft.category, display.clone(), shape, reason)
+            .expect("A1 隔离原因是静态非空事实")
+            .with_name_source(draft.name_source)
+    };
+    let isolated_validated =
+        |shape: CandidateShape, validation_flag: ReviewableValidation, reason: &str| {
+            CandidateProjectionDraft::isolated_validated(
+                source(),
+                draft.category,
+                display.clone(),
+                shape,
+                validation_flag,
+                reason,
+            )
+            .expect("A1 隔离原因是静态非空事实")
+            .with_name_source(draft.name_source)
+        };
+    let boundary_isolated = |reason: &str| match outcome.map(|item| &item.disposition) {
+        Some(ValidationDisposition::Retained) | Some(ValidationDisposition::Repaired) => {
+            let geometry = outcome
+                .and_then(|item| item.geometry.as_ref())
+                .expect("B14 保留/修复必有规范化几何");
+            let validation_flag = if matches!(
+                outcome.map(|item| &item.disposition),
+                Some(ValidationDisposition::Repaired)
+            ) {
+                ReviewableValidation::Repaired
+            } else {
+                ReviewableValidation::Retained
+            };
+            isolated_validated(shape_from_candidate(geometry), validation_flag, reason)
+        }
+        Some(ValidationDisposition::Rejected(_)) => {
+            isolated(shape_from_source(draft.source_geometry.as_ref()), reason)
+        }
+        None | Some(_) => isolated(no_shape(), reason),
     };
     match draft.boundary_disposition {
         BoundaryDisposition::Outside => {
-            return common(
-                shape_from_source(draft.source_geometry.as_ref()),
-                CandidateValidation::Rejected,
-                CandidateEligibility::Isolated,
-            )
-            .isolated_reason("outside_confirmed_plan_boundary");
+            return boundary_isolated("outside_confirmed_plan_boundary");
         }
         BoundaryDisposition::Crosses => {
-            return common(
-                shape_from_source(draft.source_geometry.as_ref()),
-                CandidateValidation::Rejected,
-                CandidateEligibility::Isolated,
-            )
-            .isolated_reason("crosses_confirmed_plan_boundary");
+            return boundary_isolated("crosses_confirmed_plan_boundary");
         }
         BoundaryDisposition::Invalid => {
-            return common(
-                no_shape(),
-                CandidateValidation::Rejected,
-                CandidateEligibility::Isolated,
-            )
-            .isolated_reason("invalid_source_geometry");
+            return isolated(no_shape(), "invalid_source_geometry");
         }
         BoundaryDisposition::Inside => {}
     }
@@ -800,28 +802,24 @@ fn projection_for(
                 outcome.map(|item| &item.disposition),
                 Some(ValidationDisposition::Repaired)
             ) {
-                CandidateValidation::Repaired
+                ReviewableValidation::Repaired
             } else {
-                CandidateValidation::Retained
+                ReviewableValidation::Retained
             };
-            common(
+            CandidateProjectionDraft::reviewable(
+                source(),
+                draft.category,
+                display,
                 shape_from_candidate(geometry),
                 validation_flag,
-                CandidateEligibility::Reviewable,
             )
+            .with_name_source(draft.name_source)
         }
-        Some(ValidationDisposition::Rejected(reason)) => common(
+        Some(ValidationDisposition::Rejected(reason)) => isolated(
             shape_from_source(draft.source_geometry.as_ref()),
-            CandidateValidation::Rejected,
-            CandidateEligibility::Isolated,
-        )
-        .isolated_reason(reason.to_string()),
-        None | Some(_) => common(
-            no_shape(),
-            CandidateValidation::Rejected,
-            CandidateEligibility::Isolated,
-        )
-        .isolated_reason("missing_source_geometry"),
+            &reason.to_string(),
+        ),
+        None | Some(_) => isolated(no_shape(), "missing_source_geometry"),
     }
 }
 

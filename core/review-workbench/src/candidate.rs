@@ -88,10 +88,10 @@ impl Candidate {
             tags: projection.display.tags.clone(),
             shape: projection.shape.clone(),
             name_source: projection.name_source,
-            validation: projection.validation,
-            automatically_repaired: projection.automatically_repaired,
-            missing_in_latest_batch: projection.missing_in_latest_batch,
-            isolation_reason: projection.isolation_reason.clone(),
+            validation: projection.validation(),
+            automatically_repaired: projection.automatically_repaired(),
+            missing_in_latest_batch: projection.missing_in_latest_batch(),
+            isolation_reason: projection.isolation_reason().map(str::to_owned),
             source_entity_id: projection.source_entity_id.clone(),
             raw_observation_id: projection.raw_observation_id.clone(),
             state: ReviewState::Pending,
@@ -105,37 +105,54 @@ impl Candidate {
 mod tests {
     use super::*;
     use data_persistence::{
-        CandidateDisplay, CandidateEligibility, CandidateShape, CandidateValidation,
+        CandidateDisplay, CandidateProjectionDraft, CandidateProjectionsApi, CandidateShape,
+        CandidateSourceIdentity, Database, RawObservation, RawObservationsApi,
+        ReviewableValidation,
     };
 
-    fn projection() -> CandidateProjection {
-        CandidateProjection::new(
-            "overpass:way/100:outer",
+    fn projection(entity_id: &str, title: &str, shape: CandidateShape) -> CandidateProjection {
+        let mut db = Database::open_in_memory().expect("内存库");
+        db.write_raw_observations(&[RawObservation::new(
             "plan-1",
-            "raw-1",
-            "overpass",
-            "way/100",
-            "outer",
             CandidateCategory::Building,
-            CandidateDisplay::new(
-                "体育馆",
-                vec![("building".to_owned(), "gymnasium".to_owned())],
-            ),
+            entity_id,
+            serde_json::json!({"tags": {"building": "gymnasium"}}),
+            "overpass",
+        )])
+        .expect("写入原始观测");
+        db.publish_candidate_batch(
+            "plan-1",
+            "fixture-boundary",
+            &[CandidateProjectionDraft::reviewable(
+                CandidateSourceIdentity::new("overpass", entity_id, "outer"),
+                CandidateCategory::Building,
+                CandidateDisplay::new(title, vec![("building".to_owned(), "gymnasium".to_owned())]),
+                shape,
+                ReviewableValidation::Retained,
+            )],
+        )
+        .expect("发布候选投影");
+        db.list_reviewable_candidate_projections("plan-1")
+            .expect("读取候选投影")
+            .into_iter()
+            .next()
+            .expect("投影存在")
+    }
+
+    #[test]
+    fn projection_display_and_stable_candidate_id_are_preserved() {
+        let projection = projection(
+            "way/100",
+            "体育馆",
             CandidateShape::polygon(serde_json::json!([
                 [121.4, 31.2],
                 [121.5, 31.2],
                 [121.4, 31.3],
                 [121.4, 31.2]
             ])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
-        )
-    }
-
-    #[test]
-    fn projection_display_and_stable_candidate_id_are_preserved() {
-        let candidate = Candidate::from_projection(&projection());
-        assert_eq!(candidate.key.candidate_id, "overpass:way/100:outer");
+        );
+        let candidate = Candidate::from_projection(&projection);
+        assert_eq!(candidate.key.candidate_id, projection.candidate_id);
         assert_eq!(candidate.category, CandidateCategory::Building);
         assert_eq!(candidate.title, "体育馆");
         assert!(candidate.named, "有真实名称的候选必须标记为 named");
@@ -153,18 +170,10 @@ mod tests {
     fn projection_without_name_is_marked_unnamed_and_keeps_fallback_identifier() {
         // T38：无名称候选的标题回退为实体 ID；named=false 供 UI 显示
         // "未命名建筑 #id"（id 即回退标识）。
-        let unnamed = CandidateProjection::new(
-            "overpass:way/101:outer",
-            "plan-1",
-            "raw-2",
-            "overpass",
+        let unnamed = projection(
             "way/101",
-            "outer",
-            CandidateCategory::Building,
-            CandidateDisplay::new("way/101", Vec::new()),
+            "way/101",
             CandidateShape::point(serde_json::json!([121.4, 31.2])),
-            CandidateValidation::Retained,
-            CandidateEligibility::Reviewable,
         );
         let candidate = Candidate::from_projection(&unnamed);
         assert_eq!(candidate.title, "way/101");

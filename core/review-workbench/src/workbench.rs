@@ -39,6 +39,8 @@ const CATEGORY_ORDER: [CandidateCategory; 6] = [
 #[derive(Debug, Clone)]
 pub struct ReviewWorkbench {
     plan_id: String,
+    /// 打开评审台时的候选批次 revision；封账时用来拒绝旧页面写回。
+    projection_revision: Option<String>,
     candidates: Vec<Candidate>,
     active_category: CandidateCategory,
     highlighted: Option<CandidateKey>,
@@ -73,6 +75,7 @@ impl ReviewWorkbench {
     /// 若评审终态表已有本方案的记录（上一轮封账结果），按候选标识对回。
     pub fn load(db: &Database, plan_id: &PlanId) -> Result<Self> {
         let plan_key = plan_id.to_string();
+        let projection_revision = db.current_candidate_batch_revision(&plan_key)?;
         let projections = db.list_reviewable_candidate_projections(&plan_key)?;
         let mut candidates: Vec<Candidate> =
             projections.iter().map(Candidate::from_projection).collect();
@@ -92,6 +95,7 @@ impl ReviewWorkbench {
 
         let mut workbench = Self {
             plan_id: plan_key,
+            projection_revision,
             candidates,
             active_category,
             highlighted: None,
@@ -487,7 +491,13 @@ impl ReviewWorkbench {
                 selected: c.selected,
             })
             .collect();
-        SessionSnapshot::new(self.plan_id.clone(), self.active_category, entries).save_to_file(path)
+        SessionSnapshot::new(
+            self.plan_id.clone(),
+            self.projection_revision.clone(),
+            self.active_category,
+            entries,
+        )
+        .save_to_file(path)
     }
 
     /// 恢复评审：从临时文件把状态对回内存。
@@ -501,6 +511,17 @@ impl ReviewWorkbench {
             return Err(Error::SessionPlanMismatch {
                 expected: self.plan_id.clone(),
                 found: snapshot.plan_id,
+            });
+        }
+        if snapshot.projection_revision != self.projection_revision {
+            return Err(Error::SessionRevisionMismatch {
+                expected: self
+                    .projection_revision
+                    .clone()
+                    .unwrap_or_else(|| "no-published-batch".to_owned()),
+                found: snapshot
+                    .projection_revision
+                    .unwrap_or_else(|| "legacy-without-revision".to_owned()),
             });
         }
         for entry in &snapshot.entries {
@@ -605,7 +626,14 @@ impl ReviewWorkbench {
                 )
             })
             .collect();
-        db.batch_update_review_decisions(&decisions)?;
+        if let Some(revision) = &self.projection_revision {
+            db.batch_update_review_decisions_at_revision(&self.plan_id, revision, &decisions)?;
+        } else if !decisions.is_empty() {
+            return Err(data_persistence::Error::CandidateBatchRejected(
+                "没有已发布候选批次却出现了评审对象".to_owned(),
+            )
+            .into());
+        }
         self.sealed = true;
         self.pending_confirmation = None;
         self.pending_suggestion_apply = None;

@@ -6,9 +6,9 @@
 
 use data_persistence::{
     boundary_fingerprint, BoundaryRevalidationApi, CandidateDisplay, CandidateEligibility,
-    CandidateEligibilityUpdate, CandidateProjection, CandidateProjectionsApi, CandidateShape,
-    CandidateValidation, Database, DecisionVoid, RawObservation, RawObservationsApi,
-    ReviewDecision, ReviewDecisionsApi, TrashApi, TrashItem, LATEST_SCHEMA_VERSION,
+    CandidateProjectionDraft, CandidateProjectionsApi, CandidateRevalidationFact, CandidateShape,
+    CandidateSourceIdentity, Database, RawObservation, RawObservationsApi, ReviewDecision,
+    ReviewDecisionsApi, ReviewableValidation, TrashApi, TrashItem, LATEST_SCHEMA_VERSION,
 };
 use shared_domain_types::{Boundary, CandidateCategory, ReviewState};
 
@@ -87,28 +87,38 @@ fn raw_observation_changed_content_refreshes_in_place() {
 #[test]
 fn review_decision_batch_write_then_select_roundtrip() {
     let mut db = Database::open_in_memory().unwrap();
+    let (revision, candidate_ids) = publish_reviewables(
+        &mut db,
+        "plan-1",
+        &[
+            (CandidateCategory::Building, "way/100"),
+            (CandidateCategory::Road, "way/200"),
+            (CandidateCategory::Water, "way/300"),
+        ],
+    );
     let decisions = vec![
         ReviewDecision::new(
             "plan-1",
             CandidateCategory::Building,
-            "way/100",
+            candidate_ids[0].clone(),
             ReviewState::Keep,
         ),
         ReviewDecision::new(
             "plan-1",
             CandidateCategory::Road,
-            "way/200",
+            candidate_ids[1].clone(),
             ReviewState::Remove,
         ),
         ReviewDecision::new(
             "plan-1",
             CandidateCategory::Water,
-            "way/300",
+            candidate_ids[2].clone(),
             ReviewState::Pending,
         ),
     ];
 
-    db.batch_update_review_decisions(&decisions).unwrap();
+    db.batch_update_review_decisions_at_revision("plan-1", &revision, &decisions)
+        .unwrap();
 
     let rows = db.list_review_decisions("plan-1").unwrap();
     assert_eq!(rows.len(), 3);
@@ -117,48 +127,64 @@ fn review_decision_batch_write_then_select_roundtrip() {
 }
 
 #[test]
-fn review_decision_same_key_in_one_batch_last_write_wins() {
+fn review_decision_duplicate_candidate_rejects_the_whole_seal() {
     let mut db = Database::open_in_memory().unwrap();
-    // 同主键两条在同一批：后写覆盖前写（UPSERT），整批在同一事务内提交
+    let (revision, candidate_ids) = publish_reviewables(
+        &mut db,
+        "plan-1",
+        &[(CandidateCategory::Building, "way/100")],
+    );
     let decisions = vec![
         ReviewDecision::new(
             "plan-1",
             CandidateCategory::Building,
-            "way/100",
+            candidate_ids[0].clone(),
             ReviewState::Keep,
         ),
         ReviewDecision::new(
             "plan-1",
             CandidateCategory::Building,
-            "way/100",
+            candidate_ids[0].clone(),
             ReviewState::Remove,
         ),
     ];
 
-    db.batch_update_review_decisions(&decisions).unwrap();
-    let rows = db.list_review_decisions("plan-1").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].review_state, ReviewState::Remove);
+    assert!(db
+        .batch_update_review_decisions_at_revision("plan-1", &revision, &decisions)
+        .is_err());
+    assert!(db.list_review_decisions("plan-1").unwrap().is_empty());
 }
 
 #[test]
 fn review_decision_category_changes_without_duplicating_candidate_identity() {
     let mut db = Database::open_in_memory().unwrap();
-    let candidate_id = "overpass:way/1:outer";
-
-    db.batch_update_review_decisions(&[ReviewDecision::new(
+    let (first_revision, candidate_ids) =
+        publish_reviewables(&mut db, "plan-1", &[(CandidateCategory::Building, "way/1")]);
+    let candidate_id = candidate_ids[0].clone();
+    db.batch_update_review_decisions_at_revision(
         "plan-1",
-        CandidateCategory::Building,
-        candidate_id,
-        ReviewState::Keep,
-    )])
+        &first_revision,
+        &[ReviewDecision::new(
+            "plan-1",
+            CandidateCategory::Building,
+            candidate_id.clone(),
+            ReviewState::Keep,
+        )],
+    )
     .unwrap();
-    db.batch_update_review_decisions(&[ReviewDecision::new(
+    let (second_revision, second_ids) =
+        publish_reviewables(&mut db, "plan-1", &[(CandidateCategory::Road, "way/1")]);
+    assert_eq!(second_ids[0], candidate_id);
+    db.batch_update_review_decisions_at_revision(
         "plan-1",
-        CandidateCategory::Road,
-        candidate_id,
-        ReviewState::Remove,
-    )])
+        &second_revision,
+        &[ReviewDecision::new(
+            "plan-1",
+            CandidateCategory::Road,
+            candidate_id.clone(),
+            ReviewState::Remove,
+        )],
+    )
     .unwrap();
 
     let rows = db.list_review_decisions("plan-1").unwrap();
@@ -171,21 +197,34 @@ fn review_decision_category_changes_without_duplicating_candidate_identity() {
 #[test]
 fn review_decision_reseal_updates_state() {
     let mut db = Database::open_in_memory().unwrap();
-    db.batch_update_review_decisions(&[ReviewDecision::new(
+    let (revision, candidate_ids) = publish_reviewables(
+        &mut db,
         "plan-1",
-        CandidateCategory::Building,
-        "way/100",
-        ReviewState::Pending,
-    )])
+        &[(CandidateCategory::Building, "way/100")],
+    );
+    db.batch_update_review_decisions_at_revision(
+        "plan-1",
+        &revision,
+        &[ReviewDecision::new(
+            "plan-1",
+            CandidateCategory::Building,
+            candidate_ids[0].clone(),
+            ReviewState::Pending,
+        )],
+    )
     .unwrap();
 
     // 重新采集重新评审后的第二次封账：同主键状态更新
-    db.batch_update_review_decisions(&[ReviewDecision::new(
+    db.batch_update_review_decisions_at_revision(
         "plan-1",
-        CandidateCategory::Building,
-        "way/100",
-        ReviewState::Keep,
-    )])
+        &revision,
+        &[ReviewDecision::new(
+            "plan-1",
+            CandidateCategory::Building,
+            candidate_ids[0].clone(),
+            ReviewState::Keep,
+        )],
+    )
     .unwrap();
 
     let rows = db.list_review_decisions("plan-1").unwrap();
@@ -303,19 +342,43 @@ fn full_collection_flow_lands_in_raw_observations() {
         .unwrap();
     assert_eq!(buildings.len(), 2);
 
-    // 3. 模拟 F5 封账：一条保留、其余维持待定（缝 4——一次性批量写回）
-    let decisions: Vec<ReviewDecision> = stored
+    // 3. lifecycle 从来源事实发布完整候选批次，再由 F5 带 revision 封账。
+    let drafts: Vec<_> = stored
         .iter()
         .map(|obs| {
-            let state = if obs.entity_id == "way/1" {
+            CandidateProjectionDraft::reviewable(
+                CandidateSourceIdentity::new(&obs.data_source_tag, &obs.entity_id, "fixture"),
+                obs.entity_type,
+                CandidateDisplay::new(&obs.entity_id, vec![]),
+                CandidateShape::point(serde_json::json!([116.4, 39.9])),
+                ReviewableValidation::Retained,
+            )
+        })
+        .collect();
+    let revision = db
+        .publish_candidate_batch(plan_id, "integration-boundary", &drafts)
+        .unwrap()
+        .batch
+        .id;
+    let projections = db.list_current_candidate_projections(plan_id).unwrap();
+    let decisions: Vec<ReviewDecision> = projections
+        .iter()
+        .map(|projection| {
+            let state = if projection.source_entity_id == "way/1" {
                 ReviewState::Keep
             } else {
                 ReviewState::Pending
             };
-            ReviewDecision::new(plan_id, obs.entity_type, obs.entity_id.clone(), state)
+            ReviewDecision::new(
+                plan_id,
+                projection.category,
+                projection.candidate_id.clone(),
+                state,
+            )
         })
         .collect();
-    db.batch_update_review_decisions(&decisions).unwrap();
+    db.batch_update_review_decisions_at_revision(plan_id, &revision, &decisions)
+        .unwrap();
     let (pending, keep, remove) = db.count_review_states(plan_id).unwrap();
     assert_eq!((pending, keep, remove), (4, 1, 0));
 
@@ -394,83 +457,115 @@ fn boundary_revalidation_applies_eligibility_voids_and_pending_atomically() {
     );
     db.write_raw_observations(&[observation_a.clone(), observation_b.clone()])
         .unwrap();
-    let batch = db.prepare_candidate_batch(plan).unwrap();
-    db.write_candidate_projections(
-        &batch.id,
+    let first_revision = db
+        .publish_candidate_batch(
+            plan,
+            "fp-1",
+            &[
+                CandidateProjectionDraft::reviewable(
+                    CandidateSourceIdentity::new("overpass", "way/1", "point"),
+                    CandidateCategory::Building,
+                    CandidateDisplay::new("教学楼A", vec![]),
+                    CandidateShape::point(serde_json::json!([116.40, 39.90])),
+                    ReviewableValidation::Retained,
+                ),
+                CandidateProjectionDraft::reviewable(
+                    CandidateSourceIdentity::new("overpass", "way/2", "point"),
+                    CandidateCategory::Building,
+                    CandidateDisplay::new("教学楼B", vec![]),
+                    CandidateShape::point(serde_json::json!([116.41, 39.91])),
+                    ReviewableValidation::Retained,
+                ),
+            ],
+        )
+        .unwrap()
+        .batch
+        .id;
+    let current = db.list_current_candidate_projections(plan).unwrap();
+    let cand_a = current
+        .iter()
+        .find(|projection| projection.source_entity_id == "way/1")
+        .unwrap()
+        .candidate_id
+        .clone();
+    let cand_b = current
+        .iter()
+        .find(|projection| projection.source_entity_id == "way/2")
+        .unwrap()
+        .candidate_id
+        .clone();
+    db.batch_update_review_decisions_at_revision(
+        plan,
+        &first_revision,
         &[
-            CandidateProjection::new(
-                "cand-a",
+            ReviewDecision::new(
                 plan,
-                observation_a.id.clone(),
-                "overpass",
-                "way/1",
-                "point",
                 CandidateCategory::Building,
-                CandidateDisplay::new("教学楼A", vec![]),
-                CandidateShape::point(serde_json::json!([116.40, 39.90])),
-                CandidateValidation::Retained,
-                CandidateEligibility::Reviewable,
+                cand_a.clone(),
+                ReviewState::Keep,
             ),
-            CandidateProjection::new(
-                "cand-b",
+            ReviewDecision::new(
                 plan,
-                observation_b.id.clone(),
-                "overpass",
-                "way/2",
-                "point",
                 CandidateCategory::Building,
-                CandidateDisplay::new("教学楼B", vec![]),
-                CandidateShape::point(serde_json::json!([116.41, 39.91])),
-                CandidateValidation::Rejected,
-                CandidateEligibility::Isolated,
-            )
-            .isolated_reason("outside_confirmed_plan_boundary"),
+                cand_b.clone(),
+                ReviewState::Remove,
+            ),
         ],
     )
     .unwrap();
-    db.publish_candidate_batch(&batch.id).unwrap();
-    db.batch_update_review_decisions(&[
-        ReviewDecision::new(
-            plan,
-            CandidateCategory::Building,
-            "cand-a",
-            ReviewState::Keep,
-        ),
-        ReviewDecision::new(
-            plan,
-            CandidateCategory::Building,
-            "cand-b",
-            ReviewState::Remove,
-        ),
-    ])
-    .unwrap();
 
-    // 指纹记录：无记录 → 保存 → 回读。
-    assert!(db.load_plan_collection_boundary(plan).unwrap().is_none());
-    db.save_plan_collection_boundary(plan, "fp-1").unwrap();
+    // 指纹随候选批次原子发布。
     assert_eq!(
         db.load_plan_collection_boundary(plan).unwrap().as_deref(),
         Some("fp-1")
     );
 
-    // 单事务应用重验证：cand-a 隔离 + 决定作废；cand-b 回待定；指纹更新。
-    let summary = db
-        .apply_boundary_revalidation(
+    // 第一次边界变化只让 cand-b 离开：Remove 进入历史；cand-a 的 Keep 仍有效。
+    let first_change = db
+        .publish_candidate_revalidation(
             plan,
-            &[CandidateEligibilityUpdate {
-                candidate_id: "cand-a".to_owned(),
-                eligibility: CandidateEligibility::Isolated,
-                isolation_reason: Some("outside_confirmed_plan_boundary".to_owned()),
-            }],
-            &[DecisionVoid {
-                candidate_id: "cand-a".to_owned(),
-                reason: "boundary_changed:outside_confirmed_plan_boundary".to_owned(),
-            }],
-            &["cand-b".to_owned()],
-            "fp-2",
+            "fp-1b",
+            &[
+                CandidateRevalidationFact::reviewable(
+                    cand_a.clone(),
+                    CandidateShape::point(serde_json::json!([116.40, 39.90])),
+                    ReviewableValidation::Retained,
+                ),
+                CandidateRevalidationFact::isolated_validated(
+                    cand_b.clone(),
+                    CandidateShape::point(serde_json::json!([116.41, 39.91])),
+                    ReviewableValidation::Retained,
+                    "outside_confirmed_plan_boundary",
+                )
+                .unwrap(),
+            ],
         )
         .unwrap();
-    assert_eq!(summary.eligibility_updated, 1);
+    assert_eq!(first_change.decisions_voided, 1);
+
+    // 单事务发布新 revision：cand-a 隔离 + cand-b 恢复 Reviewable；两条旧决定
+    // 都进入历史，当前 cand-b 回待定，指纹一并更新。
+    let summary = db
+        .publish_candidate_revalidation(
+            plan,
+            "fp-2",
+            &[
+                CandidateRevalidationFact::isolated_validated(
+                    cand_a.clone(),
+                    CandidateShape::point(serde_json::json!([116.40, 39.90])),
+                    ReviewableValidation::Retained,
+                    "outside_confirmed_plan_boundary",
+                )
+                .unwrap(),
+                CandidateRevalidationFact::reviewable(
+                    cand_b.clone(),
+                    CandidateShape::point(serde_json::json!([116.41, 39.91])),
+                    ReviewableValidation::Retained,
+                ),
+            ],
+        )
+        .unwrap();
+    assert_eq!(summary.eligibility_updated, 2);
     assert_eq!(summary.decisions_voided, 1);
     assert_eq!(summary.decisions_reset_to_pending, 1);
     assert_eq!(
@@ -480,10 +575,10 @@ fn boundary_revalidation_applies_eligibility_voids_and_pending_atomically() {
 
     // cand-a 投影已隔离（资格更新落库）。
     let all = db.list_current_candidate_projections(plan).unwrap();
-    let a = all.iter().find(|p| p.candidate_id == "cand-a").unwrap();
-    assert_eq!(a.eligibility, CandidateEligibility::Isolated);
+    let a = all.iter().find(|p| p.candidate_id == cand_a).unwrap();
+    assert_eq!(a.eligibility(), CandidateEligibility::Isolated);
     assert_eq!(
-        a.isolation_reason.as_deref(),
+        a.isolation_reason(),
         Some("outside_confirmed_plan_boundary")
     );
 
@@ -491,22 +586,73 @@ fn boundary_revalidation_applies_eligibility_voids_and_pending_atomically() {
     // 常规读取只看到未作废的 cand-b。
     let decisions = db.list_review_decisions(plan).unwrap();
     assert_eq!(decisions.len(), 1);
-    assert_eq!(decisions[0].candidate_id, "cand-b");
+    assert_eq!(decisions[0].candidate_id, cand_b);
     assert!(decisions[0].review_state.is_pending());
     let (pending, keep, remove) = db.count_review_states(plan).unwrap();
     assert_eq!((pending, keep, remove), (1, 0, 0));
     let voided = db.list_voided_review_decisions(plan).unwrap();
     assert_eq!(voided.len(), 1);
-    assert_eq!(voided[0].candidate_id, "cand-a");
+    assert_eq!(voided[0].candidate_id, cand_a);
     assert_eq!(voided[0].review_state, ReviewState::Keep);
     assert_eq!(
         voided[0].voided_reason.as_deref(),
-        Some("boundary_changed:outside_confirmed_plan_boundary")
+        Some("candidate_became_isolated_after_boundary_change")
     );
     assert!(voided[0].voided_at.is_some());
     let history = db.list_review_decision_invalidations(plan).unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].candidate_id, "cand-a");
-    assert_eq!(history[0].previous_state, ReviewState::Keep);
-    assert!(history[0].reason.contains("boundary_changed"));
+    assert_eq!(history.len(), 2);
+    assert!(history.iter().any(|entry| {
+        entry.candidate_id == cand_a && entry.previous_state == ReviewState::Keep
+    }));
+    assert!(history.iter().any(|entry| {
+        entry.candidate_id == cand_b && entry.previous_state == ReviewState::Remove
+    }));
+}
+
+fn publish_reviewables(
+    db: &mut Database,
+    plan_id: &str,
+    candidates: &[(CandidateCategory, &str)],
+) -> (String, Vec<String>) {
+    let observations: Vec<_> = candidates
+        .iter()
+        .map(|(category, entity_id)| {
+            RawObservation::new(
+                plan_id,
+                *category,
+                *entity_id,
+                serde_json::json!({"entity": entity_id}),
+                "overpass",
+            )
+        })
+        .collect();
+    db.write_raw_observations(&observations).unwrap();
+    let drafts: Vec<_> = candidates
+        .iter()
+        .map(|(category, entity_id)| {
+            CandidateProjectionDraft::reviewable(
+                CandidateSourceIdentity::new("overpass", *entity_id, "outer"),
+                *category,
+                CandidateDisplay::new(*entity_id, vec![]),
+                CandidateShape::point(serde_json::json!([116.4, 39.9])),
+                ReviewableValidation::Retained,
+            )
+        })
+        .collect();
+    let summary = db
+        .publish_candidate_batch(plan_id, "test-boundary", &drafts)
+        .unwrap();
+    let current = db.list_current_candidate_projections(plan_id).unwrap();
+    let ids = candidates
+        .iter()
+        .map(|(_, entity_id)| {
+            current
+                .iter()
+                .find(|projection| projection.source_entity_id == *entity_id)
+                .unwrap()
+                .candidate_id
+                .clone()
+        })
+        .collect();
+    (summary.batch.id, ids)
 }

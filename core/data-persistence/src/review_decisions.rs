@@ -4,7 +4,7 @@
 //! F5 把最终三态**一次性批量写回**本表——单事务原子提交，
 //! 任何一条失败整批回滚，保证不出现"账封了但没存上"的半截状态。
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::database::Database;
 use crate::entities::{
@@ -15,11 +15,14 @@ use crate::error::Result;
 
 /// 评审终态批量写回接口（供 F5 封账、F9 导出读取调用）
 pub trait ReviewDecisionsApi {
-    /// 封账批量写回：整批评审终态在单事务内原子写入（UPSERT）。
-    ///
-    /// 任一条写入失败即整批回滚（Err 返回时数据库保持写入前状态），
-    /// 调用方（F5）据此保持封账不生效、评审状态可改。
-    fn batch_update_review_decisions(&mut self, decisions: &[ReviewDecision]) -> Result<()>;
+    /// 仅当候选批次仍是评审页打开时的 revision 才原子封账；整批必须且只能
+    /// 覆盖当前 Reviewable 候选，调用方不能把旧决定或隔离候选写回。
+    fn batch_update_review_decisions_at_revision(
+        &mut self,
+        plan_id: &str,
+        expected_revision: &str,
+        decisions: &[ReviewDecision],
+    ) -> Result<()>;
 
     /// 列出方案下的全部评审终态（按稳定候选 ID 排序）。
     fn list_review_decisions(&self, plan_id: &str) -> Result<Vec<ReviewDecision>>;
@@ -29,8 +32,64 @@ pub trait ReviewDecisionsApi {
 }
 
 impl ReviewDecisionsApi for Database {
-    fn batch_update_review_decisions(&mut self, decisions: &[ReviewDecision]) -> Result<()> {
+    fn batch_update_review_decisions_at_revision(
+        &mut self,
+        plan_id: &str,
+        expected_revision: &str,
+        decisions: &[ReviewDecision],
+    ) -> Result<()> {
+        if decisions.iter().any(|decision| decision.plan_id != plan_id) {
+            return Err(crate::Error::CandidateBatchRejected(
+                "封账决定包含其他方案的候选".to_owned(),
+            ));
+        }
         let tx = self.conn.transaction()?;
+        let actual_revision = tx
+            .query_row(
+                "SELECT collection_batch_id FROM current_candidate_batches WHERE plan_id=?1",
+                params![plan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        if actual_revision != expected_revision {
+            return Err(crate::Error::StaleCandidateProjectionRevision {
+                expected: expected_revision.to_owned(),
+                actual: actual_revision,
+            });
+        }
+        let reviewable_count: usize = tx.query_row(
+            "SELECT COUNT(*) FROM candidate_projections
+             WHERE collection_batch_id=?1 AND plan_id=?2 AND eligibility='reviewable'",
+            params![expected_revision, plan_id],
+            |row| row.get(0),
+        )?;
+        let unique_ids: std::collections::HashSet<_> = decisions
+            .iter()
+            .map(|decision| decision.candidate_id.as_str())
+            .collect();
+        if unique_ids.len() != decisions.len() || decisions.len() != reviewable_count {
+            return Err(crate::Error::CandidateBatchRejected(
+                "封账必须且只能覆盖当前完整 Reviewable 候选集".to_owned(),
+            ));
+        }
+        for decision in decisions {
+            let category: Option<String> = tx
+                .query_row(
+                    "SELECT category FROM candidate_projections
+                     WHERE collection_batch_id=?1 AND plan_id=?2
+                       AND candidate_id=?3 AND eligibility='reviewable'",
+                    params![expected_revision, plan_id, decision.candidate_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if category.as_deref() != Some(category_to_db(decision.category)?) {
+                return Err(crate::Error::CandidateBatchRejected(format!(
+                    "封账候选不属于当前合法评审批次：{}",
+                    decision.candidate_id
+                )));
+            }
+        }
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO review_decisions
@@ -40,7 +99,10 @@ impl ReviewDecisionsApi for Database {
                     category = excluded.category,
                     review_state = excluded.review_state,
                     reviewer_id = excluded.reviewer_id,
-                    updated_at = excluded.updated_at",
+                    updated_at = excluded.updated_at,
+                    voided = 0,
+                    voided_reason = NULL,
+                    voided_at = NULL",
             )?;
             for decision in decisions {
                 stmt.execute(params![

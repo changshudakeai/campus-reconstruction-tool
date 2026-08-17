@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use data_persistence::{
-    CampusCrudApi, CandidateDisplay, CandidateEligibility, CandidateProjection,
-    CandidateProjectionsApi, CandidateShape, CandidateValidation, Database, RawObservation,
-    RawObservationsApi,
+    boundary_fingerprint, CampusCrudApi, CandidateDisplay, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateShape, CandidateSourceIdentity, Database, RawObservation,
+    RawObservationsApi, ReviewableValidation,
 };
 use desktop_shell::{
     assemble_application, AppWindow, OperationPresentationState, ShellDatabases, ShellPresenter,
@@ -15,10 +15,10 @@ use desktop_shell::{
 use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
-use shared_domain_types::{CampusId, CandidateCategory};
+use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::Model;
 
-fn seed_two_buildings(database: &mut Database, plan_id: &str) {
+fn seed_two_buildings(database: &mut Database, plan_id: &str) -> Vec<String> {
     let observations: Vec<_> = (0..2)
         .map(|index| {
             RawObservation::new(
@@ -33,19 +33,15 @@ fn seed_two_buildings(database: &mut Database, plan_id: &str) {
     database
         .write_raw_observations(&observations)
         .expect("写入原始观测");
-    let batch = database
-        .prepare_candidate_batch(plan_id)
-        .expect("准备候选批次");
-    let projections: Vec<_> = observations
+    let drafts: Vec<_> = observations
         .iter()
         .map(|observation| {
-            CandidateProjection::new(
-                format!("overpass:{}:outer", observation.entity_id),
-                plan_id,
-                &observation.id,
-                &observation.data_source_tag,
-                &observation.entity_id,
-                "default",
+            CandidateProjectionDraft::reviewable(
+                CandidateSourceIdentity::new(
+                    &observation.data_source_tag,
+                    &observation.entity_id,
+                    "default",
+                ),
                 observation.entity_type,
                 CandidateDisplay::new(
                     observation.source_data["tags"]["name"]
@@ -59,17 +55,31 @@ fn seed_two_buildings(database: &mut Database, plan_id: &str) {
                     [121.4, 31.3],
                     [121.4, 31.2]
                 ])),
-                CandidateValidation::Retained,
-                CandidateEligibility::Reviewable,
+                ReviewableValidation::Retained,
             )
         })
         .collect();
     database
-        .write_candidate_projections(&batch.id, &projections)
-        .expect("写入候选投影");
+        .publish_candidate_batch(plan_id, &review_boundary_fingerprint(), &drafts)
+        .expect("原子发布候选批次");
     database
-        .publish_candidate_batch(&batch.id)
-        .expect("发布候选批次");
+        .list_reviewable_candidate_projections(plan_id)
+        .expect("读取合法评审候选")
+        .into_iter()
+        .map(|projection| projection.candidate_id)
+        .collect()
+}
+
+fn review_boundary_fingerprint() -> String {
+    boundary_fingerprint(&Boundary {
+        r#type: "Polygon".to_owned(),
+        coordinates: serde_json::json!([[
+            [116.40, 39.90],
+            [116.41, 39.90],
+            [116.41, 39.91],
+            [116.40, 39.91]
+        ]]),
+    })
 }
 
 fn open_plan_and_review(
@@ -171,13 +181,13 @@ fn review_empty_state_does_not_block_export_and_seal_failure_is_b7_visible() {
         let directory = tempfile::tempdir().expect("临时目录");
         let database_path = directory.path().join("s1-18-seal-failure.db");
         let (injector, plan_id) = build_injector(&directory, "s1-18-seal-failure.db");
-        {
+        let candidate_ids = {
             let mut database = injector.projects().database();
-            seed_two_buildings(&mut database, &plan_id);
-        }
+            seed_two_buildings(&mut database, &plan_id)
+        };
         open_plan_and_review(&window, &center, injector, &plan_id);
         assert_eq!(window.get_review_candidate_count(), 2);
-        window.invoke_review_card_state_clicked("overpass:way/b0:outer".into(), "keep".into());
+        window.invoke_review_card_state_clicked(candidate_ids[0].clone().into(), "keep".into());
 
         // 用“-journal 位置被目录占用”模拟写回失败（Windows 下 SQLite 无法打开 journal）。
         let journal = journal_path(&database_path);
@@ -209,7 +219,7 @@ fn review_empty_state_does_not_block_export_and_seal_failure_is_b7_visible() {
 
         // 恢复可写后，评审状态仍可继续修改并最终封账成功。
         std::fs::remove_dir(&journal).expect("移除阻塞 journal 目录");
-        window.invoke_review_card_state_clicked("overpass:way/b1:outer".into(), "keep".into());
+        window.invoke_review_card_state_clicked(candidate_ids[1].clone().into(), "keep".into());
         assert_eq!(
             window
                 .get_review_cards()

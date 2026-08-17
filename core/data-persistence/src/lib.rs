@@ -43,13 +43,14 @@ mod trash;
 mod workspace_state;
 
 pub use boundary_revalidation::{
-    boundary_fingerprint, BoundaryRevalidationApi, CandidateEligibilityUpdate, DecisionVoid,
-    RevalidationWriteSummary, ReviewDecisionInvalidation, VoidedReviewDecision,
+    boundary_fingerprint, BoundaryRevalidationApi, RevalidationWriteSummary,
+    ReviewDecisionInvalidation, VoidedReviewDecision,
 };
 pub use candidate_projections::{
     CandidateBatch, CandidateBatchStatus, CandidateBatchSummary, CandidateDisplay,
-    CandidateEligibility, CandidateNameSource, CandidateProjection, CandidateProjectionsApi,
-    CandidateShape, CandidateValidation,
+    CandidateEligibility, CandidateNameSource, CandidateProjection, CandidateProjectionDraft,
+    CandidateProjectionsApi, CandidateRevalidationFact, CandidateShape, CandidateSourceIdentity,
+    CandidateValidation, ReviewableValidation,
 };
 pub use database::Database;
 pub use entities::{

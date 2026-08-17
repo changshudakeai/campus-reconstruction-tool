@@ -49,6 +49,10 @@ pub enum Error {
         /// 会话文件里记录的方案 ID
         found: String,
     },
+
+    /// 暂停文件属于旧候选批次，不能把旧 Keep/Remove 恢复到新生命周期。
+    #[error("评审会话候选版本已变化：期望 {expected}，文件为 {found}")]
+    SessionRevisionMismatch { expected: String, found: String },
 }
 
 /// F5 结果别名

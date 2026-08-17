@@ -263,6 +263,9 @@ pub data_persistence::Error::MigrationFailed::message: alloc::string::String
 pub data_persistence::Error::MigrationFailed::version: u32
 pub data_persistence::Error::PlanNotFound(alloc::string::String)
 pub data_persistence::Error::Serialization(serde_json::error::Error)
+pub data_persistence::Error::StaleCandidateProjectionRevision
+pub data_persistence::Error::StaleCandidateProjectionRevision::actual: alloc::string::String
+pub data_persistence::Error::StaleCandidateProjectionRevision::expected: alloc::string::String
 pub data_persistence::Error::TrashOperationRejected(alloc::string::String)
 impl core::convert::From<rusqlite::error::Error> for data_persistence::Error
 pub fn data_persistence::Error::from(source: rusqlite::error::Error) -> Self
@@ -303,6 +306,53 @@ pub fn data_persistence::Error::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::Error
 pub type data_persistence::Error::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::Error where T: ?core::marker::Sized
+pub enum data_persistence::ReviewableValidation
+pub data_persistence::ReviewableValidation::Repaired
+pub data_persistence::ReviewableValidation::Retained
+impl core::clone::Clone for data_persistence::ReviewableValidation
+pub fn data_persistence::ReviewableValidation::clone(&self) -> data_persistence::ReviewableValidation
+impl core::cmp::Eq for data_persistence::ReviewableValidation
+impl core::cmp::PartialEq for data_persistence::ReviewableValidation
+pub fn data_persistence::ReviewableValidation::eq(&self, other: &data_persistence::ReviewableValidation) -> bool
+impl core::fmt::Debug for data_persistence::ReviewableValidation
+pub fn data_persistence::ReviewableValidation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for data_persistence::ReviewableValidation
+impl core::marker::StructuralPartialEq for data_persistence::ReviewableValidation
+impl core::marker::Freeze for data_persistence::ReviewableValidation
+impl core::marker::Send for data_persistence::ReviewableValidation
+impl core::marker::Sync for data_persistence::ReviewableValidation
+impl core::marker::Unpin for data_persistence::ReviewableValidation
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::ReviewableValidation
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::ReviewableValidation
+impl<Q, K> hashbrown::Equivalent<K> for data_persistence::ReviewableValidation where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_persistence::ReviewableValidation::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::ReviewableValidation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::ReviewableValidation where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::ReviewableValidation where U: core::convert::From<T>
+pub fn data_persistence::ReviewableValidation::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::ReviewableValidation where U: core::convert::Into<T>
+pub type data_persistence::ReviewableValidation::Error = core::convert::Infallible
+pub fn data_persistence::ReviewableValidation::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::ReviewableValidation where U: core::convert::TryFrom<T>
+pub type data_persistence::ReviewableValidation::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::ReviewableValidation::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_persistence::ReviewableValidation where T: core::clone::Clone
+pub type data_persistence::ReviewableValidation::Owned = T
+pub fn data_persistence::ReviewableValidation::clone_into(&self, target: &mut T)
+pub fn data_persistence::ReviewableValidation::to_owned(&self) -> T
+impl<T> core::any::Any for data_persistence::ReviewableValidation where T: 'static + ?core::marker::Sized
+pub fn data_persistence::ReviewableValidation::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::ReviewableValidation where T: ?core::marker::Sized
+pub fn data_persistence::ReviewableValidation::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::ReviewableValidation where T: ?core::marker::Sized
+pub fn data_persistence::ReviewableValidation::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_persistence::ReviewableValidation where T: core::clone::Clone
+pub unsafe fn data_persistence::ReviewableValidation::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_persistence::ReviewableValidation
+pub fn data_persistence::ReviewableValidation::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::ReviewableValidation
+pub type data_persistence::ReviewableValidation::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::ReviewableValidation where T: ?core::marker::Sized
 pub struct data_persistence::CampusEntity
 pub data_persistence::CampusEntity::address: alloc::string::String
 pub data_persistence::CampusEntity::anchor_lat: f64
@@ -499,77 +549,26 @@ pub fn data_persistence::CandidateDisplay::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::CandidateDisplay
 pub type data_persistence::CandidateDisplay::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateDisplay where T: ?core::marker::Sized
-pub struct data_persistence::CandidateEligibilityUpdate
-pub data_persistence::CandidateEligibilityUpdate::candidate_id: alloc::string::String
-pub data_persistence::CandidateEligibilityUpdate::eligibility: data_persistence::CandidateEligibility
-pub data_persistence::CandidateEligibilityUpdate::isolation_reason: core::option::Option<alloc::string::String>
-impl core::clone::Clone for data_persistence::CandidateEligibilityUpdate
-pub fn data_persistence::CandidateEligibilityUpdate::clone(&self) -> data_persistence::CandidateEligibilityUpdate
-impl core::cmp::Eq for data_persistence::CandidateEligibilityUpdate
-impl core::cmp::PartialEq for data_persistence::CandidateEligibilityUpdate
-pub fn data_persistence::CandidateEligibilityUpdate::eq(&self, other: &data_persistence::CandidateEligibilityUpdate) -> bool
-impl core::fmt::Debug for data_persistence::CandidateEligibilityUpdate
-pub fn data_persistence::CandidateEligibilityUpdate::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for data_persistence::CandidateEligibilityUpdate
-impl core::marker::Freeze for data_persistence::CandidateEligibilityUpdate
-impl core::marker::Send for data_persistence::CandidateEligibilityUpdate
-impl core::marker::Sync for data_persistence::CandidateEligibilityUpdate
-impl core::marker::Unpin for data_persistence::CandidateEligibilityUpdate
-impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::CandidateEligibilityUpdate
-impl core::panic::unwind_safe::UnwindSafe for data_persistence::CandidateEligibilityUpdate
-impl<Q, K> hashbrown::Equivalent<K> for data_persistence::CandidateEligibilityUpdate where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
-pub fn data_persistence::CandidateEligibilityUpdate::equivalent(&self, key: &K) -> bool
-impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::CandidateEligibilityUpdate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
-impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::CandidateEligibilityUpdate where ST: ?core::marker::Sized, DT: ?core::marker::Sized
-impl<T, U> core::convert::Into<U> for data_persistence::CandidateEligibilityUpdate where U: core::convert::From<T>
-pub fn data_persistence::CandidateEligibilityUpdate::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for data_persistence::CandidateEligibilityUpdate where U: core::convert::Into<T>
-pub type data_persistence::CandidateEligibilityUpdate::Error = core::convert::Infallible
-pub fn data_persistence::CandidateEligibilityUpdate::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for data_persistence::CandidateEligibilityUpdate where U: core::convert::TryFrom<T>
-pub type data_persistence::CandidateEligibilityUpdate::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn data_persistence::CandidateEligibilityUpdate::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for data_persistence::CandidateEligibilityUpdate where T: core::clone::Clone
-pub type data_persistence::CandidateEligibilityUpdate::Owned = T
-pub fn data_persistence::CandidateEligibilityUpdate::clone_into(&self, target: &mut T)
-pub fn data_persistence::CandidateEligibilityUpdate::to_owned(&self) -> T
-impl<T> core::any::Any for data_persistence::CandidateEligibilityUpdate where T: 'static + ?core::marker::Sized
-pub fn data_persistence::CandidateEligibilityUpdate::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for data_persistence::CandidateEligibilityUpdate where T: ?core::marker::Sized
-pub fn data_persistence::CandidateEligibilityUpdate::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for data_persistence::CandidateEligibilityUpdate where T: ?core::marker::Sized
-pub fn data_persistence::CandidateEligibilityUpdate::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for data_persistence::CandidateEligibilityUpdate where T: core::clone::Clone
-pub unsafe fn data_persistence::CandidateEligibilityUpdate::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for data_persistence::CandidateEligibilityUpdate
-pub fn data_persistence::CandidateEligibilityUpdate::from(t: T) -> T
-impl<T> typenum::type_operators::Same for data_persistence::CandidateEligibilityUpdate
-pub type data_persistence::CandidateEligibilityUpdate::Output = T
-impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateEligibilityUpdate where T: ?core::marker::Sized
 pub struct data_persistence::CandidateProjection
-pub data_persistence::CandidateProjection::automatically_repaired: bool
 pub data_persistence::CandidateProjection::candidate_id: alloc::string::String
 pub data_persistence::CandidateProjection::category: shared_domain_types::category::CandidateCategory
 pub data_persistence::CandidateProjection::collection_batch_id: core::option::Option<alloc::string::String>
 pub data_persistence::CandidateProjection::created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
 pub data_persistence::CandidateProjection::data_source_tag: alloc::string::String
 pub data_persistence::CandidateProjection::display: data_persistence::CandidateDisplay
-pub data_persistence::CandidateProjection::eligibility: data_persistence::CandidateEligibility
 pub data_persistence::CandidateProjection::geometry_part_id: alloc::string::String
-pub data_persistence::CandidateProjection::isolation_reason: core::option::Option<alloc::string::String>
-pub data_persistence::CandidateProjection::missing_in_latest_batch: bool
 pub data_persistence::CandidateProjection::name_source: data_persistence::CandidateNameSource
 pub data_persistence::CandidateProjection::plan_id: alloc::string::String
 pub data_persistence::CandidateProjection::raw_observation_id: alloc::string::String
 pub data_persistence::CandidateProjection::shape: data_persistence::CandidateShape
 pub data_persistence::CandidateProjection::source_entity_id: alloc::string::String
 pub data_persistence::CandidateProjection::updated_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
-pub data_persistence::CandidateProjection::validation: data_persistence::CandidateValidation
 impl data_persistence::CandidateProjection
-pub fn data_persistence::CandidateProjection::isolated_reason(self, reason: impl core::convert::Into<alloc::string::String>) -> Self
-pub fn data_persistence::CandidateProjection::missing_in_latest_batch(self) -> Self
-pub fn data_persistence::CandidateProjection::new(candidate_id: impl core::convert::Into<alloc::string::String>, plan_id: impl core::convert::Into<alloc::string::String>, raw_observation_id: impl core::convert::Into<alloc::string::String>, data_source_tag: impl core::convert::Into<alloc::string::String>, source_entity_id: impl core::convert::Into<alloc::string::String>, geometry_part_id: impl core::convert::Into<alloc::string::String>, category: shared_domain_types::category::CandidateCategory, display: data_persistence::CandidateDisplay, shape: data_persistence::CandidateShape, validation: data_persistence::CandidateValidation, eligibility: data_persistence::CandidateEligibility) -> Self
-pub fn data_persistence::CandidateProjection::with_name_source(self, source: data_persistence::CandidateNameSource) -> Self
+pub fn data_persistence::CandidateProjection::automatically_repaired(&self) -> bool
+pub fn data_persistence::CandidateProjection::eligibility(&self) -> data_persistence::CandidateEligibility
+pub fn data_persistence::CandidateProjection::isolation_reason(&self) -> core::option::Option<&str>
+pub fn data_persistence::CandidateProjection::missing_in_latest_batch(&self) -> bool
+pub fn data_persistence::CandidateProjection::validation(&self) -> data_persistence::CandidateValidation
 impl core::clone::Clone for data_persistence::CandidateProjection
 pub fn data_persistence::CandidateProjection::clone(&self) -> data_persistence::CandidateProjection
 impl core::cmp::PartialEq for data_persistence::CandidateProjection
@@ -610,6 +609,97 @@ pub fn data_persistence::CandidateProjection::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::CandidateProjection
 pub type data_persistence::CandidateProjection::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateProjection where T: ?core::marker::Sized
+pub struct data_persistence::CandidateProjectionDraft
+impl data_persistence::CandidateProjectionDraft
+pub fn data_persistence::CandidateProjectionDraft::isolated(source: data_persistence::CandidateSourceIdentity, category: shared_domain_types::category::CandidateCategory, display: data_persistence::CandidateDisplay, shape: data_persistence::CandidateShape, reason: impl core::convert::Into<alloc::string::String>) -> data_persistence::Result<Self>
+pub fn data_persistence::CandidateProjectionDraft::isolated_validated(source: data_persistence::CandidateSourceIdentity, category: shared_domain_types::category::CandidateCategory, display: data_persistence::CandidateDisplay, shape: data_persistence::CandidateShape, validation: data_persistence::ReviewableValidation, reason: impl core::convert::Into<alloc::string::String>) -> data_persistence::Result<Self>
+pub fn data_persistence::CandidateProjectionDraft::reviewable(source: data_persistence::CandidateSourceIdentity, category: shared_domain_types::category::CandidateCategory, display: data_persistence::CandidateDisplay, shape: data_persistence::CandidateShape, validation: data_persistence::ReviewableValidation) -> Self
+pub fn data_persistence::CandidateProjectionDraft::with_name_source(self, source: data_persistence::CandidateNameSource) -> Self
+impl core::clone::Clone for data_persistence::CandidateProjectionDraft
+pub fn data_persistence::CandidateProjectionDraft::clone(&self) -> data_persistence::CandidateProjectionDraft
+impl core::cmp::PartialEq for data_persistence::CandidateProjectionDraft
+pub fn data_persistence::CandidateProjectionDraft::eq(&self, other: &data_persistence::CandidateProjectionDraft) -> bool
+impl core::fmt::Debug for data_persistence::CandidateProjectionDraft
+pub fn data_persistence::CandidateProjectionDraft::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for data_persistence::CandidateProjectionDraft
+impl core::marker::Freeze for data_persistence::CandidateProjectionDraft
+impl core::marker::Send for data_persistence::CandidateProjectionDraft
+impl core::marker::Sync for data_persistence::CandidateProjectionDraft
+impl core::marker::Unpin for data_persistence::CandidateProjectionDraft
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::CandidateProjectionDraft
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::CandidateProjectionDraft
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::CandidateProjectionDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::CandidateProjectionDraft where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::CandidateProjectionDraft where U: core::convert::From<T>
+pub fn data_persistence::CandidateProjectionDraft::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::CandidateProjectionDraft where U: core::convert::Into<T>
+pub type data_persistence::CandidateProjectionDraft::Error = core::convert::Infallible
+pub fn data_persistence::CandidateProjectionDraft::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::CandidateProjectionDraft where U: core::convert::TryFrom<T>
+pub type data_persistence::CandidateProjectionDraft::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::CandidateProjectionDraft::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_persistence::CandidateProjectionDraft where T: core::clone::Clone
+pub type data_persistence::CandidateProjectionDraft::Owned = T
+pub fn data_persistence::CandidateProjectionDraft::clone_into(&self, target: &mut T)
+pub fn data_persistence::CandidateProjectionDraft::to_owned(&self) -> T
+impl<T> core::any::Any for data_persistence::CandidateProjectionDraft where T: 'static + ?core::marker::Sized
+pub fn data_persistence::CandidateProjectionDraft::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::CandidateProjectionDraft where T: ?core::marker::Sized
+pub fn data_persistence::CandidateProjectionDraft::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::CandidateProjectionDraft where T: ?core::marker::Sized
+pub fn data_persistence::CandidateProjectionDraft::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_persistence::CandidateProjectionDraft where T: core::clone::Clone
+pub unsafe fn data_persistence::CandidateProjectionDraft::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_persistence::CandidateProjectionDraft
+pub fn data_persistence::CandidateProjectionDraft::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::CandidateProjectionDraft
+pub type data_persistence::CandidateProjectionDraft::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateProjectionDraft where T: ?core::marker::Sized
+pub struct data_persistence::CandidateRevalidationFact
+impl data_persistence::CandidateRevalidationFact
+pub fn data_persistence::CandidateRevalidationFact::isolated(candidate_id: impl core::convert::Into<alloc::string::String>, shape: data_persistence::CandidateShape, reason: impl core::convert::Into<alloc::string::String>) -> data_persistence::Result<Self>
+pub fn data_persistence::CandidateRevalidationFact::isolated_validated(candidate_id: impl core::convert::Into<alloc::string::String>, shape: data_persistence::CandidateShape, validation: data_persistence::ReviewableValidation, reason: impl core::convert::Into<alloc::string::String>) -> data_persistence::Result<Self>
+pub fn data_persistence::CandidateRevalidationFact::reviewable(candidate_id: impl core::convert::Into<alloc::string::String>, shape: data_persistence::CandidateShape, validation: data_persistence::ReviewableValidation) -> Self
+impl core::clone::Clone for data_persistence::CandidateRevalidationFact
+pub fn data_persistence::CandidateRevalidationFact::clone(&self) -> data_persistence::CandidateRevalidationFact
+impl core::cmp::PartialEq for data_persistence::CandidateRevalidationFact
+pub fn data_persistence::CandidateRevalidationFact::eq(&self, other: &data_persistence::CandidateRevalidationFact) -> bool
+impl core::fmt::Debug for data_persistence::CandidateRevalidationFact
+pub fn data_persistence::CandidateRevalidationFact::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for data_persistence::CandidateRevalidationFact
+impl core::marker::Freeze for data_persistence::CandidateRevalidationFact
+impl core::marker::Send for data_persistence::CandidateRevalidationFact
+impl core::marker::Sync for data_persistence::CandidateRevalidationFact
+impl core::marker::Unpin for data_persistence::CandidateRevalidationFact
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::CandidateRevalidationFact
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::CandidateRevalidationFact
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::CandidateRevalidationFact where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::CandidateRevalidationFact where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::CandidateRevalidationFact where U: core::convert::From<T>
+pub fn data_persistence::CandidateRevalidationFact::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::CandidateRevalidationFact where U: core::convert::Into<T>
+pub type data_persistence::CandidateRevalidationFact::Error = core::convert::Infallible
+pub fn data_persistence::CandidateRevalidationFact::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::CandidateRevalidationFact where U: core::convert::TryFrom<T>
+pub type data_persistence::CandidateRevalidationFact::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::CandidateRevalidationFact::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_persistence::CandidateRevalidationFact where T: core::clone::Clone
+pub type data_persistence::CandidateRevalidationFact::Owned = T
+pub fn data_persistence::CandidateRevalidationFact::clone_into(&self, target: &mut T)
+pub fn data_persistence::CandidateRevalidationFact::to_owned(&self) -> T
+impl<T> core::any::Any for data_persistence::CandidateRevalidationFact where T: 'static + ?core::marker::Sized
+pub fn data_persistence::CandidateRevalidationFact::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::CandidateRevalidationFact where T: ?core::marker::Sized
+pub fn data_persistence::CandidateRevalidationFact::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::CandidateRevalidationFact where T: ?core::marker::Sized
+pub fn data_persistence::CandidateRevalidationFact::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_persistence::CandidateRevalidationFact where T: core::clone::Clone
+pub unsafe fn data_persistence::CandidateRevalidationFact::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_persistence::CandidateRevalidationFact
+pub fn data_persistence::CandidateRevalidationFact::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::CandidateRevalidationFact
+pub type data_persistence::CandidateRevalidationFact::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateRevalidationFact where T: ?core::marker::Sized
 pub struct data_persistence::CandidateShape
 pub data_persistence::CandidateShape::coordinates: serde_json::value::Value
 pub data_persistence::CandidateShape::kind: alloc::string::String
@@ -657,6 +747,57 @@ pub fn data_persistence::CandidateShape::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::CandidateShape
 pub type data_persistence::CandidateShape::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateShape where T: ?core::marker::Sized
+pub struct data_persistence::CandidateSourceIdentity
+impl data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::data_source_tag(&self) -> &str
+pub fn data_persistence::CandidateSourceIdentity::geometry_part_id(&self) -> &str
+pub fn data_persistence::CandidateSourceIdentity::new(data_source_tag: impl core::convert::Into<alloc::string::String>, source_entity_id: impl core::convert::Into<alloc::string::String>, geometry_part_id: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn data_persistence::CandidateSourceIdentity::source_entity_id(&self) -> &str
+impl core::clone::Clone for data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::clone(&self) -> data_persistence::CandidateSourceIdentity
+impl core::cmp::Eq for data_persistence::CandidateSourceIdentity
+impl core::cmp::PartialEq for data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::eq(&self, other: &data_persistence::CandidateSourceIdentity) -> bool
+impl core::fmt::Debug for data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for data_persistence::CandidateSourceIdentity
+impl core::marker::Freeze for data_persistence::CandidateSourceIdentity
+impl core::marker::Send for data_persistence::CandidateSourceIdentity
+impl core::marker::Sync for data_persistence::CandidateSourceIdentity
+impl core::marker::Unpin for data_persistence::CandidateSourceIdentity
+impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::CandidateSourceIdentity
+impl core::panic::unwind_safe::UnwindSafe for data_persistence::CandidateSourceIdentity
+impl<Q, K> hashbrown::Equivalent<K> for data_persistence::CandidateSourceIdentity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn data_persistence::CandidateSourceIdentity::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::CandidateSourceIdentity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::CandidateSourceIdentity where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for data_persistence::CandidateSourceIdentity where U: core::convert::From<T>
+pub fn data_persistence::CandidateSourceIdentity::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for data_persistence::CandidateSourceIdentity where U: core::convert::Into<T>
+pub type data_persistence::CandidateSourceIdentity::Error = core::convert::Infallible
+pub fn data_persistence::CandidateSourceIdentity::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for data_persistence::CandidateSourceIdentity where U: core::convert::TryFrom<T>
+pub type data_persistence::CandidateSourceIdentity::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn data_persistence::CandidateSourceIdentity::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for data_persistence::CandidateSourceIdentity where T: core::clone::Clone
+pub type data_persistence::CandidateSourceIdentity::Owned = T
+pub fn data_persistence::CandidateSourceIdentity::clone_into(&self, target: &mut T)
+pub fn data_persistence::CandidateSourceIdentity::to_owned(&self) -> T
+impl<T> core::any::Any for data_persistence::CandidateSourceIdentity where T: 'static + ?core::marker::Sized
+pub fn data_persistence::CandidateSourceIdentity::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for data_persistence::CandidateSourceIdentity where T: ?core::marker::Sized
+pub fn data_persistence::CandidateSourceIdentity::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for data_persistence::CandidateSourceIdentity where T: ?core::marker::Sized
+pub fn data_persistence::CandidateSourceIdentity::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for data_persistence::CandidateSourceIdentity where T: core::clone::Clone
+pub unsafe fn data_persistence::CandidateSourceIdentity::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for data_persistence::CandidateSourceIdentity
+pub fn data_persistence::CandidateSourceIdentity::from(t: T) -> T
+impl<T> typenum::type_operators::Same for data_persistence::CandidateSourceIdentity
+pub type data_persistence::CandidateSourceIdentity::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::CandidateSourceIdentity where T: ?core::marker::Sized
 pub struct data_persistence::Database
 impl data_persistence::Database
 pub fn data_persistence::Database::delete_plan_to_trash(&mut self, campus_id: &str, plan_id: &str) -> data_persistence::Result<data_persistence::TrashItem>
@@ -672,7 +813,6 @@ impl data_persistence::AppSettingsApi for data_persistence::Database
 pub fn data_persistence::Database::get_setting(&self, key: data_persistence::AppSettingKey) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn data_persistence::Database::set_setting(&mut self, key: data_persistence::AppSettingKey, value: &str) -> data_persistence::Result<()>
 impl data_persistence::BoundaryRevalidationApi for data_persistence::Database
-pub fn data_persistence::Database::apply_boundary_revalidation(&mut self, plan_id: &str, eligibility_updates: &[data_persistence::CandidateEligibilityUpdate], voids: &[data_persistence::DecisionVoid], reset_to_pending: &[alloc::string::String], fingerprint: &str) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 pub fn data_persistence::Database::list_review_decision_invalidations(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecisionInvalidation>>
 pub fn data_persistence::Database::list_voided_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::VoidedReviewDecision>>
 pub fn data_persistence::Database::load_plan_collection_boundary(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
@@ -686,13 +826,14 @@ pub fn data_persistence::Database::list_campuses(&self) -> data_persistence::Res
 pub fn data_persistence::Database::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 impl data_persistence::CandidateProjectionsApi for data_persistence::Database
 pub fn data_persistence::Database::candidate_batch_summary(&self, batch_id: &str) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
-pub fn data_persistence::Database::carry_forward_missing_candidate_projections(&mut self, batch_id: &str) -> data_persistence::Result<()>
+pub fn data_persistence::Database::current_candidate_batch_revision(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn data_persistence::Database::get_current_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
+pub fn data_persistence::Database::get_kept_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
 pub fn data_persistence::Database::list_current_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
+pub fn data_persistence::Database::list_kept_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
 pub fn data_persistence::Database::list_reviewable_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
-pub fn data_persistence::Database::prepare_candidate_batch(&mut self, plan_id: &str) -> data_persistence::Result<data_persistence::CandidateBatch>
-pub fn data_persistence::Database::publish_candidate_batch(&mut self, batch_id: &str) -> data_persistence::Result<()>
-pub fn data_persistence::Database::write_candidate_projections(&mut self, batch_id: &str, projections: &[data_persistence::CandidateProjection]) -> data_persistence::Result<()>
+pub fn data_persistence::Database::publish_candidate_batch(&mut self, plan_id: &str, boundary_fingerprint: &str, drafts: &[data_persistence::CandidateProjectionDraft]) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
+pub fn data_persistence::Database::publish_candidate_revalidation(&mut self, plan_id: &str, boundary_fingerprint: &str, facts: &[data_persistence::CandidateRevalidationFact]) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 impl data_persistence::PlanCrudApi for data_persistence::Database
 pub fn data_persistence::Database::create_plan(&mut self, campus_id: &str, name: &str) -> data_persistence::Result<data_persistence::PlanEntity>
 pub fn data_persistence::Database::find_plan_by_id(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::PlanEntity>>
@@ -705,7 +846,7 @@ pub fn data_persistence::Database::list_raw_observations(&self, plan_id: &str) -
 pub fn data_persistence::Database::list_raw_observations_by_category(&self, plan_id: &str, category: shared_domain_types::category::CandidateCategory) -> data_persistence::Result<alloc::vec::Vec<data_persistence::RawObservation>>
 pub fn data_persistence::Database::write_raw_observations(&mut self, observations: &[data_persistence::RawObservation]) -> data_persistence::Result<usize>
 impl data_persistence::ReviewDecisionsApi for data_persistence::Database
-pub fn data_persistence::Database::batch_update_review_decisions(&mut self, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
+pub fn data_persistence::Database::batch_update_review_decisions_at_revision(&mut self, plan_id: &str, expected_revision: &str, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
 pub fn data_persistence::Database::count_review_states(&self, plan_id: &str) -> data_persistence::Result<(usize, usize, usize)>
 pub fn data_persistence::Database::list_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecision>>
 impl data_persistence::ReviewDraftApi for data_persistence::Database
@@ -752,52 +893,6 @@ pub fn data_persistence::Database::from(t: T) -> T
 impl<T> typenum::type_operators::Same for data_persistence::Database
 pub type data_persistence::Database::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::Database where T: ?core::marker::Sized
-pub struct data_persistence::DecisionVoid
-pub data_persistence::DecisionVoid::candidate_id: alloc::string::String
-pub data_persistence::DecisionVoid::reason: alloc::string::String
-impl core::clone::Clone for data_persistence::DecisionVoid
-pub fn data_persistence::DecisionVoid::clone(&self) -> data_persistence::DecisionVoid
-impl core::cmp::Eq for data_persistence::DecisionVoid
-impl core::cmp::PartialEq for data_persistence::DecisionVoid
-pub fn data_persistence::DecisionVoid::eq(&self, other: &data_persistence::DecisionVoid) -> bool
-impl core::fmt::Debug for data_persistence::DecisionVoid
-pub fn data_persistence::DecisionVoid::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for data_persistence::DecisionVoid
-impl core::marker::Freeze for data_persistence::DecisionVoid
-impl core::marker::Send for data_persistence::DecisionVoid
-impl core::marker::Sync for data_persistence::DecisionVoid
-impl core::marker::Unpin for data_persistence::DecisionVoid
-impl core::panic::unwind_safe::RefUnwindSafe for data_persistence::DecisionVoid
-impl core::panic::unwind_safe::UnwindSafe for data_persistence::DecisionVoid
-impl<Q, K> hashbrown::Equivalent<K> for data_persistence::DecisionVoid where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
-pub fn data_persistence::DecisionVoid::equivalent(&self, key: &K) -> bool
-impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for data_persistence::DecisionVoid where ST: ?core::marker::Sized, DT: ?core::marker::Sized
-impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for data_persistence::DecisionVoid where ST: ?core::marker::Sized, DT: ?core::marker::Sized
-impl<T, U> core::convert::Into<U> for data_persistence::DecisionVoid where U: core::convert::From<T>
-pub fn data_persistence::DecisionVoid::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for data_persistence::DecisionVoid where U: core::convert::Into<T>
-pub type data_persistence::DecisionVoid::Error = core::convert::Infallible
-pub fn data_persistence::DecisionVoid::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for data_persistence::DecisionVoid where U: core::convert::TryFrom<T>
-pub type data_persistence::DecisionVoid::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn data_persistence::DecisionVoid::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for data_persistence::DecisionVoid where T: core::clone::Clone
-pub type data_persistence::DecisionVoid::Owned = T
-pub fn data_persistence::DecisionVoid::clone_into(&self, target: &mut T)
-pub fn data_persistence::DecisionVoid::to_owned(&self) -> T
-impl<T> core::any::Any for data_persistence::DecisionVoid where T: 'static + ?core::marker::Sized
-pub fn data_persistence::DecisionVoid::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for data_persistence::DecisionVoid where T: ?core::marker::Sized
-pub fn data_persistence::DecisionVoid::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for data_persistence::DecisionVoid where T: ?core::marker::Sized
-pub fn data_persistence::DecisionVoid::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for data_persistence::DecisionVoid where T: core::clone::Clone
-pub unsafe fn data_persistence::DecisionVoid::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for data_persistence::DecisionVoid
-pub fn data_persistence::DecisionVoid::from(t: T) -> T
-impl<T> typenum::type_operators::Same for data_persistence::DecisionVoid
-pub type data_persistence::DecisionVoid::Output = T
-impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for data_persistence::DecisionVoid where T: ?core::marker::Sized
 pub struct data_persistence::PlanEntity
 pub data_persistence::PlanEntity::campus_id: alloc::string::String
 pub data_persistence::PlanEntity::created_at: alloc::string::String
@@ -1345,13 +1440,11 @@ impl data_persistence::AppSettingsApi for rusqlite::Connection
 pub fn rusqlite::Connection::get_setting(&self, key: data_persistence::AppSettingKey) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn rusqlite::Connection::set_setting(&mut self, key: data_persistence::AppSettingKey, value: &str) -> data_persistence::Result<()>
 pub trait data_persistence::BoundaryRevalidationApi
-pub fn data_persistence::BoundaryRevalidationApi::apply_boundary_revalidation(&mut self, plan_id: &str, eligibility_updates: &[data_persistence::CandidateEligibilityUpdate], voids: &[data_persistence::DecisionVoid], reset_to_pending: &[alloc::string::String], fingerprint: &str) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 pub fn data_persistence::BoundaryRevalidationApi::list_review_decision_invalidations(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecisionInvalidation>>
 pub fn data_persistence::BoundaryRevalidationApi::list_voided_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::VoidedReviewDecision>>
 pub fn data_persistence::BoundaryRevalidationApi::load_plan_collection_boundary(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn data_persistence::BoundaryRevalidationApi::save_plan_collection_boundary(&mut self, plan_id: &str, fingerprint: &str) -> data_persistence::Result<()>
 impl data_persistence::BoundaryRevalidationApi for data_persistence::Database
-pub fn data_persistence::Database::apply_boundary_revalidation(&mut self, plan_id: &str, eligibility_updates: &[data_persistence::CandidateEligibilityUpdate], voids: &[data_persistence::DecisionVoid], reset_to_pending: &[alloc::string::String], fingerprint: &str) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 pub fn data_persistence::Database::list_review_decision_invalidations(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecisionInvalidation>>
 pub fn data_persistence::Database::list_voided_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::VoidedReviewDecision>>
 pub fn data_persistence::Database::load_plan_collection_boundary(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
@@ -1379,22 +1472,24 @@ pub fn rusqlite::Connection::list_campuses(&self) -> data_persistence::Result<al
 pub fn rusqlite::Connection::update_campus_anchor(&self, campus_id: &str, anchor_lng: f64, anchor_lat: f64) -> data_persistence::Result<()>
 pub trait data_persistence::CandidateProjectionsApi
 pub fn data_persistence::CandidateProjectionsApi::candidate_batch_summary(&self, batch_id: &str) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
-pub fn data_persistence::CandidateProjectionsApi::carry_forward_missing_candidate_projections(&mut self, batch_id: &str) -> data_persistence::Result<()>
+pub fn data_persistence::CandidateProjectionsApi::current_candidate_batch_revision(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn data_persistence::CandidateProjectionsApi::get_current_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
+pub fn data_persistence::CandidateProjectionsApi::get_kept_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
 pub fn data_persistence::CandidateProjectionsApi::list_current_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
+pub fn data_persistence::CandidateProjectionsApi::list_kept_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
 pub fn data_persistence::CandidateProjectionsApi::list_reviewable_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
-pub fn data_persistence::CandidateProjectionsApi::prepare_candidate_batch(&mut self, plan_id: &str) -> data_persistence::Result<data_persistence::CandidateBatch>
-pub fn data_persistence::CandidateProjectionsApi::publish_candidate_batch(&mut self, batch_id: &str) -> data_persistence::Result<()>
-pub fn data_persistence::CandidateProjectionsApi::write_candidate_projections(&mut self, batch_id: &str, projections: &[data_persistence::CandidateProjection]) -> data_persistence::Result<()>
+pub fn data_persistence::CandidateProjectionsApi::publish_candidate_batch(&mut self, plan_id: &str, boundary_fingerprint: &str, drafts: &[data_persistence::CandidateProjectionDraft]) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
+pub fn data_persistence::CandidateProjectionsApi::publish_candidate_revalidation(&mut self, plan_id: &str, boundary_fingerprint: &str, facts: &[data_persistence::CandidateRevalidationFact]) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 impl data_persistence::CandidateProjectionsApi for data_persistence::Database
 pub fn data_persistence::Database::candidate_batch_summary(&self, batch_id: &str) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
-pub fn data_persistence::Database::carry_forward_missing_candidate_projections(&mut self, batch_id: &str) -> data_persistence::Result<()>
+pub fn data_persistence::Database::current_candidate_batch_revision(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<alloc::string::String>>
 pub fn data_persistence::Database::get_current_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
+pub fn data_persistence::Database::get_kept_candidate_projection(&self, plan_id: &str, candidate_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::CandidateProjection>>
 pub fn data_persistence::Database::list_current_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
+pub fn data_persistence::Database::list_kept_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
 pub fn data_persistence::Database::list_reviewable_candidate_projections(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::CandidateProjection>>
-pub fn data_persistence::Database::prepare_candidate_batch(&mut self, plan_id: &str) -> data_persistence::Result<data_persistence::CandidateBatch>
-pub fn data_persistence::Database::publish_candidate_batch(&mut self, batch_id: &str) -> data_persistence::Result<()>
-pub fn data_persistence::Database::write_candidate_projections(&mut self, batch_id: &str, projections: &[data_persistence::CandidateProjection]) -> data_persistence::Result<()>
+pub fn data_persistence::Database::publish_candidate_batch(&mut self, plan_id: &str, boundary_fingerprint: &str, drafts: &[data_persistence::CandidateProjectionDraft]) -> data_persistence::Result<data_persistence::CandidateBatchSummary>
+pub fn data_persistence::Database::publish_candidate_revalidation(&mut self, plan_id: &str, boundary_fingerprint: &str, facts: &[data_persistence::CandidateRevalidationFact]) -> data_persistence::Result<data_persistence::RevalidationWriteSummary>
 pub trait data_persistence::PlanCrudApi
 pub fn data_persistence::PlanCrudApi::create_plan(&mut self, campus_id: &str, name: &str) -> data_persistence::Result<data_persistence::PlanEntity>
 pub fn data_persistence::PlanCrudApi::find_plan_by_id(&self, plan_id: &str) -> data_persistence::Result<core::option::Option<data_persistence::PlanEntity>>
@@ -1430,11 +1525,11 @@ impl data_persistence::RegeoNameCacheApi for data_persistence::RegeoNameCache
 pub fn data_persistence::RegeoNameCache::get_regeo_name(&self, cache_key: &str) -> data_persistence::Result<core::option::Option<core::option::Option<alloc::string::String>>>
 pub fn data_persistence::RegeoNameCache::put_regeo_name(&self, cache_key: &str, name: core::option::Option<&str>) -> data_persistence::Result<()>
 pub trait data_persistence::ReviewDecisionsApi
-pub fn data_persistence::ReviewDecisionsApi::batch_update_review_decisions(&mut self, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
+pub fn data_persistence::ReviewDecisionsApi::batch_update_review_decisions_at_revision(&mut self, plan_id: &str, expected_revision: &str, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
 pub fn data_persistence::ReviewDecisionsApi::count_review_states(&self, plan_id: &str) -> data_persistence::Result<(usize, usize, usize)>
 pub fn data_persistence::ReviewDecisionsApi::list_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecision>>
 impl data_persistence::ReviewDecisionsApi for data_persistence::Database
-pub fn data_persistence::Database::batch_update_review_decisions(&mut self, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
+pub fn data_persistence::Database::batch_update_review_decisions_at_revision(&mut self, plan_id: &str, expected_revision: &str, decisions: &[data_persistence::ReviewDecision]) -> data_persistence::Result<()>
 pub fn data_persistence::Database::count_review_states(&self, plan_id: &str) -> data_persistence::Result<(usize, usize, usize)>
 pub fn data_persistence::Database::list_review_decisions(&self, plan_id: &str) -> data_persistence::Result<alloc::vec::Vec<data_persistence::ReviewDecision>>
 pub trait data_persistence::ReviewDraftApi
