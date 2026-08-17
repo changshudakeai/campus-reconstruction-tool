@@ -127,7 +127,7 @@ pub fn run_dev() -> Result<()> {
     {
         window.window().on_close_requested(|| {
             log::info!("runtime: 收到窗口关闭请求，先同步释放地图 WebView");
-            crate::map_webview::shutdown();
+            crate::map_session::shutdown();
             slint::CloseRequestResponse::HideWindow
         });
     }
@@ -495,11 +495,11 @@ impl ViewModelInjector {
         window.on_confirm_dialog_confirmed(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
-            // T34：弹窗遮挡统一机制——确认弹窗关闭后按当前步骤模式恢复地图
-            crate::map_webview::restore_after_modal(window.as_weak());
             let needs_campus_search_polling = presentation_confirmed
                 .borrow_mut()
                 .confirm_pending_action(&window);
+            // 先执行最终动作，再由地图会话合并最后的显示意图，避免恢复错页。
+            crate::map_session::uncover_after_modal();
             if needs_campus_search_polling {
                 // 校区搜索失败弹窗点"重试"：确认后重新搜索并拉起轮询
                 crate::production::ProductionEntries::start_campus_search_polling(
@@ -514,11 +514,10 @@ impl ViewModelInjector {
         window.on_confirm_dialog_cancelled(move || {
             let Some(window) = weak.upgrade() else { return };
             window.set_confirm_dialog_visible(false);
-            // T34：弹窗遮挡统一机制——确认弹窗取消后按当前步骤模式恢复地图
-            crate::map_webview::restore_after_modal(window.as_weak());
             presentation_cancel
                 .borrow_mut()
                 .cancel_pending_action(&window);
+            crate::map_session::uncover_after_modal();
         });
     }
 

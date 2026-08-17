@@ -991,57 +991,9 @@ export component AppWindow inherits Window {
                     export-start-clicked => { root.workspace-export-start-clicked(); }
                 }
 
-                // 地图槽位兜底画布（仅边界步骤且地图不可用时显示；
-                // 地图可用时由 WebView 占据同一槽位）
-                if root.workspace-active-step == 0 && !root.workspace-map-available: Rectangle {
-                    x: root.workspace-map-slot-x;
-                    y: root.workspace-map-slot-y;
-                    width: root.workspace-map-slot-width;
-                    height: root.workspace-map-slot-height;
-                    background: Theme.surface;
-                    border-color: Theme.separator;
-                    border-width: 1px;
-                    border-radius: 4px;
-                    clip: true;
-                    Path {
-                        x: 0px;
-                        y: 0px;
-                        width: parent.width;
-                        height: parent.height;
-                        stroke: Theme.separator;
-                        stroke-width: 2px;
-                        fill: transparent;
-                        commands: root.workspace-boundary-path-commands;
-                    }
-                    for point[i] in root.workspace-boundary-points: Rectangle {
-                        x: point.x * 1px;
-                        y: point.y * 1px;
-                        width: 10px;
-                        height: 10px;
-                        border-radius: 5px;
-                        background: {
-                            if i == 0 && root.workspace-boundary-point-count > 0 {
-                                Theme.error
-                            } else {
-                                Theme.text-primary
-                            }
-                        };
-                        border-color: Theme.surface;
-                        border-width: 1px;
-                    }
-                    TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-                        clicked => {
-                            root.workspace-boundary-canvas-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
-                        }
-                    }
-                }
-
-                // T36：步骤②/③（非边界、非评审）地图不可用时显示明确占位，
-                // 不得面对无声空白；加载中显示"地图加载中…"，失败提示可退回
-                // 左侧抽屉"方位角手动输入"完成朝向。
-                if root.workspace-active-step != 0 && !root.workspace-map-available: Rectangle {
+                // 地图不可用时只显示明确阻断反馈；不提供无底图的伪造画布。
+                // 边界、朝向与评审都依赖同一地图事实；不可用时统一暂停。
+                if !root.workspace-map-available: Rectangle {
                     x: root.workspace-map-slot-x;
                     y: root.workspace-map-slot-y;
                     width: root.workspace-map-slot-width;

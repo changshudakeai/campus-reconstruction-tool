@@ -1,12 +1,12 @@
 //! T36 正式回归（b）：步骤切换 navigate(1) 后 map_available 如实反映 WebView
 //! 创建结果；页面 onerror / 5s SDK 超时（及 Rust 侧 10s 加载超时标记）→
-//! 明确错误对话框，不静默；地图不可用后仍可用"方位角手动输入"完成朝向。
+//! 明确错误对话框，不静默；地图不可用后新的朝向提交必须暂停。
 //!
 //! - WebView 创建前失败（HTML 构建）如实上报 false 的确定性断言在
 //!   `map_webview::tests::creation_failure_reports_map_unavailable_immediately`
 //!   （非法密钥同步失败，无事件循环依赖）；本契约锁定状态通道到 UI 的链路：
 //!   status=false → map_available=false、处理中清除、明确提示。
-//! - 错误 IPC（SDK 失败/超时标记）→ 错误弹窗 + 地图不可用 + 手动输入兜底。
+//! - 错误 IPC（SDK 失败/超时标记）→ 错误弹窗 + 地图事实相关操作暂停。
 
 use data_persistence::CampusCrudApi;
 use desktop_shell::{
@@ -70,10 +70,9 @@ fn s1_27_orientation_step_map_available_and_error_contract() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#.into(),
+    );
     assert!(window.get_workspace_boundary_is_determined());
     assert_eq!(window.get_workspace_completed_steps(), 1);
 
@@ -179,13 +178,20 @@ fn s1_27_orientation_step_map_available_and_error_contract() {
     );
     window.invoke_error_dialog_dismissed();
 
-    // ── 6. 地图失败后仍可用"方位角手动输入"完成朝向（兜底入口）──
+    // ── 6. 地图失败后手输角度也不生效；地图恢复后才允许提交 ──
     window.set_workspace_orientation_input_text("270".into());
     window.invoke_workspace_orientation_submit_clicked();
     assert!(
         !window.get_confirm_dialog_visible(),
         "首次设定朝向直接保存，不弹重算确认"
     );
+    assert!(!window.get_workspace_orientation_is_determined());
+    assert_eq!(window.get_workspace_completed_steps(), 1);
+    window.invoke_error_dialog_dismissed();
+
+    window.invoke_workspace_map_status_changed(true);
+    window.set_workspace_orientation_input_text("270".into());
+    window.invoke_workspace_orientation_submit_clicked();
     assert!(window.get_workspace_orientation_is_determined());
     assert!(
         window
@@ -202,8 +208,8 @@ fn s1_27_orientation_step_map_available_and_error_contract() {
     window.invoke_workspace_step_clicked(1);
     assert_eq!(window.get_workspace_active_step(), 1);
     assert!(
-        window.get_workspace_map_available(),
-        "重新进入步骤后重新请求地图（待创建）"
+        !window.get_workspace_map_available(),
+        "重新进入步骤后在真实创建成功前保持不可用"
     );
     assert!(
         window.get_workspace_map_loading(),

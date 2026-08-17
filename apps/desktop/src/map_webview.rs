@@ -1,51 +1,13 @@
-//! 屏幕 4 边界地图 WebView 嵌入与生命周期管理。
+//! 地图会话的 Windows WebView2 适配器（ADR-0017/0045）。
 //!
-//! 薄壳原则：（ADR-0017）本模块只做嵌入显示与消息桥接，零业务计算——
-//! OSM 候选排序在 B3 `gaode_client::BoundarySorter`，校验在 B5
-//! `validate_polygon_closure`，HTML 生成在 B3 `gaode_client`。
+//! 本模块只负责原生子窗口、延迟销毁、串行创建与代际过滤；显示意图、
+//! 方案身份、弹窗遮挡、视野和结构化命令均由 `map_session` 持有。
+//! 嵌入链路保持为 `slint::spawn_local → winit_window → build_as_child`。
 //!
-//! ## 嵌入链路（T21 已验证，禁止推翻）
-//! `slint::spawn_local` → `winit_window().await` → `build_as_child`。
-//!
-//! ## 显隐策略
-//! 屏幕 4 显示、其余屏隐藏。wry 0.55 时无 `set_visible` API，采用
-//! **drop/recreate** 兜底并诚实声明（验收条目"随屏显隐"以此实现）。
-//! 屏幕切换处由注入器调用 [`show`] / [`hide`]。
-//!
-//! ## T35：销毁延迟到事件循环下一拍（P0 崩溃修复，本分支自带）
-//! wry 的 IPC 回调（`window.ipc.postMessage` → `with_ipc_handler`）运行在
-//! WebView2 自身 COM 回调栈内。错误/确认/输入弹窗路径都会在回调栈内调用
-//! [`hide`]；若同步 drop WebView，WebView2 COM 重入会在 combase.dll 崩溃
-//! （WER 0xc0000005 / 0xc0000409）。因此 [`hide`] 是**唯一延迟销毁入口**：
-//! 活跃 WebView 立即移入 `retiring`（逻辑隐藏即刻生效），经
-//! `slint::invoke_from_event_loop` 排定下一拍回调，IPC 回调返回后才真正
-//! drop；全部弹窗遮挡调用点（presenter / presentation / 工作区适配器）
-//! 统一走本入口。同时 IPC/状态回调先克隆 handler 释放 `STATE` 借用再执行
-//! （`RefCell already borrowed` 根因，WER 0xc0000409）。
-//!
-//! ## T36：hide→show 步骤切换串行化（P1）
-//! T35 延迟销毁后，"旧 WebView 尚未真正 drop 就新建下一份"会产生时序窗口：
-//! 两个 WebView2 子窗口并存、Z 序/焦点错乱，朝向页点击无反应。本模块把
-//! 创建也纳入同一生命周期：
-//! - 每次 show 请求自增 `generation`；在途创建的完成结果只允许"当前代"
-//!   生效，过期结果一律转入 `retiring` 延迟销毁，绝不触碰当前状态；
-//! - 新建 WebView 前必须满足：无活跃 WebView、无在途创建、`retiring`
-//!   队列已清空（销毁回调执行完后 `pump_creation` 才放行）——步骤切换
-//!   hide→show 由此串行化；
-//! - HTML 构建改为同步：密钥/锚点非法等创建前失败**如实**上报
-//!   `map_available=false`，不再保持上一次的 true；
-//! - 工作区页（边界/朝向）创建附带 10s 加载超时（[`LOAD_TIMEOUT`]）：超时后使在途
-//!   创建过期、经错误 IPC 弹明确错误对话框，用户可退回"方位角手动输入"。
-//!   T39：评审地图页不挂该超时（候选不再内嵌 HTML；千级候选在 map_ready
-//!   后分批上屏，属于创建超时之外的绘制阶段，不应被 10s 兜底误杀）。
-//!
-//! ## T40：朝向页创建成功即激活两点选择（不依赖 map_ready）
-//! 朝向步 WebView 创建成功后立即 `evaluate_script("activateOrientationWhenReady();")`
-//! （页面脚本在 SDK/地图未就绪时静默等待，由 onMapReadyForMode 自动激活兜底）；
-//! 朝向页同时在 onMapReadyForMode 之外发送 map_ready，启用 T37 的
-//! `map_ready_for_active_step` 兜底——两个独立激活通道保证页面就绪后两点点击挂接。
-// ignore-tidy-filelength: T38 评审地图页生命周期（种类路由/show_review/弹窗恢复）并入本文件
-// 后短暂超限；失效里程碑：v2.1.0（2026-12-31），届时按页种类拆出 WebView 生命周期助手后消除
+//! WebView2 IPC 回调栈内同步 drop 会触发 COM 重入崩溃，因此 `hide` 先把
+//! 活跃实例移到 `retiring`，下一事件循环拍再释放；新实例只在退休队列清空
+//! 后创建。每次请求递增 generation，创建结果、状态与 IPC 都必须同时匹配
+//! 当前 generation 和页面种类，退休页面的迟到结果一律丢弃。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -59,19 +21,19 @@ pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// T36：Rust 侧超时经错误 IPC 上报时使用的标记；工作区入口把它本地化为
 /// 明确的超时文案（ADR-0005 禁止硬编码可见文本）。
-pub const MAP_LOAD_TIMEOUT_MARKER: &str = "__t36_map_load_timeout__";
+pub(crate) const MAP_LOAD_TIMEOUT_MARKER: &str = "__t36_map_load_timeout__";
 
 /// IPC 消息处理签名：输入原始消息文本，输出是否已识别处理。
 /// 由功能入口注册；返回值仅用于诊断记录。
-pub(crate) type IpcHandler = Rc<dyn Fn(&str)>;
+pub(crate) type IpcHandler = Rc<dyn Fn(MapPageKind, &str)>;
 
 /// 地图加载完成状态处理器：true = WebView 创建成功，false = 创建失败。
 /// 由功能入口注册；故障只暂停地图相关操作，不阻塞其他页面（ADR-0037）。
-pub(crate) type MapStatusHandler = Rc<dyn Fn(bool)>;
+pub(crate) type MapStatusHandler = Rc<dyn Fn(MapPageKind, bool)>;
 
 /// 地图页面种类：决定弹窗关闭后按哪个页面重建。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MapPageKind {
+pub(crate) enum MapPageKind {
     /// 边界编辑页（步骤 ①②③ 的常驻地图）
     Boundary,
     /// 朝向编辑页（步骤 ②）
@@ -100,6 +62,7 @@ enum PendingShow {
         security_key: String,
         anchor_lon: f64,
         anchor_lat: f64,
+        initial_viewport: Option<gaode_client::MapViewport>,
     },
     CampusSearch {
         window: Weak<crate::AppWindow>,
@@ -118,6 +81,7 @@ enum PendingShow {
         anchor_lat: f64,
         map_text_label: String,
         map_text_visible: bool,
+        initial_viewport: Option<gaode_client::MapViewport>,
     },
 }
 
@@ -164,28 +128,16 @@ struct WebViewState {
     pending_show: Option<PendingShow>,
     /// T36：工作区页创建加载超时（一次性；成功后或 hide 时取消）。
     load_timer: Option<slint::Timer>,
-    /// T36：地图加载失败后禁止弹窗关闭自动重建（避免反复失败弹窗）；
-    /// 用户显式切换步骤重新请求时才清除。
-    suppress_restore: bool,
     /// 功能入口注册的 IPC 处理器
     ipc_handler: Option<IpcHandler>,
     /// 功能入口注册的地图加载状态处理器
     status_handler: Option<MapStatusHandler>,
-    /// 上次使用的密钥（recreate 时复用）
-    last_api_key: String,
-    last_security_key: String,
-    /// 上次使用的校区锚点（recreate 时复用；模态弹窗隐藏后恢复用）
-    last_anchor: Option<(f64, f64)>,
     /// 上次显示的地图页面种类（弹窗恢复按此步骤重建）
     last_page_kind: Option<MapPageKind>,
-    /// 朝向页配置（含已确认边界半透明参照；弹窗恢复时复用）
-    last_orientation_config: Option<gaode_client::BoundaryEditPageConfig>,
     /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
     campus_search_mode: bool,
     /// 评审会话内“显示地图文字”开关状态（默认 false：隐藏地标/POI 文字）。
     review_map_text_visible: bool,
-    /// 评审地图文字开关文案（经 B6 l10n 注入，重建评审页时复用）。
-    review_map_text_label: String,
     /// resize 跟随轮询定时器（hide 时 drop 即停）
     resize_timer: Option<slint::Timer>,
     /// 上次同步的（地图槽位矩形, 缩放因子）——变化才 set_bounds
@@ -203,17 +155,11 @@ thread_local! {
             creation_in_flight: false,
             pending_show: None,
             load_timer: None,
-            suppress_restore: false,
             ipc_handler: None,
             status_handler: None,
-            last_api_key: String::new(),
-            last_security_key: String::new(),
-            last_anchor: None,
             last_page_kind: None,
-            last_orientation_config: None,
             campus_search_mode: false,
             review_map_text_visible: false,
-            review_map_text_label: String::new(),
             resize_timer: None,
             last_slot_scale: None,
         })
@@ -229,13 +175,13 @@ thread_local! {
 
 /// 评审地图回推命令累计条数（诊断/验收用）。
 #[doc(hidden)]
-pub fn review_push_count() -> usize {
+pub(crate) fn review_push_count() -> usize {
     REVIEW_PUSH_COUNT.with(|s| s.get())
 }
 
 /// 清零评审地图回推计数（验收测试起点）。
 #[doc(hidden)]
-pub fn reset_review_push_count() {
+pub(crate) fn reset_review_push_count() {
     REVIEW_PUSH_COUNT.with(|s| s.set(0));
     REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow_mut().clear());
 }
@@ -243,7 +189,7 @@ pub fn reset_review_push_count() {
 /// 无 WebView 测试环境下模拟"评审地图可见"，使回推路径可被计数观察；
 /// 生产不设置（恒为实际可见性）。
 #[doc(hidden)]
-pub fn set_review_push_probe_visible(visible: bool) {
+pub(crate) fn set_review_push_probe_visible(visible: bool) {
     REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.set(visible));
 }
 
@@ -261,24 +207,19 @@ thread_local! {
 ///
 /// [`hide`] 会同步清除该探针；真实 WebView 存在时以真实可见性为准。
 #[doc(hidden)]
-pub fn set_map_visible_probe(visible: bool) {
+pub(crate) fn set_map_visible_probe(visible: bool) {
     MAP_VISIBLE_PROBE.with(|s| s.set(visible));
 }
 
 /// 契约测试观测：地图 WebView 是否可见（探针 + 真实状态）。
 #[doc(hidden)]
-pub fn map_visible() -> bool {
+pub(crate) fn map_visible() -> bool {
     is_visible() || MAP_VISIBLE_PROBE.with(|s| s.get())
-}
-
-/// 评审回推是否应执行：生产 = 活跃 WebView；契约测试可经探针模拟。
-pub(crate) fn review_push_visible() -> bool {
-    is_visible() || REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.get())
 }
 
 /// 测试用 JS 地图 spy：返回本次探针开启后记录到的 Rust→JS 回推脚本。
 #[doc(hidden)]
-pub fn review_pushed_scripts() -> Vec<String> {
+pub(crate) fn review_pushed_scripts() -> Vec<String> {
     REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow().clone())
 }
 
@@ -305,11 +246,18 @@ pub(crate) fn register_status_handler(handler: MapStatusHandler) {
 /// 通知地图加载完成状态（WebView 创建成功或失败后调用一次）
 ///
 /// 与 IPC 回调同纪律：先克隆释放借用，再调用外部 handler（T35）。
-fn notify_status(available: bool) {
-    log::debug!("map_webview: notify_status(available={available})");
-    let handler = STATE.with(|s| s.borrow().status_handler.clone());
+fn notify_status(generation: u64, page_kind: MapPageKind, available: bool) {
+    log::debug!(
+        "map_webview: notify_status(page={page_kind:?}, generation={generation}, available={available})"
+    );
+    let handler = STATE.with(|s| {
+        let state = s.borrow();
+        (state.generation == generation && state.last_page_kind == Some(page_kind))
+            .then(|| state.status_handler.clone())
+            .flatten()
+    });
     if let Some(handler) = handler {
-        handler(available);
+        handler(page_kind, available);
     }
 }
 
@@ -318,10 +266,17 @@ fn notify_status(available: bool) {
 /// T35 根因（RefCell already borrowed → WebView2 回调内不可 unwind 崩溃，
 /// WER 0xc0000409）：不得在 `STATE` 借用存活期间调用 handler。这里先克隆出
 /// handler、释放借用，再在回调栈内执行业务（handler 内可能调用 [`hide`]）。
-fn dispatch_ipc(body: &str) {
-    let handler = STATE.with(|s| s.borrow().ipc_handler.clone());
+fn dispatch_ipc(generation: u64, page_kind: MapPageKind, body: &str) {
+    let handler = STATE.with(|s| {
+        let state = s.borrow();
+        (state.generation == generation && state.last_page_kind == Some(page_kind))
+            .then(|| state.ipc_handler.clone())
+            .flatten()
+    });
     if let Some(handler) = handler {
-        handler(body);
+        handler(page_kind, body);
+    } else {
+        log::debug!("map_webview: 丢弃退休页面事件（page={page_kind:?}, generation={generation}）");
     }
 }
 
@@ -338,16 +293,6 @@ pub(crate) fn campus_search_ready() -> bool {
     })
 }
 
-/// 当前地图是否为边界编辑页（T34：步骤切换时避免把朝向页留在边界步骤上）。
-pub(crate) fn is_boundary_page() -> bool {
-    page_kind() == Some(MapPageKind::Boundary)
-}
-
-/// 当前地图是否为评审页（T38：评审步的 IPC 路由到评审入口而非边界入口）。
-pub(crate) fn is_review_page() -> bool {
-    page_kind() == Some(MapPageKind::Review)
-}
-
 /// 记录评审会话内“显示地图文字”开关状态（由评审地图 IPC 上报）。
 ///
 /// 状态只保存在本进程的 WebView 会话状态中：评审页被隐藏/弹窗恢复重建时，
@@ -360,7 +305,7 @@ pub(crate) fn set_review_map_text_visible(visible: bool) {
 
 /// 读取评审会话内“显示地图文字”开关状态（验收测试观察用）。
 #[doc(hidden)]
-pub fn review_map_text_visible() -> bool {
+pub(crate) fn review_map_text_visible() -> bool {
     STATE.with(|s| s.borrow().review_map_text_visible)
 }
 
@@ -478,10 +423,14 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             security_key,
             anchor_lon,
             anchor_lat,
+            initial_viewport,
             ..
         } => {
-            let config = gaode_client::BoundaryEditPageConfig::new(api_key, security_key)
+            let mut config = gaode_client::BoundaryEditPageConfig::new(api_key, security_key)
                 .with_anchor(*anchor_lon, *anchor_lat);
+            if let Some(viewport) = initial_viewport {
+                config = config.with_initial_viewport(*viewport);
+            }
             gaode_client::build_boundary_edit_page_html(&config)
         }
         PendingShow::CampusSearch {
@@ -502,11 +451,15 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             anchor_lat,
             map_text_label,
             map_text_visible,
+            initial_viewport,
             ..
         } => {
-            let config = gaode_client::ReviewMapPageConfig::new(api_key, security_key)
+            let mut config = gaode_client::ReviewMapPageConfig::new(api_key, security_key)
                 .with_anchor(*anchor_lon, *anchor_lat)
                 .with_map_text_toggle(map_text_label, *map_text_visible);
+            if let Some(viewport) = initial_viewport {
+                config = config.with_initial_viewport(*viewport);
+            }
             gaode_client::build_review_map_page_html(&config)
         }
     }
@@ -569,7 +522,11 @@ fn pump_creation() {
                         "map_webview: HTML 构建失败（page={page_kind:?}），如实上报地图不可用: {error}"
                     );
                 }
-                Some(PumpAction::HtmlFailed { reports_status })
+                Some(PumpAction::HtmlFailed {
+                    generation: state.generation,
+                    page_kind,
+                    reports_status,
+                })
             }
             Ok(html) => {
                 state.creation_in_flight = true;
@@ -589,9 +546,13 @@ fn pump_creation() {
         }
     });
     match action {
-        Some(PumpAction::HtmlFailed { reports_status }) => {
+        Some(PumpAction::HtmlFailed {
+            generation,
+            page_kind,
+            reports_status,
+        }) => {
             if reports_status {
-                notify_status(false);
+                notify_status(generation, page_kind, false);
             }
         }
         Some(PumpAction::Spawn {
@@ -609,6 +570,8 @@ fn pump_creation() {
 
 enum PumpAction {
     HtmlFailed {
+        generation: u64,
+        page_kind: MapPageKind,
         reports_status: bool,
     },
     Spawn {
@@ -647,22 +610,23 @@ fn handle_load_timeout(generation: u64) {
     let timed_out = STATE.with(|s| {
         let mut state = s.borrow_mut();
         if generation != state.generation || state.webview.is_some() {
-            return false;
+            return None;
         }
         log::warn!("map_webview: 地图加载超时（{LOAD_TIMEOUT:?}），上报失败并禁止自动重建");
         state.generation += 1;
         state.creation_in_flight = false;
         state.pending_show = None;
         state.load_timer = None;
-        state.suppress_restore = true;
-        true
+        Some((state.generation, state.last_page_kind))
     });
-    if timed_out {
+    if let Some((current_generation, Some(page_kind))) = timed_out {
         // 状态（map_available=false / 处理中清除）由工作区入口在错误 IPC
         // 分支统一处理并弹明确错误对话框；这里只发 IPC，避免重复通知。
-        dispatch_ipc(&format!(
-            r#"{{"type":"error","message":"{MAP_LOAD_TIMEOUT_MARKER}"}}"#
-        ));
+        dispatch_ipc(
+            current_generation,
+            page_kind,
+            &format!(r#"{{"type":"error","message":"{MAP_LOAD_TIMEOUT_MARKER}"}}"#),
+        );
     }
     pump_creation();
 }
@@ -717,20 +681,20 @@ fn spawn_creation(
             .with_background_color((255, 255, 255, 255))
             .with_bounds(bounds)
             .with_focused(false)
-            .with_ipc_handler(|request: wry::http::Request<String>| {
+            .with_ipc_handler(move |request: wry::http::Request<String>| {
                 let body = request.body().to_string();
                 log::debug!(
                     "map_webview: WebView2 IPC 回调进入（body={} 字节）",
                     body.len()
                 );
-                dispatch_ipc(&body);
+                dispatch_ipc(generation, page_kind, &body);
                 log::debug!("map_webview: WebView2 IPC 回调返回");
             })
             .build_as_child(&*winit_win);
 
         #[cfg(windows)]
         if result.is_ok() {
-            windows_focus_guard::install(&*winit_win);
+            crate::map_webview_focus::install(&*winit_win);
         }
 
         finish_creation(generation, result, window_weak, page_kind);
@@ -788,7 +752,7 @@ fn finish_creation(
     match outcome {
         Outcome::Active => {
             start_resize_timer(window_weak);
-            notify_status(true);
+            notify_status(generation, page_kind, true);
             // T40：朝向页创建成功即经可靠通道激活（不依赖 map_ready）；页面
             // 脚本在 SDK/地图未就绪时静默等待自动激活兜底。
             if let Some(script) = creation_activation_script(page_kind) {
@@ -796,7 +760,7 @@ fn finish_creation(
                 evaluate_script(script);
             }
         }
-        Outcome::Failed => notify_status(false),
+        Outcome::Failed => notify_status(generation, page_kind, false),
         Outcome::Stale => {}
     }
     pump_creation();
@@ -804,59 +768,28 @@ fn finish_creation(
 
 /// 记录待执行请求并尝试放行（T36 统一 show 入口）。
 fn request_show(request: PendingShow) {
-    let page_kind = request.page_kind();
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        // 幂等：同页已显示时不重建（键/锚点已被记录供 recreate 复用）。
-        if state.webview.is_some() && state.last_page_kind == Some(page_kind) {
-            return;
-        }
+        // 显示意图的幂等与方案身份由 map_session 判定。适配器不能只凭页面
+        // 种类短路，否则同类页面的新方案、锚点或配置会沿用旧现场。
         match &request {
-            PendingShow::Boundary {
-                api_key,
-                security_key,
-                anchor_lon,
-                anchor_lat,
-                ..
-            } => {
-                state.last_api_key = api_key.clone();
-                state.last_security_key = security_key.clone();
-                state.last_anchor = Some((*anchor_lon, *anchor_lat));
+            PendingShow::Boundary { .. } => {
                 state.last_page_kind = Some(MapPageKind::Boundary);
                 state.campus_search_mode = false;
             }
-            PendingShow::CampusSearch {
-                api_key,
-                security_key,
-                ..
-            } => {
-                state.last_api_key = api_key.clone();
-                state.last_security_key = security_key.clone();
+            PendingShow::CampusSearch { .. } => {
                 state.last_page_kind = Some(MapPageKind::CampusSearch);
                 state.campus_search_mode = true;
             }
-            PendingShow::Orientation { config, .. } => {
-                state.last_api_key = config.api_key.clone();
-                state.last_security_key = config.security_key.clone();
+            PendingShow::Orientation { .. } => {
                 state.last_page_kind = Some(MapPageKind::Orientation);
-                state.last_orientation_config = Some(config.clone());
                 state.campus_search_mode = false;
             }
             PendingShow::Review {
-                api_key,
-                security_key,
-                anchor_lon,
-                anchor_lat,
-                map_text_label,
-                map_text_visible,
-                ..
+                map_text_visible, ..
             } => {
-                state.last_api_key = api_key.clone();
-                state.last_security_key = security_key.clone();
-                state.last_anchor = Some((*anchor_lon, *anchor_lat));
                 state.last_page_kind = Some(MapPageKind::Review);
                 state.campus_search_mode = false;
-                state.review_map_text_label = map_text_label.clone();
                 state.review_map_text_visible = *map_text_visible;
             }
         }
@@ -870,24 +803,19 @@ fn request_show(request: PendingShow) {
             state.campus_search_mode = false;
             schedule_drop(&mut state);
         }
-        // 显式请求清除"失败后禁止自动重建"标记。
-        state.suppress_restore = false;
         state.generation += 1;
         state.pending_show = Some(request);
     });
     pump_creation();
 }
 
-/// 显示（或重建）边界地图 WebView。
-///
-/// 幂等：已存在时不重复创建。密钥/锚点被记录供 recreate 复用。
-/// 创建失败如实上报（地图不可用 → 人工圈画画布仍在 Slint 侧可用）。
-pub(crate) fn show(
+pub(crate) fn show_boundary_with_viewport(
     window_weak: Weak<crate::AppWindow>,
     api_key: String,
     security_key: String,
     anchor_lon: f64,
     anchor_lat: f64,
+    initial_viewport: Option<gaode_client::MapViewport>,
 ) {
     request_show(PendingShow::Boundary {
         window: window_weak,
@@ -895,6 +823,7 @@ pub(crate) fn show(
         security_key,
         anchor_lon,
         anchor_lat,
+        initial_viewport,
     });
 }
 
@@ -930,17 +859,14 @@ pub(crate) fn show_with_config(
     });
 }
 
-/// T38: 显示（或重建）评审地图 WebView。
-///
-/// 候选标注由 Rust 侧在 `map_ready` IPC 后经 `drawReviewCandidates` 推送
-/// （候选几何已在 B2 投影中为 GCJ-02，JS 不做坐标转换）。
-pub(crate) fn show_review(
+pub(crate) fn show_review_with_viewport(
     window_weak: Weak<crate::AppWindow>,
     api_key: String,
     security_key: String,
     anchor_lon: f64,
     anchor_lat: f64,
     map_text_label: String,
+    initial_viewport: Option<gaode_client::MapViewport>,
 ) {
     let map_text_visible = STATE.with(|s| s.borrow().review_map_text_visible);
     request_show(PendingShow::Review {
@@ -951,6 +877,7 @@ pub(crate) fn show_review(
         anchor_lat,
         map_text_label,
         map_text_visible,
+        initial_viewport,
     });
 }
 
@@ -961,7 +888,7 @@ pub(crate) fn show_review(
 /// 触发 combase.dll 0xc0000005（CoUnmarshalInterface 通道对端已死）。这里在
 /// 事件循环仍存活、COM 仍健康时先同步关闭控制器（含待退休 WebView），
 /// 使退出时 TLS 析构为空操作。不得在事件循环停止后再调用本函数。
-pub fn shutdown() {
+pub(crate) fn shutdown() {
     let (webview, retiring) = STATE.with(|s| {
         let mut state = s.borrow_mut();
         state.resize_timer = None;
@@ -983,13 +910,10 @@ pub fn shutdown() {
     }
 }
 
-/// 隐藏地图 WebView（离开屏幕 4 或模态弹窗前调用）——**唯一延迟销毁入口**。
+/// 隐藏地图 WebView——**唯一延迟销毁入口**。
 ///
-/// 诚实声明：wry 0.55 无 `set_visible` API，这里 drop WebView；返回对应
-/// 页面时由 [`show`] / [`show_with_config`] / [`show_campus_search`] 重建。
-/// 重建期间地图状态（缩放/编辑内容）不保留——已确认边界已由 Rust 侧保管，
-/// 不影响数据正确性。页面种类与配置被保留，供 [`restore_after_modal`] 按
-/// 模式重建。
+/// wry 0.55 无 `set_visible` API，因此这里 drop WebView；返回时由上层地图
+/// 会话重新下发页面配置、视野和未提交草稿，让用户继续同一处地图现场。
 ///
 /// T35 崩溃根因：错误/确认/输入弹窗的 `hide` 可能发生在 wry IPC 回调栈内
 /// （WebView2 COM 回调），同步 drop WebView 导致 COM 重入崩溃。本入口一律
@@ -1019,7 +943,6 @@ pub(crate) fn hide() {
 pub(crate) fn mark_map_failed() {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        state.suppress_restore = true;
         if state.creation_in_flight {
             state.generation += 1;
             state.creation_in_flight = false;
@@ -1033,81 +956,6 @@ pub(crate) fn mark_map_failed() {
 /// 当前记录的地图页面种类（测试与弹窗恢复决策用）。
 fn page_kind() -> Option<MapPageKind> {
     STATE.with(|s| s.borrow().last_page_kind)
-}
-
-/// 模态弹窗关闭后是否需要恢复地图（T34 统一机制）。
-///
-/// - 工作区（screen 4）：五个步骤全部显示地图——步骤 ①② 为边界/朝向页，
-///   步骤 ③④⑤ 继续让位显示（评审步骤 ④ 显示评审地图，T38）。
-/// - 校区搜索页（screen 1）：取消弹窗后停留该页时需要恢复搜索地图。
-fn should_restore_after_modal(active_screen: i32, _active_step: i32) -> bool {
-    if active_screen == 4 {
-        return true;
-    }
-    active_screen == 1 && page_kind() == Some(MapPageKind::CampusSearch)
-}
-
-/// 恢复被模态弹窗隐藏的地图 WebView（仅当应当恢复且锚点/配置已知时）。
-///
-/// T34：关闭错误/确认/输入弹窗后按**当前步骤模式**重建——
-/// 步骤②重建朝向页（复用上次朝向配置，含半透明边界参照），
-/// 步骤④重建评审地图页（T38），其余步骤重建边界页；不得恢复错页。
-/// T36：地图加载失败（[`mark_map_failed`] / 超时）后跳过自动重建，
-/// 用户显式切换步骤才重试。
-pub(crate) fn restore_after_modal(window: Weak<crate::AppWindow>) {
-    if STATE.with(|s| s.borrow().suppress_restore) {
-        log::debug!("map_webview: 地图加载失败后跳过弹窗自动重建（等待显式重新进入）");
-        return;
-    }
-    let Some(app_window) = window.upgrade() else {
-        return;
-    };
-    let active_screen = app_window.get_active_screen();
-    let active_step = app_window.get_workspace_active_step();
-    if !should_restore_after_modal(active_screen, active_step) {
-        return;
-    }
-    let (api_key, security_key, anchor, review_map_text_label) = STATE.with(|s| {
-        let state = s.borrow();
-        (
-            state.last_api_key.clone(),
-            state.last_security_key.clone(),
-            state.last_anchor,
-            state.review_map_text_label.clone(),
-        )
-    });
-    if active_screen == 4 {
-        if active_step == 1 {
-            // 朝向页：必须用上次朝向配置重建，不得回落到边界页
-            let config = STATE.with(|s| s.borrow().last_orientation_config.clone());
-            if let Some(config) = config {
-                show_with_config(window, config);
-            }
-            return;
-        }
-        if active_step == 3 {
-            // 评审页：用上次密钥/锚点重建评审地图——候选不再内嵌 HTML，
-            // 重建后页面 map_ready → Rust 在事件循环安全上下文全量推送。
-            if let Some((anchor_lon, anchor_lat)) = anchor {
-                show_review(
-                    window,
-                    api_key,
-                    security_key,
-                    anchor_lon,
-                    anchor_lat,
-                    review_map_text_label,
-                );
-            }
-            return;
-        }
-        if let Some((anchor_lon, anchor_lat)) = anchor {
-            show(window, api_key, security_key, anchor_lon, anchor_lat);
-        }
-        return;
-    }
-    if active_screen == 1 && page_kind() == Some(MapPageKind::CampusSearch) {
-        show_campus_search(window, api_key, security_key);
-    }
 }
 
 /// 向 JS 发送命令（Rust→JS 单向通道，如 drawBoundaryGcj / enableManualMode /
@@ -1124,242 +972,6 @@ pub(crate) fn evaluate_script(script: &str) {
     });
 }
 
-#[cfg(windows)]
-#[allow(
-    unsafe_code,
-    reason = "Windows subclass callback required to keep Slint keyboard focus instead of WebView2"
-)]
-mod windows_focus_guard {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, GetClassLongPtrW, GCLP_WNDPROC, WM_ENTERSIZEMOVE, WM_SETFOCUS, WNDPROC,
-    };
-
-    /// 与 wry 的 `PARENT_SUBCLASS_ID`（`WM_USER + 0x64`）错开的子类 ID。
-    const FOCUS_GUARD_SUBCLASS_ID: usize = 0x4d43_0001;
-
-    unsafe extern "system" fn subclass_proc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-        _uidsubclass: usize,
-        dwrefdata: usize,
-    ) -> LRESULT {
-        if bypasses_wry(msg) {
-            // 绕过 wry 父窗口子类（它会把焦点 MoveFocus 到 WebView2），直接交回
-            // 原始 winit 窗口过程，使 Slint 文本输入保持键盘焦点。
-            let original: WNDPROC = unsafe { std::mem::transmute(dwrefdata) };
-            unsafe { CallWindowProcW(original, hwnd, msg, wparam, lparam) }
-        } else {
-            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
-        }
-    }
-
-    /// 只把「抢焦点」的消息绕过 wry 子类；其余消息（含 WM_SIZE / WM_DESTROY /
-    /// WM_MOVE）仍走正常链，保证 wry 的尺寸与销毁清理逻辑不受影响。
-    fn bypasses_wry(msg: u32) -> bool {
-        msg == WM_SETFOCUS || msg == WM_ENTERSIZEMOVE
-    }
-
-    pub(crate) fn install(window: &impl HasWindowHandle) {
-        let Ok(handle) = window.window_handle() else {
-            return;
-        };
-        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-            return;
-        };
-        let hwnd = HWND(handle.hwnd.get() as _);
-        unsafe {
-            let original = GetClassLongPtrW(hwnd, GCLP_WNDPROC);
-            if original == 0 {
-                log::debug!("map_webview: 焦点守卫未安装（原始窗口过程为空）");
-                return;
-            }
-            log::debug!(
-                "map_webview: 安装焦点守卫子类（原始窗口过程=0x{:x}）",
-                original
-            );
-            let _ = SetWindowSubclass(hwnd, Some(subclass_proc), FOCUS_GUARD_SUBCLASS_ID, original);
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use windows::Win32::UI::WindowsAndMessaging::{WM_MOVE, WM_SIZE};
-
-        #[test]
-        fn guard_bypasses_only_focus_messages() {
-            assert!(bypasses_wry(WM_SETFOCUS));
-            assert!(bypasses_wry(WM_ENTERSIZEMOVE));
-            assert!(!bypasses_wry(WM_SIZE));
-            assert!(!bypasses_wry(WM_MOVE));
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 清空注册的 handler 与状态（thread_local 在测试线程间共享）。
-    fn reset_state() {
-        REVIEW_PUSH_PROBE_VISIBLE.with(|s| s.set(false));
-        REVIEW_PUSH_COUNT.with(|s| s.set(0));
-        REVIEW_PUSHED_SCRIPTS.with(|s| s.borrow_mut().clear());
-        STATE.with(|s| {
-            let mut state = s.borrow_mut();
-            state.ipc_handler = None;
-            state.status_handler = None;
-            state.webview = None;
-            state.retiring.clear();
-            state.hide_scheduled = false;
-            state.generation = 0;
-            state.creation_in_flight = false;
-            state.pending_show = None;
-            state.load_timer = None;
-            state.suppress_restore = false;
-            state.review_map_text_visible = false;
-            state.review_map_text_label = String::new();
-        });
-    }
-
-    #[test]
-    fn hide_without_webview_keeps_state_clean_in_headless_environment() {
-        // T35：单元测试进程没有运行中的 Slint 事件循环，hide() 必须在
-        // 无 WebView 时直接返回（不调用 invoke_from_event_loop、不残留
-        // 排定标记），否则无界面环境下会误排定一次永不执行的销毁回调。
-        reset_state();
-        hide();
-        STATE.with(|s| {
-            let state = s.borrow();
-            assert!(!state.hide_scheduled);
-            assert!(state.retiring.is_empty());
-            assert!(!state.campus_search_mode);
-            assert_eq!(state.last_slot_scale, None);
-        });
-        assert!(!is_visible());
-    }
-
-    #[test]
-    fn orientation_page_creation_success_has_activation_channel() {
-        // T40：朝向页创建成功必须走"创建成功回调激活"通道（不依赖
-        // map_ready）；其他页种类不得误触发朝向激活。
-        assert_eq!(
-            creation_activation_script(MapPageKind::Orientation),
-            Some("activateOrientationWhenReady();")
-        );
-        assert_eq!(creation_activation_script(MapPageKind::Boundary), None);
-        assert_eq!(creation_activation_script(MapPageKind::CampusSearch), None);
-        assert_eq!(creation_activation_script(MapPageKind::Review), None);
-    }
-
-    #[test]
-    fn ipc_dispatch_releases_borrow_before_invoking_handler() {
-        // T35 根因回归（RefCell already borrowed → WebView2 回调内不可 unwind
-        // 崩溃，WER 0xc0000409）：错误弹窗路径会在 IPC handler 内调用
-        // hide()（对 STATE 做 borrow_mut）。若 dispatch 在 STATE 借用存活期间
-        // 调用 handler（旧写法 `if let Some(handler) = s.borrow()...` 的临时
-        // Ref 活到 if-let 体结束），这里会直接 panic。
-        reset_state();
-        register_ipc_handler(Rc::new(|_body| {
-            hide();
-        }));
-        dispatch_ipc(r#"{"type":"confirm_boundary","coords":[]}"#);
-        // 走到这里说明 handler 调用期间 STATE 无存活借用、无 panic。
-        STATE.with(|s| {
-            let state = s.borrow();
-            assert!(!state.hide_scheduled, "handler 内 hide() 后不得残留排定");
-            assert!(state.retiring.is_empty());
-        });
-        reset_state();
-    }
-
-    #[test]
-    fn creation_failure_reports_map_unavailable_immediately() {
-        // T36：步骤②切换后必须如实上报 map_available——创建前失败（如非法
-        // 密钥）不得保持上一次的 true，也不得静默。HTML 构建为同步路径，
-        // 无事件循环也能断言状态回调收到 false。
-        reset_state();
-        let received: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
-        let captured = Rc::clone(&received);
-        register_status_handler(Rc::new(move |available| {
-            captured.borrow_mut().push(available);
-        }));
-        // 非法密钥：gaode_client 要求纯字母数字 → HTML 构建失败。
-        let config = gaode_client::BoundaryEditPageConfig::new("bad key!", "xyz789")
-            .with_anchor(116.4, 39.9)
-            .with_orientation_mode(true);
-        show_with_config(Weak::<crate::AppWindow>::default(), config);
-        assert_eq!(
-            received.borrow().as_slice(),
-            &[false],
-            "创建前失败必须如实上报 map_available=false"
-        );
-        STATE.with(|s| {
-            let state = s.borrow();
-            assert!(state.webview.is_none(), "失败后不得持有 WebView");
-            assert!(!state.creation_in_flight, "失败后不得残留在途创建");
-            assert!(state.pending_show.is_none(), "失败后不得残留等待请求");
-            assert!(state.retiring.is_empty(), "失败后不得残留待销毁队列");
-        });
-        reset_state();
-    }
-
-    #[test]
-    fn review_page_skips_rust_load_timeout() {
-        // T39：评审地图页不得挂 Rust 侧 10s 加载超时——候选不再内嵌 HTML，
-        // 千级候选在 map_ready 后分批上屏（属于创建超时之外的绘制阶段），
-        // 10s 兜底会把慢速注入/慢网络的评审地图误杀；页面自身 5s SDK 超时
-        // 与 onerror 仍负责失败上报。
-        reset_state();
-        let weak = Weak::<crate::AppWindow>::default();
-        assert!(
-            !PendingShow::Review {
-                window: weak.clone(),
-                api_key: "testapikey123".into(),
-                security_key: "testsecurity123".into(),
-                anchor_lon: 116.4,
-                anchor_lat: 39.9,
-                map_text_label: "显示地图文字".into(),
-                map_text_visible: false,
-            }
-            .has_load_timeout(),
-            "评审页必须跳过 Rust 侧加载超时"
-        );
-        assert!(
-            PendingShow::Boundary {
-                window: weak.clone(),
-                api_key: "testapikey123".into(),
-                security_key: "testsecurity123".into(),
-                anchor_lon: 116.4,
-                anchor_lat: 39.9,
-            }
-            .has_load_timeout(),
-            "边界页必须保留 Rust 侧加载超时"
-        );
-        reset_state();
-    }
-
-    #[test]
-    fn review_push_counter_and_probe_are_diagnostic_seams() {
-        // T39 验收缝：回推计数可注入观察；探针仅测试环境使用，生产恒为
-        // 实际可见性（无 WebView 不推送）。
-        reset_state();
-        set_review_push_probe_visible(true);
-        assert!(review_push_visible(), "探针打开后回推路径必须可观察");
-        note_review_push("window.highlightReviewCandidate(\"candidate\");");
-        assert_eq!(review_push_count(), 1, "一次命令只计一条回推");
-        assert_eq!(
-            review_pushed_scripts(),
-            vec!["window.highlightReviewCandidate(\"candidate\");"]
-        );
-        set_review_push_probe_visible(false);
-        assert!(!review_push_visible(), "探针关闭后回到实际可见性");
-        reset_review_push_count();
-        reset_state();
-    }
-}
+#[path = "map_webview_tests.rs"]
+mod tests;

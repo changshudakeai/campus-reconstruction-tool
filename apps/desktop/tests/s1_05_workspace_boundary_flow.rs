@@ -147,21 +147,23 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     assert_eq!(window.get_active_screen(), 4);
 
-    // ── 5. 边界闭合/有效性/重置/保存由功能入口完成（B5）──
-    // 无效边界（共线 → 面积过小）：失败留在边界页，可继续修改
+    // ── 5. 地图不可用时不允许用无底图画布伪造边界；恢复后仍由 B5 校验 ──
     window.invoke_workspace_boundary_canvas_clicked(0.0, 0.0);
     window.invoke_workspace_boundary_canvas_clicked(50.0, 50.0);
     window.invoke_workspace_boundary_canvas_clicked(100.0, 100.0);
-    assert_eq!(window.get_workspace_boundary_point_count(), 3);
+    assert_eq!(window.get_workspace_boundary_point_count(), 0);
     window.invoke_workspace_boundary_confirm_clicked();
-    assert!(window.get_error_dialog_visible(), "无效边界必须走错误弹窗");
+    assert!(!window.get_workspace_boundary_is_determined());
+    assert_eq!(window.get_workspace_completed_steps(), 0);
+    window.invoke_error_dialog_dismissed();
+
+    window.invoke_workspace_map_status_changed(true);
+    let invalid_confirm =
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.405,39.905],[116.41,39.91]]}"#;
+    window.invoke_workspace_map_ipc(invalid_confirm.into());
     assert!(
-        window
-            .get_workspace_boundary_status()
-            .as_str()
-            .contains("已添加"),
-        "失败后保留可继续修改的状态：{}",
-        window.get_workspace_boundary_status()
+        window.get_error_dialog_visible(),
+        "无效地图边界必须走错误弹窗"
     );
     assert_eq!(window.get_workspace_completed_steps(), 0);
     window.invoke_error_dialog_dismissed();
@@ -171,11 +173,9 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
     assert_eq!(window.get_workspace_boundary_point_count(), 0);
     assert!(!window.get_workspace_boundary_is_determined());
 
-    // 合法边界（100m×100m 正方形）：闭合 + 保存 → 解锁下一步
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    // 合法地图边界：闭合 + 保存 → 解锁下一步
+    let valid_confirm = r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#;
+    window.invoke_workspace_map_ipc(valid_confirm.into());
     assert!(window.get_workspace_boundary_is_determined());
     assert_eq!(
         window.get_workspace_boundary_status().as_str(),
@@ -210,10 +210,15 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
     assert!(window.get_workspace_boundary_is_determined());
     assert_eq!(window.get_workspace_completed_steps(), 1);
 
-    // ── 7. 朝向门控：方位角提交后步骤③可进入 ──
+    // ── 7. 朝向门控：地图不可用时手输也不生效；恢复后方可提交 ──
     window.invoke_workspace_step_clicked(1);
     window.invoke_workspace_map_status_changed(false);
     // T34：模式切换已删除；抽屉"确认朝向"按钮即手动角度提交
+    window.set_workspace_orientation_input_text("90".into());
+    window.invoke_workspace_orientation_submit_clicked();
+    assert!(!window.get_workspace_orientation_is_determined());
+    assert_eq!(window.get_workspace_completed_steps(), 1);
+    window.invoke_workspace_map_status_changed(true);
     window.set_workspace_orientation_input_text("90".into());
     window.invoke_workspace_orientation_submit_clicked();
     assert!(window.get_workspace_orientation_is_determined());
@@ -231,11 +236,28 @@ fn s1_05_workspace_navigation_and_boundary_flow_through_functional_entry() {
         "步骤③顶部仍显示方案名"
     );
 
-    // ── 8. 离开边界页由功能入口判定：未保存绘制需确认，确认后离开 ──
+    // ── 8. 未确认地图边界草稿切评审时先确认，取消继续编辑，确认才丢弃 ──
     window.invoke_workspace_step_clicked(0);
-    window.invoke_workspace_map_status_changed(false);
-    window.invoke_workspace_boundary_reset_clicked();
-    window.invoke_workspace_boundary_canvas_clicked(10.0, 10.0);
+    window.invoke_workspace_map_status_changed(true);
+    let switch_draft = r#"{"type":"boundary_update","coords":[[116.40,39.90],[116.412,39.90],[116.412,39.912],[116.40,39.912]]}"#;
+    window.invoke_workspace_map_ipc(switch_draft.into());
+    window.invoke_workspace_step_clicked(3);
+    assert!(window.get_confirm_dialog_visible());
+    assert_eq!(
+        window.get_confirm_dialog_title().as_str(),
+        l10n.t("boundary.draft_leave_title")
+    );
+    window.invoke_confirm_dialog_cancelled();
+    assert_eq!(window.get_workspace_active_step(), 0);
+    window.invoke_workspace_step_clicked(3);
+    window.invoke_confirm_dialog_confirmed();
+    assert_eq!(window.get_workspace_active_step(), 3);
+
+    // ── 9. 离开边界页由功能入口判定：未保存绘制需确认，确认后离开 ──
+    window.invoke_workspace_step_clicked(0);
+    window.invoke_workspace_map_status_changed(true);
+    let draft = r#"{"type":"boundary_update","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#;
+    window.invoke_workspace_map_ipc(draft.into());
     window.invoke_settings_toolbar_button_clicked();
     assert!(window.get_confirm_dialog_visible(), "未保存边界离开需确认");
     assert_eq!(

@@ -96,10 +96,9 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     assert_eq!(window.get_active_screen(), 4);
 
-    for (x, y) in [(0.0, 0.0), (120.0, 0.0), (120.0, 40.0), (0.0, 40.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.4000,39.9000],[116.4014,39.9000],[116.4014,39.9004],[116.4000,39.9004]]}"#.into(),
+    );
     assert!(window.get_workspace_boundary_is_determined());
     window.invoke_workspace_step_clicked(4);
     assert_eq!(
@@ -124,11 +123,9 @@ fn manual_canvas_boundary_exports_latest_confirmed_revision() {
     assert!(schematic_path.is_file());
     assert!(manifest_path.is_file());
 
-    window.invoke_workspace_boundary_reset_clicked();
-    for (x, y) in [(0.0, 0.0), (320.0, 0.0), (320.0, 160.0), (0.0, 160.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.4000,39.9000],[116.4038,39.9000],[116.4038,39.9015],[116.4000,39.9015]]}"#.into(),
+    );
     assert!(window.get_workspace_boundary_is_determined());
     window.invoke_workspace_step_clicked(4);
     window.invoke_workspace_export_start_clicked();

@@ -334,8 +334,12 @@ fn s1_26_real_orientation_page_two_clicks_produce_orientation_points() {
     );
     assert!(window.get_workspace_orientation_status().contains("已计算"));
 
-    // "确认两点朝向"可用：首次设定直接保存。
+    // “确认两点朝向”先向当前地图会话发出提交命令；本测试的真实页面由
+    // 独立 WebView 驱动，因此把该页随后产生的确认事件送回工作区 seam。
     window.invoke_workspace_orientation_confirm_two_points_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_orientation","points":[[116.3975,39.9160],[116.3985,39.9160]]}"#.into(),
+    );
     assert!(window.get_workspace_orientation_is_determined());
     assert_eq!(window.get_workspace_completed_steps(), 2);
 

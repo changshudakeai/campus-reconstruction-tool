@@ -249,6 +249,8 @@ fn workspace_restore_acceptance_matrix() {
             "第一段会话确认边界必须立即可见"
         );
 
+        window.invoke_workspace_step_clicked(1);
+        window.invoke_workspace_map_status_changed(true);
         window.set_workspace_orientation_input_text("90".into());
         window.invoke_workspace_orientation_submit_clicked();
         assert!(
@@ -257,6 +259,7 @@ fn workspace_restore_acceptance_matrix() {
         );
 
         window.invoke_workspace_step_clicked(3);
+        window.invoke_workspace_map_status_changed(true);
         assert_eq!(window.get_review_candidate_count(), 6);
         window
             .invoke_review_card_state_clicked(harness.reviewable[0].clone().into(), "keep".into());
@@ -401,6 +404,7 @@ fn workspace_restore_acceptance_matrix() {
                 .into(),
         );
         window.invoke_workspace_step_clicked(3);
+        window.invoke_workspace_map_status_changed(true);
         window
             .invoke_review_card_state_clicked(harness.reviewable[0].clone().into(), "keep".into());
         window.invoke_review_seal_clicked();

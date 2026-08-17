@@ -131,10 +131,9 @@ fn setup_window(source: Arc<dyn DataSource + Send + Sync>) -> (AppWindow, Locali
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (3000.0, 0.0), (3000.0, 500.0), (0.0, 500.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.44,39.90],[116.44,39.905],[116.40,39.905]]}"#.into(),
+    );
     window.invoke_workspace_step_clicked(2);
     (window, l10n)
 }

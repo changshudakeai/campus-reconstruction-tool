@@ -81,10 +81,9 @@ fn switching_and_reopening_a_plan_exports_its_latest_confirmed_boundary() {
     let _runtime = assemble_application(&window, injector, Arc::clone(&center));
 
     window.invoke_plan_list_card_clicked(plan_a.to_string().into());
-    for (x, y) in [(0.0, 0.0), (320.0, 0.0), (320.0, 160.0), (0.0, 160.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.4000,39.9000],[116.4038,39.9000],[116.4038,39.9015],[116.4000,39.9015]]}"#.into(),
+    );
     assert!(window.get_workspace_boundary_is_determined());
 
     window.invoke_switch_campus_toolbar_button_clicked();

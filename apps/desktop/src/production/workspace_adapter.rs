@@ -13,7 +13,7 @@ use foundation_mode::{
     check_orientation_change_impact, validate_polygon_closure, BoundaryUiEvent,
     CoordinateConverter, EventResult, MercatorCoord, Orientation, OrientationCalculator, Vertex,
 };
-use gaode_client::{parse_ipc_message, BoundaryEditPageConfig, IpcMessage};
+use gaode_client::{BoundaryEditPageConfig, IpcMessage};
 use localization::Localization;
 use onboarding_tutorial::TutorialStep;
 use shared_domain_types::PlanId;
@@ -28,8 +28,8 @@ use super::record_entry_call;
 
 use super::workspace_boundary::{
     calculate_orientation_angle, centroid, error_fact, first_outer_ring, info_fact,
-    orientation_recalc_body, plane_vertices_to_gcj02, polygon_coordinates, validation_detail,
-    MapDrawState, MapDrawStatus, WorkspaceProductionContext,
+    orientation_recalc_body, polygon_coordinates, validation_detail, MapDrawState, MapDrawStatus,
+    WorkspaceProductionContext,
 };
 use super::workspace_leave::{LeaveConfirmationReason, LeaveWorkspaceDecision};
 
@@ -66,13 +66,31 @@ impl PresentationAdapter<WorkspaceRequest, WorkspacePageState> for WorkspaceProd
             WorkspaceRequest::TutorialDismiss => self.tutorial_dismiss(),
             WorkspaceRequest::TutorialSkipAll => self.tutorial_skip_all(),
             WorkspaceRequest::MapStatus { available } => self.map_status(available),
-            WorkspaceRequest::MapIpc { message } => self.map_ipc(&message),
+            WorkspaceRequest::MapEvent { message } => self.map_event(message),
             WorkspaceRequest::PollBoundaryFetch => self.poll_boundary_fetch(),
         }
     }
 }
 
 impl WorkspaceProductionAdapter {
+    fn map_plan_id(&self) -> String {
+        self.context
+            .active_plan_id()
+            .unwrap_or_else(|| "__adopted_workspace__".to_owned())
+    }
+
+    fn present_boundary_map(&self, keys: (String, String), anchor: (f64, f64)) -> bool {
+        crate::map_session::present(
+            self.context.window.clone(),
+            crate::map_session::MapDisplayIntent::Boundary {
+                plan_id: self.map_plan_id(),
+                api_key: keys.0,
+                security_key: keys.1,
+                anchor,
+            },
+        )
+    }
+
     fn open_plan(&mut self, plan_id: &str) -> Presentation<WorkspacePageState> {
         let parsed = match PlanId::parse(plan_id) {
             Ok(parsed) => parsed,
@@ -180,28 +198,24 @@ impl WorkspaceProductionAdapter {
             }
             return self.finish_open_plan(presentation, restored_step);
         };
-        // T34：打开方案必须落在边界页——若残留其他页 WebView（如朝向页），
-        // 先重建为边界页，避免"恢复错页"。
-        let map_is_boundary =
-            crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
-        let mut presentation = if keys.0.is_empty() || map_is_boundary {
+        // 地图会话按方案身份决定是否复用；同类页面的新方案不会沿用旧现场。
+        let mut presentation = if keys.0.is_empty() {
             let mut page = self.context.page();
             page.orientation.clear_input = true;
             Presentation::ready(page)
         } else {
-            crate::map_webview::hide();
-            crate::map_webview::show(
-                self.context.window.clone(),
-                keys.0,
-                keys.1,
-                anchor.0,
-                anchor.1,
-            );
-            self.context.session.borrow_mut().map_available = true;
-            self.context.mark_map_loading();
+            let changed = self.present_boundary_map(keys, anchor);
+            self.context.session.borrow_mut().map_available = false;
+            if changed {
+                self.context.mark_map_loading();
+            }
             let mut page = self.context.page();
             page.orientation.clear_input = true;
-            Presentation::processing(page, Progress::ZERO)
+            if changed {
+                Presentation::processing(page, Progress::ZERO)
+            } else {
+                Presentation::ready(page)
+            }
         };
         if let Some(notice) = restore_notice {
             presentation = presentation.with_notification(notice);
@@ -241,6 +255,26 @@ impl WorkspaceProductionAdapter {
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Blocked);
         }
+        let destination = match step {
+            3 => Some(crate::map_session::MapDestination::Review),
+            4 => Some(crate::map_session::MapDestination::Export),
+            _ => None,
+        };
+        if destination.is_some_and(|destination| {
+            crate::map_session::prepare(destination)
+                == crate::map_session::MapTransition::ConfirmBoundaryDraftDiscard
+        }) {
+            let l10n = self.l10n();
+            return Presentation::needs_confirmation(
+                self.context.page(),
+                ConfirmationPresentation::new(
+                    l10n.t("boundary.draft_leave_title"),
+                    l10n.t("boundary.draft_leave_body"),
+                    l10n.t("boundary.draft_leave_confirm"),
+                    l10n.t("boundary.draft_leave_cancel"),
+                ),
+            );
+        }
         if step == 0 {
             let Some((keys, anchor)) = self.context.map_credentials() else {
                 let l10n = self.l10n();
@@ -266,23 +300,13 @@ impl WorkspaceProductionAdapter {
             }
             self.context.session.borrow_mut().active_step = 0;
             self.context.checkpoint_workspace_session();
-            // T34：进入边界步骤必须落在边界页（朝向页 WebView 不能留在本步骤）
-            let map_is_boundary =
-                crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
-            let presentation = if map_is_boundary {
-                Presentation::ready(self.context.page())
-            } else {
-                crate::map_webview::hide();
-                crate::map_webview::show(
-                    self.context.window.clone(),
-                    keys.0,
-                    keys.1,
-                    anchor.0,
-                    anchor.1,
-                );
-                self.context.session.borrow_mut().map_available = true;
+            let changed = self.present_boundary_map(keys, anchor);
+            let presentation = if changed {
+                self.context.session.borrow_mut().map_available = false;
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
+            } else {
+                Presentation::ready(self.context.page())
             };
             return presentation.with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
@@ -302,7 +326,6 @@ impl WorkspaceProductionAdapter {
             let presentation = if keys.0.is_empty() {
                 Presentation::ready(self.context.page())
             } else {
-                crate::map_webview::hide();
                 let existing_boundary = self
                     .context
                     .export_flow
@@ -313,8 +336,14 @@ impl WorkspaceProductionAdapter {
                     .with_anchor(anchor.0, anchor.1)
                     .with_orientation_mode(true)
                     .with_existing_boundary(existing_boundary);
-                crate::map_webview::show_with_config(self.context.window.clone(), config);
-                self.context.session.borrow_mut().map_available = true;
+                crate::map_session::present(
+                    self.context.window.clone(),
+                    crate::map_session::MapDisplayIntent::Orientation {
+                        plan_id: self.map_plan_id(),
+                        config,
+                    },
+                );
+                self.context.session.borrow_mut().map_available = false;
                 self.context.mark_map_loading();
                 Presentation::processing(self.context.page(), Progress::ZERO)
             };
@@ -334,22 +363,10 @@ impl WorkspaceProductionAdapter {
         if matches!(step, 2 | 4) {
             // 从评审步返回（或地图页为评审/朝向页）时重建边界页，保证
             // 采集/导出步骤的让位地图始终是边界页。
-            let map_is_boundary =
-                crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
-            if !map_is_boundary {
-                if let Some((keys, anchor)) = self.context.map_credentials() {
-                    if !keys.0.is_empty() {
-                        crate::map_webview::hide();
-                        crate::map_webview::show(
-                            self.context.window.clone(),
-                            keys.0,
-                            keys.1,
-                            anchor.0,
-                            anchor.1,
-                        );
-                        self.context.session.borrow_mut().map_available = true;
-                        self.context.mark_map_loading();
-                    }
+            if let Some((keys, anchor)) = self.context.map_credentials() {
+                if !keys.0.is_empty() && self.present_boundary_map(keys, anchor) {
+                    self.context.session.borrow_mut().map_available = false;
+                    self.context.mark_map_loading();
                 }
             }
         }
@@ -391,6 +408,11 @@ impl WorkspaceProductionAdapter {
     }
 
     fn boundary_canvas_click(&mut self, x: f32, y: f32) -> Presentation<WorkspacePageState> {
+        if !crate::map_session::available() {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")));
+        }
         let rejected = {
             let mut session = self.context.session.borrow_mut();
             match session.drawer.handle_event(BoundaryUiEvent::ClickAt {
@@ -410,111 +432,54 @@ impl WorkspaceProductionAdapter {
     }
 
     fn boundary_undo(&mut self) -> Presentation<WorkspacePageState> {
-        // T34：地图可用时撤销走抽屉按钮 → JS 桥接命令（地图退化为纯画布 +
-        // 消息桥）；地图不可用时回落到 Slint 兜底画布状态机。
-        if crate::map_webview::is_visible() {
-            crate::map_webview::evaluate_script("undoManualPointFromDrawer();");
+        if crate::map_session::command(crate::map_session::MapCommand::BoundaryUndo)
+            == crate::map_session::MapCommandResult::Allowed
+        {
             return Presentation::ready(self.context.page());
         }
-        let rejected = {
-            let mut session = self.context.session.borrow_mut();
-            match session.drawer.handle_event(BoundaryUiEvent::Cancel) {
-                EventResult::Rejected(message) => Some(message),
-                EventResult::Accepted | EventResult::Ignored => None,
-            }
-        };
-        if let Some(message) = rejected {
-            let l10n = self.l10n();
-            return Presentation::failed(self.context.page())
-                .with_notification(error_fact(&l10n, &message));
-        }
-        Presentation::ready(self.context.page())
+        let l10n = self.l10n();
+        Presentation::failed(self.context.page())
+            .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")))
     }
 
     /// 抽屉"删除选中点"：地图可用时走 JS 桥接命令（JS 校验剩余点数并删除
     /// 选中顶点后经 boundary_update/vertex_deselected 回传）；地图不可用时
     /// 无可删对象，保持现状。
     fn boundary_delete_selected(&mut self) -> Presentation<WorkspacePageState> {
-        if crate::map_webview::is_visible() {
-            crate::map_webview::evaluate_script("deleteSelectedVertexFromDrawer();");
+        let result =
+            crate::map_session::command(crate::map_session::MapCommand::BoundaryDeleteSelected);
+        if result == crate::map_session::MapCommandResult::Allowed {
+            Presentation::ready(self.context.page())
+        } else {
+            let l10n = self.l10n();
+            Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")))
         }
-        Presentation::ready(self.context.page())
     }
 
     fn boundary_confirm(&mut self) -> Presentation<WorkspacePageState> {
         // T34：地图可用时确认走抽屉按钮 → JS 桥接命令（JS 读取当前多边形/
         // 人工点序列后经 confirm_boundary IPC 回传，由 B5 校验并落库）。
-        if crate::map_webview::is_visible() {
-            crate::map_webview::evaluate_script("submitBoundaryFromDrawer();");
+        if crate::map_session::command(crate::map_session::MapCommand::SubmitBoundary)
+            == crate::map_session::MapCommandResult::Allowed
+        {
             return Presentation::ready(self.context.page());
         }
-        let invalid = {
-            let session = self.context.session.borrow();
-            let vertices = session.drawer.vertices().to_vec();
-            let result = validate_polygon_closure(&vertices);
-            if !result.is_valid {
-                Some(validation_detail(&result))
-            } else {
-                None
-            }
-        };
-        if let Some(detail) = invalid {
-            let l10n = self.l10n();
-            return Presentation::failed(self.context.page())
-                .with_notification(error_fact(&l10n, &detail));
-        }
-        let rejected = {
-            let mut session = self.context.session.borrow_mut();
-            match session.drawer.handle_event(BoundaryUiEvent::Confirm) {
-                EventResult::Accepted => None,
-                EventResult::Rejected(message) => Some(message),
-                EventResult::Ignored => None,
-            }
-        };
-        if let Some(message) = rejected {
-            let l10n = self.l10n();
-            return Presentation::failed(self.context.page())
-                .with_notification(error_fact(&l10n, &message));
-        }
-        let gcj02 = {
-            let session = self.context.session.borrow();
-            let Some(context) = session.active_context.as_ref() else {
-                return Presentation::failed(self.context.page());
-            };
-            plane_vertices_to_gcj02(
-                session.drawer.vertices(),
-                context.anchor_lng,
-                context.anchor_lat,
-            )
-        };
-        let coordinates = serde_json::json!([gcj02.clone()]);
-        let boundary = shared_domain_types::Boundary {
-            r#type: "Polygon".to_owned(),
-            coordinates: coordinates.clone(),
-        };
-        self.cache_confirmed_boundary(&gcj02);
-        self.context
-            .collection_flow
-            .confirm_boundary(boundary.clone());
-        self.context
-            .export_flow
-            .confirm_boundary("Polygon", coordinates);
-        self.context.checkpoint_workspace_session();
-        let mut presentation = Presentation::ready(self.context.page());
-        if let Some(notice) = self.revalidate_boundary_after_confirm(&boundary) {
-            presentation = presentation.with_notification(notice);
-        }
-        presentation
+        let l10n = self.l10n();
+        Presentation::failed(self.context.page())
+            .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")))
     }
 
     fn boundary_reset(&mut self) -> Presentation<WorkspacePageState> {
+        if crate::map_session::command(crate::map_session::MapCommand::BoundaryClear)
+            == crate::map_session::MapCommandResult::Unavailable
+        {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")));
+        }
         {
             let mut session = self.context.session.borrow_mut();
-            // T34：地图可用时清空 JS 侧绘制（多边形/编辑器/人工点），
-            // 并同时复位本地兜底画布与地图侧呈现状态。
-            if crate::map_webview::is_visible() {
-                crate::map_webview::evaluate_script("clearManualDrawingFromDrawer();");
-            }
             session.drawer.reset();
             session.map_draw = MapDrawState::default();
             session.map_processing = false;
@@ -535,6 +500,11 @@ impl WorkspaceProductionAdapter {
         mode: &str,
         angle_text: &str,
     ) -> Presentation<WorkspacePageState> {
+        if !crate::map_session::available() {
+            let l10n = self.l10n();
+            return Presentation::failed(self.context.page())
+                .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")));
+        }
         if mode == "bearing-angle" {
             let angle: f32 = match angle_text.trim().parse() {
                 Ok(angle) => angle,
@@ -555,17 +525,15 @@ impl WorkspaceProductionAdapter {
             return self.apply_orientation(orientation.degree());
         }
         if mode == "two-points" {
-            let angle = {
-                let session = self.context.session.borrow();
-                if session.orientation_points.len() == 2 {
-                    session.orientation_angle
-                } else {
-                    None
-                }
+            let result =
+                crate::map_session::command(crate::map_session::MapCommand::SubmitOrientation);
+            return if result == crate::map_session::MapCommandResult::Allowed {
+                Presentation::ready(self.context.page())
+            } else {
+                let l10n = self.l10n();
+                Presentation::failed(self.context.page())
+                    .with_notification(error_fact(&l10n, &l10n.t("boundary.map_load_failed")))
             };
-            if let Some(angle) = angle {
-                return self.apply_orientation(angle);
-            }
         }
         Presentation::ready(self.context.page())
     }
@@ -746,9 +714,7 @@ impl WorkspaceProductionAdapter {
             }
         }
         // T34：地图可用时同步清空 JS 侧朝向两点草稿（纯画布 + 消息桥）
-        if crate::map_webview::is_visible() {
-            crate::map_webview::evaluate_script("clearOrientationFromDrawer();");
-        }
+        let _ = crate::map_session::command(crate::map_session::MapCommand::OrientationClear);
         self.context.export_flow.set_orientation(None);
         self.context.checkpoint_workspace_session();
         let mut page = self.context.page();
@@ -832,11 +798,8 @@ impl WorkspaceProductionAdapter {
         presentation
     }
 
-    fn map_ipc(&mut self, message: &str) -> Presentation<WorkspacePageState> {
-        let Ok(parsed) = parse_ipc_message(message) else {
-            return Presentation::ready(self.context.page());
-        };
-        match parsed {
+    fn map_event(&mut self, message: IpcMessage) -> Presentation<WorkspacePageState> {
+        match message {
             // T37：地图就绪后按当前步骤激活对应交互模式——朝向步（步骤②）
             // 显式调用 ORIENTATION_SCRIPT 的 initOrientationMode 挂接两点
             // 选择点击处理器；边界步仍走 T31 Rust 侧 OSM 自动获取。
@@ -919,24 +882,25 @@ impl WorkspaceProductionAdapter {
             IpcMessage::OrientationPoints { points } => self.orientation_points(points),
             IpcMessage::ConfirmOrientation { points } => self.confirm_orientation_points(points),
             IpcMessage::OrientationClear => self.orientation_clear(),
-            // T38：评审地图 IPC 由 handle_map_ipc 在 is_review_page 分支路由，
-            // 不会到达工作区适配器；此处保留显式空分支满足穷尽匹配。
+            // 地图会话按场景路由评审事件，不会把它交给工作区适配器；此处
+            // 保留显式空分支满足穷尽匹配。
             IpcMessage::ReviewObjectClicked { .. } => Presentation::ready(self.context.page()),
             // 评审地图文字开关只由评审入口处理；此处保留空分支满足穷尽匹配。
             IpcMessage::ReviewMapTextToggled { .. } => Presentation::ready(self.context.page()),
+            // 视野属于地图会话现场，进入工作区前已由 map_session 消费。
+            IpcMessage::ViewportChanged { .. } => Presentation::ready(self.context.page()),
             IpcMessage::Error { message } => {
                 let l10n = self.l10n();
                 // T36：页面 onerror / 5s SDK 超时（及 Rust 侧 10s 加载超时）→
                 // 明确错误对话框，不静默；隐藏损坏地图并如实上报不可用，用户
-                // 可退回左侧抽屉"方位角手动输入"完成朝向。超时标记由
-                // map_webview 在 Rust 侧兜底超时时回传，这里本地化。
-                let body = if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
+                // 依赖地图事实的新操作必须暂停。超时标记由地图会话的底层
+                // WebView 适配器回传，这里只负责本地化用户反馈。
+                let body = if crate::map_session::is_load_timeout(&message) {
                     l10n.t("map.load_timeout_body")
                 } else {
                     l10n.t_with_array("map.load_failed_body", &[&message])
                 };
-                crate::map_webview::mark_map_failed();
-                crate::map_webview::hide();
+                crate::map_session::mark_failed();
                 {
                     let mut session = self.context.session.borrow_mut();
                     session.map_processing = false;
@@ -949,18 +913,17 @@ impl WorkspaceProductionAdapter {
 
     /// T37：地图就绪后按当前步骤激活交互模式。
     ///
-    /// 朝向步（步骤②）：经 `map_webview::evaluate_script` 显式调用页面
-    /// `initOrientationMode()`（页面 ORIENTATION_SCRIPT 已定义，:154），
-    /// 挂接两点选择点击处理器并回显已确认边界半透明参照；这是对页面自身
-    /// `onMapReadyForMode` 自动激活的防御性兜底，确保朝向步地图点击可点。
+    /// 朝向步（步骤②）：向地图会话下发激活命令，挂接两点选择点击处理器并
+    /// 回显已确认边界半透明参照，确保朝向步地图点击可点。
     /// 边界步（其余步骤）：仍走 [`Self::start_boundary_fetch`]（T31 Rust
     /// 侧 Nominatim → Overpass → WGS→GCJ 自动获取）。
     fn map_ready_for_active_step(&mut self) -> Presentation<WorkspacePageState> {
         let active_step = self.context.session.borrow().active_step;
         if active_step == 1 {
-            crate::map_webview::evaluate_script("initOrientationMode();");
+            let _ =
+                crate::map_session::command(crate::map_session::MapCommand::OrientationActivate);
             Presentation::ready(self.context.page())
-        } else if active_step == 0 {
+        } else if active_step == 0 && !crate::map_session::has_boundary_draft() {
             self.start_boundary_fetch()
         } else {
             // 采集/评审/导出步骤的地图只是让位显示：迟到的 map_ready 既不应
@@ -1032,6 +995,7 @@ impl WorkspaceProductionAdapter {
             .export_flow
             .confirm_boundary(boundary_type, coordinates);
         self.cache_confirmed_boundary(&coords);
+        crate::map_session::boundary_committed();
         self.context.checkpoint_workspace_session();
         let mut presentation = Presentation::ready(self.context.page());
         if let Some(notice) = self.revalidate_boundary_after_confirm(&boundary) {

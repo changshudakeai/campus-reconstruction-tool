@@ -353,7 +353,7 @@ fn render_presentation<Page>(
         window.set_confirm_dialog_cancel_label(confirmation.cancel_label.clone().into());
         window.set_confirm_dialog_visible(true);
         // T34：弹窗遮挡统一机制——确认弹窗显示前隐藏地图 WebView
-        crate::map_webview::hide();
+        crate::map_session::cover_for_modal();
     }
 
     if let Some(input) = &presentation.input {
@@ -362,7 +362,7 @@ fn render_presentation<Page>(
         window.set_input_dialog_mode(input.mode);
         window.set_input_dialog_visible(true);
         // T34：弹窗遮挡统一机制——输入弹窗显示前隐藏地图 WebView
-        crate::map_webview::hide();
+        crate::map_session::cover_for_modal();
     }
 }
 

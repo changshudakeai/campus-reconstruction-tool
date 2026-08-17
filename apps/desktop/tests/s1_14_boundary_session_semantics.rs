@@ -245,6 +245,7 @@ fn boundary_cache_scenarios() {
     pump_for(Duration::from_millis(100));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(app.window.get_workspace_boundary_point_count(), 4);
+    app.window.invoke_workspace_map_status_changed(true);
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
@@ -257,6 +258,7 @@ fn boundary_cache_scenarios() {
     // 失败不写成功缓存，可重试；第二次成功后后续 map_ready 命中缓存。
     app.window
         .invoke_plan_list_card_clicked(app.plan_b.clone().into());
+    app.window.invoke_workspace_map_status_changed(true);
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
@@ -302,6 +304,7 @@ fn boundary_cache_scenarios() {
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_plan_list_card_clicked(app.plan_a.clone().into());
+    app.window.invoke_workspace_map_status_changed(true);
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
@@ -384,12 +387,14 @@ fn boundary_cache_scenarios() {
     // A 的请求仍在途时快速 A→B→A，返回 A 必须重新接管原请求，不能再访问 OSM。
     app.window
         .invoke_plan_list_card_clicked(app.plan_a.clone().into());
+    app.window.invoke_workspace_map_status_changed(true);
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
     pump_until_calls(&calls, 12);
     app.window
         .invoke_plan_list_card_clicked(app.plan_b.clone().into());
+    app.window.invoke_workspace_map_status_changed(true);
     app.window.invoke_workspace_boundary_reset_clicked();
     app.window
         .invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());

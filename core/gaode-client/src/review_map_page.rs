@@ -20,6 +20,7 @@
 //! - 署名：OSM 数据 ODbL，页面保留 `© OpenStreetMap contributors`。
 
 use crate::error::{Error, Result};
+use crate::MapViewport;
 
 /// 官方 CDN URL 模板（v2.0；评审页不需要 PolygonEditor 等插件）
 pub const REVIEW_MAP_CDN_URL_TEMPLATE: &str = "https://webapi.amap.com/maps?v=2.0&key={key}";
@@ -38,6 +39,8 @@ pub struct ReviewMapPageConfig {
     pub map_text_toggle_label: String,
     /// 评审会话内地图文字是否可见（默认 false：隐藏易遮挡轮廓的地标/POI 文字）。
     pub map_text_visible: bool,
+    /// ADR-0045：评审页单独记住的位置与缩放。
+    pub initial_viewport: Option<MapViewport>,
 }
 
 impl ReviewMapPageConfig {
@@ -50,6 +53,7 @@ impl ReviewMapPageConfig {
             anchor_lat: f64::NAN,
             map_text_toggle_label: String::new(),
             map_text_visible: false,
+            initial_viewport: None,
         }
     }
 
@@ -63,6 +67,11 @@ impl ReviewMapPageConfig {
     pub fn with_map_text_toggle(mut self, label: impl Into<String>, visible: bool) -> Self {
         self.map_text_toggle_label = label.into();
         self.map_text_visible = visible;
+        self
+    }
+
+    pub fn with_initial_viewport(mut self, viewport: MapViewport) -> Self {
+        self.initial_viewport = Some(viewport);
         self
     }
 }
@@ -230,7 +239,8 @@ const REVIEW_SCRIPT: &str = r#"
         drawTimer = null;
         // 全部候选上屏后自动框住候选范围，避免地图仍停留在初始化锚点
         // 而候选在其视野之外（看起来像"没有画出来"）。
-        if (!locatedThisTick && map && typeof map.setFitView === 'function') {
+        if (!locatedThisTick && !window.__reviewPreserveInitialViewport &&
+            map && typeof map.setFitView === 'function') {
           try { map.setFitView(); } catch (e) { postReviewMapFailure('fit_view'); }
         }
       }
@@ -514,6 +524,8 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
     }
 
     let cdn_url = REVIEW_MAP_CDN_URL_TEMPLATE.replace("{key}", &config.api_key);
+    let initial_viewport_json =
+        serde_json::to_string(&config.initial_viewport).unwrap_or_else(|_| "null".to_string());
 
     Ok(format!(
         r#"<!DOCTYPE html>
@@ -585,6 +597,9 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
 <script>
   var map;
   var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};
+  var initialViewport = {initial_viewport_json};
+  var preserveInitialViewport = !!initialViewport;
+  window.__reviewPreserveInitialViewport = preserveInitialViewport;
   // 评审地图文字初始可见性（false = 默认隐藏地标/POI 文字）
   window.__reviewMapTextVisible = {map_text_visible};
 
@@ -613,10 +628,24 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
       // T37/T39：AMap 初始化前把容器宽高钳制到当前 WebView 视口
       syncContainerSize();
       map = new AMap.Map('map-container', {{
-        zoom: 16,
-        center: [anchorPoint.lng, anchorPoint.lat],
+        zoom: initialViewport ? initialViewport.zoom : 16,
+        center: initialViewport
+          ? [initialViewport.longitude, initialViewport.latitude]
+          : [anchorPoint.lng, anchorPoint.lat],
         viewMode: '3D'
       }});
+      function reportViewport() {{
+        if (!(window.ipc && window.ipc.postMessage)) return;
+        var center = map.getCenter();
+        window.ipc.postMessage(JSON.stringify({{
+          type: 'viewport_changed',
+          longitude: center.lng,
+          latitude: center.lat,
+          zoom: map.getZoom()
+        }}));
+      }}
+      map.on('moveend', reportViewport);
+      map.on('zoomend', reportViewport);
       // T37/T39：布局完成后同步一次画布尺寸（含 map.resize()）
       syncContainerSize();
       // WebView bounds 变化（窗口 resize 或抽屉开合让位）时同步容器尺寸
@@ -654,6 +683,7 @@ pub fn build_review_map_page_html(config: &ReviewMapPageConfig) -> Result<String
         anchor_lat = config.anchor_lat,
         map_text_toggle_label = config.map_text_toggle_label,
         map_text_visible = config.map_text_visible,
+        initial_viewport_json = initial_viewport_json,
         review_script = REVIEW_SCRIPT,
     ))
 }
@@ -747,6 +777,16 @@ mod tests {
             html.contains("syncContainerSize();"),
             "AMap 初始化前后必须调用尺寸同步（含 map.resize()）"
         );
+    }
+
+    #[test]
+    fn html_restores_review_viewport_without_refitting_candidates() {
+        let config = config().with_initial_viewport(crate::MapViewport::new(121.46, 31.05, 19.0));
+        let html = build_review_map_page_html(&config).unwrap();
+
+        assert!(html.contains("initialViewport"));
+        assert!(html.contains("preserveInitialViewport"));
+        assert!(html.contains("type: 'viewport_changed'"));
     }
 
     #[test]

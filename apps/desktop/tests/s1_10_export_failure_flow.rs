@@ -266,7 +266,6 @@ impl TestApp {
     }
 
     fn confirm_boundary(&self, coords: &str) {
-        self.window.invoke_workspace_boundary_reset_clicked();
         self.window.invoke_workspace_map_ipc(coords.into());
         assert!(self.window.get_workspace_boundary_is_determined());
         self.window.invoke_workspace_step_clicked(4);

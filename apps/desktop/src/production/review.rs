@@ -6,8 +6,7 @@
 use super::collection::COLLECTION_CATEGORY_KEYS;
 use super::review_draft::{checkpoint_review, restore_review_draft_if_unsealed};
 use super::review_map::{
-    map_object_json, push_full_visible_sync, push_review_script, visible_review_set_for,
-    ReviewMapSync,
+    map_object_json, push_full_visible_sync, visible_review_set_for, ReviewMapSync,
 };
 use super::workspace_boundary::WorkspaceProductionContext;
 use crate::presentation::{
@@ -352,11 +351,8 @@ impl ReviewProductionAdapter {
     ///
     /// 分类/翻页变化触发一次 `setReviewCandidates`（清旧 overlay + 画新集合），
     /// 同页内的 state/highlight 变更才走 `updateReviewCandidate` /
-    /// `highlightReviewCandidate` 增量路径。地图不可用或非评审页时为空操作。
+    /// `highlightReviewCandidate` 增量路径。地图会话不接受命令时不更新本代已应用状态。
     fn sync_review_map(&self) {
-        if !crate::map_webview::is_review_page() || !crate::map_webview::review_push_visible() {
-            return;
-        }
         let injector = self.context.injector();
         let injector = injector.borrow();
         let Some(workbench) = injector.review() else {
@@ -370,18 +366,21 @@ impl ReviewProductionAdapter {
         let full_needed =
             sync.pushed_visible != Some((visible.active_category_index, visible.page_index));
         if full_needed {
-            push_full_visible_sync(&visible, &mut sync);
+            let _ = push_full_visible_sync(&visible, &mut sync);
             sync.full_push_scheduled = false;
             return;
         }
 
-        let mut scripts = Vec::new();
         for object in &visible.objects {
             let state = object.state.to_identifier().to_string();
             if sync.pushed_states.get(&object.candidate_id) != Some(&state) {
-                let json = serde_json::to_string(&map_object_json(object))
-                    .unwrap_or_else(|_| "{}".to_string());
-                scripts.push(format!("window.updateReviewCandidate({json});"));
+                if crate::map_session::command(crate::map_session::MapCommand::ReviewUpdate(
+                    map_object_json(object),
+                )) == crate::map_session::MapCommandResult::Unavailable
+                {
+                    sync.full_push_scheduled = false;
+                    return;
+                }
                 sync.pushed_states
                     .insert(object.candidate_id.clone(), state);
             }
@@ -392,20 +391,16 @@ impl ReviewProductionAdapter {
             .find(|object| object.highlighted)
             .map(|object| object.candidate_id.clone());
         if sync.pushed_highlight != highlighted {
-            match &highlighted {
-                Some(key) => {
-                    let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
-                    scripts.push(format!("window.highlightReviewCandidate({id});"));
-                }
-                None => scripts.push("window.clearReviewHighlight();".to_string()),
+            let command = crate::map_session::MapCommand::ReviewHighlight(highlighted.clone());
+            if crate::map_session::command(command)
+                == crate::map_session::MapCommandResult::Unavailable
+            {
+                sync.full_push_scheduled = false;
+                return;
             }
             sync.pushed_highlight = highlighted;
         }
         sync.full_push_scheduled = false;
-        drop(sync);
-        for script in scripts {
-            push_review_script(&script);
-        }
     }
 
     /// map_ready 后的全量推送：在事件循环安全上下文排定一次，按当前可见集合
@@ -438,7 +433,7 @@ impl ReviewProductionAdapter {
                 sync.full_push_scheduled = false;
                 return;
             }
-            push_full_visible_sync(&visible, &mut sync);
+            let _ = push_full_visible_sync(&visible, &mut sync);
             sync.full_push_scheduled = false;
         });
     }
@@ -456,13 +451,20 @@ impl ReviewProductionAdapter {
         let injector = injector.borrow();
         let map_text_label = injector.l10n().t("review.map_text_toggle");
         drop(injector);
-        crate::map_webview::show_review(
+        self.map_sync.borrow_mut().reset_applied();
+        let plan_id = self
+            .context
+            .active_plan_id()
+            .unwrap_or_else(|| "__adopted_workspace__".to_owned());
+        crate::map_session::present(
             self.context.window.clone(),
-            keys.0,
-            keys.1,
-            anchor.0,
-            anchor.1,
-            map_text_label,
+            crate::map_session::MapDisplayIntent::Review {
+                plan_id,
+                api_key: keys.0,
+                security_key: keys.1,
+                anchor,
+                map_text_label,
+            },
         );
     }
 
@@ -754,6 +756,31 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
     fn present(&mut self, request: ReviewRequest) -> Presentation<ReviewPageState> {
         #[cfg(test)]
         record_entry_call(4);
+        let requires_map_fact = matches!(
+            &request,
+            ReviewRequest::SetState { .. }
+                | ReviewRequest::Locate { .. }
+                | ReviewRequest::SetBulk { .. }
+                | ReviewRequest::ConfirmPending
+                | ReviewRequest::ApplySuggestions
+                | ReviewRequest::ConfirmSuggestionApply
+                | ReviewRequest::UndoSuggestionApply
+                | ReviewRequest::Seal
+        );
+        if requires_map_fact && !crate::map_session::available() {
+            let injector = self.context.injector();
+            let injector = injector.borrow();
+            let l10n = injector.l10n();
+            let notification = Notification::error(
+                l10n.t("app.source_tag"),
+                l10n.t("review.map_unavailable_title"),
+                l10n.t("review.map_unavailable_body"),
+            );
+            drop(injector);
+            return Presentation::failed(self.page_state())
+                .with_notification(NotificationFact::new(notification))
+                .with_navigation(NavigationDecision::Show(Screen::Workspace));
+        }
         match request {
             ReviewRequest::Open => self.open(),
             ReviewRequest::SetCategory { index } => {
@@ -834,17 +861,19 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                 let presentation = self.present_apply(result);
                 // 地图中心跳转 + 高亮（JS 侧；无 WebView/非评审页时为空操作）。
                 // 必须放在 page_state 的目标页全量同步之后，避免 pending 静默丢失。
-                if located && crate::map_webview::is_review_page() {
-                    let id = serde_json::to_string(&candidate_id).unwrap_or_else(|_| "\"\"".into());
-                    push_review_script(&format!("window.locateReviewCandidate({id});"));
+                if located {
+                    let _ = crate::map_session::command(
+                        crate::map_session::MapCommand::ReviewLocate(candidate_id),
+                    );
                 }
                 presentation
             }
             ReviewRequest::MapReady => {
                 // T39：评审地图就绪——候选不再内嵌 HTML，这里排定一次全量
                 // 推送（事件循环安全上下文执行，不在 IPC 回调栈内
-                // evaluate_script）；后续 state/highlight/locate 变更由
+                // 执行页面命令）；后续 state/highlight/locate 变更由
                 // page_state 尾部的 sync_review_map 增量只推对应候选。
+                self.map_sync.borrow_mut().reset_applied();
                 self.schedule_review_map_full_push();
                 Presentation::ready(self.page_state_quiet())
                     .with_navigation(NavigationDecision::Show(Screen::Workspace))
@@ -867,7 +896,7 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     | "review_map_page_error"
                     | "review_map_sdk_timeout"
                     | "review_map_init_failed" => message.as_str(),
-                    marker if marker == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER => marker,
+                    marker if crate::map_session::is_load_timeout(marker) => marker,
                     _ => "review_map_unclassified_failure",
                 };
                 log::warn!(target: "review_map", "failure_code={diagnostic_code}");
@@ -889,7 +918,7 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                         l10n.t("review.map_locate_failed_title"),
                         l10n.t("review.map_locate_unavailable_body"),
                     )
-                } else if message == crate::map_webview::MAP_LOAD_TIMEOUT_MARKER {
+                } else if crate::map_session::is_load_timeout(&message) {
                     (
                         l10n.t("review.map_unavailable_title"),
                         l10n.t("map.load_timeout_body"),

@@ -105,6 +105,10 @@ enum PendingConfirmation {
     ClearTrash,
     /// 边界页缺高德密钥时确认后前往设置页（S1-05）
     GoToSettings,
+    /// 地图上存在未确认边界草稿；确认后丢弃草稿并继续目标步骤。
+    DiscardBoundaryDraft {
+        step: i32,
+    },
     /// 离开边界页的确认（S1-05：确认后按目标页导航）
     LeaveWorkspace {
         target: Screen,
@@ -262,7 +266,7 @@ impl ProductionEntries {
 
     pub(crate) fn show_startup(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         // 启动着陆是“从零进入”：历史栈清空，任何着陆页都不显示返回按钮。
         self.clear_back_stack(window);
         // 工作现场恢复（A.1）：启动时若存在"上次打开方案"且方案仍在，
@@ -297,7 +301,7 @@ impl ProductionEntries {
 
     pub(crate) fn complete_first_run(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         // 首启向导完成后进入校区选择属于“从零进入”：清空历史栈，
         // 校区选择页无返回按钮（验收 C.9/C.13）。
         self.clear_back_stack(window);
@@ -314,7 +318,7 @@ impl ProductionEntries {
 
     pub(crate) fn show_settings(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         self.settings
             .show(window, &self.center, SettingsRequest::Show);
     }
@@ -394,13 +398,18 @@ impl ProductionEntries {
                     .show(window, &self.center, TrashRequest::ConfirmClearAll);
             }
             PendingConfirmation::GoToSettings => {
-                crate::map_webview::hide();
+                crate::map_session::hide();
                 // 从工作区边界页经确认进入设置：记录来源以便返回。
                 let before = window.get_active_screen();
                 self.show_settings(window);
                 self.record_forward_navigation(window, before);
             }
+            PendingConfirmation::DiscardBoundaryDraft { step } => {
+                crate::map_session::discard_boundary_draft();
+                self.handle_workspace_step_clicked(window, step);
+            }
             PendingConfirmation::LeaveWorkspace { target, from_back } => {
+                crate::map_session::discard_boundary_draft();
                 // 与直接离开（NavigationDecision::Show）等价：离开工作区会使当前
                 // 交付 generation 过期，旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                 self.export_poll_timer.stop();
@@ -516,14 +525,14 @@ impl ProductionEntries {
 
     pub(crate) fn show_campus_select(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         self.campus_plan
             .show(window, &self.center, CampusPlanRequest::CampusSelect);
     }
 
     pub(crate) fn show_plan_list(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         self.campus_plan
             .show(window, &self.center, CampusPlanRequest::PlanList);
     }
@@ -795,7 +804,7 @@ impl ProductionEntries {
         // 通知中心页不承载地图：离开工作区/校区搜索页时必须隐藏地图 WebView，
         // 否则原生子窗口会盖住通知中心页面（“点不动”根因，与 show_trash/
         // show_settings/show_plan_list 同一纪律）。
-        crate::map_webview::hide();
+        crate::map_session::hide();
         self.notification
             .show(window, &self.center, NotificationRequest::Open);
     }
@@ -844,8 +853,13 @@ impl ProductionEntries {
             self.workspace
                 .show(window, &self.center, WorkspaceRequest::Navigate { step });
         if presentation.operation() == &OperationState::NeedsConfirmation {
-            // 进入边界页且缺少高德密钥：确认后前往设置页
-            self.pending_confirmation = Some(PendingConfirmation::GoToSettings);
+            self.pending_confirmation =
+                if matches!(step, 3 | 4) && crate::map_session::has_boundary_draft() {
+                    Some(PendingConfirmation::DiscardBoundaryDraft { step })
+                } else {
+                    // 进入边界页且缺少高德密钥：确认后前往设置页
+                    Some(PendingConfirmation::GoToSettings)
+                };
         }
         if presentation.navigation() == NavigationDecision::Show(Screen::Workspace)
             && (2..=4).contains(&step)
@@ -975,39 +989,44 @@ impl ProductionEntries {
         );
     }
 
-    /// 地图 WebView 转交的原始 IPC 消息：原样转交候选数据源桥的响应通道
-    /// （信封匹配在数据源适配器内，S1 不读取采集内容），同时转交校区搜索
-    /// 响应通道（D-3：信封匹配在校区搜索传输内），并交给工作区功能入口
-    /// 解析边界/朝向消息。
-    pub(crate) fn handle_map_ipc(&mut self, window: &AppWindow, message: &str) {
-        // T38：评审地图页（步骤 ④）的 IPC 路由到评审入口，不进入边界/朝向解析，
-        // 也不触发 OSM 边界自动获取。
-        if crate::map_webview::is_review_page() {
-            match gaode_client::parse_ipc_message(message) {
-                Ok(IpcMessage::MapReady) => {
+    /// 地图会话转交的结构化事件。页面种类和退休代淘汰均已在会话内完成，
+    /// 功能入口不再读取 WebView 当前页来猜测路由。
+    pub(crate) fn handle_map_event(
+        &mut self,
+        window: &AppWindow,
+        event: crate::map_session::MapEvent,
+    ) {
+        let (scene, parsed) = match event {
+            crate::map_session::MapEvent::CampusSearch(raw) => {
+                let _ = self.campus_search_ipc.send(raw);
+                return;
+            }
+            crate::map_session::MapEvent::Workspace { scene, message } => (scene, message),
+        };
+        if scene == crate::map_session::MapScene::Review {
+            match parsed {
+                IpcMessage::MapReady => {
                     // T39：评审地图就绪——候选不再内嵌 HTML；评审入口排定
                     // 一次全量推送，由事件循环安全上下文执行（回调栈内不再
                     // 执行 WebView2 脚本调用，T35/T38 同纪律）。
                     self.submit_review(window, ReviewRequest::MapReady);
                 }
-                Ok(IpcMessage::ReviewObjectClicked { candidate_id }) => {
+                IpcMessage::ReviewObjectClicked { candidate_id } => {
                     self.submit_review(window, ReviewRequest::MapObjectHighlight { candidate_id });
                 }
-                Ok(IpcMessage::ReviewMapTextToggled { visible }) => {
+                IpcMessage::ReviewMapTextToggled { visible } => {
                     // 地图文字开关只影响 WebView 内的 POI 标签显示；把状态记入
                     // WebView 会话，评审页隐藏/弹窗恢复重建时按此状态重新生成。
-                    crate::map_webview::set_review_map_text_visible(visible);
+                    let _ = crate::map_session::command(
+                        crate::map_session::MapCommand::ReviewMapText(visible),
+                    );
                 }
-                Ok(IpcMessage::Error { message }) => self.review_map_error(window, &message),
+                IpcMessage::Error { message } => self.review_map_error(window, &message),
                 _ => {}
             }
             return;
         }
-        let _ = self.campus_search_ipc.send(message.to_owned());
-        let map_ready = matches!(
-            gaode_client::parse_ipc_message(message),
-            Ok(IpcMessage::MapReady)
-        );
+        let map_ready = matches!(parsed, IpcMessage::MapReady);
         // B 工单/恢复实测竞态：采集/导出步骤（2/4）的迟到 map_ready 只确认
         // 让位地图加载完成——不渲染工作区页面，避免用 Ready 页面覆盖在途
         // 导出/采集进度；边界获取只属于步骤①（步骤②由朝向入口处理）。
@@ -1017,9 +1036,7 @@ impl ProductionEntries {
         let mut presentation = self.workspace.show(
             window,
             &self.center,
-            WorkspaceRequest::MapIpc {
-                message: message.to_string(),
-            },
+            WorkspaceRequest::MapEvent { message: parsed },
         );
         // 重复 map_ready 在请求仍进行时既不能新开请求，也不能只等待下一次
         // 计时器采样：顺手非阻塞轮询一次，若后台结果已经完成则立即命中。
@@ -1040,9 +1057,9 @@ impl ProductionEntries {
         let recoverable_failure = message.starts_with("review_map_draw_failed:")
             || message.starts_with("review_map_locate_");
         if !recoverable_failure {
-            crate::map_webview::mark_map_failed();
+            crate::map_session::mark_failed();
+            crate::map_session::hide();
         }
-        crate::map_webview::hide();
         if !recoverable_failure {
             self.workspace.show(
                 window,
@@ -1447,7 +1464,7 @@ impl ProductionEntries {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().confirm_pending_input(&window);
                 // T34：弹窗遮挡统一机制——输入窗关闭后按当前步骤模式恢复地图
-                crate::map_webview::restore_after_modal(window.as_weak());
+                crate::map_session::uncover_after_modal();
             }
         });
 
@@ -1457,7 +1474,7 @@ impl ProductionEntries {
             if let Some(window) = weak.upgrade() {
                 shared.borrow_mut().cancel_pending_input(&window);
                 // T34：弹窗遮挡统一机制——输入窗取消后按当前步骤模式恢复地图
-                crate::map_webview::restore_after_modal(window.as_weak());
+                crate::map_session::uncover_after_modal();
             }
         });
         // ── S1-05：工作区导航、边界与朝向门控（统一经工作区功能入口）────────
@@ -1611,8 +1628,8 @@ impl ProductionEntries {
             if let Some(window) = weak.upgrade() {
                 window.set_error_dialog_visible(false);
                 window.set_error_dialog_retry_visible(false);
-                crate::map_webview::restore_after_modal(window.as_weak());
                 let started = shared.borrow_mut().start_collection(&window);
+                crate::map_session::uncover_after_modal();
                 if started {
                     ProductionEntries::start_collection_polling(&shared, &window);
                 }
@@ -1777,65 +1794,50 @@ impl ProductionEntries {
             }
         });
 
-        // 地图加载完成状态（map_webview → 窗口回调 → 工作区入口）
-        let weak = window.as_weak();
-        let shared = Rc::clone(entries);
+        // Slint 契约测试的消息注入也进入地图会话，不绕过结构化路由。
         window.on_workspace_map_ipc(move |message| {
-            if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().handle_map_ipc(&window, &message);
-                // T31：地图就绪 → Rust 侧 OSM 边界自动获取（后台线程轮询取回）
-                // T38：评审地图就绪走评审入口（不触发边界获取）；标注推送
-                // 定时器由地图创建完成回调（handle_map_status 绑定）排定，
-                // 不在 WebView2 IPC 回调栈内启动。
-                if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(&message) {
-                    if crate::map_webview::is_review_page() {
-                        return;
-                    }
-                    // 只有边界步（步骤①）的 map_ready 会真正启动边界获取；
-                    // 采集/导出步的 map_ready 只是让位显示，启动轮询会把迟到
-                    // 的 Idle 呈现覆盖掉在途导出/采集进度（恢复工作流实测竞态）。
-                    if window.get_workspace_active_step() != 0 {
-                        return;
-                    }
-                    ProductionEntries::start_boundary_fetch_polling(&shared, &window);
-                }
-            }
+            crate::map_session::dispatch_contract_ipc(message.to_string());
         });
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
         window.on_workspace_map_status_changed(move |available| {
             if let Some(window) = weak.upgrade() {
+                crate::map_session::set_contract_available(available);
                 shared.borrow_mut().handle_map_status(&window, available);
             }
         });
-        let weak = window.as_weak();
-        crate::map_webview::register_status_handler(Rc::new(move |available| {
-            if let Some(window) = weak.upgrade() {
-                window.invoke_workspace_map_status_changed(available);
-            }
-        }));
-        // 地图 IPC：map_webview 只转交原始消息，规则解析在工作区功能入口
+        // 地图会话是唯一 WebView 事件入口：代际/页面路由在此之前已收口。
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
-        crate::map_webview::register_ipc_handler(Rc::new(move |message: &str| {
+        let event_handler = Rc::new(move |event: crate::map_session::MapEvent| {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().handle_map_ipc(&window, message);
-                // T31：同上（wry IPC 直达路径同样触发后台获取轮询）
-                if let Ok(IpcMessage::MapReady) = gaode_client::parse_ipc_message(message) {
-                    // T38 根因：评审页 map_ready 不得重启边界获取轮询——评审步
-                    // 轮询空态会触发 poll_boundary_fetch 的 RefCell 借用 panic
-                    // （见 workspace_adapter 修复），与 on_workspace_map_ipc 同纪律。
-                    if crate::map_webview::is_review_page() {
-                        return;
+                let starts_boundary_fetch = matches!(
+                    &event,
+                    crate::map_session::MapEvent::Workspace {
+                        scene: crate::map_session::MapScene::Boundary,
+                        message: IpcMessage::MapReady,
+                        ..
                     }
-                    if window.get_workspace_active_step() != 0 {
-                        return;
-                    }
+                );
+                shared.borrow_mut().handle_map_event(&window, event);
+                if starts_boundary_fetch
+                    && window.get_workspace_active_step() == 0
+                    && !crate::map_session::has_boundary_draft()
+                {
                     ProductionEntries::start_boundary_fetch_polling(&shared, &window);
                 }
             }
-        }));
+        });
+        let weak = window.as_weak();
+        let availability_handler = Rc::new(
+            move |_scene: crate::map_session::MapScene, available: bool| {
+                if let Some(window) = weak.upgrade() {
+                    window.invoke_workspace_map_status_changed(available);
+                }
+            },
+        );
+        crate::map_session::register_handlers(event_handler, availability_handler);
 
         // ── 右上角工具栏（S1-05：离开工作区先经功能入口判定）──────────────
         let weak = window.as_weak();

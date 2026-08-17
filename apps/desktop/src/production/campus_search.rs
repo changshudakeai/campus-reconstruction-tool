@@ -24,8 +24,8 @@ static CAMPUS_SEARCH_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 /// 生产校区搜索传输：等待校区搜索 WebView 就绪 → 求值 `searchCampus(requestId,
 /// keyword)`（B3 `build_map_page_html` 已定义）→ 等待匹配信封返回响应 JSON。
 ///
-/// S1 只把原始 IPC 消息转交响应通道（见 `ProductionEntries::handle_map_ipc`），
-/// 解析与学校类筛选在 B3 `parse_place_search_response`。
+/// S1 只把地图会话的响应转交响应通道；解析与学校类筛选在 B3
+/// `parse_place_search_response`。
 pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, CampusSearchTransport)
 {
     let (response_tx, response_rx) = mpsc::channel::<String>();
@@ -45,7 +45,7 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
                 }
                 let (ready_tx, ready_rx) = mpsc::channel();
                 let dispatched = slint::invoke_from_event_loop(move || {
-                    let ready = crate::map_webview::campus_search_ready();
+                    let ready = crate::map_session::campus_search_ready();
                     let _ = ready_tx.send(ready);
                 });
                 if dispatched.is_ok()
@@ -60,7 +60,7 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
                 let _ = tick_rx.recv_timeout(std::time::Duration::from_millis(100));
             }
             // 页面脚本就绪握手：等 campus_search_ready 信封（页面加载完成再求值，
-            // 避免 evaluate_script 早于页面脚本导致搜索函数不存在）。
+            // 避免地图命令早于页面脚本就绪而静默丢失）。
             let handshake_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
                 let remaining =
@@ -91,9 +91,12 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
                     break;
                 }
             }
-            let script = campus_search_request_script(request_id, query);
+            let query = query.to_owned();
             let _ = slint::invoke_from_event_loop(move || {
-                crate::map_webview::evaluate_script(&script);
+                let _ = crate::map_session::command(crate::map_session::MapCommand::CampusSearch {
+                    request_id,
+                    query,
+                });
             });
             // 等待匹配的校区搜索响应（25 秒超时；测试直接注入罐头响应）。
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -140,17 +143,6 @@ pub(crate) fn campus_search_production_transport() -> (mpsc::Sender<String>, Cam
         },
     );
     (response_tx, transport)
-}
-
-/// 校区搜索求值脚本：调用 B3 页面已定义的 `searchCampus(requestId, keyword)`。
-/// keyword 经 JSON 序列化转义，避免引号/反斜杠注入。
-fn campus_search_request_script(request_id: u64, keyword: &str) -> String {
-    let keyword_json = serde_json::to_string(keyword).unwrap_or_else(|_| "\"\"".to_owned());
-    format!(
-        "(function(){{if (typeof searchCampus !== 'function') return;searchCampus({request_id},{keyword});}})();",
-        request_id = request_id,
-        keyword = keyword_json
-    )
 }
 
 /// 一次后台搜索的结果：Ok(REST 风格响应 JSON) / Err(可显示原因)
@@ -306,10 +298,12 @@ impl CampusPlanProductionAdapter {
             }
         };
         drop(injector);
-        crate::map_webview::show_campus_search(
+        crate::map_session::present(
             self.workspace.window.clone(),
-            keys.0.clone(),
-            keys.1.clone(),
+            crate::map_session::MapDisplayIntent::CampusSearch {
+                api_key: keys.0.clone(),
+                security_key: keys.1.clone(),
+            },
         );
         match self.search.start_search(query, &keys.0, &keys.1) {
             Ok(()) => {
@@ -354,7 +348,7 @@ impl CampusPlanProductionAdapter {
         if let Err(message) = self.search.receive(&payload) {
             return self.search_failure(&message);
         }
-        crate::map_webview::hide();
+        crate::map_session::hide();
         let injector = self.injector.borrow();
         let mut page = campus_select_page(&injector, &self.workspace)
             .unwrap_or_else(|_| campus_page_fallback(&injector, &self.workspace));
@@ -428,7 +422,7 @@ impl CampusPlanProductionAdapter {
                 )
                 .map_err(|error| error.to_string())
         };
-        crate::map_webview::hide();
+        crate::map_session::hide();
         let injector = self.injector.borrow();
         let l10n = injector.l10n();
         let page = plan_list_page(&injector, &self.workspace);

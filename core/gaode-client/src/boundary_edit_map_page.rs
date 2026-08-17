@@ -26,6 +26,7 @@
 // 届时把顶点编辑 JS 段拆出后消除。
 
 use crate::error::{Error, Result};
+use crate::MapViewport;
 
 /// 官方 CDN URL 模板 (v2.0 + PlaceSearch + PolygonEditor)
 pub const GAODE_CDN_URL_TEMPLATE: &str =
@@ -47,6 +48,8 @@ pub struct BoundaryEditPageConfig {
     pub orientation_mode: bool,
     /// T25: 已确认边界坐标（用于在朝向模式下显示半透明参照）
     pub existing_boundary_gcj02: Option<Vec<[f64; 2]>>,
+    /// ADR-0045：安全重建 WebView 时恢复的连续校园视野。
+    pub initial_viewport: Option<MapViewport>,
 }
 
 impl BoundaryEditPageConfig {
@@ -62,6 +65,7 @@ impl BoundaryEditPageConfig {
             height_px: 300,
             orientation_mode: false,
             existing_boundary_gcj02: None,
+            initial_viewport: None,
         }
     }
 
@@ -80,6 +84,11 @@ impl BoundaryEditPageConfig {
     /// T25: 设置已确认边界坐标（GCJ-02）
     pub fn with_existing_boundary(mut self, coords: Option<Vec<[f64; 2]>>) -> Self {
         self.existing_boundary_gcj02 = coords;
+        self
+    }
+
+    pub fn with_initial_viewport(mut self, viewport: MapViewport) -> Self {
+        self.initial_viewport = Some(viewport);
         self
     }
 
@@ -303,6 +312,8 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
     // T25: 将已确认边界坐标序列化为 JSON 注入 JS
     let existing_boundary_json = serde_json::to_string(&config.existing_boundary_gcj02)
         .unwrap_or_else(|_| "null".to_string());
+    let initial_viewport_json =
+        serde_json::to_string(&config.initial_viewport).unwrap_or_else(|_| "null".to_string());
 
     let base_html = format!(
         r#"<!DOCTYPE html>
@@ -385,6 +396,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   var midInsertMarkers = [];     // 相邻两条边中点的 "+" 按钮
   var VERTEX_SELECT_PX = 16;     // 点击命中顶点的像素阈值
   var anchorPoint = {{ lng: {anchor_lon}, lat: {anchor_lat} }};  // 校区锚点 (GCJ-02，来自高德 POI)
+  var initialViewport = {initial_viewport_json};
 
   var statusPanel = document.getElementById('status-panel');
 
@@ -439,10 +451,25 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
       // 可能尚未稳定，AMap 会按容器当前尺寸创建画布；T37 高度随视口填满）
       syncContainerSize();
       map = new AMap.Map('map-container', {{
-        zoom: 16,
-        center: [anchorPoint.lng, anchorPoint.lat],
+        zoom: initialViewport ? initialViewport.zoom : 16,
+        center: initialViewport
+          ? [initialViewport.longitude, initialViewport.latitude]
+          : [anchorPoint.lng, anchorPoint.lat],
         viewMode: '3D'
       }});
+
+      function reportViewport() {{
+        if (!(window.ipc && window.ipc.postMessage)) return;
+        var center = map.getCenter();
+        window.ipc.postMessage(JSON.stringify({{
+          type: 'viewport_changed',
+          longitude: center.lng,
+          latitude: center.lat,
+          zoom: map.getZoom()
+        }}));
+      }}
+      map.on('moveend', reportViewport);
+      map.on('zoomend', reportViewport);
 
       // T32/T37：布局完成后同步一次画布尺寸（含 map.resize()）
       syncContainerSize();
@@ -856,6 +883,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
         anchor_lat = config.anchor_lat,
         orientation_mode = config.orientation_mode,
         existing_boundary_json = existing_boundary_json,
+        initial_viewport_json = initial_viewport_json,
         orientation_script = if config.orientation_mode {
             ORIENTATION_SCRIPT
         } else {
@@ -985,6 +1013,19 @@ mod tests {
             !html.contains("AMap.convertFrom(["),
             "JS 不得再发起 convertFrom 调用"
         );
+    }
+
+    #[test]
+    fn html_restores_and_reports_map_session_viewport() {
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789")
+            .with_anchor(116.4, 39.9)
+            .with_initial_viewport(crate::MapViewport::new(121.44, 31.03, 17.0));
+        let html = build_boundary_edit_page_html(&config).unwrap();
+
+        assert!(html.contains("initialViewport"));
+        assert!(html.contains("type: 'viewport_changed'"));
+        assert!(html.contains("map.on('moveend'"));
+        assert!(html.contains("map.on('zoomend'"));
     }
 
     #[test]

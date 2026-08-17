@@ -134,7 +134,7 @@ impl ShellPresenter {
                 window.set_error_dialog_retry_visible(false);
                 // T34：弹窗遮挡统一机制——错误弹窗关闭后按当前步骤模式
                 // （边界页 vs 朝向页）恢复地图，不得恢复错页。
-                crate::map_webview::restore_after_modal(window.as_weak());
+                crate::map_session::uncover_after_modal();
             }
             // 唤醒全部等待中的后台调用者（弹窗已被用户确认）
             for ack in acks.lock().expect("弹窗确认队列锁不可中毒").drain(..) {
@@ -163,7 +163,7 @@ impl ShellPresenter {
         window.set_error_dialog_visible(true);
         // T34：地图 WebView 是原生子窗口，会渲染在 Slint 模态遮罩之上，
         // 让错误弹窗（及其拦截输入的遮罩）不可见；弹窗前先隐藏地图。
-        crate::map_webview::hide();
+        crate::map_session::cover_for_modal();
     }
 }
 

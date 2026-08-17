@@ -200,11 +200,11 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#.into(),
+    );
     window.invoke_workspace_step_clicked(3);
+    window.invoke_workspace_map_status_changed(true);
 
     // 只读入 Reviewable：3 建筑 + 1 道路 + 1 水域 = 5；隔离/无投影绝不进入。
     assert_eq!(window.get_workspace_active_step(), 3);

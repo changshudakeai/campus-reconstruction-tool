@@ -242,12 +242,11 @@ impl WorkspaceProductionAdapter {
                 source,
                 candidate_count,
             } => {
-                let coords_json = serde_json::to_string(&gcj02).unwrap_or_else(|_| "[]".to_owned());
-                let name_json =
-                    serde_json::to_string(&name).unwrap_or_else(|_| "\"未知校区\"".to_owned());
-                crate::map_webview::evaluate_script(&format!(
-                    "drawBoundaryGcj({coords_json}, {name_json});"
-                ));
+                let _ = crate::map_session::command(crate::map_session::MapCommand::BoundaryDraw {
+                    coordinates: gcj02.clone(),
+                    label: name.clone(),
+                    restored: false,
+                });
                 {
                     let mut session = self.context.session.borrow_mut();
                     session.map_draw.point_count = gcj02.len() as i32;
@@ -260,7 +259,9 @@ impl WorkspaceProductionAdapter {
                 notifications.push(info_fact(&l10n, "boundary.osm_auto_selected_title", &body));
             }
             BoundaryFetchOutcome::NotFound => {
-                crate::map_webview::evaluate_script("enableManualMode();");
+                let _ = crate::map_session::command(
+                    crate::map_session::MapCommand::BoundaryEnableManual,
+                );
                 notifications.push(info_fact(
                     &l10n,
                     "boundary.osm_not_found_title",
@@ -269,7 +270,9 @@ impl WorkspaceProductionAdapter {
             }
             BoundaryFetchOutcome::Unreachable { message } => {
                 log::warn!("OSM 边界自动获取失败（人工圈画兜底）: {message}");
-                crate::map_webview::evaluate_script("enableManualMode();");
+                let _ = crate::map_session::command(
+                    crate::map_session::MapCommand::BoundaryEnableManual,
+                );
                 // B.10：失败原因明确到阶段（校名解析失败/端点不可达/解析失败），
                 // 不得笼统提示"超时"。
                 let body = l10n.t_with_array("boundary.osm_unreachable_detail_body", &[&message]);
@@ -284,7 +287,7 @@ impl WorkspaceProductionAdapter {
     }
 
     fn boundary_source_context_missing(&self) -> Presentation<WorkspacePageState> {
-        crate::map_webview::evaluate_script("enableManualMode();");
+        let _ = crate::map_session::command(crate::map_session::MapCommand::BoundaryEnableManual);
         let l10n = self.l10n();
         Presentation::ready(self.context.page()).with_notification(info_fact(
             &l10n,
@@ -302,19 +305,19 @@ impl WorkspaceProductionAdapter {
     }
 
     pub(super) fn restore_cached_boundary(&self, cached: &PlanBoundaryView) {
-        let coords_json = serde_json::to_string(&cached.gcj02).unwrap_or_else(|_| "[]".to_owned());
         if cached.confirmed {
             let status = self.l10n().t("boundary.session_restored_status");
-            let status_json = serde_json::to_string(&status).unwrap_or_else(|_| "\"\"".to_owned());
-            crate::map_webview::evaluate_script(&format!(
-                "drawRestoredBoundaryGcj({coords_json}, {status_json});"
-            ));
+            let _ = crate::map_session::command(crate::map_session::MapCommand::BoundaryDraw {
+                coordinates: cached.gcj02.clone(),
+                label: status,
+                restored: true,
+            });
         } else {
-            let name_json =
-                serde_json::to_string(&cached.name).unwrap_or_else(|_| "\"\"".to_owned());
-            crate::map_webview::evaluate_script(&format!(
-                "drawBoundaryGcj({coords_json}, {name_json});"
-            ));
+            let _ = crate::map_session::command(crate::map_session::MapCommand::BoundaryDraw {
+                coordinates: cached.gcj02.clone(),
+                label: cached.name.clone(),
+                restored: false,
+            });
         }
         self.restore_cached_drawer_state(cached);
     }

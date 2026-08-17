@@ -363,6 +363,12 @@ pub enum IpcMessage {
     ReviewObjectClicked { candidate_id: String },
     /// 评审地图“显示地图文字”开关切换（true = 恢复地标/POI 文字）。
     ReviewMapTextToggled { visible: bool },
+    /// 地图会话视野变化（中心 GCJ-02 + 缩放级别）。
+    ViewportChanged {
+        longitude: f64,
+        latitude: f64,
+        zoom: f64,
+    },
 }
 
 /// T24: OSM 元素结构 (Overpass JSON)
@@ -591,6 +597,28 @@ pub fn parse_ipc_message(msg: &str) -> Result<IpcMessage> {
                         });
                     }
                 }
+                "viewport_changed" => {
+                    #[derive(Deserialize)]
+                    struct ViewportPayload {
+                        longitude: f64,
+                        latitude: f64,
+                        zoom: f64,
+                    }
+                    if let Ok(payload) = serde_json::from_str::<ViewportPayload>(msg) {
+                        if payload.longitude.is_finite()
+                            && payload.latitude.is_finite()
+                            && payload.zoom.is_finite()
+                            && (-180.0..=180.0).contains(&payload.longitude)
+                            && (-90.0..=90.0).contains(&payload.latitude)
+                        {
+                            return Ok(IpcMessage::ViewportChanged {
+                                longitude: payload.longitude,
+                                latitude: payload.latitude,
+                                zoom: payload.zoom,
+                            });
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -635,6 +663,26 @@ mod ipc_tests {
         // T31：JS 只发就绪信号，Overpass 查询由 Rust 侧执行
         let result = parse_ipc_message(r#"{"type":"map_ready"}"#).unwrap();
         assert!(matches!(result, IpcMessage::MapReady));
+    }
+
+    #[test]
+    fn viewport_payload_is_structured_and_validated() {
+        let result = parse_ipc_message(
+            r#"{"type":"viewport_changed","longitude":121.44,"latitude":31.03,"zoom":17}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            result,
+            IpcMessage::ViewportChanged {
+                longitude: 121.44,
+                latitude: 31.03,
+                zoom: 17.0
+            }
+        ));
+        assert!(parse_ipc_message(
+            r#"{"type":"viewport_changed","longitude":999,"latitude":31.03,"zoom":17}"#
+        )
+        .is_err());
     }
 
     #[test]

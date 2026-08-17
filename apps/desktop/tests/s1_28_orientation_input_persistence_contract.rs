@@ -2,8 +2,8 @@
 //! orientation_points IPC、步骤切换）都不得重置文本；输入值只活在窗口，
 //! 提交时才读取；程序性清空只发生在"重置/清除/切换方案"显式入口。
 //!
-//! T40 回归（b）：步骤② WebView 创建失败 → 明确错误提示 + 地图如实不可用，
-//! 仍可退回"方位角手动输入"完成朝向；切换方案是输入框显式清空入口。
+//! T46 回归（b）：步骤② WebView 创建失败 → 明确错误提示 + 地图如实不可用，
+//! 输入内容可以保留，但不得据此产生新的正式朝向；切换方案是输入框显式清空入口。
 
 use data_persistence::CampusCrudApi;
 use desktop_shell::{
@@ -102,9 +102,9 @@ fn open_plan_boundary_and_step_2(harness: &Harness, plan_id: &str) {
 }
 
 #[test]
-fn s1_28_orientation_input_persistence_fallback_and_clear_contract() {
+fn s1_28_orientation_input_persistence_failure_block_and_clear_contract() {
     // 单一 AppWindow（winit 事件循环不可在同一进程重建）：一个流程锁死
-    // 键入后任意呈现不重置、重置清空、创建失败后手动输入兜底、切方案清空。
+    // 键入后任意呈现不重置、重置清空、创建失败后阻断提交、切方案清空。
     let harness = setup();
     let window = &harness.window;
     open_plan_boundary_and_step_2(&harness, &harness.plan_a);
@@ -182,15 +182,15 @@ fn s1_28_orientation_input_persistence_fallback_and_clear_contract() {
         "创建失败必须留底明确提示"
     );
 
-    // 仍可退回"方位角手动输入"完成朝向（不依赖地图）。
+    // 输入内容可以保留，但地图事实不可用时不得形成新的正式朝向。
     window.set_workspace_orientation_input_text("270".into());
     window.invoke_workspace_orientation_submit_clicked();
     assert!(
         !window.get_confirm_dialog_visible(),
         "首次设定朝向直接保存，不弹重算确认"
     );
-    assert!(window.get_workspace_orientation_is_determined());
-    assert_eq!(window.get_workspace_completed_steps(), 2);
+    assert!(!window.get_workspace_orientation_is_determined());
+    assert_eq!(window.get_workspace_completed_steps(), 1);
 
     // 切换方案是输入框显式清空入口。
     window.invoke_switch_campus_toolbar_button_clicked();

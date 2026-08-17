@@ -6,16 +6,19 @@
 //! S1 业务协调的授权。Slint 绑定、B6 文案与 B7 Presenter 仍是呈现层能力。
 mod boundary_source;
 mod diagnostic_log;
+mod map_session;
 mod map_webview;
+#[cfg(windows)]
+mod map_webview_focus;
 mod presentation;
 mod presenter;
 mod production;
 mod runtime;
 
 pub use boundary_source::BoundaryFetchSource;
-pub use map_webview::MAP_LOAD_TIMEOUT_MARKER;
+pub use map_session::MAP_LOAD_TIMEOUT_MARKER;
 #[doc(hidden)]
-pub use map_webview::{
+pub use map_session::{
     map_visible, reset_review_push_count, review_map_text_visible, review_push_count,
     review_pushed_scripts, set_map_visible_probe, set_review_push_probe_visible, shutdown,
 };

@@ -838,7 +838,7 @@ fn trash_info_fact(l10n: &Localization, title_key: &str, body_key: &str) -> Noti
 impl ProductionEntries {
     pub(crate) fn request_campus_search(&mut self, window: &AppWindow) -> bool {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         let query = window.get_campus_search_text().to_string();
         let presentation = self.campus_plan.show(
             window,
@@ -863,7 +863,7 @@ impl ProductionEntries {
 
     pub(crate) fn select_campus(&mut self, window: &AppWindow, campus_id: String) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         let before = window.get_active_screen();
         let presentation = self.campus_plan.show(
             window,
@@ -932,7 +932,7 @@ impl ProductionEntries {
 
     pub(crate) fn show_trash(&mut self, window: &AppWindow) {
         self.supersede_diagnostic(window);
-        crate::map_webview::hide();
+        crate::map_session::hide();
         self.trash.show(window, &self.center, TrashRequest::Show);
     }
 

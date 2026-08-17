@@ -226,11 +226,11 @@ fn enter_review(window: &AppWindow, plan_id: &str) {
     window.invoke_plan_list_card_clicked(plan_id.into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#.into(),
+    );
     window.invoke_workspace_step_clicked(3);
+    window.invoke_workspace_map_status_changed(true);
 }
 
 /// 从工作区返回方案列表（若存在离开确认弹窗则确认；评审步无未保存边界/

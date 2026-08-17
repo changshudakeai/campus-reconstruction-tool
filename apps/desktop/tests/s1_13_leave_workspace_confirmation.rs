@@ -295,6 +295,8 @@ fn assert_return_to_plan_list_works_from_all_five_steps_and_preserves_saved_plan
         let app = TestApp::new(file_system);
 
         app.confirm_boundary();
+        app.window.invoke_workspace_step_clicked(1);
+        app.window.invoke_workspace_map_status_changed(true);
         app.window
             .set_workspace_orientation_input_text("135".into());
         app.window.invoke_workspace_orientation_submit_clicked();

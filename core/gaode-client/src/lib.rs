@@ -34,6 +34,7 @@ mod boundary_sorting;
 mod coords;
 mod error;
 mod map_page;
+mod map_viewport;
 mod poi;
 mod record;
 mod review_map_page;
@@ -50,6 +51,7 @@ pub use map_page::{
     build_map_page_html, build_pick_point_page_html, MapPageConfig, GAODE_CDN_URL_TEMPLATE,
     MAP_MIN_HEIGHT_PX,
 };
+pub use map_viewport::MapViewport;
 pub use poi::{
     parse_ipc_message, parse_location_value, parse_place_search_response, IpcMessage, OsmElement,
     OsmMember, SchoolPoi, SCHOOL_TYPECODE_PREFIX,

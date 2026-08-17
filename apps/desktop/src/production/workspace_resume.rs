@@ -34,23 +34,24 @@ impl WorkspaceProductionAdapter {
             // 边界/朝向/采集/导出：边界页或朝向页 WebView 按步骤重建；
             // 已是对应页面时保持不变（幂等）。
             0 | 2 | 4 => {
-                let map_is_boundary =
-                    crate::map_webview::is_visible() && crate::map_webview::is_boundary_page();
-                if !map_is_boundary {
-                    crate::map_webview::hide();
-                    crate::map_webview::show(
-                        self.context.window.clone(),
-                        keys.0,
-                        keys.1,
-                        anchor.0,
-                        anchor.1,
-                    );
-                    self.context.session.borrow_mut().map_available = true;
+                let plan_id = self
+                    .context
+                    .active_plan_id()
+                    .unwrap_or_else(|| "__adopted_workspace__".to_owned());
+                if crate::map_session::present(
+                    self.context.window.clone(),
+                    crate::map_session::MapDisplayIntent::Boundary {
+                        plan_id,
+                        api_key: keys.0,
+                        security_key: keys.1,
+                        anchor,
+                    },
+                ) {
+                    self.context.session.borrow_mut().map_available = false;
                     self.context.mark_map_loading();
                 }
             }
             1 => {
-                crate::map_webview::hide();
                 let existing_boundary = self
                     .context
                     .export_flow
@@ -61,8 +62,15 @@ impl WorkspaceProductionAdapter {
                     .with_anchor(anchor.0, anchor.1)
                     .with_orientation_mode(true)
                     .with_existing_boundary(existing_boundary);
-                crate::map_webview::show_with_config(self.context.window.clone(), config);
-                self.context.session.borrow_mut().map_available = true;
+                let plan_id = self
+                    .context
+                    .active_plan_id()
+                    .unwrap_or_else(|| "__adopted_workspace__".to_owned());
+                crate::map_session::present(
+                    self.context.window.clone(),
+                    crate::map_session::MapDisplayIntent::Orientation { plan_id, config },
+                );
+                self.context.session.borrow_mut().map_available = false;
                 self.context.mark_map_loading();
             }
             // 步骤 ④ 评审：地图由评审入口（ReviewRequest::Open）装载。

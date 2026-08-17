@@ -434,9 +434,9 @@ pub enum WorkspaceRequest {
     TutorialSkipAll,
     /// 地图加载完成状态（成功或故障；故障只暂停地图相关操作）。
     MapStatus { available: bool },
-    /// 地图 WebView 转交的原始 IPC 消息（由功能入口解析并应用业务规则）。
+    /// 地图会话已经过代际过滤、场景路由和解析的结构化页面事件。
     #[doc(hidden)]
-    MapIpc { message: String },
+    MapEvent { message: gaode_client::IpcMessage },
     /// T31：轮询 Rust 侧 OSM 边界自动获取的后台结果（不阻塞 UI 线程）。
     #[doc(hidden)]
     PollBoundaryFetch,

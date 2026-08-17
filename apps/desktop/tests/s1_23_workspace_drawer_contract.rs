@@ -245,6 +245,7 @@ fn s1_23_drawer_toggle_moves_map_slot_without_intersections() {
     );
     window.invoke_confirm_dialog_cancelled();
     assert!(!window.get_confirm_dialog_visible());
+    window.invoke_workspace_map_status_changed(true);
     assert!(
         window
             .get_workspace_orientation_angle_display()
@@ -255,6 +256,7 @@ fn s1_23_drawer_toggle_moves_map_slot_without_intersections() {
     window.set_workspace_orientation_input_text("180".into());
     window.invoke_workspace_orientation_submit_clicked();
     window.invoke_confirm_dialog_confirmed();
+    window.invoke_workspace_map_status_changed(true);
     assert!(
         window
             .get_workspace_orientation_angle_display()
@@ -269,6 +271,9 @@ fn s1_23_drawer_toggle_moves_map_slot_without_intersections() {
     window.invoke_workspace_map_ipc(two_points.into());
     assert_eq!(window.get_workspace_orientation_points().row_count(), 2);
     window.invoke_workspace_orientation_confirm_two_points_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_orientation","points":[[116.3975,39.9160],[116.3985,39.9160]]}"#.into(),
+    );
     assert!(
         window.get_confirm_dialog_visible(),
         "两点确认覆盖已有朝向仍需重算确认"

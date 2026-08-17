@@ -67,10 +67,9 @@ fn s1_06_orientation_flow_through_functional_entry() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#.into(),
+    );
     assert!(window.get_workspace_boundary_is_determined());
     assert_eq!(window.get_workspace_completed_steps(), 1);
 
@@ -80,6 +79,8 @@ fn s1_06_orientation_flow_through_functional_entry() {
     window.invoke_workspace_map_status_changed(true);
     let two_points =
         r#"{"type":"orientation_points","points":[[116.3975,39.9160],[116.3985,39.9160]]}"#;
+    let confirm_points =
+        r#"{"type":"confirm_orientation","points":[[116.3975,39.9160],[116.3985,39.9160]]}"#;
     window.invoke_workspace_map_ipc(two_points.into());
     assert_eq!(
         window.get_workspace_orientation_points().row_count(),
@@ -113,6 +114,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
     // ── 3. 地图确认朝向：首次设定直接保存（无重算确认）──
     // T34：两点朝向确认经左侧抽屉按钮（submit two-points）完成
     window.invoke_workspace_orientation_confirm_two_points_clicked();
+    window.invoke_workspace_map_ipc(confirm_points.into());
     assert!(!window.get_confirm_dialog_visible(), "首次设定不弹重算确认");
     assert!(window.get_workspace_orientation_is_determined());
     assert_eq!(window.get_workspace_completed_steps(), 2);
@@ -172,12 +174,14 @@ fn s1_06_orientation_flow_through_functional_entry() {
         "180",
         "取消后保留页面临时输入"
     );
+    window.invoke_workspace_map_status_changed(true);
 
     // 再次提交并确认：新朝向生效
     window.invoke_workspace_orientation_submit_clicked();
     assert!(window.get_confirm_dialog_visible());
     window.invoke_confirm_dialog_confirmed();
     assert!(!window.get_confirm_dialog_visible());
+    window.invoke_workspace_map_status_changed(true);
     assert_eq!(window.get_workspace_completed_steps(), 2);
     assert!(
         window
@@ -201,6 +205,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
     );
     assert_eq!(window.get_workspace_completed_steps(), 2);
     window.invoke_error_dialog_dismissed();
+    window.invoke_workspace_map_status_changed(true);
 
     window.set_workspace_orientation_input_text("NaN".into());
     window.invoke_workspace_orientation_submit_clicked();
@@ -215,6 +220,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
         "非有限角度失败后正式状态不变"
     );
     window.invoke_error_dialog_dismissed();
+    window.invoke_workspace_map_status_changed(true);
 
     // 两点重合：计算失败只影响朝向操作
     // T34：无模式切换，地图两点是默认交互
@@ -237,6 +243,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
     );
     assert_eq!(window.get_workspace_completed_steps(), 2);
     window.invoke_error_dialog_dismissed();
+    window.invoke_workspace_map_status_changed(true);
 
     // ── 6. 地图“清除重来”只清草稿，不清已保存的正式状态 ──
     window.invoke_workspace_map_ipc(two_points.into());
@@ -264,12 +271,14 @@ fn s1_06_orientation_flow_through_functional_entry() {
     window.invoke_workspace_map_ipc(two_points.into());
     assert_eq!(window.get_workspace_orientation_points().row_count(), 2);
     window.invoke_workspace_orientation_confirm_two_points_clicked();
+    window.invoke_workspace_map_ipc(confirm_points.into());
     assert!(
         window.get_confirm_dialog_visible(),
         "地图确认覆盖既有朝向必须弹重算确认窗"
     );
     window.invoke_confirm_dialog_cancelled();
     assert!(!window.get_confirm_dialog_visible());
+    window.invoke_workspace_map_status_changed(true);
     assert!(
         window
             .get_workspace_orientation_angle_display()
@@ -280,6 +289,7 @@ fn s1_06_orientation_flow_through_functional_entry() {
     assert_eq!(window.get_workspace_completed_steps(), 2);
 
     window.invoke_workspace_orientation_confirm_two_points_clicked();
+    window.invoke_workspace_map_ipc(confirm_points.into());
     assert!(
         window.get_confirm_dialog_visible(),
         "再次确认覆盖仍须弹重算确认窗"
@@ -329,13 +339,24 @@ fn s1_06_orientation_flow_through_functional_entry() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     assert_eq!(window.get_active_screen(), 4);
 
-    // 地图故障下方位角手动输入仍可保存（不依赖地图）
+    // 地图故障下方位角输入也暂停；地图恢复后才能覆盖已有朝向
     window.invoke_workspace_step_clicked(1);
     // T34：模式切换已删除；手动角度输入即方位角提交
+    let saved_angle_before_failure = window.get_workspace_orientation_angle_display();
+    window.set_workspace_orientation_input_text("270".into());
+    window.invoke_workspace_orientation_submit_clicked();
+    assert!(!window.get_confirm_dialog_visible());
+    assert_eq!(
+        window.get_workspace_orientation_angle_display(),
+        saved_angle_before_failure
+    );
+    window.invoke_error_dialog_dismissed();
+    window.invoke_workspace_map_status_changed(true);
     window.set_workspace_orientation_input_text("270".into());
     window.invoke_workspace_orientation_submit_clicked();
     assert!(window.get_confirm_dialog_visible(), "覆盖已有朝向仍须确认");
     window.invoke_confirm_dialog_confirmed();
+    window.invoke_workspace_map_status_changed(true);
     assert!(window
         .get_workspace_orientation_angle_display()
         .as_str()

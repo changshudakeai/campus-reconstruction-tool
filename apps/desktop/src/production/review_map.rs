@@ -23,6 +23,16 @@ pub(super) struct ReviewMapSync {
     pub(super) full_push_scheduled: bool,
 }
 
+impl ReviewMapSync {
+    /// 新 WebView 代开始时只清理“本代已应用”，期望状态仍由工作台持有并重放。
+    pub(super) fn reset_applied(&mut self) {
+        self.pushed_states.clear();
+        self.pushed_highlight = None;
+        self.pushed_visible = None;
+        self.full_push_scheduled = false;
+    }
+}
+
 /// 当前应绘制到评审地图的可见候选集合（当前类别 + 当前分页）。
 pub(super) struct VisibleReviewSet {
     pub(super) active_category_index: usize,
@@ -79,24 +89,9 @@ pub(super) fn map_object_json(object: &review_workbench::MapObjectView) -> serde
     })
 }
 
-/// 全量推送脚本：一条 `setReviewCandidates(可见集合)` + 高亮命令（如有）。
-/// 可见集合受当前类别 + 当前分页限制，因此不会把全量候选排进 JS 缓冲。
-pub(super) fn full_push_scripts(
-    objects: &[serde_json::Value],
-    highlight: Option<&String>,
-) -> Vec<String> {
-    let json = serde_json::to_string(objects).unwrap_or_else(|_| "[]".to_string());
-    let mut scripts = vec![format!("window.setReviewCandidates({json});")];
-    if let Some(key) = highlight {
-        let id = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
-        scripts.push(format!("window.highlightReviewCandidate({id});"));
-    }
-    scripts
-}
-
 /// 全量推送当前可见集合：`setReviewCandidates` 会清掉旧 overlay 再画新集合，
 /// 因此分类/翻页时不会残留上一页/上一类别的标注。
-pub(super) fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut ReviewMapSync) {
+pub(super) fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut ReviewMapSync) -> bool {
     let objects: Vec<serde_json::Value> = visible.objects.iter().map(map_object_json).collect();
     let states: HashMap<String, String> = visible
         .objects
@@ -113,17 +108,18 @@ pub(super) fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut Revi
         .iter()
         .find(|object| object.highlighted)
         .map(|object| object.candidate_id.clone());
-    let scripts = full_push_scripts(&objects, highlight.as_ref());
-    for script in &scripts {
-        push_review_script(script);
+    if crate::map_session::command(crate::map_session::MapCommand::ReviewReplace(objects))
+        == crate::map_session::MapCommandResult::Unavailable
+    {
+        return false;
+    }
+    if let Some(candidate_id) = highlight.as_ref() {
+        let _ = crate::map_session::command(crate::map_session::MapCommand::ReviewHighlight(Some(
+            candidate_id.clone(),
+        )));
     }
     sync.pushed_states = states;
     sync.pushed_highlight = highlight;
     sync.pushed_visible = Some((visible.active_category_index, visible.page_index));
-}
-
-/// 评审地图回推命令：先计数（T39 验收观察），再执行（无 WebView 时为空操作）。
-pub(super) fn push_review_script(script: &str) {
-    crate::map_webview::note_review_push(script);
-    crate::map_webview::evaluate_script(script);
+    true
 }

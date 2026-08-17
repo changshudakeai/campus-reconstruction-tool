@@ -163,12 +163,12 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
     window.invoke_plan_list_card_clicked(plan_id.to_string().into());
     window.invoke_workspace_tutorial_dismiss_clicked();
     window.invoke_workspace_map_status_changed(true);
-    for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
-        window.invoke_workspace_boundary_canvas_clicked(x, y);
-    }
-    window.invoke_workspace_boundary_confirm_clicked();
+    window.invoke_workspace_map_ipc(
+        r#"{"type":"confirm_boundary","coords":[[116.40,39.90],[116.41,39.90],[116.41,39.91],[116.40,39.91]]}"#.into(),
+    );
     window.invoke_workspace_step_clicked(3);
     assert_eq!(window.get_workspace_active_step(), 3);
+    window.invoke_workspace_map_status_changed(true);
 
     // 1. 评审地图就绪 IPC → 评审入口（候选标注推送在无 WebView 测试环境为空操作）
     window.invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
@@ -321,7 +321,7 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
     );
     window.invoke_error_dialog_dismissed();
 
-    // 4b. 评审地图加载失败 → B7 错误弹窗；评审抽屉状态保持可继续修改
+    // 4b. 评审地图整体失败 → B7 错误弹窗；已有状态保留，新决定暂停
     window.invoke_workspace_map_ipc(r#"{"type":"error","message":"评审地图初始化失败"}"#.into());
     assert!(
         window.get_error_dialog_visible(),
@@ -333,10 +333,11 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         3,
         "地图失败不破坏评审抽屉"
     );
+    let state_before = card_state_key(&window, 1);
     window.invoke_review_card_state_clicked(reviewable[1].clone().into(), "keep".into());
     assert_eq!(
         card_state_key(&window, 1),
-        "keep",
-        "地图失败后评审操作仍可继续"
+        state_before,
+        "地图整体失败后不得写入新的评审决定"
     );
 }

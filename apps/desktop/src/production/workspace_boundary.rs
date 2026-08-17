@@ -14,8 +14,7 @@ use collection_flow::CollectionFlow;
 use data_persistence::PlanWorkspaceState;
 use export_flow::BoundaryExportFlow;
 use foundation_mode::{
-    BoundaryDrawer, BoundaryState, MercatorCoord, OrientationCalculator, OrientationLine, Point2D,
-    Vertex,
+    BoundaryDrawer, BoundaryState, OrientationCalculator, OrientationLine, Point2D, Vertex,
 };
 use localization::Localization;
 use notification_center::Notification;
@@ -196,7 +195,8 @@ impl WorkspaceProductionContext {
             target,
             map_processing: session.map_processing,
             active_step: session.active_step,
-            boundary_unsaved: session.boundary_unsaved(),
+            boundary_unsaved: session.boundary_unsaved()
+                || crate::map_session::has_boundary_draft(),
         })
     }
 
@@ -581,28 +581,6 @@ pub(super) fn centroid(coords: &[[f64; 2]]) -> Option<(f64, f64)> {
         });
     let count = coords.len() as f64;
     Some((sum_lon / count, sum_lat / count))
-}
-
-/// 手动画布没有地图经纬度时，沿用 B5 的平面米语义以校区锚点反投影，
-/// 让“已确认边界”仍能交给 F9 完整导出用例，不在壳层计算导出尺寸。
-pub(super) fn plane_vertices_to_gcj02(
-    vertices: &[Vertex],
-    anchor_lng: f64,
-    anchor_lat: f64,
-) -> Vec<[f64; 2]> {
-    let center = MercatorCoord::from_lat_lon(anchor_lat, anchor_lng);
-    let scale = anchor_lat.to_radians().cos();
-    vertices
-        .iter()
-        .map(|vertex| {
-            let mercator = MercatorCoord {
-                x: center.x + vertex.x / scale,
-                y: center.y + vertex.y / scale,
-            };
-            let (lat, lon) = mercator.to_lat_lon();
-            [lon, lat]
-        })
-        .collect()
 }
 
 /// 重算确认窗正文：沿用既有重算提示（collection.orientation_recalc_notice），
