@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared fixtures are intentionally consumed by only some split integration tests"
+)]
 //! ReviewWorkbench 集成测试共享的私有候选夹具。
 //!
 //! Cargo 会把每个场景文件编译为独立测试目标，各目标只使用这里的一部分夹具。
