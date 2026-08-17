@@ -1,17 +1,28 @@
-﻿# Run the V2 dev app directly from source (debug incremental build).
+﻿# Run the V2 dev app directly from source (debug incremental build),
+# sharing the SAME database as the installed desktop dev version
+# (%LOCALAPPDATA%\MCRebuildV2\dev\campus-rebuild.db).
 # Usage: double-click the desktop shortcut, or run:  .\scripts\run-dev.ps1
 # Note: does NOT overwrite the installed dev copy or the desktop shortcut.
 # Note: keep this file ASCII-only so Windows PowerShell 5.1 parses it correctly.
 
 $ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $PSScriptRoot   # = New-branch-v2
-Set-Location $Root
+$Repo = Split-Path -Parent $PSScriptRoot   # = New-branch-v2
+$Manifest = Join-Path $Repo 'Cargo.toml'
 
 $env:CARGO_BUILD_JOBS = '2'
 $env:SLINT_BACKEND = 'software'
 
-Write-Host '==> cargo run -p desktop-shell --bin campus-tool-dev'
-cargo run -p desktop-shell --bin campus-tool-dev
+# The app opens "campus-rebuild.db" relative to its working directory, so run it
+# from the dev install dir to share the same DB as the desktop "dev" shortcut.
+$DevDir = Join-Path $env:LOCALAPPDATA 'MCRebuildV2\dev'
+if (-not (Test-Path -LiteralPath $DevDir)) {
+    New-Item -ItemType Directory -Force -Path $DevDir | Out-Null
+}
+Set-Location $DevDir
+
+Write-Host '==> cargo run --manifest-path <repo>\Cargo.toml -p desktop-shell --bin campus-tool-dev'
+Write-Host ("    working dir (DB): " + $DevDir)
+cargo run --manifest-path $Manifest -p desktop-shell --bin campus-tool-dev
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ("cargo run exit code: " + $LASTEXITCODE)
