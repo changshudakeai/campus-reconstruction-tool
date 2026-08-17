@@ -555,3 +555,16 @@ fn s1_31_toolbar_navigation_and_back_stack_contract() {
         "方案列表无上一页时返回按钮隐藏"
     );
 }
+
+#[test]
+fn overflow_menu_card_contains_its_option_buttons() {
+    let toolbar = include_str!("../ui/toolbar.slint");
+    assert!(
+        toolbar.contains("height: menu-layout.preferred-height;"),
+        "溢出菜单外框必须跟随选项内容高度，不能让选项卡片跑出外框"
+    );
+    assert!(
+        toolbar.contains("overflow-menu-card := Rectangle") && toolbar.contains("clip: true;"),
+        "溢出菜单外框必须裁切内部绘制，防止卡片越出圆角边界"
+    );
+}

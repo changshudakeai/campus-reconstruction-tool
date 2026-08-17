@@ -60,14 +60,16 @@ export component PlanList inherits Rectangle {
         padding: 24px;
 
         // 顶部：操作行（标题由统一工具栏显示；本页保留“新建方案”）
-        HorizontalLayout {
+        create-action-row := HorizontalLayout {
+            height: 36px;
             spacing: 12px;
 
             Rectangle {
                 // 弹性间隔
             }
 
-            Button {
+            create-plan-button := Button {
+                height: 32px;
                 text: root.create-button-text;
                 primary: true;
                 clicked => { root.create-plan-clicked(); }

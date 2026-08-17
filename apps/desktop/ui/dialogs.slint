@@ -29,14 +29,12 @@ export component ConfirmDialog inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: min(parent.width - 64px, 400px);
-            height: dialog-body.preferred-height + 48px;
+            height: dialog-body.preferred-height;
             background: Theme.surface;
             border-radius: 8px;
 
             dialog-body := VerticalLayout {
-                x: 24px;
-                y: 24px;
-                width: parent.width - 48px;
+                padding: 24px;
                 spacing: 12px;
 
                 Text {
@@ -53,7 +51,8 @@ export component ConfirmDialog inherits Rectangle {
                     wrap: word-wrap;
                 }
 
-                HorizontalLayout {
+                dialog-actions := HorizontalLayout {
+                    preferred-height: 32px;
                     spacing: 8px;
                     alignment: end;
 
@@ -96,14 +95,12 @@ export component InputDialog inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: min(parent.width - 64px, 400px);
-            height: input-body.preferred-height + 48px;
+            height: input-body.preferred-height;
             background: Theme.surface;
             border-radius: 8px;
 
             input-body := VerticalLayout {
-                x: 24px;
-                y: 24px;
-                width: parent.width - 48px;
+                padding: 24px;
                 spacing: 12px;
 
                 Text {
@@ -125,7 +122,8 @@ export component InputDialog inherits Rectangle {
                     height: 32px;
                 }
 
-                HorizontalLayout {
+                input-actions := HorizontalLayout {
+                    preferred-height: 32px;
                     spacing: 8px;
                     alignment: end;
 

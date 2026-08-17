@@ -501,8 +501,11 @@ impl ProductionEntries {
         true
     }
 
-    pub(crate) fn cancel_pending_input(&mut self) {
+    pub(crate) fn cancel_pending_input(&mut self, window: &AppWindow) {
         self.pending_input = None;
+        window.set_input_dialog_visible(false);
+        window.set_input_dialog_text("".into());
+        window.set_input_dialog_mode(0);
     }
 
     pub(crate) fn replay_tutorial(&mut self, window: &AppWindow) {
@@ -1452,7 +1455,7 @@ impl ProductionEntries {
         let shared = Rc::clone(entries);
         window.on_input_dialog_cancelled(move || {
             if let Some(window) = weak.upgrade() {
-                shared.borrow_mut().cancel_pending_input();
+                shared.borrow_mut().cancel_pending_input(&window);
                 // T34：弹窗遮挡统一机制——输入窗取消后按当前步骤模式恢复地图
                 crate::map_webview::restore_after_modal(window.as_weak());
             }

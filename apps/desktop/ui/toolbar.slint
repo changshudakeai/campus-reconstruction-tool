@@ -24,7 +24,6 @@ export component AppToolbar inherits Rectangle {
     in property <string> switch-campus-label;
     // 溢出菜单开合（in-out：契约测试可直接置位断言；轻点别处自动关闭）
     in-out property <bool> overflow-open;
-
     callback back-clicked();
     callback notice-clicked();
     callback settings-clicked();
@@ -133,14 +132,16 @@ export component AppToolbar inherits Rectangle {
             clicked => { root.overflow-open = false; }
         }
 
-        Rectangle {
+        overflow-menu-card := Rectangle {
             x: parent.width - 192px;
             y: 48px;
             width: 176px;
+            height: menu-layout.preferred-height;
             background: Theme.surface;
             border-radius: 4px;
             border-color: Theme.separator;
             border-width: 1px;
+            clip: true;
 
             menu-layout := VerticalLayout {
                 padding: 4px;
@@ -148,6 +149,7 @@ export component AppToolbar inherits Rectangle {
 
                 if root.trash-visible: Button {
                     text: root.trash-label;
+                    height: 32px;
                     clicked => {
                         root.overflow-open = false;
                         root.trash-clicked();
@@ -156,6 +158,7 @@ export component AppToolbar inherits Rectangle {
 
                 if root.switch-campus-visible: Button {
                     text: root.switch-campus-label;
+                    height: 32px;
                     clicked => {
                         root.overflow-open = false;
                         root.switch-campus-clicked();

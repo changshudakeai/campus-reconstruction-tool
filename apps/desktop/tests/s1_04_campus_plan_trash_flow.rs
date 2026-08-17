@@ -370,6 +370,22 @@ fn s1_04_campus_plan_trash_flow_through_plan_management_entry() {
     // ── 7. 创建 / 复制 / 改名 / 删除均由方案管理入口完成 ──
     window.invoke_plan_list_create_clicked();
     assert!(window.get_input_dialog_visible(), "新建方案弹出输入窗");
+    window.invoke_input_dialog_cancelled();
+    assert!(
+        !window.get_input_dialog_visible(),
+        "取消新建方案后必须立即关闭输入窗"
+    );
+    assert_eq!(
+        window.get_plan_list_model().row_count(),
+        0,
+        "取消新建方案不得创建数据"
+    );
+
+    window.invoke_plan_list_create_clicked();
+    assert!(
+        window.get_input_dialog_visible(),
+        "取消后可以再次打开输入窗"
+    );
     window.set_input_dialog_text("全景复刻方案".into());
     window.invoke_input_dialog_confirmed();
     assert!(!window.get_input_dialog_visible(), "创建成功后关闭输入窗");
