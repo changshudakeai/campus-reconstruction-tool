@@ -2,7 +2,7 @@
 //!
 //! 真实 1026 候选（建筑 1000 + 道路 26，贴近 T32 走查）进入评审工作台，
 //! 只验证呈现/地图推送层，不触碰 F5 评审/封账业务：
-//! 1. 卡片分页（每页 60）：模型行数 ≤ 页大小；翻页/切分类才重建模型，
+//! 1. 卡片分页（T51 每页 20）：模型行数 ≤ 页大小；翻页/切分类才重建模型，
 //!    三态/高亮/复选变更走单卡更新（模型实例指针不变，非整表重建）；
 //! 2. "分类切换 + 三态点击 10 次"计时：单次操作 ≤ 500ms（不再成秒级冻结）；
 //! 3. 评审地图回推计数（T39 计数器注入）：map_ready 全量只推 21 批一次；
@@ -191,17 +191,18 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
     window.invoke_workspace_drawer_toggle_clicked();
     assert!(window.get_workspace_drawer_open(), "评审抽屉必须可展开");
 
-    // ── 验收 1a：卡片分页（每页 60；Slint 无虚拟化 → 不一次实例化千级卡片）──
-    assert_eq!(window.get_review_page_size(), 60, "页大小必须在 50–100 内");
+    // ── 验收 1a：卡片分页（T51 收窄到每页 20；Slint 无虚拟化 → 不一次
+    // 实例化千级卡片，降低滚轮滚动的单帧布局/绘制成本）──
+    assert_eq!(window.get_review_page_size(), 20, "页大小必须为 20（T51）");
     assert_eq!(
         window.get_review_page_total(),
-        17,
-        "建筑 1000 → ceil(1000/60)=17 页"
+        50,
+        "建筑 1000 → ceil(1000/20)=50 页"
     );
     assert_eq!(window.get_review_page_index(), 0);
-    assert!(window.get_review_page_label().contains("1/17"));
+    assert!(window.get_review_page_label().contains("1/50"));
     assert!(
-        window.get_review_cards().row_count() <= 60,
+        window.get_review_cards().row_count() <= 20,
         "模型只含当前页切片（实际 {}）",
         window.get_review_cards().row_count()
     );
@@ -221,7 +222,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
                 .to_string()
         })
         .collect();
-    assert_eq!(page_one_ids.len(), 60, "第一页必须满页 60 张卡");
+    assert_eq!(page_one_ids.len(), 20, "第一页必须满页 20 张卡");
 
     // 翻页：下一页 → 模型重建（新页切片），上一页复位
     let model_page_one = window.get_review_cards();
@@ -232,7 +233,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         model_page_one,
         "翻页必须重建模型（新页切片）"
     );
-    assert_eq!(window.get_review_cards().row_count(), 60, "第 2 页必须满页");
+    assert_eq!(window.get_review_cards().row_count(), 20, "第 2 页必须满页");
     let page_two_first = window
         .get_review_cards()
         .row_data(0)
@@ -260,7 +261,11 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
     window.invoke_review_category_clicked(1);
     assert_eq!(window.get_review_active_category(), 1);
     assert_eq!(window.get_review_page_index(), 0);
-    assert_eq!(window.get_review_page_total(), 1, "道路 26 → 1 页");
+    assert_eq!(
+        window.get_review_page_total(),
+        2,
+        "道路 26 → 2 页（每页 20）"
+    );
     window.invoke_review_category_clicked(0);
     assert_eq!(window.get_review_active_category(), 0);
     assert_eq!(window.get_review_page_index(), 0);
@@ -277,7 +282,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
                 .to_string()
         })
         .collect();
-    assert_eq!(page_ids.len(), 60, "当前页必须满页 60 张卡");
+    assert_eq!(page_ids.len(), 20, "当前页必须满页 20 张卡");
     desktop_shell::set_review_push_probe_visible(true);
     desktop_shell::reset_review_push_count();
     window.invoke_workspace_map_ipc(r#"{"type":"map_ready"}"#.into());
@@ -302,7 +307,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
                 "不得把全量候选逐条 addReviewCandidate 排进 JS 缓冲"
             );
         }
-        // 建筑当前页 60 条是地图 overlay 的明确上限（1026 条只画 60）。
+        // 建筑当前页 20 条是地图 overlay 的明确上限（1026 条只画当前页）。
         let building_push = scripts.last().expect("最后一条是建筑页全量推送");
         let json_start = building_push
             .find('[')
@@ -311,7 +316,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         let array: Vec<serde_json::Value> =
             serde_json::from_str(&building_push[json_start..=json_end])
                 .expect("建筑页可见集合 JSON 必须是数组");
-        assert_eq!(array.len(), 60, "地图只绘制当前分页 60 条，而非全量 1026");
+        assert_eq!(array.len(), 20, "地图只绘制当前分页 20 条，而非全量 1026");
     }
 
     // 一次高亮操作 → 只产生 1 条回推（不是 21 批全量）

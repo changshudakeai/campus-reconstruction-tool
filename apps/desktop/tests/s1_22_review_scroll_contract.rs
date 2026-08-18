@@ -195,8 +195,8 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     assert!(drawer_h > 200.0, "抽屉必须有足够高度容纳操作栏");
 
     // 契约 1：滚轮向下滚动有效（真实 PointerScrolled 事件，落在抽屉列表区；
-    // 建议筛选区在列表上方，因此取列表中部偏下的位置）。
-    // 建议筛选区位于列表上方，列表区位置随内容下移：沿抽屉中部到底部扫描
+    // 置信度筛选区与固定批量行在列表上方，因此取列表中部偏下的位置）。
+    // 筛选区与批量行位于列表上方，列表区位置随内容下移：沿抽屉中部到底部扫描
     // 真实列表区域（一次派发，单次事件循环推进动画到终值），确认滚轮向下
     // 滚动有效（真实 PointerScrolled 事件）。
     for fraction in [
@@ -298,12 +298,13 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     assert_eq!(window.get_review_active_category(), 0);
 
     // 契约 4：大量候选下“封账完成评审”固定于抽屉底部，真实可见可点。
-    // 抽屉底部为操作行（暂停/继续/封账），先点预估中心，未命中则小范围扫描，
+    // T51 已删除暂停/继续按钮，底部操作行只剩封账；扫描整个底部行，
     // 点击成功后 F5 封账落账（1026 条决定一次性写回），呈现 sealed + 导出摘要。
     let mut sealed = window.get_review_sealed();
-    // 封账行位于抽屉底部右侧；详情面板高度随高亮候选变化会小幅移动其位置，
-    // 因此扫描底部右侧密集网格（避开左侧暂停/继续按钮，x 限制在 0.72+）。
-    'scan: for x_ratio in [0.72_f32, 0.77, 0.82, 0.87, 0.92, 0.97] {
+    // 封账行位于抽屉底部；扫描底部密集网格（x 从 0.28 到 0.97）。
+    'scan: for x_ratio in [
+        0.28_f32, 0.36, 0.44, 0.52, 0.60, 0.68, 0.76, 0.84, 0.92, 0.97,
+    ] {
         for y in (0..=34).map(|step| drawer_y + drawer_h - 140.0 + step as f32 * 4.0) {
             let position = LogicalPosition::new(drawer_x + drawer_w * x_ratio, y);
             window.window().dispatch_event(WindowEvent::PointerPressed {

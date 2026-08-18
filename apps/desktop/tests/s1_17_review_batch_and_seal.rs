@@ -138,6 +138,13 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
             serde_json::json!({ "tags": { "name": "实验楼", "building": "lab" } }),
             "overpass",
         ),
+        RawObservation::new(
+            plan_id,
+            CandidateCategory::Building,
+            "way/b5",
+            serde_json::json!({ "tags": { "name": "岗亭", "building": "yes" } }),
+            "overpass",
+        ),
     ];
     database
         .write_raw_observations(&observations)
@@ -174,11 +181,18 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
                 ReviewableValidation::Retained,
                 CandidateNameSource::Osm,
             ),
-            // b4 几何自动修复 → 建议人工确认（形状经修复）
-            _ => (
+            // b4 几何自动修复 → 建议人工确认（形状经修复，低）
+            4 => (
                 "实验楼".to_owned(),
                 vec![("building".to_owned(), "lab".to_owned())],
                 ReviewableValidation::Repaired,
+                CandidateNameSource::Osm,
+            ),
+            // b5 建筑点形状可疑 → 建议人工确认（中）
+            _ => (
+                "岗亭".to_owned(),
+                vec![("building".to_owned(), "yes".to_owned())],
+                ReviewableValidation::Retained,
                 CandidateNameSource::Osm,
             ),
         };
@@ -190,6 +204,11 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
         // b3 与 b0 同来源实体 + 同几何（重复投影）；其余互不重叠。
         let geometry_offset = if index == 3 { 0.0 } else { index as f64 * 0.2 };
         let geometry_part_id = if index == 3 { "duplicate" } else { "default" };
+        let shape = if index == 5 {
+            CandidateShape::point(serde_json::json!([121.4, 31.9]))
+        } else {
+            CandidateShape::polygon(ring(geometry_offset))
+        };
         drafts.push(
             CandidateProjectionDraft::reviewable(
                 CandidateSourceIdentity::new(
@@ -199,7 +218,7 @@ fn seed_suggestion_candidates(database: &mut Database, plan_id: &str) -> Vec<Str
                 ),
                 observation.entity_type,
                 CandidateDisplay::new(title, tags),
-                CandidateShape::polygon(ring(geometry_offset)),
+                shape,
                 validation,
             )
             .with_name_source(name_source),
@@ -259,8 +278,9 @@ fn leave_to_plan_list(window: &AppWindow) {
     }
 }
 
-/// 轻量建议辅助的 AppWindow 契约：筛选组合、一键应用确认/取消、撤销恢复、
-/// 仅生成建议不改三态、封账后不可撤销。
+/// T51 置信度分档 + 一键应用建议的 AppWindow 契约：四个芯片与计数、
+/// 筛选后卡片刷新、高→中→低排序、一键只保留高置信并确认（不剔除）、
+/// 撤销恢复、封账后不可撤销。
 fn run_suggestion_contract(
     window: &AppWindow,
     l10n: &Localization,
@@ -269,61 +289,99 @@ fn run_suggestion_contract(
     reviewable: &[String],
 ) {
     enter_review(window, plan_id);
-    assert_eq!(window.get_review_candidate_count(), 5);
+    assert_eq!(window.get_review_candidate_count(), 6);
 
-    // 建议筛选区可见：五个筛选器 + 计数（建议保留 2 / 建议剔除 1 / 未命名 1 /
-    // 建议人工确认 2 / 需要关注 2）。
+    // 四个置信度芯片 + 计数（全部 6 / 高 2 / 中 1 / 低 3）。
     let labels: Vec<String> = window
-        .get_review_suggestion_filter_labels()
+        .get_review_confidence_filter_labels()
         .iter()
         .map(|label| label.to_string())
         .collect();
-    assert_eq!(labels.len(), 5);
+    assert_eq!(labels.len(), 4, "芯片必须固定为 全部/高/中/低 四档");
     assert_eq!(
-        window.get_review_suggestion_filters_label().as_str(),
-        l10n.t("review.suggestion_filters_label")
+        window.get_review_confidence_filters_label().as_str(),
+        l10n.t("review.confidence_filters_label")
     );
     assert!(
-        labels[0].contains("需要关注") && labels[0].contains("2"),
-        "筛选标签 0 不符：{labels:?}"
+        labels[0].contains("全部") && labels[0].contains("6"),
+        "芯片 0 不符：{labels:?}"
     );
     assert!(
-        labels[1].contains("未命名") && labels[1].contains("1"),
-        "筛选标签 1 不符：{labels:?}"
+        labels[1].contains("高") && labels[1].contains("2"),
+        "芯片 1 不符：{labels:?}"
     );
     assert!(
-        labels[2].contains("建议保留") && labels[2].contains("2"),
-        "筛选标签 2 不符：{labels:?}"
+        labels[2].contains("中") && labels[2].contains("1"),
+        "芯片 2 不符：{labels:?}"
     );
     assert!(
-        labels[3].contains("建议人工确认") && labels[3].contains("2"),
-        "筛选标签 3 不符：{labels:?}"
-    );
-    assert!(
-        labels[4].contains("建议剔除") && labels[4].contains("1"),
-        "筛选标签 4 不符：{labels:?}"
+        labels[3].contains("低") && labels[3].contains("3"),
+        "芯片 3 不符：{labels:?}"
     );
 
-    // 仅生成建议：五张卡片都未裁决（待定），生成建议不改变 ReviewState。
-    for index in 0..5 {
+    // 默认"全部"：建筑 6 张卡初始全部待定，且按 高→中→低 排序
+    // （高=重复对前序 b0/b1，中=b5 点形状，低=b3 后序/b2 未命名/b4 修复）。
+    assert_eq!(window.get_review_cards().row_count(), 6);
+    for index in 0..6 {
         assert_eq!(card_state_key(window, index), "pending");
     }
+    let expected_order = vec![
+        reviewable[0].clone(),
+        reviewable[1].clone(),
+        reviewable[5].clone(),
+        reviewable[3].clone(),
+        reviewable[2].clone(),
+        reviewable[4].clone(),
+    ];
+    let order: Vec<String> = (0..window.get_review_cards().row_count())
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .candidate_id
+                .to_string()
+        })
+        .collect();
+    assert_eq!(order, expected_order, "卡片必须按 高→中→低 排序");
 
-    // 切换"建议保留"筛选：列表收缩为 2 张建议保留卡，应用按钮可用。
-    window.invoke_review_suggestion_filter_clicked(2);
-    assert_eq!(window.get_review_candidate_count(), 5);
+    // 切换"高"：卡片收缩为 2 张高置信卡，应用按钮可用，芯片激活标记正确。
+    window.invoke_review_confidence_filter_clicked(1);
+    assert_eq!(window.get_review_candidate_count(), 6);
     assert_eq!(window.get_review_cards().row_count(), 2);
+    assert_eq!(
+        window
+            .get_review_confidence_filter_active()
+            .row_data(1)
+            .unwrap(),
+        1,
+        "高置信芯片必须激活"
+    );
     assert!(window.get_review_apply_suggestions_enabled());
-    let cards = window.get_review_cards();
-    let suggestions: Vec<String> = (0..cards.row_count())
-        .map(|index| cards.row_data(index).unwrap().suggestion_reason.to_string())
+    let suggestions: Vec<String> = (0..window.get_review_cards().row_count())
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .suggestion_reason
+                .to_string()
+        })
         .collect();
     assert!(
         suggestions.iter().all(|reason| !reason.is_empty()),
-        "建议保留筛选下的每张卡都必须带可读理由：{suggestions:?}"
+        "高置信筛选下的每张卡都必须带可读理由：{suggestions:?}"
     );
 
-    // 一键应用 → 确认弹窗：对象数量 + 主要理由分布。
+    // 切换"低"：卡片刷新为 3 张，分页仍可用（1/1 也常显）。
+    window.invoke_review_confidence_filter_clicked(3);
+    assert_eq!(window.get_review_cards().row_count(), 3);
+    assert_eq!(window.get_review_page_total(), 1);
+    assert!(window.get_review_page_label().contains("1/1"));
+
+    // 切回"全部"后一键应用（范围=全部尚未保留的高置信候选，跨芯片）。
+    window.invoke_review_confidence_filter_clicked(0);
+    assert_eq!(window.get_review_cards().row_count(), 6);
     window.invoke_review_apply_suggestions_clicked();
     assert!(window.get_confirm_dialog_visible());
     assert_eq!(
@@ -332,8 +390,8 @@ fn run_suggestion_contract(
     );
     let body = window.get_confirm_dialog_body().to_string();
     assert!(
-        body.contains("2") && body.contains("保留 2 项"),
-        "确认框必须显示对象数量与保留/剔除拆分：{body}"
+        body.contains("2") && body.contains("不会剔除任何候选"),
+        "确认框必须显示变更数量并明示不剔除：{body}"
     );
     assert!(
         body.contains(&l10n.t("review.apply_suggest_reason_label")) && body.contains("无需处理"),
@@ -343,60 +401,51 @@ fn run_suggestion_contract(
     // 取消：状态不变、无撤销可用。
     window.invoke_confirm_dialog_cancelled();
     assert!(!window.get_confirm_dialog_visible());
-    for index in 0..2 {
+    for index in 0..6 {
         assert_eq!(card_state_key(window, index), "pending");
     }
     assert!(!window.get_review_undo_available());
 
-    // 再次应用并确认：b0/b1 变为保留。
+    // 再次应用并确认：只有 2 个高置信候选变为保留，低/中候选保持待定。
     window.invoke_review_apply_suggestions_clicked();
     assert!(window.get_confirm_dialog_visible());
     window.invoke_confirm_dialog_confirmed();
     assert!(!window.get_confirm_dialog_visible());
-    assert_eq!(card_state_key(window, 0), "keep");
-    assert_eq!(card_state_key(window, 1), "keep");
     assert!(window.get_review_undo_available());
+    let kept: Vec<String> = (0..window.get_review_cards().row_count())
+        .filter(|index| {
+            window
+                .get_review_cards()
+                .row_data(*index)
+                .unwrap()
+                .state_key
+                .as_str()
+                == "keep"
+        })
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .candidate_id
+                .to_string()
+        })
+        .collect();
+    assert_eq!(kept.len(), 2, "一键应用只保留高置信：{kept:?}");
+    assert!(kept.contains(&reviewable[0]) && kept.contains(&reviewable[1]));
+    assert!(
+        !window.get_review_apply_suggestions_enabled(),
+        "全部高置信候选已保留后应用按钮应禁用"
+    );
 
     // 撤销上一批：恢复到应用前（全部待定）。
     window.invoke_review_undo_suggestions_clicked();
     assert!(!window.get_review_undo_available());
-    for index in 0..2 {
+    for index in 0..6 {
         assert_eq!(card_state_key(window, index), "pending");
     }
 
-    // 建议剔除批：切换"建议剔除"筛选 → 1 张卡（b3 重复投影）。
-    window.invoke_review_suggestion_filter_clicked(2); // 关闭"建议保留"
-    window.invoke_review_suggestion_filter_clicked(4); // 开启"建议剔除"
-    assert_eq!(window.get_review_cards().row_count(), 1);
-    let duplicate_candidate = window
-        .get_review_cards()
-        .row_data(0)
-        .unwrap()
-        .candidate_id
-        .to_string();
-    assert!(
-        duplicate_candidate == reviewable[0] || duplicate_candidate == reviewable[3],
-        "建议剔除必须指向同来源同几何的重复对之一"
-    );
-    window.invoke_review_apply_suggestions_clicked();
-    assert!(window.get_confirm_dialog_visible());
-    let body = window.get_confirm_dialog_body().to_string();
-    assert!(
-        body.contains("剔除 1 项") && body.contains("重复投影"),
-        "剔除批确认框必须显示数量与理由：{body}"
-    );
-    window.invoke_confirm_dialog_confirmed();
-    assert_eq!(card_state_key(window, 0), "remove");
-
-    // 撤销：b3 回到待定。
-    window.invoke_review_undo_suggestions_clicked();
-    assert_eq!(card_state_key(window, 0), "pending");
-
-    // 封账后不可撤销：先应用一批（保留 + 剔除混合批），再封账，
-    // 撤销按钮不可用且请求被拒绝。
-    window.invoke_review_suggestion_filter_clicked(4); // 关闭"建议剔除"
-    window.invoke_review_suggestion_filter_clicked(2); // 开启"建议保留"
-    window.invoke_review_suggestion_filter_clicked(4); // 同时开启"建议剔除"
+    // 重新应用并封账：封账后不可撤销、不可再应用。
     window.invoke_review_apply_suggestions_clicked();
     window.invoke_confirm_dialog_confirmed();
     assert!(window.get_review_undo_available());
@@ -408,13 +457,14 @@ fn run_suggestion_contract(
         "封账后不可再应用建议"
     );
 
-    // 数据库终态落账：b0/b1 保留、b3 剔除、b2/b4 待定（应用 + 封账的最终决定）。
+    // 数据库终态落账：2 个高置信保留、4 个中/低候选待定、0 个剔除。
     let db = Database::open(database_path).expect("打开数据库核对终态");
     let (pending, keep, remove) = db.count_review_states(plan_id).expect("统计评审终态");
-    assert_eq!((pending, keep, remove), (2, 2, 1));
+    assert_eq!((pending, keep, remove), (4, 2, 0));
 }
 
-/// 既有 M3 批量确认/封账/重进恢复终态的 AppWindow 契约（保持原语义）。
+/// T51 固定批量行契约：全选＝当前页、批量剔除无门槛但始终确认、
+/// 批量改保留/待定直接执行，封账与重进恢复终态语义保持不变。
 fn run_batch_contract(
     window: &AppWindow,
     l10n: &Localization,
@@ -425,15 +475,31 @@ fn run_batch_contract(
     enter_review(window, plan_id);
     assert_eq!(window.get_review_candidate_count(), 6);
 
-    // 全选当前类别（建筑 5 项）→ 批量按钮浮现。
-    window.invoke_review_select_all_clicked();
-    assert!(window.get_review_bulk_buttons_visible());
+    // 固定批量行初始状态：未全选、批量按钮禁用。
+    assert!(!window.get_review_all_page_selected());
+    assert!(!window.get_review_batch_buttons_enabled());
+
+    // 全选＝当前页：建筑当前页 5 项全部勾选。
+    window.invoke_review_select_all_toggled();
+    assert!(window.get_review_all_page_selected());
+    assert!(window.get_review_batch_buttons_enabled());
     assert_eq!(
         window.get_review_selected_count_label().as_str(),
         l10n.t_with_args("review.selected_count", serde_json::json!({ "count": 5 }))
     );
 
-    // 批量剔除 5 项（阈值路径）→ 二次确认弹窗。
+    // 再点一次全选：只取消当前页勾选。
+    window.invoke_review_select_all_toggled();
+    assert!(!window.get_review_all_page_selected());
+    assert!(!window.get_review_batch_buttons_enabled());
+    assert_eq!(
+        window.get_review_selected_count_label().as_str(),
+        l10n.t_with_args("review.selected_count", serde_json::json!({ "count": 0 }))
+    );
+
+    // 批量剔除 1 项也必须弹确认（移除 ≥5 门槛）。
+    window.invoke_review_card_selection_toggled(reviewable[0].clone().into());
+    assert!(window.get_review_batch_buttons_enabled());
     window.invoke_review_bulk_state_clicked("remove".into());
     assert!(window.get_confirm_dialog_visible());
     assert_eq!(
@@ -441,31 +507,48 @@ fn run_batch_contract(
         l10n.t("review.batch_reject_confirm_title")
     );
     assert!(
+        window.get_confirm_dialog_body().as_str().contains("1"),
+        "确认弹窗正文必须携带待剔除数量"
+    );
+    window.invoke_confirm_dialog_cancelled();
+    assert!(!window.get_confirm_dialog_visible());
+    assert_eq!(card_state_key(window, 0), "pending", "取消后状态不得改变");
+
+    // 全选当前页 → 批量剔除 5 项 → 确认执行。
+    window.invoke_review_select_all_toggled();
+    assert!(window.get_review_all_page_selected());
+    window.invoke_review_bulk_state_clicked("remove".into());
+    assert!(window.get_confirm_dialog_visible());
+    assert!(
         window.get_confirm_dialog_body().as_str().contains("5"),
         "确认弹窗正文必须携带待剔除数量"
     );
-
-    // 取消：状态原样不动。
-    window.invoke_confirm_dialog_cancelled();
-    assert!(!window.get_confirm_dialog_visible());
-    for index in 0..5 {
-        assert_eq!(
-            card_state_key(window, index),
-            "pending",
-            "取消二次确认后状态不得改变"
-        );
-    }
-
-    // 再次批量剔除并确认：5 项全部变为剔除。
-    window.invoke_review_bulk_state_clicked("remove".into());
-    assert!(window.get_confirm_dialog_visible());
     window.invoke_confirm_dialog_confirmed();
     assert!(!window.get_confirm_dialog_visible());
     for index in 0..5 {
         assert_eq!(card_state_key(window, index), "remove");
     }
 
-    // 逐项恢复：建筑 0 改回保留；道路切到保留。
+    // 批量改保留直接执行（无需确认）：当前页仍为勾选态。
+    window.invoke_review_bulk_state_clicked("keep".into());
+    assert!(!window.get_confirm_dialog_visible(), "批量改保留不得弹确认");
+    for index in 0..5 {
+        assert_eq!(card_state_key(window, index), "keep");
+    }
+
+    // 批量改待定直接执行。
+    window.invoke_review_bulk_state_clicked("pending".into());
+    assert!(!window.get_confirm_dialog_visible(), "批量改待定不得弹确认");
+    for index in 0..5 {
+        assert_eq!(card_state_key(window, index), "pending");
+    }
+
+    // 再次批量剔除并确认：5 项全部剔除；随后逐项恢复两个候选。
+    window.invoke_review_bulk_state_clicked("remove".into());
+    window.invoke_confirm_dialog_confirmed();
+    for index in 0..5 {
+        assert_eq!(card_state_key(window, index), "remove");
+    }
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
     window.invoke_review_category_clicked(1);
     window.invoke_review_card_state_clicked(reviewable[5].clone().into(), "keep".into());
