@@ -27,8 +27,6 @@ localization = { workspace = true }
 notification-center = { workspace = true }
 # B1 共享领域类型（PlanId/Boundary/CandidateCategory）
 shared-domain-types = { workspace = true }
-# 稳定候选投影标识（ADR-0040：投影必须有稳定候选 ID）
-uuid = { workspace = true }
 # JSON 值承载（边界坐标、source_data 标签展示）
 serde_json = { workspace = true }
 # 带类型错误（窗口契约章：错误是带类型的值一路向上传递）

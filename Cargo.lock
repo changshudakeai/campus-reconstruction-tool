@@ -998,7 +998,6 @@ dependencies = [
  "shared-domain-types",
  "tempfile",
  "thiserror 2.0.19",
- "uuid",
 ]
 
 [[package]]
