@@ -727,16 +727,9 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
-        window.on_review_select_all_clicked(move || {
+        window.on_review_select_all_toggled(move || {
             let Some(window) = weak.upgrade() else { return };
-            shared.borrow_mut().review_select_all(&window);
-        });
-
-        let weak = window.as_weak();
-        let shared = Rc::clone(entries);
-        window.on_review_deselect_all_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            shared.borrow_mut().review_deselect_all(&window);
+            shared.borrow_mut().review_toggle_select_all_page(&window);
         });
 
         let weak = window.as_weak();
@@ -750,20 +743,6 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
-        window.on_review_pause_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            shared.borrow_mut().review_pause(&window);
-        });
-
-        let weak = window.as_weak();
-        let shared = Rc::clone(entries);
-        window.on_review_resume_clicked(move || {
-            let Some(window) = weak.upgrade() else { return };
-            shared.borrow_mut().review_resume(&window);
-        });
-
-        let weak = window.as_weak();
-        let shared = Rc::clone(entries);
         window.on_review_seal_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             shared.borrow_mut().review_seal(&window);
@@ -771,11 +750,11 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
-        window.on_review_suggestion_filter_clicked(move |index| {
+        window.on_review_confidence_filter_clicked(move |index| {
             let Some(window) = weak.upgrade() else { return };
             shared
                 .borrow_mut()
-                .review_toggle_suggestion_filter(&window, index);
+                .review_set_confidence_filter(&window, index);
         });
 
         let weak = window.as_weak();

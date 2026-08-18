@@ -12,8 +12,8 @@ use crate::ReviewCandidateData;
 use localization::Localization;
 use notification_center::Notification;
 use review_workbench::{
-    text_keys, CandidateKey, CommandOutcome, ExportSummary, ReviewWorkbench, StateChange,
-    SuggestFilter,
+    text_keys, CandidateKey, CommandOutcome, ConfidenceFilter, ExportSummary, ReviewWorkbench,
+    StateChange,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::cell::RefCell;
@@ -42,8 +42,9 @@ pub(crate) struct ReviewProductionAdapter {
     pub(super) map_sync: Rc<RefCell<ReviewMapSync>>,
 }
 
-/// T39：评审候选列表分页页大小（Slint 无虚拟化；50–100 内取 60）。
-pub(super) const REVIEW_PAGE_SIZE: usize = 60;
+/// T39/T51：评审候选列表分页页大小。Slint 无虚拟化，60 张复杂卡片在软件
+/// 渲染下滚轮滑动卡顿，T51 收窄到 20 以降低单帧布局/绘制成本。
+pub(super) const REVIEW_PAGE_SIZE: usize = 20;
 
 impl ReviewProductionAdapter {
     pub(crate) fn new(context: WorkspaceProductionContext) -> Self {
@@ -77,12 +78,12 @@ impl ReviewProductionAdapter {
             page_prev_label: l10n.t("review.page_prev"),
             page_next_label: l10n.t("review.page_next"),
             selected_count_label: String::new(),
-            bulk_buttons_visible: false,
+            all_page_selected: false,
+            batch_buttons_enabled: false,
             set_keep_label: l10n.t("review.set_keep"),
             set_reject_label: l10n.t("review.set_reject"),
             set_pending_label: l10n.t("review.set_pending"),
             select_all_label: l10n.t("review.select_all"),
-            deselect_all_label: l10n.t("review.deselect_all"),
             card_pending_label: l10n.t("review.pending"),
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
@@ -96,14 +97,12 @@ impl ReviewProductionAdapter {
             detail_source_label: String::new(),
             detail_source: String::new(),
             detail_state_label: String::new(),
-            pause_label: l10n.t("review.pause"),
-            resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
             sealed: false,
-            suggestion_filters_label: l10n.t(text_keys::SUGGESTION_FILTERS_LABEL),
-            suggestion_filter_labels: Vec::new(),
-            suggestion_filter_counts: Vec::new(),
-            suggestion_filter_active: Vec::new(),
+            confidence_filters_label: l10n.t(text_keys::CONFIDENCE_FILTERS_LABEL),
+            confidence_filter_labels: Vec::new(),
+            confidence_filter_counts: Vec::new(),
+            confidence_filter_active: Vec::new(),
             apply_suggestions_label: l10n.t(text_keys::APPLY_SUGGESTIONS),
             undo_suggestions_label: l10n.t(text_keys::UNDO_SUGGESTIONS),
             apply_suggestions_enabled: false,
@@ -182,8 +181,8 @@ impl ReviewProductionAdapter {
                     .into(),
             })
             .collect();
-        // T39：Slint 无虚拟化 → 卡片分页（每页 60，50–100 内）。全量卡片只在
-        // 切分类/翻页时重建；三态/高亮变更由呈现层单卡更新（set_row_data）。
+        // T39/T51：Slint 无虚拟化 → 卡片分页（每页 20，滚轮滑动更轻）。全量
+        // 卡片只在切分类/翻页/筛选时重建；三态/高亮/复选变更由呈现层单卡更新。
         let page_total = cards.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
         let page_index = {
             let mut session = self.context.session.borrow_mut();
@@ -247,12 +246,16 @@ impl ReviewProductionAdapter {
             "review.selected_count",
             serde_json::json!({ "count": view.selected_count }),
         );
-        let suggestion_filter_labels: Vec<String> = view
-            .suggestion_filters
+        // T51 固定批量行：全选＝当前页（所有当前页卡片已勾选时复选框选中）；
+        // 批量三态按钮在至少勾选 1 项且未封账时可用。
+        let all_page_selected = !cards.is_empty() && cards.iter().all(|card| card.selected);
+        let batch_buttons_enabled = view.selected_count > 0 && !view.sealed;
+        let confidence_filter_labels: Vec<String> = view
+            .confidence_filters
             .iter()
             .map(|filter| {
                 l10n.t_with_args(
-                    text_keys::SUGGESTION_FILTER_TAB,
+                    text_keys::CONFIDENCE_FILTER_TAB,
                     serde_json::json!({
                         "label": l10n.t(filter.label_key),
                         "count": filter.count,
@@ -260,13 +263,13 @@ impl ReviewProductionAdapter {
                 )
             })
             .collect();
-        let suggestion_filter_counts: Vec<i32> = view
-            .suggestion_filters
+        let confidence_filter_counts: Vec<i32> = view
+            .confidence_filters
             .iter()
             .map(|filter| filter.count as i32)
             .collect();
-        let suggestion_filter_active: Vec<i32> = view
-            .suggestion_filters
+        let confidence_filter_active: Vec<i32> = view
+            .confidence_filters
             .iter()
             .map(|filter| i32::from(filter.active))
             .collect();
@@ -291,12 +294,12 @@ impl ReviewProductionAdapter {
             page_prev_label: l10n.t("review.page_prev"),
             page_next_label: l10n.t("review.page_next"),
             selected_count_label,
-            bulk_buttons_visible: view.bulk_buttons_visible,
+            all_page_selected,
+            batch_buttons_enabled,
             set_keep_label: l10n.t("review.set_keep"),
             set_reject_label: l10n.t("review.set_reject"),
             set_pending_label: l10n.t("review.set_pending"),
             select_all_label: l10n.t("review.select_all"),
-            deselect_all_label: l10n.t("review.deselect_all"),
             card_pending_label: l10n.t("review.pending"),
             card_keep_label: l10n.t("review.keep"),
             card_reject_label: l10n.t("review.reject"),
@@ -310,14 +313,12 @@ impl ReviewProductionAdapter {
             detail_source_label,
             detail_source,
             detail_state_label,
-            pause_label: l10n.t("review.pause"),
-            resume_label: l10n.t("review.resume"),
             seal_label: l10n.t("review.seal"),
             sealed: view.sealed,
-            suggestion_filters_label: l10n.t(view.suggestion_filters_label_key),
-            suggestion_filter_labels,
-            suggestion_filter_counts,
-            suggestion_filter_active,
+            confidence_filters_label: l10n.t(view.confidence_filters_label_key),
+            confidence_filter_labels,
+            confidence_filter_counts,
+            confidence_filter_active,
             apply_suggestions_label: l10n.t(view.apply_suggestions_label_key),
             undo_suggestions_label: l10n.t(view.undo_suggestions_label_key),
             apply_suggestions_enabled: view.apply_suggestions_enabled,
@@ -441,11 +442,7 @@ impl ReviewProductionAdapter {
                 let l10n = injector.l10n();
                 let main = l10n.t_with_args(
                     text_keys::APPLY_SUGGEST_CONFIRM_BODY,
-                    serde_json::json!({
-                        "count": request.count,
-                        "keep": request.keep_count,
-                        "remove": request.remove_count,
-                    }),
+                    serde_json::json!({ "count": request.count }),
                 );
                 let lines: Vec<String> = request
                     .reason_lines
@@ -815,11 +812,30 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     Ok(())
                 }))
             }
-            ReviewRequest::SelectAllActive => {
-                self.mutate_simple(|workbench| workbench.select_all_in_active_category())
-            }
-            ReviewRequest::DeselectAllActive => {
-                self.mutate_simple(|workbench| workbench.deselect_all_in_active_category())
+            ReviewRequest::ToggleSelectAllPage => {
+                // T51：固定批量行的"全选"复选框只作用于当前页切片。
+                let (page_keys, target) = {
+                    let injector = self.context.injector();
+                    let injector = injector.borrow();
+                    let Some(workbench) = injector.review() else {
+                        return Presentation::ready(self.empty_page())
+                            .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                    };
+                    let view = workbench.view();
+                    let page_index = self.context.session.borrow().review_page_index;
+                    let start = page_index * REVIEW_PAGE_SIZE;
+                    let end = (start + REVIEW_PAGE_SIZE).min(view.cards.len());
+                    let slice = &view.cards[start..end];
+                    let page_keys: Vec<CandidateKey> = slice
+                        .iter()
+                        .map(|card| CandidateKey::new(card.candidate_id.clone()))
+                        .collect();
+                    let all_selected = !slice.is_empty() && slice.iter().all(|card| card.selected);
+                    (page_keys, !all_selected)
+                };
+                self.mutate_simple(|workbench| {
+                    workbench.set_selected(&page_keys, target);
+                })
             }
             ReviewRequest::SetBulk { state } => {
                 let Some(state) = ReviewState::parse(&state) else {
@@ -834,12 +850,14 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             ReviewRequest::CancelPending => {
                 self.present_apply(self.apply(|workbench| workbench.cancel_pending()))
             }
-            ReviewRequest::ToggleSuggestionFilter { index } => {
-                let Some(filter) = SuggestFilter::ALL.get(index).copied() else {
+            ReviewRequest::SetConfidenceFilter { index } => {
+                let Some(filter) = ConfidenceFilter::ALL.get(index).copied() else {
                     return Presentation::ready(self.page_state())
                         .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
-                self.mutate_simple(|workbench| workbench.toggle_suggestion_filter(filter))
+                // 筛选变化后复位到第一页，保证用户立即看到对应筛选的第一页切片。
+                self.context.session.borrow_mut().review_page_index = 0;
+                self.mutate_simple(|workbench| workbench.set_confidence_filter(filter))
             }
             ReviewRequest::ApplySuggestions => {
                 self.present_submit(self.submit(|workbench| workbench.apply_suggestions()))
@@ -853,61 +871,6 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             ReviewRequest::UndoSuggestionApply => self.present_apply(
                 self.apply(|workbench| workbench.undo_last_suggestion_apply().map(|_| ())),
             ),
-            ReviewRequest::Pause => {
-                // 检查点已随每次状态变更落库；暂停按钮只是再次确认并提示。
-                checkpoint_review(&self.context);
-                let injector = self.context.injector();
-                let injector = injector.borrow();
-                let l10n = injector.l10n();
-                let notification = Notification::info(
-                    l10n.t("app.source_tag"),
-                    l10n.t("review.session_saved_title"),
-                    l10n.t("review.session_saved_body"),
-                );
-                drop(injector);
-                Presentation::ready(self.page_state())
-                    .with_notification(NotificationFact::new(notification))
-                    .with_navigation(NavigationDecision::Show(Screen::Workspace))
-            }
-            ReviewRequest::Resume => {
-                let plan_id = self.context.active_plan_id().unwrap_or_default();
-                let result = {
-                    let injector = self.context.injector();
-                    let mut injector = injector.borrow_mut();
-                    let draft = injector.load_review_draft(&plan_id);
-                    match draft {
-                        Ok(Some(draft)) => match injector.review_mut() {
-                            Some(workbench) => {
-                                workbench.restore_draft_entries(&draft.entries).map(|_| {
-                                    workbench.set_active_category(draft.active_category);
-                                })
-                            }
-                            None => Ok(()),
-                        },
-                        Ok(None) => Ok(()),
-                        Err(error) => Err(review_workbench::Error::SessionIo(error.to_string())),
-                    }
-                };
-                match result {
-                    Ok(()) => {
-                        let injector = self.context.injector();
-                        let injector = injector.borrow();
-                        let l10n = injector.l10n();
-                        let notification = Notification::info(
-                            l10n.t("app.source_tag"),
-                            l10n.t("review.session_restored_title"),
-                            l10n.t("review.session_restored_body"),
-                        );
-                        drop(injector);
-                        Presentation::ready(self.page_state())
-                            .with_notification(NotificationFact::new(notification))
-                            .with_navigation(NavigationDecision::Show(Screen::Workspace))
-                    }
-                    Err(error) => self
-                        .review_failure_presentation(&error)
-                        .with_navigation(NavigationDecision::Show(Screen::Workspace)),
-                }
-            }
             ReviewRequest::Seal => {
                 let result = {
                     let injector = self.context.injector();

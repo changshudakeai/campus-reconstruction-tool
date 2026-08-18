@@ -8,6 +8,7 @@
   "text-faint": "#aaaaaa",
   "separator": "#e0e0e0",
   "highlight": "#e3f2fd",
+  "map-highlight": "#2196f3",
   "bubble-background": "#fffde7",
   "bubble-border": "#fbc02d",
   "error": "#c62828"

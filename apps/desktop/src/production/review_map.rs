@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use review_workbench::{MapObjectView, WorkbenchView};
+use review_workbench::{ConfidenceFilter, MapObjectView, WorkbenchView};
 
 use super::review::{ReviewProductionAdapter, REVIEW_PAGE_SIZE};
 use super::workspace_boundary::WorkspaceProductionContext;
@@ -18,9 +18,10 @@ pub(super) struct ReviewMapSync {
     pub(super) pushed_states: HashMap<String, String>,
     /// 已推送的高亮候选（None = 无高亮）。
     pub(super) pushed_highlight: Option<String>,
-    /// 已推送的可见集合身份（active_category_index, page_index）。
-    /// 分类/翻页变化时触发一次全量重推（清旧 overlay + 画新集合）。
-    pub(super) pushed_visible: Option<(usize, usize)>,
+    /// 已推送的可见集合身份（active_category_index, page_index,
+    /// active_confidence_filter）。分类/翻页/筛选变化时触发一次全量重推
+    /// （清旧 overlay + 画新集合，T51：筛选变化不得残留旧筛选标注）。
+    pub(super) pushed_visible: Option<(usize, usize, ConfidenceFilter)>,
     /// 全量推送是否已排定（幂等，防止多次 map_ready 重复排定）。
     pub(super) full_push_scheduled: bool,
 }
@@ -39,6 +40,7 @@ impl ReviewMapSync {
 pub(super) struct VisibleReviewSet {
     pub(super) active_category_index: usize,
     pub(super) page_index: usize,
+    pub(super) active_filter: ConfidenceFilter,
     pub(super) objects: Vec<MapObjectView>,
 }
 
@@ -56,6 +58,12 @@ pub(super) fn visible_review_set_for(
         .iter()
         .position(|tab| tab.active)
         .unwrap_or(0);
+    let active_filter = view
+        .confidence_filters
+        .iter()
+        .find(|chip| chip.active)
+        .map(|chip| chip.filter)
+        .unwrap_or(ConfidenceFilter::All);
     let page_total = view.cards.len().div_ceil(page_size).max(1);
     let mut session = context.session.borrow_mut();
     let page_index = session.review_page_index.min(page_total - 1);
@@ -77,6 +85,7 @@ pub(super) fn visible_review_set_for(
     VisibleReviewSet {
         active_category_index,
         page_index,
+        active_filter,
         objects,
     }
 }
@@ -122,7 +131,11 @@ pub(super) fn push_full_visible_sync(visible: &VisibleReviewSet, sync: &mut Revi
     }
     sync.pushed_states = states;
     sync.pushed_highlight = highlight;
-    sync.pushed_visible = Some((visible.active_category_index, visible.page_index));
+    sync.pushed_visible = Some((
+        visible.active_category_index,
+        visible.page_index,
+        visible.active_filter,
+    ));
     true
 }
 
@@ -144,8 +157,12 @@ impl ReviewProductionAdapter {
         drop(injector);
 
         let mut sync = self.map_sync.borrow_mut();
-        let full_needed =
-            sync.pushed_visible != Some((visible.active_category_index, visible.page_index));
+        let full_needed = sync.pushed_visible
+            != Some((
+                visible.active_category_index,
+                visible.page_index,
+                visible.active_filter,
+            ));
         if full_needed {
             let _ = push_full_visible_sync(&visible, &mut sync);
             sync.full_push_scheduled = false;
@@ -207,7 +224,11 @@ impl ReviewProductionAdapter {
             let visible = visible_review_set_for(&context, &view, REVIEW_PAGE_SIZE);
             drop(injector);
             let mut sync = map_sync.borrow_mut();
-            let visible_key = (visible.active_category_index, visible.page_index);
+            let visible_key = (
+                visible.active_category_index,
+                visible.page_index,
+                visible.active_filter,
+            );
             if sync.pushed_visible == Some(visible_key) {
                 // 该可见集合已由用户操作路径内联推送（测试无事件循环或生产
                 // 1ms 窗口内用户先操作）：不再重复推一次。
