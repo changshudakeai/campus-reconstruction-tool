@@ -1,7 +1,8 @@
 //! F5 候选审核工作台
 //!
-//! 左卡片列表 + 中间大地图 + 右信息面板的三栏布局；所有候选初始为"待定"，
-//! 逐个或批量裁决为保留/剔除；点错状态直接改点另一个状态（状态本身就是后悔药）。
+//! 地图为主区 + 左侧评审抽屉（T38）；候选按置信度 高→中→低 排序（T51）；
+//! 所有候选初始为"待定"，逐个或批量裁决为保留/剔除；点错状态直接改点另一个
+//! 状态（状态本身就是后悔药）。
 //!
 //! ## 缝 4 契约（无卡顿铁律，ADR-0016/0022）
 //!
@@ -24,6 +25,7 @@
 
 mod candidate;
 mod command;
+mod confidence;
 mod error;
 mod session;
 mod suggestion;
@@ -31,16 +33,15 @@ mod view_models;
 mod workbench;
 
 pub use candidate::{Candidate, CandidateKey};
-pub use command::{
-    CommandOutcome, ConfirmationRequest, StateChange, BATCH_REMOVE_CONFIRM_THRESHOLD,
-};
+pub use command::{CommandOutcome, ConfirmationRequest, StateChange};
+pub use confidence::{ConfidenceFilter, ConfidenceTier};
 pub use error::{Error, Result};
 pub use suggestion::{
-    AppliedSuggestionBatch, CandidateSuggestion, ReasonLine, SuggestFilter, SuggestionAction,
+    AppliedSuggestionBatch, CandidateSuggestion, ReasonLine, SuggestionAction,
     SuggestionApplyRequest, SuggestionCategory, SuggestionEngine,
 };
 pub use view_models::{
-    text_keys, CandidateCardView, CategoryTabView, ExportSummary, InfoPanelView, MapObjectView,
-    SuggestionCardView, SuggestionFilterView, WorkbenchView,
+    text_keys, CandidateCardView, CategoryTabView, ConfidenceFilterView, ExportSummary,
+    InfoPanelView, MapObjectView, SuggestionCardView, WorkbenchView,
 };
 pub use workbench::ReviewWorkbench;

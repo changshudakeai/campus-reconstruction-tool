@@ -4,17 +4,14 @@
 //! 将来补建 B8 命令历史层时，只需在提交入口记录这些值即可回放/撤销，
 //! 无须翻修既有代码。
 //!
-//! 批量确认规则（ADR-0016/0022）：批量**剔除 ≥5 项**需二次确认弹窗；
-//! 批量剔除 1-4 项直接执行；批量改保留/待定不需确认（可自愈的无害动作）。
+//! 批量确认规则（ADR-0016/0022，T51 修订）：批量**剔除**一律先弹一次二次
+//! 确认（无数量门槛）；单卡剔除与批量改保留/待定直接执行（可自愈的无害动作）。
 
 use shared_domain_types::ReviewState;
 
 use crate::candidate::CandidateKey;
 use crate::suggestion::SuggestionApplyRequest;
 use crate::view_models::text_keys;
-
-/// 批量剔除需要二次确认的阈值（≥5 项弹窗，ADR-0016）
-pub const BATCH_REMOVE_CONFIRM_THRESHOLD: usize = 5;
 
 /// 一次明确的状态变更操作：把一批候选改为目标三态
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,9 +36,11 @@ impl StateChange {
         Self { targets, to }
     }
 
-    /// 是否需要二次确认：只有批量剔除 ≥5 项需要（ADR-0022 第二节）
+    /// 是否需要二次确认：只有多目标批量剔除需要（T51 移除数量门槛；
+    /// 单卡剔除走直接路径，批量按钮的剔除确认由
+    /// [`crate::workbench::ReviewWorkbench::submit_for_selected`] 统一保证）。
     pub fn needs_confirmation(&self) -> bool {
-        self.to.is_remove() && self.targets.len() >= BATCH_REMOVE_CONFIRM_THRESHOLD
+        self.to.is_remove() && self.targets.len() > 1
     }
 }
 
@@ -99,14 +98,14 @@ mod tests {
     }
 
     #[test]
-    fn batch_remove_of_five_needs_confirmation() {
+    fn batch_remove_of_two_or_more_needs_confirmation() {
+        assert!(StateChange::batch(keys(2), ReviewState::Remove).needs_confirmation());
         assert!(StateChange::batch(keys(5), ReviewState::Remove).needs_confirmation());
         assert!(StateChange::batch(keys(9), ReviewState::Remove).needs_confirmation());
     }
 
     #[test]
-    fn batch_remove_below_threshold_is_direct() {
-        assert!(!StateChange::batch(keys(4), ReviewState::Remove).needs_confirmation());
+    fn single_remove_is_direct() {
         assert!(!StateChange::single(keys(1).remove(0), ReviewState::Remove).needs_confirmation());
     }
 

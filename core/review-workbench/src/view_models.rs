@@ -7,9 +7,8 @@
 use shared_domain_types::{CandidateCategory, ReviewState};
 
 use crate::command::ConfirmationRequest;
-use crate::suggestion::{
-    SuggestFilter, SuggestionAction, SuggestionApplyRequest, SuggestionCategory,
-};
+use crate::confidence::ConfidenceFilter;
+use crate::suggestion::{SuggestionAction, SuggestionApplyRequest, SuggestionCategory};
 
 /// 本 crate 产出的全部文本键（zh-CN.json 中必须逐条存在，由测试保证）
 pub mod text_keys {
@@ -49,28 +48,22 @@ pub mod text_keys {
     pub const INFO_CATEGORY: &str = "review.info_category";
     /// 信息面板：标签与属性行标签
     pub const INFO_TAGS: &str = "review.info_tags";
-    /// 暂停评审按钮（进度存临时文件，随时回来继续）
-    pub const PAUSE: &str = "review.pause";
-    /// 继续评审按钮（从临时文件恢复进度）
-    pub const RESUME: &str = "review.resume";
     /// 确认按钮（弹窗共用，app 命名空间既有键）
     pub const CONFIRM_BUTTON: &str = "app.confirm_button";
     /// 取消按钮（弹窗共用，app 命名空间既有键）
     pub const CANCEL_BUTTON: &str = "app.cancel_button";
-    /// 建议筛选区标题
-    pub const SUGGESTION_FILTERS_LABEL: &str = "review.suggestion_filters_label";
-    /// 建议筛选器标签行（含 `{label}`/`{count}` 占位符）
-    pub const SUGGESTION_FILTER_TAB: &str = "review.suggestion_filter_tab";
-    /// 建议筛选：需要关注
-    pub const FILTER_NEEDS_ATTENTION: &str = "review.filter_needs_attention";
-    /// 建议筛选：未命名
-    pub const FILTER_UNNAMED: &str = "review.filter_unnamed";
-    /// 建议筛选：建议保留
-    pub const FILTER_SUGGEST_KEEP: &str = "review.filter_suggest_keep";
-    /// 建议筛选：建议人工确认
-    pub const FILTER_HUMAN_REVIEW: &str = "review.filter_human_review";
-    /// 建议筛选：建议剔除
-    pub const FILTER_SUGGEST_REMOVE: &str = "review.filter_suggest_remove";
+    /// 置信度筛选区标题
+    pub const CONFIDENCE_FILTERS_LABEL: &str = "review.confidence_filters_label";
+    /// 置信度筛选芯片标签行（含 `{label}`/`{count}` 占位符）
+    pub const CONFIDENCE_FILTER_TAB: &str = "review.confidence_filter_tab";
+    /// 置信度筛选：全部
+    pub const FILTER_ALL: &str = "review.filter_all";
+    /// 置信度筛选：高
+    pub const FILTER_HIGH: &str = "review.filter_high";
+    /// 置信度筛选：中
+    pub const FILTER_MEDIUM: &str = "review.filter_medium";
+    /// 置信度筛选：低
+    pub const FILTER_LOW: &str = "review.filter_low";
     /// 一键应用建议按钮
     pub const APPLY_SUGGESTIONS: &str = "review.apply_suggestions";
     /// 撤销上一批按钮
@@ -239,12 +232,12 @@ pub struct SuggestionCardView {
     pub reason_args: serde_json::Value,
 }
 
-/// 建议筛选器标签（六类标签之外；与类别组合，验收 3）。
+/// 置信度筛选芯片（六类标签之外；全部/高/中/低单选，与类别组合）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct SuggestionFilterView {
+pub struct ConfidenceFilterView {
     /// 筛选器标识。
-    pub filter: SuggestFilter,
+    pub filter: ConfidenceFilter,
     /// 筛选器显示名文本键。
     pub label_key: &'static str,
     /// 命中该筛选器的候选总数（跨类别）。
@@ -315,19 +308,17 @@ pub struct WorkbenchView {
     pub info_panel: Option<InfoPanelView>,
     /// 当前勾选数（"已选 {count} 项"插值用）
     pub selected_count: usize,
-    /// 勾选 ≥2 个时自动浮现“全选/取消全选”按钮（ADR-0016）。
-    pub bulk_buttons_visible: bool,
-    /// 等待中的二次确认弹窗（批量剔除 ≥5 项时出现）
+    /// 等待中的二次确认弹窗（批量剔除时出现，无数量门槛）
     pub pending_confirmation: Option<ConfirmationRequest>,
-    /// 建议筛选区标题文本键
-    pub suggestion_filters_label_key: &'static str,
-    /// 建议筛选器标签（固定顺序，可多选，与类别组合）
-    pub suggestion_filters: Vec<SuggestionFilterView>,
+    /// 置信度筛选区标题文本键
+    pub confidence_filters_label_key: &'static str,
+    /// 置信度筛选芯片（固定顺序，单选，与类别组合）
+    pub confidence_filters: Vec<ConfidenceFilterView>,
     /// 一键应用建议按钮文本键
     pub apply_suggestions_label_key: &'static str,
     /// 撤销上一批按钮文本键
     pub undo_suggestions_label_key: &'static str,
-    /// 一键应用是否可用（未封账且当前筛选范围内有可执行建议）
+    /// 一键应用是否可用（未封账且存在可转为保留的高置信候选）
     pub apply_suggestions_enabled: bool,
     /// 是否存在可撤销的上一批（未封账时）
     pub undo_available: bool,

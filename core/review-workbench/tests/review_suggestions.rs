@@ -8,20 +8,21 @@ use data_persistence::{
     CandidateShape, CandidateSourceIdentity, Database, ReviewableValidation,
 };
 use review_workbench::{
-    CandidateKey, CommandOutcome, Error, ReviewWorkbench, SuggestFilter, SuggestionAction,
-    SuggestionCategory,
+    CandidateKey, CommandOutcome, ConfidenceFilter, ConfidenceTier, Error, ReviewWorkbench,
+    StateChange, SuggestionAction, SuggestionCategory,
 };
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 
 /// 建议夹具：混合信号的已发布 Reviewable 候选。
 ///
-/// - b1 教学楼甲（干净）→ 建议保留
-/// - b2 教学楼乙（干净、独立位置）→ 建议保留
+/// - b1 教学楼甲（干净）→ 建议保留（高）
+/// - b2 教学楼乙（干净、独立位置）→ 建议保留（高）
 /// - b3 教学楼甲（与 b1 同来源实体 + 同几何 = 重复投影）→ 建议剔除
-/// - b4 未命名建筑 → 建议人工确认（未命名）
-/// - b5 实验楼（几何自动修复）→ 建议人工确认（形状经修复）
-/// - r1 道路（未命名）→ 建议人工确认（未命名）
-/// - w1 游泳池（干净水体）→ 建议保留
+/// - b4 未命名建筑 → 建议人工确认（未命名，低）
+/// - b5 实验楼（几何自动修复）→ 建议人工确认（形状经修复，低）
+/// - b6 实验楼乙（建筑点形状可疑）→ 建议人工确认（形状可疑，中）
+/// - r1 道路（未命名）→ 建议人工确认（未命名，低）
+/// - w1 游泳池（干净水体）→ 建议保留（高）
 fn suggestion_fixture() -> (Database, PlanId) {
     let mut db = Database::open_in_memory().expect("内存库");
     let plan_id = PlanId::generate();
@@ -31,6 +32,7 @@ fn suggestion_fixture() -> (Database, PlanId) {
         ("way/b2", CandidateCategory::Building, "教学楼乙"),
         ("way/b4", CandidateCategory::Building, "way/b4"),
         ("way/b5", CandidateCategory::Building, "实验楼"),
+        ("way/b6", CandidateCategory::Building, "实验楼乙"),
         ("way/r1", CandidateCategory::Road, "way/r1"),
         ("way/w1", CandidateCategory::Water, "游泳池"),
     ] {
@@ -119,6 +121,16 @@ fn suggestion_fixture() -> (Database, PlanId) {
         CandidateNameSource::Osm,
     );
     push(
+        "way/b6",
+        "outer",
+        CandidateCategory::Building,
+        "实验楼乙",
+        vec![("building".to_owned(), "lab".to_owned())],
+        CandidateShape::point(serde_json::json!([121.4, 31.4])),
+        ReviewableValidation::Retained,
+        CandidateNameSource::Osm,
+    );
+    push(
         "way/r1",
         "outer",
         CandidateCategory::Road,
@@ -153,15 +165,6 @@ fn suggestion_key(
     candidate_key_part(db, plan_id, source_entity_id, Some(geometry_part_id))
 }
 
-fn visible_card_keys(workbench: &ReviewWorkbench) -> Vec<CandidateKey> {
-    workbench
-        .view()
-        .cards
-        .into_iter()
-        .map(|card| CandidateKey::new(card.candidate_id))
-        .collect()
-}
-
 #[test]
 fn generating_suggestions_never_changes_review_state() {
     let (db, plan_id) = suggestion_fixture();
@@ -176,9 +179,9 @@ fn generating_suggestions_never_changes_review_state() {
         assert!(workbench.suggestion_of(key).is_some());
         assert!(!suggestion.reason_key.is_empty());
     }
-    for filter in SuggestFilter::ALL {
-        let _ = workbench.suggestion_filter_count(filter);
-        workbench.toggle_suggestion_filter(filter);
+    for filter in ConfidenceFilter::ALL {
+        let _ = workbench.confidence_filter_count(filter);
+        workbench.set_confidence_filter(filter);
     }
     let _ = workbench.view();
 
@@ -191,7 +194,7 @@ fn generating_suggestions_never_changes_review_state() {
         before, after,
         "仅生成建议/筛选不得改变 ReviewState（验收 5）"
     );
-    assert_eq!(workbench.export_summary().pending_count, 7);
+    assert_eq!(workbench.export_summary().pending_count, 8);
 }
 
 #[test]
@@ -219,6 +222,7 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
         let suggestion = &by_id[&key.candidate_id];
         assert_eq!(suggestion.category, SuggestionCategory::Unnamed);
         assert_eq!(suggestion.action, SuggestionAction::HumanReview);
+        assert_eq!(suggestion.confidence_tier(), ConfidenceTier::Low);
     }
     let duplicate_pair = [
         suggestion_key(&db, &plan_id, "way/b1", "outer"),
@@ -247,10 +251,16 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
         .find(|suggestion| suggestion.action == SuggestionAction::Remove)
         .expect("重复对中有一个建议剔除");
     assert_eq!(duplicate.category, SuggestionCategory::NeedsAttention);
+    assert_eq!(duplicate.confidence_tier(), ConfidenceTier::Low);
     let repaired_key = suggestion_key(&db, &plan_id, "way/b5", "outer");
     let repaired = &by_id[&repaired_key.candidate_id];
     assert_eq!(repaired.category, SuggestionCategory::NeedsAttention);
     assert_eq!(repaired.action, SuggestionAction::HumanReview);
+    assert_eq!(repaired.confidence_tier(), ConfidenceTier::Low);
+    let medium_key = suggestion_key(&db, &plan_id, "way/b6", "outer");
+    let medium = &by_id[&medium_key.candidate_id];
+    assert_eq!(medium.action, SuggestionAction::HumanReview);
+    assert_eq!(medium.confidence_tier(), ConfidenceTier::Medium);
     for key in [
         suggestion_key(&db, &plan_id, "way/b2", "outer"),
         suggestion_key(&db, &plan_id, "way/w1", "outer"),
@@ -258,6 +268,7 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
         let suggestion = &by_id[&key.candidate_id];
         assert_eq!(suggestion.category, SuggestionCategory::NoActionNeeded);
         assert_eq!(suggestion.action, SuggestionAction::Keep);
+        assert_eq!(suggestion.confidence_tier(), ConfidenceTier::High);
     }
     for (_, suggestion) in by_id {
         assert!(!suggestion.reason_key.is_empty());
@@ -266,40 +277,30 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
 }
 
 #[test]
-fn suggestion_filters_combine_with_category_and_count_accurately() {
+fn confidence_filters_count_tiers_and_combine_with_category() {
     let (db, plan_id) = suggestion_fixture();
     let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
 
-    assert_eq!(workbench.suggestion_filter_count(SuggestFilter::Unnamed), 2);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::All), 8);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::High), 3);
     assert_eq!(
-        workbench.suggestion_filter_count(SuggestFilter::SuggestKeep),
-        3
-    );
-    assert_eq!(
-        workbench.suggestion_filter_count(SuggestFilter::SuggestHumanReview),
-        3
-    );
-    assert_eq!(
-        workbench.suggestion_filter_count(SuggestFilter::SuggestRemove),
+        workbench.confidence_filter_count(ConfidenceFilter::Medium),
         1
     );
-    assert_eq!(
-        workbench.suggestion_filter_count(SuggestFilter::NeedsAttention),
-        2
-    );
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::Low), 4);
 
     let view = workbench.view();
-    assert_eq!(view.suggestion_filters.len(), 5);
-    let keep_tab = view
-        .suggestion_filters
+    assert_eq!(view.confidence_filters.len(), 4);
+    let high_tab = view
+        .confidence_filters
         .iter()
-        .find(|tab| tab.filter == SuggestFilter::SuggestKeep)
-        .expect("建议保留标签存在");
-    assert_eq!(keep_tab.count, 3);
-    assert!(!keep_tab.active);
+        .find(|tab| tab.filter == ConfidenceFilter::High)
+        .expect("高置信芯片存在");
+    assert_eq!(high_tab.count, 3);
+    assert!(!high_tab.active);
 
     let mut workbench = workbench;
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
+    workbench.set_confidence_filter(ConfidenceFilter::High);
     let view = workbench.view();
     assert!(view.apply_suggestions_enabled);
     assert_eq!(
@@ -308,7 +309,7 @@ fn suggestion_filters_combine_with_category_and_count_accurately() {
             .filter(|card| card.suggestion.is_some())
             .count(),
         2,
-        "建筑类别 + 建议保留筛选组合后只显示建议保留的候选"
+        "建筑类别 + 高置信筛选组合后只显示高置信（建议保留）候选"
     );
     assert!(view.cards.iter().all(|card| card
         .suggestion
@@ -320,16 +321,16 @@ fn suggestion_filters_combine_with_category_and_count_accurately() {
 fn apply_suggestions_confirmation_cancel_leaves_state_untouched() {
     let (db, plan_id) = suggestion_fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
 
+    // T51：一键应用范围 = 全部尚未保留的高置信候选（跨类别），不依赖当前芯片。
     let outcome = workbench.apply_suggestions().unwrap();
     let CommandOutcome::NeedsSuggestionConfirmation(request) = outcome else {
         panic!("一键应用必须先弹确认，实际 {outcome:?}");
     };
-    assert_eq!(request.count, 2);
-    assert_eq!(request.keep_count, 2);
+    assert_eq!(request.count, 3);
+    assert_eq!(request.keep_count, 3);
     assert_eq!(request.remove_count, 0);
-    assert!(request.reason_lines.iter().any(|line| line.count == 2));
+    assert!(request.reason_lines.iter().any(|line| line.count == 3));
 
     assert_eq!(
         workbench.state_of(&suggestion_key(&db, &plan_id, "way/b1", "outer")),
@@ -339,9 +340,18 @@ fn apply_suggestions_confirmation_cancel_leaves_state_untouched() {
 
     workbench.cancel_suggestion_apply().unwrap();
     assert!(workbench.view().pending_suggestion_apply.is_none());
-    for source_entity_id in ["way/b1", "way/b2"] {
+    for (source_entity_id, geometry_part_id) in [
+        ("way/b1", "duplicate"),
+        ("way/b2", "outer"),
+        ("way/w1", "outer"),
+    ] {
         assert_eq!(
-            workbench.state_of(&suggestion_key(&db, &plan_id, source_entity_id, "outer",)),
+            workbench.state_of(&suggestion_key(
+                &db,
+                &plan_id,
+                source_entity_id,
+                geometry_part_id
+            )),
             Some(ReviewState::Pending),
             "取消后状态不得改变"
         );
@@ -357,30 +367,36 @@ fn apply_suggestions_confirmation_cancel_leaves_state_untouched() {
 fn apply_suggestions_confirm_writes_states_and_undo_restores_them() {
     let (db, plan_id) = suggestion_fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
-    let keep_targets = visible_card_keys(&workbench);
-    assert_eq!(keep_targets.len(), 2);
+    let keep_targets = vec![
+        suggestion_key(&db, &plan_id, "way/b1", "duplicate"),
+        suggestion_key(&db, &plan_id, "way/b2", "outer"),
+        suggestion_key(&db, &plan_id, "way/w1", "outer"),
+    ];
 
     let CommandOutcome::NeedsSuggestionConfirmation(request) =
         workbench.apply_suggestions().unwrap()
     else {
         panic!("需要确认");
     };
-    assert_eq!(request.count, 2);
+    assert_eq!(request.count, 3);
 
     let outcome = workbench.confirm_suggestion_apply().unwrap();
-    assert_eq!(outcome, CommandOutcome::Applied { changed: 2 });
+    assert_eq!(outcome, CommandOutcome::Applied { changed: 3 });
     for key in &keep_targets {
         assert_eq!(workbench.state_of(key), Some(ReviewState::Keep));
     }
+    assert!(
+        !workbench.apply_suggestions_enabled(),
+        "全部高置信候选已保留后一键应用应禁用"
+    );
 
     let batch = workbench
         .last_applied_suggestion_batch()
         .expect("已记录最近一批");
-    assert_eq!(batch.keep_count, 2);
+    assert_eq!(batch.keep_count, 3);
     assert_eq!(batch.remove_count, 0);
-    assert_eq!(batch.targets.len(), 2);
-    assert_eq!(batch.before_states.len(), 2);
+    assert_eq!(batch.targets.len(), 3);
+    assert_eq!(batch.before_states.len(), 3);
     assert!(batch
         .before_states
         .iter()
@@ -389,7 +405,7 @@ fn apply_suggestions_confirm_writes_states_and_undo_restores_them() {
     assert!(workbench.view().undo_available);
 
     let changed = workbench.undo_last_suggestion_apply().unwrap();
-    assert_eq!(changed, 2);
+    assert_eq!(changed, 3);
     for key in &keep_targets {
         assert_eq!(
             workbench.state_of(key),
@@ -405,52 +421,51 @@ fn apply_suggestions_confirm_writes_states_and_undo_restores_them() {
 }
 
 #[test]
-fn apply_suggestions_scope_respects_active_category_and_remove_batch() {
+fn apply_suggestions_keeps_only_high_confidence_and_never_removes() {
     let (db, plan_id) = suggestion_fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestRemove);
-    let remove_targets = visible_card_keys(&workbench);
-    assert_eq!(remove_targets.len(), 1);
 
     let CommandOutcome::NeedsSuggestionConfirmation(request) =
         workbench.apply_suggestions().unwrap()
     else {
         panic!("需要确认");
     };
-    assert_eq!(request.count, 1);
-    assert_eq!(request.remove_count, 1);
+    assert_eq!(request.count, 3);
+    assert_eq!(request.keep_count, 3);
+    assert_eq!(request.remove_count, 0, "T51：一键应用不得剔除任何候选");
     let changed = workbench.confirm_suggestion_apply().unwrap();
-    assert_eq!(changed, CommandOutcome::Applied { changed: 1 });
-    assert_eq!(
-        workbench.state_of(&remove_targets[0]),
-        Some(ReviewState::Remove)
-    );
-
-    let mut water = workbench;
-    water.set_active_category(CandidateCategory::Water);
-    water.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
-    let CommandOutcome::NeedsSuggestionConfirmation(request) = water.apply_suggestions().unwrap()
-    else {
-        panic!("需要确认");
-    };
-    assert_eq!(request.count, 1);
-    assert_eq!(request.keep_count, 1);
+    assert_eq!(changed, CommandOutcome::Applied { changed: 3 });
     assert_eq!(request.reason_lines.len(), 1);
     assert_eq!(
-        water.confirm_suggestion_apply().unwrap(),
-        CommandOutcome::Applied { changed: 1 }
+        workbench.state_of(&suggestion_key(&db, &plan_id, "way/b1", "duplicate")),
+        Some(ReviewState::Keep),
+        "重复对中的前序高置信投影应被保留"
     );
-    assert_eq!(
-        water.state_of(&suggestion_key(&db, &plan_id, "way/w1", "outer")),
-        Some(ReviewState::Keep)
-    );
+    // 中/低置信（含被建议剔除的重复投影）保持待定，绝不自动剔除。
+    for (source_entity_id, geometry_part_id) in [
+        ("way/b1", "outer"),
+        ("way/b4", "outer"),
+        ("way/b5", "outer"),
+        ("way/b6", "outer"),
+        ("way/r1", "outer"),
+    ] {
+        assert_eq!(
+            workbench.state_of(&suggestion_key(
+                &db,
+                &plan_id,
+                source_entity_id,
+                geometry_part_id
+            )),
+            Some(ReviewState::Pending),
+            "{source_entity_id}/{geometry_part_id} 不得被一键应用改变"
+        );
+    }
 }
 
 #[test]
 fn undo_is_rejected_after_seal_but_batch_record_remains_traceable() {
     let (mut db, plan_id) = suggestion_fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
     let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
     else {
         panic!("需要确认");
@@ -467,7 +482,7 @@ fn undo_is_rejected_after_seal_but_batch_record_remains_traceable() {
     let batch = workbench
         .last_applied_suggestion_batch()
         .expect("封账后追溯记录仍可读");
-    assert_eq!(batch.keep_count, 2);
+    assert_eq!(batch.keep_count, 3);
     assert_eq!(batch.reason_lines.len(), 1);
 }
 
@@ -475,36 +490,96 @@ fn undo_is_rejected_after_seal_but_batch_record_remains_traceable() {
 fn only_most_recent_batch_is_undoable() {
     let (db, plan_id) = suggestion_fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestKeep);
-    let keep_targets = visible_card_keys(&workbench);
+    let high_keys = vec![
+        suggestion_key(&db, &plan_id, "way/b1", "duplicate"),
+        suggestion_key(&db, &plan_id, "way/b2", "outer"),
+        suggestion_key(&db, &plan_id, "way/w1", "outer"),
+    ];
     let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
     else {
         panic!("需要确认");
     };
     workbench.confirm_suggestion_apply().unwrap();
-    workbench.toggle_suggestion_filter(SuggestFilter::SuggestRemove);
-    let remove_target = workbench
-        .suggestions()
-        .into_iter()
-        .find(|(_, suggestion)| suggestion.action == SuggestionAction::Remove)
-        .map(|(key, _)| key.clone())
-        .expect("存在唯一建议剔除对象");
-    let CommandOutcome::NeedsSuggestionConfirmation(_) = workbench.apply_suggestions().unwrap()
+    for key in &high_keys {
+        assert_eq!(workbench.state_of(key), Some(ReviewState::Keep));
+    }
+
+    // 把 b2 改回待定后再应用一批：只含 b2 一个目标。
+    workbench
+        .submit(StateChange::single(
+            high_keys[1].clone(),
+            ReviewState::Pending,
+        ))
+        .unwrap();
+    let CommandOutcome::NeedsSuggestionConfirmation(request) =
+        workbench.apply_suggestions().unwrap()
     else {
         panic!("需要确认");
     };
+    assert_eq!(request.count, 1, "第二批只应包含改回待定的高置信候选");
     workbench.confirm_suggestion_apply().unwrap();
     let batch = workbench
         .last_applied_suggestion_batch()
-        .expect("最近一批为剔除批");
-    assert_eq!(batch.remove_count, 1);
+        .expect("最近一批存在");
+    assert_eq!(batch.keep_count, 1);
+    assert_eq!(batch.remove_count, 0);
 
+    // 撤销只覆盖最近一批：b2 回待定，b1/w1 保持保留。
     workbench.undo_last_suggestion_apply().unwrap();
     assert_eq!(
-        workbench.state_of(&remove_target),
+        workbench.state_of(&high_keys[1]),
         Some(ReviewState::Pending)
     );
-    for key in &keep_targets {
+    for key in [&high_keys[0], &high_keys[2]] {
         assert_eq!(workbench.state_of(key), Some(ReviewState::Keep));
     }
+    assert!(!workbench.can_undo_suggestion_apply());
+}
+
+#[test]
+fn cards_and_map_objects_are_sorted_high_to_low() {
+    let (db, plan_id) = suggestion_fixture();
+    let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+    let view = workbench.view();
+
+    // 建筑类别（默认激活）：高（重复对中的前序 b1、b2）→ 中 b6 →
+    // 低（被建议剔除的 b1 后序投影、未命名 b4、修复 b5）。
+    let expected_building_order = vec![
+        suggestion_key(&db, &plan_id, "way/b1", "duplicate").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b2", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b4", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b5", "outer").candidate_id,
+    ];
+    let card_ids: Vec<String> = view
+        .cards
+        .iter()
+        .map(|card| card.candidate_id.clone())
+        .collect();
+    assert_eq!(
+        card_ids, expected_building_order,
+        "卡片必须按 高→中→低 排序，同档按稳定候选 ID"
+    );
+
+    // 地图对象（跨类别）：高 b1 前序投影/b2/w1 → 中 b6 → 低（b1 后序、b4、b5、r1）。
+    let expected_map_order = vec![
+        suggestion_key(&db, &plan_id, "way/b1", "duplicate").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b2", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/w1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b4", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b5", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/r1", "outer").candidate_id,
+    ];
+    let object_ids: Vec<String> = view
+        .map_objects
+        .iter()
+        .map(|object| object.candidate_id.clone())
+        .collect();
+    assert_eq!(
+        object_ids, expected_map_order,
+        "地图对象必须与列表同序（高置信优先加载）"
+    );
 }

@@ -7,10 +7,7 @@ use data_persistence::{
     CandidateDisplay, CandidateProjectionDraft, CandidateProjectionsApi, CandidateShape,
     CandidateSourceIdentity, Database, RawObservation, RawObservationsApi,
 };
-use review_workbench::{
-    CandidateKey, CommandOutcome, Error, ReviewWorkbench, StateChange,
-    BATCH_REMOVE_CONFIRM_THRESHOLD,
-};
+use review_workbench::{CandidateKey, CommandOutcome, Error, ReviewWorkbench, StateChange};
 use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 use std::collections::HashSet;
 
@@ -129,18 +126,18 @@ fn pending_to_keep_transition_via_state_change_operation() {
 }
 
 #[test]
-fn batch_remove_at_threshold_pops_confirmation_dialog() {
+fn multi_target_batch_remove_pops_confirmation_dialog_without_threshold() {
     let (db, plan_id) = fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
 
-    for index in 0..BATCH_REMOVE_CONFIRM_THRESHOLD {
+    for index in 0..5 {
         workbench
             .toggle_selected(&building_key(&db, &plan_id, index))
             .unwrap();
     }
     let outcome = workbench.submit_for_selected(ReviewState::Remove).unwrap();
     let CommandOutcome::NeedsConfirmation(request) = outcome else {
-        panic!("批量剔除 ≥5 项必须先弹二次确认，实际 {outcome:?}");
+        panic!("批量剔除必须先弹二次确认，实际 {outcome:?}");
     };
     assert_eq!(request.count, 5);
     assert_eq!(request.title_key, "review.batch_reject_confirm_title");
@@ -188,17 +185,17 @@ fn cancel_leaves_states_untouched() {
 }
 
 #[test]
-fn batch_remove_below_threshold_and_harmless_batches_run_directly() {
+fn single_remove_and_harmless_batches_run_directly() {
     let (db, plan_id) = fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
 
-    let targets: Vec<CandidateKey> = (0..4)
+    let single: Vec<CandidateKey> = (0..1)
         .map(|index| building_key(&db, &plan_id, index))
         .collect();
     let outcome = workbench
-        .submit(StateChange::batch(targets, ReviewState::Remove))
+        .submit(StateChange::batch(single, ReviewState::Remove))
         .unwrap();
-    assert_eq!(outcome, CommandOutcome::Applied { changed: 4 });
+    assert_eq!(outcome, CommandOutcome::Applied { changed: 1 });
 
     let targets: Vec<CandidateKey> = (0..6)
         .map(|index| building_key(&db, &plan_id, index))
@@ -215,26 +212,24 @@ fn batch_remove_below_threshold_and_harmless_batches_run_directly() {
 }
 
 #[test]
-fn bulk_buttons_appear_at_two_selections() {
+fn page_selection_updates_selected_count_without_bulk_visibility_flag() {
     let (db, plan_id) = fixture();
     let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
 
-    workbench
-        .toggle_selected(&building_key(&db, &plan_id, 0))
-        .unwrap();
-    assert!(!workbench.bulk_buttons_visible(), "勾选 1 个不显示");
+    let first = building_key(&db, &plan_id, 0);
+    let second = building_key(&db, &plan_id, 1);
+    workbench.toggle_selected(&first).unwrap();
+    assert_eq!(workbench.selected_count(), 1);
 
-    workbench
-        .toggle_selected(&building_key(&db, &plan_id, 1))
-        .unwrap();
-    assert!(workbench.bulk_buttons_visible(), "勾选 ≥2 个自动浮现");
-    assert!(workbench.view().bulk_buttons_visible);
+    // T51：页面级全选由呈现层按当前页切片调用 set_selected。
+    let page_keys = [first.clone(), second.clone()];
+    let changed = workbench.set_selected(&page_keys, true);
+    assert_eq!(changed, 1, "只把尚未勾选的一张卡改为勾选");
+    assert_eq!(workbench.selected_count(), 2);
 
-    workbench.select_all_in_active_category();
-    assert_eq!(workbench.selected_count(), 6);
-    workbench.deselect_all_in_active_category();
+    let changed = workbench.set_selected(&page_keys, false);
+    assert_eq!(changed, 2);
     assert_eq!(workbench.selected_count(), 0);
-    assert!(!workbench.bulk_buttons_visible());
 }
 
 #[test]
@@ -283,6 +278,18 @@ fn three_pane_view_reflects_active_category() {
     let view = workbench.view();
     assert_eq!(view.title_key, "review.workbench_title");
     assert_eq!(view.category_tabs.len(), 6);
+    assert_eq!(
+        view.confidence_filters.len(),
+        4,
+        "置信度芯片固定为 全部/高/中/低 四个"
+    );
+    assert!(
+        view.confidence_filters
+            .iter()
+            .find(|chip| chip.filter == review_workbench::ConfidenceFilter::All)
+            .is_some_and(|chip| chip.active),
+        "默认激活芯片必须是'全部'"
+    );
     let building_tab = &view.category_tabs[0];
     assert_eq!(building_tab.category, CandidateCategory::Building);
     assert_eq!(building_tab.count, 6);
