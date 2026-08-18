@@ -1,7 +1,7 @@
 # T49 — 全局导航转移收口
 
 **Status:** completed（2026-08-18，产品负责人验收后本地合并，提交 `a4867d6`；
-未推送 GitHub）
+2026-08-18 V2.1 收口完成后已推送 `origin/main`，HEAD `aa24cf5`）
 
 **What to build:** 只收口全局导航的呈现层内部结构：
 
@@ -87,7 +87,10 @@ git diff --check                          通过（无空白错误）
 升级门禁触发项：无（同 crate 私有重构）。machete/deny/workspace 全量/timings 由
 V2.1 收口在最后一次代码改动后统一运行。
 
-## 最终收口证据（V2.1 收口时补）
+## 最终收口证据（已补，2026-08-18）
 
-验收通过并授权合并后，在此绑定 HEAD + diff fingerprint 补记完整门禁与 timings
-证据；本票工作树保持未提交，不以未授权合入冒充完成。
+V2.1 版本收口已完成：三处 `v2.1.0 / 2026-12-31` 期限标记归零（mod.rs 本票消除；
+另两处收口时转为可持续理由），完整门禁（machete / workspace tests / fmt / clippy /
+deny / xtask ci）与一次 timings 全部通过。证据归档
+`docs/developer-guide/v2.1-release-closeout-evidence.md`，绑定 HEAD `aa24cf5`，
+收口改动提交 `7bd40cf`、`61256a3`、`aa24cf5`，已推送 `origin/main`。
