@@ -4,9 +4,12 @@
 //! B5 foundation-mode 完成；朝向校验与保存经 F5 OrientationCalculator / B1
 //! Orientation；地图通道只负责显示与转交原始动作。状态与上下文见
 //! `super::workspace_boundary`（会话状态 / 共享上下文 / 几何与通知辅助）。
-// ignore-tidy-filelength: 工作区适配器承载 open/navigate/边界/朝向/地图 IPC 全
-// 部请求（workspace-restore 合流后短暂超 1000 行）；拆分需先立适配器拆分工单。
-// 失效里程碑：v2.1.0（2026-12-31），届时把地图 IPC 与边界动作拆出后消除。
+// ignore-tidy-filelength: 工作区适配器是“小入口、大实现”的深适配器：对外只有
+// `PresentationAdapter<WorkspaceRequest, WorkspacePageState>` 一个小接口，背后
+// 承载 open/navigate/边界/朝向/地图事件等完整呈现实现。地图 IPC 与生命周期已由
+// 地图会话（map_session，T46/ADR-0045）集中拥有，本文件不再出现按页种类判断或
+// 原始 JS；未出现真实的独立变化轴，不为追求行数机械拆分（T47/T48 已并入 T46）。
+// 2026-08-18 删除失效期限：此有期限豁免因结构目标已达成而转为可持续理由。
 use std::collections::HashMap;
 
 use foundation_mode::{

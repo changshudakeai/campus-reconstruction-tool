@@ -21,9 +21,12 @@
 //!
 //! **职责**: B3 高德客户端负责生成 HTML，壳层 WebView 加载渲染 —— 零业务计算
 //! 在壳内（ADR-0017）。
-// ignore-tidy-filelength: 边界编辑地图页单文件承载地图 HTML/JS（顶点编辑增强后
-// 超 1000 行）；拆分需先立地图页拆分工单。失效里程碑：v2.1.0（2026-12-31），
-// 届时把顶点编辑 JS 段拆出后消除。
+// ignore-tidy-filelength: 边界编辑地图页是“小入口、大实现”的深适配器：对外只有
+// `BoundaryEditPageConfig` + `build_boundary_edit_page_html` 一个小接口，背后
+// 承载完整地图 HTML/JS 生成（含顶点编辑、朝向模式、消息桥）。按 ADR-0045 它属于
+// 地图会话背后的高德页面适配器，未出现真实的独立变化轴，不为追求行数机械拆散
+// HTML/JS 片段（T47/T48 已并入 T46）。
+// 2026-08-18 删除失效期限：此有期限豁免因结构目标已达成而转为可持续理由。
 
 use crate::error::{Error, Result};
 use crate::MapViewport;
