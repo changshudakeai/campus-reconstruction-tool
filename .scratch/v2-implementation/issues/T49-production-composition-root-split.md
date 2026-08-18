@@ -1,8 +1,7 @@
 # T49 — 全局导航转移收口
 
-**Status:** in-progress（2026-08-17，独立工作树
-`worktrees/t49-navigation-transfer`（`refactor/t49-navigation-transfer`）实施，
-保持未提交交付验收；验收授权后再 commit/merge）
+**Status:** completed（2026-08-18，产品负责人验收后本地合并，提交 `a4867d6`；
+未推送 GitHub）
 
 **What to build:** 只收口全局导航的呈现层内部结构：
 
@@ -56,7 +55,8 @@
 ## 实施证据（2026-08-17，未提交交付验收）
 
 工作树：`worktrees/t49-navigation-transfer`（`refactor/t49-navigation-transfer`，
-HEAD `00f378a` = 本地 main）；改动文件：
+HEAD `00f378a` = 本地 main）；已快进合并入本地 main（提交 `a4867d6`，未推送）。
+改动文件：
 
 - `apps/desktop/src/production/navigation.rs`（新增，导航策略 + 7 个单测）
 - `apps/desktop/src/production/bindings.rs`（新增，机械接线：回调绑定/弹窗调度/
