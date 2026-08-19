@@ -4,7 +4,7 @@
 # 本文件是 F9 导出控制台公开 API 的人工评审清单，不是 rustdoc 自动生成的完备快照。
 # 关键构造契约由 tests/public_api.rs 直接编译调用；本清单用于评审接口意图与 diff。
 #
-# 最后更新: 2026-08-17 (T42 导出请求接口收束)
+# 最后更新: 2026-08-18 (T52 第五步 3D 方块预览能力)
 
 ## Text Keys (pub mod text_keys)
 
@@ -42,6 +42,12 @@ pub struct MockSealGate { .. }
 pub struct SummaryRowView { pub category: CandidateCategory, pub label_key: &'static str, pub keep_count: usize }   #[non_exhaustive]
 pub struct ExportConfirmDialogView { pub title_key: &'static str, pub summary_label_key: &'static str, pub summary_rows: Vec<SummaryRowView>, pub seal_notice_key: &'static str, pub pending_notice_key: &'static str, pub pending_count: usize, pub confirm_key: &'static str, pub cancel_key: &'static str }   #[non_exhaustive]
 pub struct ExportProgressView { pub visible: bool, pub percent: u32, pub stage_key: &'static str, pub is_done: bool, pub is_failed: bool }   #[non_exhaustive]
+pub struct PreviewRenderPayload { pub json: String, pub block_count: usize, pub simplified: bool }
+pub struct BlockPreviewOperation { .. }
+pub struct BlockPreviewPort { .. }
+pub enum BlockPreviewInput { Boundary(Arc<dyn BoundaryExportInput>), Enhanced { input: Arc<dyn EnhancedExportInput>, reader: Arc<dyn CandidateExportReader> } }
+pub const PREVIEW_SIMPLIFIED_NOTICE_THRESHOLD: usize
+pub const PREVIEW_GRID_CELL_LIMIT: usize
 
 ## Type Aliases
 
@@ -80,6 +86,7 @@ pub enum NavigationTarget {
 Error::CandidateRead(String)
 Error::CandidateEligibility(String)
 Error::CandidateFactsMismatch(String)
+Error::Preview(PreviewError)
 
 impl EnhancedExportRequest {
     pub fn new(context: ExportPlanContext, state: ExportPlanState, targets: ExportArtifactTargets, summary: CandidateExportSummary, kept_candidate_ids: Vec<String>) -> Self
@@ -105,6 +112,7 @@ pub enum Error {
     ArtifactWrite(ArtifactWriteError),
     ArtifactRecovery(ArtifactRecoveryError),
     BackgroundTask,
+    Preview(PreviewError),
 }
 
 pub enum BoundaryError { Missing, NotConfirmed, Invalid(String) }
@@ -112,6 +120,7 @@ pub enum VersionError { Unsupported { requested: String }, MaterialTableMismatch
 pub enum ArtifactKind { Schematic, Manifest }
 pub enum ArtifactWriteError { InvalidTarget { detail: String }, Publish { artifact: ArtifactKind, path: PathBuf, detail: String }, Cleanup { path: PathBuf, detail: String } }
 pub enum ArtifactRecoveryError { Failed { primary: String, recovery: String, paths: Vec<PathBuf> } }
+pub enum PreviewError { TooLarge { cells: u64, limit: usize } }
 
 ## Traits & Implementations
 
@@ -149,6 +158,18 @@ impl BoundaryExportOperation {
 
 impl BoundaryExportPort {
     pub fn start(&self) -> Result<BoundaryExportOperation>
+}
+
+impl BlockPreviewPort {
+    pub fn new_boundary_v26_1_2(input: Arc<dyn BoundaryExportInput>) -> Self
+    pub fn new_enhanced_v26_1_2(input: Arc<dyn EnhancedExportInput>, reader: Arc<dyn CandidateExportReader>) -> Self
+    pub fn start(&self) -> Result<BlockPreviewOperation>
+    pub fn expire_active(&self)
+}
+
+impl BlockPreviewOperation {
+    pub fn progress_view(&self) -> ExportProgressView
+    pub fn try_complete(&mut self) -> Option<Result<PreviewRenderPayload>>
 }
 
 impl ExportStage {
@@ -207,6 +228,7 @@ impl ExportProgressView {
 
 pub fn adapt_to_voxel_model(model: &BlockModel) -> Result<VoxelModel>
 pub fn export_schematic(model: &BlockModel, output_path: &Path, schematic_name: &str, progress: &ProgressTracker) -> Result<()>
+pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload>
 
 impl std::error::Error for Error            (thiserror)
 impl std::fmt::Display for Error            (thiserror)

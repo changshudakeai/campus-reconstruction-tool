@@ -25,11 +25,140 @@ use shared_domain_types::{CandidateCategory, Orientation};
 use crate::boundary_export::{
     guarded_export, staged_path, validate_targets, version_contract, write_and_publish,
     ActiveTaskGuard, BoundaryExportOperation, BoundaryExportResult, ExportArtifactTargets,
-    ExportFileSystem, ExportPlanContext, ExportPlanState, PublicationPayload, PublicationTargets,
+    ExportFileSystem, ExportPlanContext, ExportPlanState, ExportVersionContract,
+    PublicationPayload, PublicationTargets,
 };
 use crate::data::ExportStage;
 use crate::error::{BoundaryError, Error, Result, VersionError};
 use crate::progress::ProgressTracker;
+
+/// 增强导出与增强预览共用的一次完整“边界 + 保留候选 → 校园模型”生成结果。
+///
+/// 预览与导出消费同一个函数，保证预览内容与最终 `.schem` 同源（T52）。
+pub(crate) struct EnhancedGeneration {
+    pub(crate) contract: ExportVersionContract,
+    pub(crate) degree: f32,
+    pub(crate) source: ManifestOrientationSource,
+    pub(crate) model: BlockModel,
+    pub(crate) dimensions: [usize; 3],
+}
+
+/// 校验边界/候选资格并按保留候选生成完整初始校园模型（B5 → B18）。
+///
+/// 不写任何文件；候选读取、投影复核与合并规则与增强导出完全一致。
+pub(crate) fn generate_enhanced_model(
+    material_table: &MaterialTable,
+    request: &EnhancedExportRequest,
+    reader: &dyn CandidateExportReader,
+    progress: &ProgressTracker,
+) -> Result<EnhancedGeneration> {
+    let boundary = request
+        .state
+        .boundary
+        .as_ref()
+        .ok_or(Error::Boundary(BoundaryError::Missing))?;
+    if !request.state.boundary_confirmed {
+        return Err(Error::Boundary(BoundaryError::NotConfirmed));
+    }
+    let contract = version_contract(
+        request.context.plan.minecraft_version.as_str(),
+        material_table,
+    )?;
+    material_table
+        .validate_configured_blocks()
+        .map_err(|error| {
+            Error::Version(VersionError::InvalidMaterialTable {
+                version: material_table.minecraft_version.to_string(),
+                detail: error.to_string(),
+            })
+        })?;
+    if request.summary.keep_total != request.kept_candidate_ids.len() {
+        return Err(Error::CandidateFactsMismatch(format!(
+            "摘要保留数 {} 与候选标识数 {} 不一致",
+            request.summary.keep_total,
+            request.kept_candidate_ids.len()
+        )));
+    }
+
+    let (orientation, degree, source) = match request.state.orientation {
+        Some(orientation) => (
+            orientation,
+            orientation.degree(),
+            ManifestOrientationSource::Custom,
+        ),
+        None => (
+            Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
+            0.0,
+            ManifestOrientationSource::MapNorth,
+        ),
+    };
+
+    let projector = BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
+        .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
+    let footprint = projector.footprint();
+    let bounds = projector.bounds();
+
+    progress.set_stage(ExportStage::Generating);
+    progress.report_percent(5);
+    let engine = GenerationEngine::new(material_table.clone());
+    let mut model = engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
+    progress.report_percent(20);
+
+    let plan_key = request.context.plan.plan_id.to_string();
+    let mut generated = 0usize;
+    for candidate_id in &request.kept_candidate_ids {
+        let projection = reader
+            .kept_projection(&plan_key, candidate_id)?
+            .ok_or_else(|| {
+                Error::CandidateEligibility(format!("候选 {candidate_id} 的规范化投影缺失"))
+            })?;
+        if !projection.reviewable {
+            return Err(Error::CandidateEligibility(format!(
+                "候选 {} 的当前投影不再满足 Reviewable 资格",
+                projection.candidate_id
+            )));
+        }
+        let candidate_bounds = projector
+            .candidate_bounds(&projection.coordinates)
+            .map_err(|error| {
+                Error::CandidateEligibility(format!(
+                    "候选 {} 几何投影失败：{error}",
+                    projection.candidate_id
+                ))
+            })?;
+        let candidate_model = generate_candidate_model(&projection, candidate_bounds, &engine)?;
+        let offset_x = (candidate_bounds.min_x - bounds.min_block_x).max(0);
+        let offset_z = (candidate_bounds.min_z - bounds.min_block_z).max(0);
+        merge_models(&mut model, &candidate_model, offset_x, offset_z);
+        generated += 1;
+        let percent = 20 + (generated * 45 / request.kept_candidate_ids.len().max(1));
+        progress.report_percent(percent as u32);
+    }
+    if generated != request.summary.keep_total {
+        return Err(Error::CandidateFactsMismatch(format!(
+            "实际生成 {} 项，摘要保留 {} 项",
+            generated, request.summary.keep_total
+        )));
+    }
+
+    let dimensions = model
+        .bounding_box()
+        .map(|bbox| {
+            [
+                bbox.width() as usize,
+                bbox.height() as usize,
+                bbox.length() as usize,
+            ]
+        })
+        .unwrap_or([footprint.width_blocks, 1, footprint.length_blocks]);
+    Ok(EnhancedGeneration {
+        contract,
+        degree,
+        source,
+        model,
+        dimensions,
+    })
+}
 
 /// 增强导出内部完整用例；不向 S1 暴露 B18/B17/B4 的分段接口。
 pub(crate) struct EnhancedExportUseCase {
@@ -75,106 +204,18 @@ impl EnhancedExportUseCase {
         staged_schematic: &std::path::Path,
         staged_manifest: &std::path::Path,
     ) -> Result<BoundaryExportResult> {
-        let boundary = request
-            .state
-            .boundary
-            .as_ref()
-            .ok_or(Error::Boundary(BoundaryError::Missing))?;
-        if !request.state.boundary_confirmed {
-            return Err(Error::Boundary(BoundaryError::NotConfirmed));
-        }
-        let contract = version_contract(
-            request.context.plan.minecraft_version.as_str(),
-            &self.material_table,
-        )?;
-        self.material_table
-            .validate_configured_blocks()
-            .map_err(|error| {
-                Error::Version(VersionError::InvalidMaterialTable {
-                    version: self.material_table.minecraft_version.to_string(),
-                    detail: error.to_string(),
-                })
-            })?;
         validate_targets(
             &request.targets.schematic_path,
             &request.targets.manifest_path,
             self.file_system.as_ref(),
         )?;
-        if request.summary.keep_total != request.kept_candidate_ids.len() {
-            return Err(Error::CandidateFactsMismatch(format!(
-                "摘要保留数 {} 与候选标识数 {} 不一致",
-                request.summary.keep_total,
-                request.kept_candidate_ids.len()
-            )));
-        }
-
-        let (orientation, degree, source) = match request.state.orientation {
-            Some(orientation) => (
-                orientation,
-                orientation.degree(),
-                ManifestOrientationSource::Custom,
-            ),
-            None => (
-                Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
-                0.0,
-                ManifestOrientationSource::MapNorth,
-            ),
-        };
-
-        let projector = BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
-            .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
-        let footprint = projector.footprint();
-        let bounds = projector.bounds();
-
-        progress.set_stage(ExportStage::Generating);
-        progress.report_percent(5);
-        let engine = GenerationEngine::new(self.material_table.clone());
-        let mut model =
-            engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
-        progress.report_percent(20);
-
-        let plan_key = request.context.plan.plan_id.to_string();
-        let mut generated = 0usize;
-        for candidate_id in &request.kept_candidate_ids {
-            let projection = reader
-                .kept_projection(&plan_key, candidate_id)?
-                .ok_or_else(|| {
-                    Error::CandidateEligibility(format!("候选 {candidate_id} 的规范化投影缺失"))
-                })?;
-            if !projection.reviewable {
-                return Err(Error::CandidateEligibility(format!(
-                    "候选 {} 的当前投影不再满足 Reviewable 资格",
-                    projection.candidate_id
-                )));
-            }
-            let candidate_bounds = projector
-                .candidate_bounds(&projection.coordinates)
-                .map_err(|error| {
-                    Error::CandidateEligibility(format!(
-                        "候选 {} 几何投影失败：{error}",
-                        projection.candidate_id
-                    ))
-                })?;
-            let candidate_model = generate_candidate_model(&projection, candidate_bounds, &engine)?;
-            let offset_x = (candidate_bounds.min_x - bounds.min_block_x).max(0);
-            let offset_z = (candidate_bounds.min_z - bounds.min_block_z).max(0);
-            merge_models(&mut model, &candidate_model, offset_x, offset_z);
-            generated += 1;
-            let percent = 20 + (generated * 45 / request.kept_candidate_ids.len().max(1));
-            progress.report_percent(percent as u32);
-        }
-        if generated != request.summary.keep_total {
-            return Err(Error::CandidateFactsMismatch(format!(
-                "实际生成 {} 项，摘要保留 {} 项",
-                generated, request.summary.keep_total
-            )));
-        }
+        let generated = generate_enhanced_model(&self.material_table, request, reader, progress)?;
 
         let actual_plan = PlanInfo::new(
             request.context.plan.campus_name.clone(),
             request.context.plan.plan_id,
             request.context.plan.plan_name.clone(),
-            contract.version,
+            generated.contract.version,
         );
         let keep_decisions: Vec<(CandidateCategory, bool)> = request
             .summary
@@ -189,23 +230,15 @@ impl EnhancedExportUseCase {
                 &keep_decisions,
                 uuid::Uuid::new_v4().to_string(),
                 Utc::now().to_rfc3339(),
-                Some(ManifestOrientation { degree, source }),
+                Some(ManifestOrientation {
+                    degree: generated.degree,
+                    source: generated.source,
+                }),
                 candidate_facts,
             )
             .map_err(|error| Error::ManifestWrite(error.to_string()))?;
         manifest.export_kind = ExportKind::Enhanced;
         progress.report_percent(70);
-
-        let dimensions = model
-            .bounding_box()
-            .map(|bbox| {
-                [
-                    bbox.width() as usize,
-                    bbox.height() as usize,
-                    bbox.length() as usize,
-                ]
-            })
-            .unwrap_or([footprint.width_blocks, 1, footprint.length_blocks]);
 
         write_and_publish(
             self.file_system.as_ref(),
@@ -217,9 +250,9 @@ impl EnhancedExportUseCase {
             },
             PublicationPayload {
                 manifest: &manifest,
-                model: &model,
-                contract,
-                schematic_dimensions: dimensions,
+                model: &generated.model,
+                contract: generated.contract,
+                schematic_dimensions: generated.dimensions,
             },
             progress,
         )

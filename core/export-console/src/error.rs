@@ -96,6 +96,17 @@ pub enum ArtifactRecoveryError {
         paths: Vec<PathBuf>,
     },
 }
+
+/// 3D 方块预览的专属失败（T52）。预览是第五步的呈现能力，失败只影响预览，
+/// 不得阻塞或改变导出流程（ADR-0045 呈现层纪律）。
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreviewError {
+    /// 包围盒格数超过预览硬上限：明确拒绝生成，避免 WebView 卡死。
+    #[error("预览内容过大（包围盒 {cells} 格，上限 {limit} 格），已停止生成")]
+    TooLarge { cells: u64, limit: usize },
+}
+
 /// F9 导出控制台错误
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -155,6 +166,10 @@ pub enum Error {
     /// 后台工作线程意外断开，不能显示成功。
     #[error("导出后台任务异常中止")]
     BackgroundTask,
+
+    /// 3D 方块预览生成失败（独立于导出，不阻塞导出）。
+    #[error("3D 预览生成失败：{0}")]
+    Preview(#[from] PreviewError),
 }
 
 /// F9 结果别名
