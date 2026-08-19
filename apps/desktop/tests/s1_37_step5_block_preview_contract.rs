@@ -17,7 +17,7 @@ use global_settings::FirstRunSetup;
 use localization::{Language, Localization};
 use notification_center::{NotificationCenter, PresenterRegistry};
 use shared_domain_types::CampusId;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 /// 重复泵送事件循环直到条件满足或超时（后台线程结果经事件循环回调到达）。
 fn pump_until(
@@ -126,6 +126,19 @@ fn s1_37_step5_block_preview_contract() {
     assert!(preview_payload().is_none(), "进入第五步不得自动生成预览");
     assert_eq!(window.get_workspace_export_preview_status().as_str(), "");
     assert!(!window.get_workspace_export_preview_has_content());
+    assert_eq!(
+        window
+            .get_workspace_export_preview_candidate_titles()
+            .row_count(),
+        0,
+        "边界直出（无保留候选）时抽屉不显示候选卡片"
+    );
+    // 无候选时点击定位：入口存在且不产生副作用（不崩、不生成）。
+    window.invoke_workspace_export_preview_locate_clicked(0);
+    assert!(
+        !window.get_workspace_export_preview_has_content(),
+        "无候选定位不得触发预览生成"
+    );
 
     window.invoke_workspace_export_preview_generate_clicked();
     assert_eq!(

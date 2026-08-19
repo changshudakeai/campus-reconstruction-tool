@@ -415,6 +415,9 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
             preview_controls_hint: "拖动旋转 · 滚轮缩放".into(),
             preview_has_content: false,
             preview_generating: false,
+            preview_candidate_ids: Vec::new(),
+            preview_candidate_titles: Vec::new(),
+            preview_candidate_categories: Vec::new(),
         }),
     ));
     export_entry.show(&window, &center, ());
