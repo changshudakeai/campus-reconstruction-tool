@@ -334,6 +334,17 @@ fn start_routes_to_enhanced_export_when_sealed_keep_candidates_exist() {
     assert_eq!(hint.pending_count, 1);
     assert_eq!(hint.remove_count, 1);
 
+    let cards = flow.kept_candidate_cards().expect("只读候选卡片可读");
+    assert_eq!(cards.len(), 2, "只读卡片必须只包含保留候选");
+    assert!(cards.iter().all(|card| {
+        card.category == CandidateCategory::Building
+            && (card.display_title == "教学楼A" || card.display_title == "教学楼B")
+    }));
+    assert_eq!(
+        cards[0].candidate_id, kept[0],
+        "卡片标识必须与增强导出的保留候选一致"
+    );
+
     let mut operation = flow.start().expect("Start 路由到增强导出");
     let result = wait_for_result(&mut operation).expect("增强导出成功");
     assert!(result.schematic_path.is_file());
@@ -741,6 +752,27 @@ fn preview_routes_to_enhanced_generation_like_export() {
     assert!(
         palette.iter().any(|block| block == "minecraft:bricks"),
         "保留建筑必须生成墙体方块"
+    );
+    let features = parsed["features"].as_array().expect("要素数组");
+    assert_eq!(features.len(), 2, "增强预览必须携带全部保留候选要素");
+    assert!(
+        features.iter().all(|feature| {
+            feature["category"] == "Building"
+                && feature["bounds"].as_array().expect("包围盒数组").len() == 6
+        }),
+        "要素必须携带类别与 6 元包围盒"
+    );
+    let cards = flow.kept_candidate_cards().expect("只读候选卡片");
+    assert_eq!(
+        cards
+            .iter()
+            .map(|card| card.candidate_id.clone())
+            .collect::<Vec<_>>(),
+        features
+            .iter()
+            .map(|feature| feature["id"].as_str().expect("要素 id").to_owned())
+            .collect::<Vec<_>>(),
+        "预览要素标识必须与 A2 只读候选卡片一一对应"
     );
 
     let mut export_operation = flow.start().expect("导出路由到增强导出");

@@ -257,6 +257,18 @@ pub struct EnhancedExportHint {
     pub remove_count: usize,
 }
 
+/// 第五步抽屉“已保留候选”卡片的只读呈现数据（S1 不持有业务几何；
+/// 定位/高亮用的包围盒由预览负载 `features` 随 F9 结果下发）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptCandidateCard {
+    /// B2 候选投影的稳定标识。
+    pub candidate_id: String,
+    /// 展示标题（来源名称）。
+    pub display_title: String,
+    /// 六类别。
+    pub category: CandidateCategory,
+}
+
 /// Complete F9 boundary-only export entry. The implementation is intentionally outside S1.
 #[derive(Clone)]
 pub struct BoundaryExportFlow {
@@ -470,6 +482,17 @@ impl BoundaryExportFlow {
             pending_count: summary.pending_count,
             remove_count: summary.remove_count,
         }))
+    }
+
+    /// 第五步抽屉只读候选卡片列表（无候选或未配置候选存储时为空）。
+    pub fn kept_candidate_cards(&self) -> Result<Vec<KeptCandidateCard>> {
+        let Some(store) = &self.candidate_store else {
+            return Ok(Vec::new());
+        };
+        let Some(plan_id) = self.input.active_plan_id() else {
+            return Ok(Vec::new());
+        };
+        store.kept_candidate_cards(&plan_id)
     }
 }
 
