@@ -454,6 +454,10 @@ pub enum ExportPresentationRequest {
     Start,
     /// S1 内部观察 F9 已提交操作的真实进度或终态。
     Poll,
+    /// 用户点击一次“生成 3D 预览”按钮（预览与导出互相独立，T52）。
+    GeneratePreview,
+    /// S1 内部观察预览后台生成的真实进度或终态。
+    PreviewPoll,
     /// 离开导出上下文，丢弃旧页面的结果交付。
     Abandon,
 }
@@ -582,21 +586,6 @@ impl WindowPageState for WorkspacePageState {
     fn render(&self, window: &AppWindow) {
         self.render_with_step(window, self.active_step);
     }
-}
-macro_rules! workspace_page_state {
-    ($name:ident, $step:expr, $doc:literal) => {
-        #[doc = $doc]
-        #[derive(Clone)]
-        pub struct $name {
-            pub workspace: WorkspacePageState,
-        }
-
-        impl WindowPageState for $name {
-            fn render(&self, window: &AppWindow) {
-                self.workspace.render_with_step(window, $step);
-            }
-        }
-    };
 }
 
 /// 采集步骤的完整可观察状态。
@@ -871,7 +860,47 @@ pub enum ReviewRequest {
     /// 封账：终态批量写回 B2。
     Seal,
 }
-workspace_page_state!(ExportPageState, 4, "导出入口的当前完整占位页状态。");
+/// 导出入口的当前完整页面状态（含第五步 3D 预览呈现字段，T52）。
+#[derive(Clone)]
+pub struct ExportPageState {
+    pub workspace: WorkspacePageState,
+    /// “生成 3D 预览”按钮文案。
+    pub preview_generate_label: String,
+    /// 预览状态文案（未生成提示 / 生成中 / 已生成 / 失败原因）。
+    pub preview_status: String,
+    /// “复位视角”按钮文案。
+    pub preview_reset_label: String,
+    /// “放大”按钮文案。
+    pub preview_zoom_in_label: String,
+    /// “缩小”按钮文案。
+    pub preview_zoom_out_label: String,
+    /// 旋转/缩放操作提示文案。
+    pub preview_controls_hint: String,
+    /// 是否已有可交互的预览内容（复位/缩放可用）。
+    pub preview_has_content: bool,
+    /// 是否正在生成预览（生成按钮禁用）。
+    pub preview_generating: bool,
+}
+
+impl WindowPageState for ExportPageState {
+    fn render(&self, window: &AppWindow) {
+        self.workspace.render_with_step(window, 4);
+        window.set_workspace_export_preview_generate_label(
+            self.preview_generate_label.clone().into(),
+        );
+        window.set_workspace_export_preview_status(self.preview_status.clone().into());
+        window.set_workspace_export_preview_reset_label(self.preview_reset_label.clone().into());
+        window
+            .set_workspace_export_preview_zoom_in_label(self.preview_zoom_in_label.clone().into());
+        window.set_workspace_export_preview_zoom_out_label(
+            self.preview_zoom_out_label.clone().into(),
+        );
+        window
+            .set_workspace_export_preview_controls_hint(self.preview_controls_hint.clone().into());
+        window.set_workspace_export_preview_has_content(self.preview_has_content);
+        window.set_workspace_export_preview_generating(self.preview_generating);
+    }
+}
 
 /// 通知入口一次返回的完整公告栏状态。
 #[derive(Clone)]

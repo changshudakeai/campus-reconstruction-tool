@@ -226,7 +226,19 @@
     "cleanup_warning": "导出完成，但旧备份清理失败；当前双文件仍有效。",
     "manifest_title": "导出清单",
     "included_categories": "包含的类别",
-    "missing_categories": "缺失的类别"
+    "missing_categories": "缺失的类别",
+    "preview_generate_button": "生成 3D 预览",
+    "preview_generating": "正在生成 3D 预览…",
+    "preview_hint": "进入本步不会自动生成。点击“生成 3D 预览”查看整校园方块模型。",
+    "preview_ready": "3D 预览已生成：{0} 个方块，与导出内容一致。",
+    "preview_simplified_title": "3D 预览已简化",
+    "preview_simplified_notice": "方案较大，预览已自动简化渲染；方块数据与导出内容一致。",
+    "preview_failed_title": "3D 预览生成失败",
+    "preview_failed_body": "{0}。可以继续导出，导出流程不受影响。",
+    "preview_reset_button": "复位视角",
+    "preview_zoom_in_button": "放大",
+    "preview_zoom_out_button": "缩小",
+    "preview_controls_hint": "拖动旋转 · 滚轮缩放"
   },
   "boundary": {
     "point_count": "当前点数：{0}",
@@ -410,6 +422,7 @@
     "export_artifact_write_failed": "导出文件发布失败",
     "export_recovery_failed": "导出失败且恢复未完成",
     "export_background_failed": "导出后台任务异常中止",
+    "export_preview_failed": "3D 预览生成失败",
     "export_failed": "导出失败",
     "file_write_failed": "文件写入失败，可重试",
     "block_not_in_version": "用料表中查不到目标版本的方块，已终止导出"

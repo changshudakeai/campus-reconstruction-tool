@@ -176,6 +176,13 @@ impl ProductionEntries {
         !matches!(presentation.operation(), OperationState::Processing { .. })
     }
 
+    fn poll_preview(&mut self, window: &AppWindow) -> bool {
+        let presentation =
+            self.export
+                .show(window, &self.center, ExportPresentationRequest::PreviewPoll);
+        !matches!(presentation.operation(), OperationState::Processing { .. })
+    }
+
     fn poll_collection(&mut self, window: &AppWindow) -> bool {
         let presentation = self
             .collection
@@ -203,6 +210,27 @@ impl ProductionEntries {
                 let completed = entries.borrow_mut().poll_export(&window);
                 if completed {
                     entries.borrow_mut().export_poll_timer.stop();
+                }
+            },
+        );
+    }
+
+    fn start_preview_polling(entries: &Rc<RefCell<Self>>, window: &AppWindow) {
+        let weak_entries = Rc::downgrade(entries);
+        let weak_window = window.as_weak();
+        entries.borrow_mut().preview_poll_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(20),
+            move || {
+                let Some(entries) = weak_entries.upgrade() else {
+                    return;
+                };
+                let Some(window) = weak_window.upgrade() else {
+                    return;
+                };
+                let completed = entries.borrow_mut().poll_preview(&window);
+                if completed {
+                    entries.borrow_mut().preview_poll_timer.stop();
                 }
             },
         );
@@ -787,6 +815,29 @@ impl ProductionEntries {
                     ProductionEntries::start_export_polling(&shared, &window);
                 }
             }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
+        window.on_workspace_export_preview_generate_clicked(move || {
+            if let Some(window) = weak.upgrade() {
+                let processing = shared.borrow_mut().start_preview(&window);
+                if processing {
+                    ProductionEntries::start_preview_polling(&shared, &window);
+                }
+            }
+        });
+
+        window.on_workspace_export_preview_reset_clicked(move || {
+            let _ = crate::map_session::command(crate::map_session::MapCommand::PreviewReset);
+        });
+
+        window.on_workspace_export_preview_zoom_in_clicked(move || {
+            let _ = crate::map_session::command(crate::map_session::MapCommand::PreviewZoom(0.85));
+        });
+
+        window.on_workspace_export_preview_zoom_out_clicked(move || {
+            let _ = crate::map_session::command(crate::map_session::MapCommand::PreviewZoom(1.18));
         });
 
         let weak = window.as_weak();

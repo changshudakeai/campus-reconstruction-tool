@@ -31,6 +31,7 @@ mod collection;
 mod export;
 mod navigation;
 mod notification;
+mod preview_entry;
 mod review;
 mod review_draft;
 mod review_map;
@@ -157,6 +158,7 @@ pub(crate) struct ProductionEntries {
     pending_confirmation: Option<PendingConfirmation>,
     pending_input: Option<PendingInput>,
     export_poll_timer: slint::Timer,
+    preview_poll_timer: slint::Timer,
     collection_poll_timer: slint::Timer,
     boundary_fetch_poll_timer: slint::Timer,
     campus_search_ipc: std::sync::mpsc::Sender<String>,
@@ -233,6 +235,10 @@ impl ProductionEntries {
                 context: workspace.clone(),
                 flow: export_flow,
                 operation: None,
+                preview_operation: None,
+                preview_status: String::new(),
+                preview_has_content: false,
+                preview_generating: false,
             }),
             notification: NotificationPresentationEntry::new(NotificationProductionAdapter {
                 center: Arc::clone(&center),
@@ -247,6 +253,7 @@ impl ProductionEntries {
             pending_confirmation: None,
             pending_input: None,
             export_poll_timer: slint::Timer::default(),
+            preview_poll_timer: slint::Timer::default(),
             collection_poll_timer: slint::Timer::default(),
             boundary_fetch_poll_timer: slint::Timer::default(),
             campus_search_ipc,
@@ -739,6 +746,10 @@ impl ProductionEntries {
                 let _ = self.campus_search_ipc.send(raw);
                 return;
             }
+            crate::map_session::MapEvent::Preview(raw) => {
+                self.handle_preview_ipc(&raw);
+                return;
+            }
             crate::map_session::MapEvent::Workspace { scene, message } => (scene, message),
         };
         if scene == crate::map_session::MapScene::Review {
@@ -866,6 +877,7 @@ impl ProductionEntries {
                     // 旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                     crate::map_session::discard_boundary_draft();
                     self.export_poll_timer.stop();
+                    self.preview_poll_timer.stop();
                     self.collection_poll_timer.stop();
                     self.boundary_fetch_poll_timer.stop();
                     self.export
