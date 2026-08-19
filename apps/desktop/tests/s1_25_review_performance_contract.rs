@@ -340,19 +340,6 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
             .highlighted
     );
 
-    // 一次三态操作 → 只推对应候选 1 条 updateReviewCandidate
-    desktop_shell::reset_review_push_count();
-    window.invoke_review_card_state_clicked(page_ids[1].clone().into(), "remove".into());
-    assert_eq!(
-        desktop_shell::review_push_count(),
-        1,
-        "三态操作只推 1 条 updateReviewCandidate"
-    );
-    assert!(
-        desktop_shell::review_pushed_scripts()[0].contains("window.updateReviewCandidate("),
-        "三态回推必须是 updateReviewCandidate（地图 spy）"
-    );
-
     // 同类别重复切换不改变可见集合 → 0 条回推
     desktop_shell::reset_review_push_count();
     window.invoke_review_category_clicked(0);
@@ -408,6 +395,22 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
     window.invoke_review_page_prev_clicked();
     desktop_shell::reset_review_push_count();
 
+    // 一次三态操作 → 只推对应候选 1 条 updateReviewCandidate（地图概览不随
+    // 三态分组过滤；卡片会从待定分组消失）。
+    window.invoke_review_category_clicked(1);
+    window.invoke_review_category_clicked(0);
+    desktop_shell::reset_review_push_count();
+    window.invoke_review_card_state_clicked(page_ids[1].clone().into(), "remove".into());
+    assert_eq!(
+        desktop_shell::review_push_count(),
+        1,
+        "三态操作只推 1 条 updateReviewCandidate"
+    );
+    assert!(
+        desktop_shell::review_pushed_scripts()[0].contains("window.updateReviewCandidate("),
+        "三态回推必须是 updateReviewCandidate（地图 spy）"
+    );
+
     // 验收 2/4：推送阶段（慢速注入场景）不得被误杀——地图仍可用、无错误弹窗
     assert!(
         !window.get_error_dialog_visible(),
@@ -415,6 +418,7 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
     );
     assert_eq!(window.get_review_candidate_count(), 1026);
     window.invoke_review_card_state_clicked(page_ids[3].clone().into(), "keep".into());
+    window.invoke_review_state_tab_clicked(1);
     let kept_row = card_row(&window, &page_ids[3]);
     assert_eq!(
         window
@@ -426,28 +430,12 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
         "keep",
         "推送后评审操作仍可继续"
     );
+    window.invoke_review_state_tab_clicked(0);
     desktop_shell::set_review_push_probe_visible(false);
 
-    // ── 验收 1b：三态/高亮变更走单卡更新（模型实例指针不变，非整表重建）──
+    // ── 验收 1b：高亮走单卡更新；三态变更因卡片离开当前分组而重建模型 ──
     let model = window.get_review_cards();
     let target_row = card_row(&window, &page_ids[0]);
-    let before_state = model.row_data(target_row).unwrap().state_key.to_string();
-    window.invoke_review_card_state_clicked(page_ids[0].clone().into(), "keep".into());
-    assert_eq!(
-        window.get_review_cards(),
-        model,
-        "三态变更必须走单卡更新，不得重建整表模型"
-    );
-    assert_eq!(
-        window
-            .get_review_cards()
-            .row_data(target_row)
-            .unwrap()
-            .state_key
-            .as_str(),
-        "keep",
-        "单卡更新后状态必须生效（before={before_state}）"
-    );
     window.invoke_review_card_highlight_clicked(page_ids[0].clone().into());
     assert_eq!(
         window.get_review_cards(),
@@ -461,6 +449,36 @@ fn review_performance_pagination_single_card_update_and_incremental_map_push() {
             .unwrap()
             .highlighted
     );
+    window.invoke_review_card_state_clicked(page_ids[0].clone().into(), "keep".into());
+    assert_ne!(
+        window.get_review_cards(),
+        model,
+        "三态变更后卡片离开待定分组，必须重建当前页模型"
+    );
+    assert!(
+        (0..window.get_review_cards().row_count()).all(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .candidate_id
+                .as_str()
+                != page_ids[0]
+        }),
+        "保留后该候选必须离开待定分组"
+    );
+    window.invoke_review_state_tab_clicked(1);
+    assert!(
+        window
+            .get_review_cards()
+            .row_data(card_row(&window, &page_ids[0]))
+            .expect("保留卡片存在")
+            .state_key
+            .as_str()
+            == "keep",
+        "保留后必须出现在保留分组"
+    );
+    window.invoke_review_state_tab_clicked(0);
 
     // ── 验收 1c：分类切换 + 三态点击 10 次计时（单次 ≤ 500ms）──
     let mut worst = Duration::ZERO;

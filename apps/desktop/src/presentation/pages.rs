@@ -720,6 +720,12 @@ pub struct ReviewPageState {
     pub confidence_filter_counts: Vec<i32>,
     /// 每个置信度筛选芯片是否激活（1=激活，0=未激活）。
     pub confidence_filter_active: Vec<i32>,
+    /// 三态分组标签（待定/保留/剔除，固定顺序）。
+    pub state_tab_labels: Vec<String>,
+    /// 每个三态分组在当前分类内的候选数。
+    pub state_tab_counts: Vec<i32>,
+    /// 每个三态分组是否激活（1=激活，0=未激活）。
+    pub state_tab_active: Vec<i32>,
     /// "应用建议"按钮文案。
     pub apply_suggestions_label: String,
     /// "撤销上一批"按钮文案。
@@ -799,6 +805,13 @@ impl WindowPageState for ReviewPageState {
         window.set_review_confidence_filter_active(ModelRc::new(VecModel::from(
             self.confidence_filter_active.clone(),
         )));
+        window.set_review_state_tab_labels(string_model(&self.state_tab_labels));
+        window.set_review_state_tab_counts(ModelRc::new(VecModel::from(
+            self.state_tab_counts.clone(),
+        )));
+        window.set_review_state_tab_active(ModelRc::new(VecModel::from(
+            self.state_tab_active.clone(),
+        )));
         window.set_review_apply_suggestions_label(self.apply_suggestions_label.clone().into());
         window.set_review_undo_suggestions_label(self.undo_suggestions_label.clone().into());
         window.set_review_apply_suggestions_enabled(self.apply_suggestions_enabled);
@@ -845,6 +858,8 @@ pub enum ReviewRequest {
     CancelPending,
     /// 切换置信度筛选芯片（index 对应 F5 `ConfidenceFilter::ALL` 顺序）。
     SetConfidenceFilter { index: usize },
+    /// 切换三态分组（state: pending/keep/remove）。
+    SetStateTab { state: String },
     /// 一键应用建议：把尚未保留的高置信候选改为保留并请求确认（T51 不剔除）。
     ApplySuggestions,
     /// 建议应用确认弹窗点了“确认”。

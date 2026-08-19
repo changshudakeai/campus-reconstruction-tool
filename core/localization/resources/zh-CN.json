@@ -169,6 +169,7 @@
     "session_failed_body": "评审会话文件读写失败，请重试；正式评审状态未受影响。",
   "confidence_filters_label": "置信度筛选",
   "confidence_filter_tab": "{label}（{count}）",
+  "state_tab": "{label}（{count}）",
   "filter_all": "全部",
   "filter_high": "高",
   "filter_medium": "中",

@@ -103,6 +103,17 @@ impl ReviewProductionAdapter {
             confidence_filter_labels: Vec::new(),
             confidence_filter_counts: Vec::new(),
             confidence_filter_active: Vec::new(),
+            state_tab_labels: ["review.pending", "review.keep", "review.reject"]
+                .into_iter()
+                .map(|key| {
+                    l10n.t_with_args(
+                        text_keys::STATE_TAB,
+                        serde_json::json!({ "label": l10n.t(key), "count": 0 }),
+                    )
+                })
+                .collect(),
+            state_tab_counts: vec![0, 0, 0],
+            state_tab_active: vec![1, 0, 0],
             apply_suggestions_label: l10n.t(text_keys::APPLY_SUGGESTIONS),
             undo_suggestions_label: l10n.t(text_keys::UNDO_SUGGESTIONS),
             apply_suggestions_enabled: false,
@@ -273,6 +284,26 @@ impl ReviewProductionAdapter {
             .iter()
             .map(|filter| i32::from(filter.active))
             .collect();
+        let state_tab_labels: Vec<String> = view
+            .state_tabs
+            .iter()
+            .map(|tab| {
+                l10n.t_with_args(
+                    text_keys::STATE_TAB,
+                    serde_json::json!({
+                        "label": l10n.t(tab.label_key),
+                        "count": tab.count,
+                    }),
+                )
+            })
+            .collect();
+        let state_tab_counts: Vec<i32> =
+            view.state_tabs.iter().map(|tab| tab.count as i32).collect();
+        let state_tab_active: Vec<i32> = view
+            .state_tabs
+            .iter()
+            .map(|tab| i32::from(tab.active))
+            .collect();
         let (summary_visible, summary_text) = if view.sealed {
             (true, self.summary_text(l10n, workbench.export_summary()))
         } else {
@@ -319,6 +350,9 @@ impl ReviewProductionAdapter {
             confidence_filter_labels,
             confidence_filter_counts,
             confidence_filter_active,
+            state_tab_labels,
+            state_tab_counts,
+            state_tab_active,
             apply_suggestions_label: l10n.t(view.apply_suggestions_label_key),
             undo_suggestions_label: l10n.t(view.undo_suggestions_label_key),
             apply_suggestions_enabled: view.apply_suggestions_enabled,
@@ -658,9 +692,21 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     return Presentation::ready(self.page_state())
                         .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
-                // T39：切分类复位分页到第一页（新分类从第一张卡开始浏览）。
-                self.context.session.borrow_mut().review_page_index = 0;
+                // T39/T51：切分类复位列表与地图分页到第一页。
+                let mut session = self.context.session.borrow_mut();
+                session.review_page_index = 0;
+                session.review_map_page_index = 0;
+                drop(session);
                 self.mutate_simple(|workbench| workbench.set_active_category(category))
+            }
+            ReviewRequest::SetStateTab { state } => {
+                let Some(state) = ReviewState::parse(&state) else {
+                    return Presentation::ready(self.page_state())
+                        .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                };
+                // 切换三态分组复位列表分页（地图概览不随分组变化）。
+                self.context.session.borrow_mut().review_page_index = 0;
+                self.mutate_simple(|workbench| workbench.set_active_state_tab(state))
             }
             ReviewRequest::PagePrev => {
                 let mut session = self.context.session.borrow_mut();
@@ -700,27 +746,39 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
             }
             ReviewRequest::Locate { candidate_id } => {
                 let key = CandidateKey::new(candidate_id.clone());
-                let mut target_page_index = None;
+                let mut target_pages = None;
                 let result = self.apply(|workbench| {
-                    let target_category = workbench
+                    let target = workbench
                         .view()
                         .map_objects
                         .iter()
                         .find(|object| object.candidate_id == candidate_id)
-                        .map(|object| object.category);
-                    if let Some(category) = target_category {
+                        .map(|object| (object.category, object.state));
+                    if let Some((category, state)) = target {
                         workbench.set_active_category(category);
-                        target_page_index = workbench
-                            .view()
-                            .cards
-                            .iter()
-                            .position(|card| card.candidate_id == candidate_id)
-                            .map(|index| index / REVIEW_PAGE_SIZE);
+                        workbench.set_active_state_tab(state);
+                        let view = workbench.view();
+                        target_pages = Some((
+                            view.cards
+                                .iter()
+                                .position(|card| card.candidate_id == candidate_id)
+                                .map(|index| index / REVIEW_PAGE_SIZE),
+                            view.map_cards
+                                .iter()
+                                .position(|card| card.candidate_id == candidate_id)
+                                .map(|index| index / REVIEW_PAGE_SIZE),
+                        ));
                     }
                     workbench.highlight(&key)
                 });
-                if let Some(page_index) = target_page_index {
-                    self.context.session.borrow_mut().review_page_index = page_index;
+                if let Some((list_page, map_page)) = target_pages {
+                    let mut session = self.context.session.borrow_mut();
+                    if let Some(page_index) = list_page {
+                        session.review_page_index = page_index;
+                    }
+                    if let Some(page_index) = map_page {
+                        session.review_map_page_index = page_index;
+                    }
                 }
                 let located = matches!(&result, Ok(Some(())));
                 if located {
@@ -855,8 +913,11 @@ impl PresentationAdapter<ReviewRequest, ReviewPageState> for ReviewProductionAda
                     return Presentation::ready(self.page_state())
                         .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 };
-                // 筛选变化后复位到第一页，保证用户立即看到对应筛选的第一页切片。
-                self.context.session.borrow_mut().review_page_index = 0;
+                // 筛选变化后列表与地图都复位到第一页。
+                let mut session = self.context.session.borrow_mut();
+                session.review_page_index = 0;
+                session.review_map_page_index = 0;
+                drop(session);
                 self.mutate_simple(|workbench| workbench.set_confidence_filter(filter))
             }
             ReviewRequest::ApplySuggestions => {

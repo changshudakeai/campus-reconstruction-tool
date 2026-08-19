@@ -67,6 +67,8 @@ pub struct ReviewWorkbench {
     undo: Option<AppliedSuggestionBatch>,
     /// 当前激活的置信度筛选芯片（单选，默认"全部"）
     confidence_filter: ConfidenceFilter,
+    /// 当前激活的三态分组（待定/保留/剔除；默认"待定"）
+    active_state_tab: ReviewState,
     sealed: bool,
 }
 
@@ -118,6 +120,7 @@ impl ReviewWorkbench {
             pending_suggestion_apply: None,
             undo: None,
             confidence_filter: ConfidenceFilter::All,
+            active_state_tab: ReviewState::Pending,
             sealed: false,
         };
         // 轻量建议：进台时按候选数据确定性生成；只读，不改变 ReviewState。
@@ -184,6 +187,25 @@ impl ReviewWorkbench {
     /// 切换置信度筛选芯片（单选，T51）。
     pub fn set_confidence_filter(&mut self, filter: ConfidenceFilter) {
         self.confidence_filter = filter;
+    }
+
+    /// 当前激活的三态分组（待定/保留/剔除）。
+    pub fn active_state_tab(&self) -> ReviewState {
+        self.active_state_tab
+    }
+
+    /// 切换三态分组（待定/保留/剔除）。
+    pub fn set_active_state_tab(&mut self, state: ReviewState) {
+        self.active_state_tab = state;
+    }
+
+    /// 当前激活分类内、指定三态分组的候选总数。
+    pub fn state_tab_count(&self, state: ReviewState) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.category == self.active_category)
+            .filter(|candidate| candidate.state == state)
+            .count()
     }
 
     /// 命中某置信度筛选的候选总数（T51：按当前激活的六类分类统计，
@@ -663,10 +685,10 @@ impl ReviewWorkbench {
             })
             .collect();
 
-        // 卡片列表 = 当前类别 ∩ 当前置信度筛选；按 高→中→低 排序
+        // 卡片范围 = 当前类别 ∩ 当前置信度筛选；按 高→中→低 排序
         // （同档按稳定候选 ID，保证确定性；T51）。
         let filter = self.confidence_filter;
-        let mut visible_cards: Vec<&Candidate> = self
+        let mut scoped_cards: Vec<&Candidate> = self
             .candidates
             .iter()
             .filter(|c| {
@@ -676,27 +698,29 @@ impl ReviewWorkbench {
                         .is_some_and(|suggestion| filter.matches(suggestion))
             })
             .collect();
-        visible_cards.sort_by(confidence_order);
-        let cards: Vec<CandidateCardView> = visible_cards
-            .into_iter()
-            .map(|c| {
-                let suggestion = c.suggestion.as_ref().map(|s| SuggestionCardView {
-                    category_key: suggestion_category_text_key(s.category),
-                    action_key: suggestion_action_text_key(s.action),
-                    reason_key: s.reason_key,
-                    reason_args: s.reason_args.clone(),
-                });
-                CandidateCardView {
-                    candidate_id: c.key.candidate_id.clone(),
-                    title: c.title.clone(),
-                    named: c.named,
-                    state: c.state,
-                    state_key: state_text_key(c.state),
-                    selected: c.selected,
-                    highlighted: self.highlighted.as_ref() == Some(&c.key),
-                    suggestion,
-                }
-            })
+        scoped_cards.sort_by(confidence_order);
+        let to_card_view = |c: &&Candidate| CandidateCardView {
+            candidate_id: c.key.candidate_id.clone(),
+            title: c.title.clone(),
+            named: c.named,
+            state: c.state,
+            state_key: state_text_key(c.state),
+            selected: c.selected,
+            highlighted: self.highlighted.as_ref() == Some(&c.key),
+            suggestion: c.suggestion.as_ref().map(|s| SuggestionCardView {
+                category_key: suggestion_category_text_key(s.category),
+                action_key: suggestion_action_text_key(s.action),
+                reason_key: s.reason_key,
+                reason_args: s.reason_args.clone(),
+            }),
+        };
+        // 地图可见集合与三态分组无关：地图始终概览当前类别+筛选下的全部三态
+        // （待定虚线/保留实线/剔除隐藏），分组只过滤左侧卡片列表。
+        let map_cards: Vec<CandidateCardView> = scoped_cards.iter().map(to_card_view).collect();
+        let cards: Vec<CandidateCardView> = scoped_cards
+            .iter()
+            .filter(|candidate| candidate.state == self.active_state_tab)
+            .map(to_card_view)
             .collect();
 
         // 地图对象按 高→中→低 排序：JS 按接收顺序标注，高置信候选优先上屏
@@ -738,9 +762,19 @@ impl ReviewWorkbench {
             title_key: text_keys::WORKBENCH_TITLE,
             category_tabs,
             cards,
+            map_cards,
             map_objects,
             info_panel,
             selected_count: self.selected_count(),
+            state_tabs: [ReviewState::Pending, ReviewState::Keep, ReviewState::Remove]
+                .into_iter()
+                .map(|state| crate::view_models::StateTabView {
+                    state,
+                    label_key: state_text_key(state),
+                    count: self.state_tab_count(state),
+                    active: self.active_state_tab == state,
+                })
+                .collect(),
             pending_confirmation: self
                 .pending_confirmation
                 .as_ref()

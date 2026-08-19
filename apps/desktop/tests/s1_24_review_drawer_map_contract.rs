@@ -242,6 +242,7 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
 
     // 3. 标注规则：剔除后卡片保留，可直接从卡片改回"保留"。
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "remove".into());
+    window.invoke_review_state_tab_clicked(2);
     assert_eq!(
         card_state_key(&window, 0),
         "remove",
@@ -249,6 +250,7 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
     );
     window.invoke_review_card_highlight_clicked(reviewable[0].clone().into());
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
+    window.invoke_review_state_tab_clicked(1);
     assert_eq!(
         card_state_key(&window, 0),
         "keep",
@@ -306,11 +308,22 @@ fn review_drawer_map_ipc_highlight_locate_and_annotation_state() {
         3,
         "地图失败不破坏评审抽屉"
     );
-    let state_before = card_state_key(&window, 1);
+    window.invoke_review_state_tab_clicked(0);
+    let state_before = window
+        .get_review_cards()
+        .row_data(0)
+        .expect("待定卡片存在")
+        .state_key
+        .to_string();
     window.invoke_review_card_state_clicked(reviewable[1].clone().into(), "keep".into());
     assert_eq!(
-        card_state_key(&window, 1),
-        state_before,
+        window
+            .get_review_cards()
+            .row_data(0)
+            .expect("待定卡片存在")
+            .state_key
+            .as_str(),
+        state_before.as_str(),
         "地图整体失败后不得写入新的评审决定"
     );
 }

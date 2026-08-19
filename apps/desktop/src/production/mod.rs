@@ -498,6 +498,19 @@ impl ProductionEntries {
         );
     }
 
+    pub(crate) fn review_set_state_tab(&mut self, window: &AppWindow, index: i32) {
+        const STATE_ORDER: [&str; 3] = ["pending", "keep", "remove"];
+        let Some(state) = STATE_ORDER.get(index as usize) else {
+            return;
+        };
+        self.submit_review(
+            window,
+            ReviewRequest::SetStateTab {
+                state: (*state).to_owned(),
+            },
+        );
+    }
+
     pub(crate) fn review_apply_suggestions(&mut self, window: &AppWindow) {
         self.submit_review(window, ReviewRequest::ApplySuggestions);
     }

@@ -291,48 +291,9 @@ fn confidence_filters_refresh_sort_apply_and_page_scoped_select_all() {
     assert_eq!(window.get_review_page_total(), 1);
     assert!(window.get_review_page_label().contains("1/1"));
 
-    // 4. 一键应用：只把 10 个高置信候选改为保留，先弹确认且不剔除。
+    // 4. 全选＝当前页：待定分组的第 1 页 20 张、第 2 页 10 张，互不跨页。
     window.invoke_review_confidence_filter_clicked(0);
-    assert!(window.get_review_apply_suggestions_enabled());
-    window.invoke_review_apply_suggestions_clicked();
-    assert!(window.get_confirm_dialog_visible());
-    assert_eq!(
-        window.get_confirm_dialog_title().as_str(),
-        l10n.t("review.apply_suggest_confirm_title")
-    );
-    let body = window.get_confirm_dialog_body().to_string();
-    assert!(
-        body.contains("10") && body.contains("不会剔除任何候选"),
-        "{body}"
-    );
-    window.invoke_confirm_dialog_confirmed();
-    assert!(!window.get_confirm_dialog_visible());
-    for index in 0..10 {
-        assert_eq!(
-            window
-                .get_review_cards()
-                .row_data(index)
-                .unwrap()
-                .state_key
-                .as_str(),
-            "keep",
-            "高置信候选必须全部保留"
-        );
-    }
-    for index in 10..20 {
-        assert_eq!(
-            window
-                .get_review_cards()
-                .row_data(index)
-                .unwrap()
-                .state_key
-                .as_str(),
-            "pending",
-            "中/低置信候选不得被一键应用改变"
-        );
-    }
-
-    // 5. 全选＝当前页：第 1 页 20 张、第 2 页 10 张，互不跨页。
+    assert_eq!(window.get_review_page_total(), 2);
     window.invoke_review_select_all_toggled();
     assert!(window.get_review_all_page_selected());
     assert_eq!(
@@ -356,6 +317,59 @@ fn confidence_filters_refresh_sort_apply_and_page_scoped_select_all() {
         l10n.t_with_args("review.selected_count", serde_json::json!({ "count": 10 })),
         "取消第 1 页全选不得影响第 2 页的勾选"
     );
+
+    // 5. 一键应用：只把 10 个高置信候选改为保留，先弹确认且不剔除；
+    // 保留后的候选离开待定分组、进入保留分组。
+    assert!(window.get_review_apply_suggestions_enabled());
+    window.invoke_review_apply_suggestions_clicked();
+    assert!(window.get_confirm_dialog_visible());
+    assert_eq!(
+        window.get_confirm_dialog_title().as_str(),
+        l10n.t("review.apply_suggest_confirm_title")
+    );
+    let body = window.get_confirm_dialog_body().to_string();
+    assert!(
+        body.contains("10") && body.contains("不会剔除任何候选"),
+        "{body}"
+    );
+    window.invoke_confirm_dialog_confirmed();
+    assert!(!window.get_confirm_dialog_visible());
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        20,
+        "待定分组只留下 20 个中/低置信候选"
+    );
+    for index in 10..20 {
+        assert_eq!(
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .state_key
+                .as_str(),
+            "pending",
+            "中/低置信候选不得被一键应用改变"
+        );
+    }
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        10,
+        "保留分组应出现 10 项"
+    );
+    for index in 0..10 {
+        assert_eq!(
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .state_key
+                .as_str(),
+            "keep",
+            "高置信候选必须全部保留"
+        );
+    }
+    window.invoke_review_state_tab_clicked(0);
 
     // 6. 评审地图按 高→中→低 接收可见集合（map_ready 后切分类触发全量推送）。
     desktop_shell::set_review_push_probe_visible(true);

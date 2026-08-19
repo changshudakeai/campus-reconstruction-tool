@@ -220,16 +220,24 @@ fn review_empty_state_does_not_block_export_and_seal_failure_is_b7_visible() {
         // 恢复可写后，评审状态仍可继续修改并最终封账成功。
         std::fs::remove_dir(&journal).expect("移除阻塞 journal 目录");
         window.invoke_review_card_state_clicked(candidate_ids[1].clone().into(), "keep".into());
+        window.invoke_review_state_tab_clicked(1);
         assert_eq!(
-            window
-                .get_review_cards()
-                .row_data(1)
-                .expect("评审卡片必须存在")
-                .state_key
-                .as_str(),
-            "keep",
-            "封账失败后评审状态必须保持可修改"
+            window.get_review_cards().row_count(),
+            2,
+            "保留分组应为 2 项"
         );
+        for index in 0..2 {
+            assert_eq!(
+                window
+                    .get_review_cards()
+                    .row_data(index)
+                    .expect("评审卡片必须存在")
+                    .state_key
+                    .as_str(),
+                "keep",
+                "封账失败后评审状态必须保持可修改"
+            );
+        }
         window.invoke_review_seal_clicked();
         assert!(window.get_review_sealed());
         assert!(window.get_review_summary_visible());

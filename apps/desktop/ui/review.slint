@@ -211,6 +211,10 @@ export component ReviewDrawer inherits Rectangle {
     in property <[string]> confidence-filter-labels;
     in property <[int]> confidence-filter-counts;
     in property <[int]> confidence-filter-active;
+    // 三态分组：待定/保留/剔除（默认待定；评审后卡片离开当前分组）。
+    in property <[string]> state-tab-labels;
+    in property <[int]> state-tab-counts;
+    in property <[int]> state-tab-active;
     // 一键应用建议 / 撤销上一批。
     in property <string> apply-suggestions-label;
     in property <string> undo-suggestions-label;
@@ -235,6 +239,7 @@ export component ReviewDrawer inherits Rectangle {
     callback bulk-state-clicked(state: string);
     callback seal-clicked();
     callback confidence-filter-clicked(index: int);
+    callback state-tab-clicked(index: int);
     callback apply-suggestions-clicked();
     callback undo-suggestions-clicked();
 
@@ -341,6 +346,33 @@ export component ReviewDrawer inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 22px;
                     clicked => { review-cards-scroll.viewport-y = 0px; root.confidence-filter-clicked(3); }
+                }
+            }
+
+            // T51 后续优化：三态分组（默认“待定”）。在待定里完成评审后，
+            // 卡片立即离开待定并进入保留/剔除分组。
+            HorizontalLayout {
+                spacing: 2px;
+                ReviewCategoryButton {
+                    label: root.state-tab-labels[0];
+                    active: root.state-tab-active[0] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.state-tab-clicked(0); }
+                }
+                ReviewCategoryButton {
+                    label: root.state-tab-labels[1];
+                    active: root.state-tab-active[1] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.state-tab-clicked(1); }
+                }
+                ReviewCategoryButton {
+                    label: root.state-tab-labels[2];
+                    active: root.state-tab-active[2] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.state-tab-clicked(2); }
                 }
             }
 

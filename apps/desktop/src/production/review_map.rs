@@ -44,10 +44,11 @@ pub(super) struct VisibleReviewSet {
     pub(super) objects: Vec<MapObjectView>,
 }
 
-/// 当前应绘制到评审地图的候选集合：当前类别 + 当前分页（每页 ≤60）。
+/// 当前应绘制到评审地图的候选集合：当前类别 + 置信度筛选 + 地图独立分页。
 ///
-/// 分页索引由工作区会话保存；此处同时把越界索引钳制回写，保证地图与列表
-/// 永远绘制同一批候选，且全量推送不会把 12,000 条候选全部排进 JS 缓冲。
+/// 地图始终概览三态（待定虚线/保留实线/剔除隐藏），不随左侧三态分组过滤；
+/// 使用独立的地图页码（review_map_page_index）。分页索引由工作区会话保存，
+/// 此处同时把越界索引钳制回写，且全量推送不会把数千候选全部排进 JS 缓冲。
 pub(super) fn visible_review_set_for(
     context: &WorkspaceProductionContext,
     view: &WorkbenchView,
@@ -64,15 +65,15 @@ pub(super) fn visible_review_set_for(
         .find(|chip| chip.active)
         .map(|chip| chip.filter)
         .unwrap_or(ConfidenceFilter::All);
-    let page_total = view.cards.len().div_ceil(page_size).max(1);
+    let page_total = view.map_cards.len().div_ceil(page_size).max(1);
     let mut session = context.session.borrow_mut();
-    let page_index = session.review_page_index.min(page_total - 1);
-    session.review_page_index = page_index;
+    let page_index = session.review_map_page_index.min(page_total - 1);
+    session.review_map_page_index = page_index;
     drop(session);
 
     let start = page_index * page_size;
-    let end = (start + page_size).min(view.cards.len());
-    let id_set: std::collections::HashSet<String> = view.cards[start..end]
+    let end = (start + page_size).min(view.map_cards.len());
+    let id_set: std::collections::HashSet<String> = view.map_cards[start..end]
         .iter()
         .map(|card| card.candidate_id.clone())
         .collect();

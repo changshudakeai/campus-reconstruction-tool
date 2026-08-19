@@ -42,6 +42,6 @@ pub use suggestion::{
 };
 pub use view_models::{
     text_keys, CandidateCardView, CategoryTabView, ConfidenceFilterView, ExportSummary,
-    InfoPanelView, MapObjectView, SuggestionCardView, WorkbenchView,
+    InfoPanelView, MapObjectView, StateTabView, SuggestionCardView, WorkbenchView,
 };
 pub use workbench::ReviewWorkbench;

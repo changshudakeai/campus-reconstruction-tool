@@ -199,10 +199,9 @@ fn review_large_candidate_list_scrolls_and_keeps_seal_action_reachable() {
     // 筛选区与批量行位于列表上方，列表区位置随内容下移：沿抽屉中部到底部扫描
     // 真实列表区域（一次派发，单次事件循环推进动画到终值），确认滚轮向下
     // 滚动有效（真实 PointerScrolled 事件）。
-    for fraction in [
-        0.1_f32, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85,
-        0.9, 0.95,
-    ] {
+    // T51 三态分组行加入后列表更短：只滚 3 次（-720px），不要直接滚到底，
+    // 给键盘滚动留出继续向下的余量。
+    for fraction in [0.55_f32, 0.6, 0.65] {
         let list_position =
             LogicalPosition::new(drawer_x + drawer_w / 2.0, drawer_y + drawer_h * fraction);
         window

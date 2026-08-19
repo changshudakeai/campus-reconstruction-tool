@@ -759,6 +759,13 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
+        window.on_review_state_tab_clicked(move |index| {
+            let Some(window) = weak.upgrade() else { return };
+            shared.borrow_mut().review_set_state_tab(&window, index);
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
         window.on_review_apply_suggestions_clicked(move || {
             let Some(window) = weak.upgrade() else { return };
             shared.borrow_mut().review_apply_suggestions(&window);

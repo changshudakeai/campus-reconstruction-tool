@@ -412,16 +412,11 @@ fn run_suggestion_contract(
     window.invoke_confirm_dialog_confirmed();
     assert!(!window.get_confirm_dialog_visible());
     assert!(window.get_review_undo_available());
+    // 待定分组只剩 4 个未保留候选；2 个高置信候选进入保留分组。
+    assert_eq!(window.get_review_cards().row_count(), 4);
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(window.get_review_cards().row_count(), 2);
     let kept: Vec<String> = (0..window.get_review_cards().row_count())
-        .filter(|index| {
-            window
-                .get_review_cards()
-                .row_data(*index)
-                .unwrap()
-                .state_key
-                .as_str()
-                == "keep"
-        })
         .map(|index| {
             window
                 .get_review_cards()
@@ -437,6 +432,7 @@ fn run_suggestion_contract(
         !window.get_review_apply_suggestions_enabled(),
         "全部高置信候选已保留后应用按钮应禁用"
     );
+    window.invoke_review_state_tab_clicked(0);
 
     // 撤销上一批：恢复到应用前（全部待定）。
     window.invoke_review_undo_suggestions_clicked();
@@ -525,6 +521,12 @@ fn run_batch_contract(
     );
     window.invoke_confirm_dialog_confirmed();
     assert!(!window.get_confirm_dialog_visible());
+    window.invoke_review_state_tab_clicked(2);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        5,
+        "剔除分组应出现 5 项"
+    );
     for index in 0..5 {
         assert_eq!(card_state_key(window, index), "remove");
     }
@@ -532,6 +534,12 @@ fn run_batch_contract(
     // 批量改保留直接执行（无需确认）：当前页仍为勾选态。
     window.invoke_review_bulk_state_clicked("keep".into());
     assert!(!window.get_confirm_dialog_visible(), "批量改保留不得弹确认");
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        5,
+        "保留分组应出现 5 项"
+    );
     for index in 0..5 {
         assert_eq!(card_state_key(window, index), "keep");
     }
@@ -539,6 +547,12 @@ fn run_batch_contract(
     // 批量改待定直接执行。
     window.invoke_review_bulk_state_clicked("pending".into());
     assert!(!window.get_confirm_dialog_visible(), "批量改待定不得弹确认");
+    window.invoke_review_state_tab_clicked(0);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        5,
+        "待定分组应回到 5 项"
+    );
     for index in 0..5 {
         assert_eq!(card_state_key(window, index), "pending");
     }
@@ -546,13 +560,21 @@ fn run_batch_contract(
     // 再次批量剔除并确认：5 项全部剔除；随后逐项恢复两个候选。
     window.invoke_review_bulk_state_clicked("remove".into());
     window.invoke_confirm_dialog_confirmed();
+    window.invoke_review_state_tab_clicked(2);
+    assert_eq!(window.get_review_cards().row_count(), 5);
     for index in 0..5 {
         assert_eq!(card_state_key(window, index), "remove");
     }
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
     window.invoke_review_category_clicked(1);
+    window.invoke_review_state_tab_clicked(0);
     window.invoke_review_card_state_clicked(reviewable[5].clone().into(), "keep".into());
-    assert_eq!(card_state_key(window, 0), "keep");
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        card_state_key(window, 0),
+        "keep",
+        "道路候选改保留后进入保留分组"
+    );
 
     // 封账：成功写出导出摘要（保留 2：建筑 1 + 道路 1；剔除 4；待定 0）。
     window.invoke_review_seal_clicked();
@@ -579,11 +601,34 @@ fn run_batch_contract(
     window.invoke_workspace_step_clicked(2);
     window.invoke_workspace_step_clicked(3);
     assert_eq!(window.get_review_candidate_count(), 6);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        0,
+        "全部已裁决后待定分组为空"
+    );
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        1,
+        "建筑保留分组只有 b0"
+    );
     assert_eq!(card_state_key(window, 0), "keep");
+    window.invoke_review_state_tab_clicked(2);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        4,
+        "建筑剔除分组 4 项"
+    );
     for index in 1..5 {
-        assert_eq!(card_state_key(window, index), "remove");
+        assert_eq!(card_state_key(window, index - 1), "remove");
     }
     window.invoke_review_category_clicked(1);
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        1,
+        "道路保留分组只有 r0"
+    );
     assert_eq!(card_state_key(window, 0), "keep");
 }
 

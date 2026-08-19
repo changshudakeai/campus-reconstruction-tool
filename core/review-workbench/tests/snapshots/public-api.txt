@@ -30,6 +30,7 @@ pub const review_workbench::text_keys::STATE_KEEP: &str
 pub const review_workbench::text_keys::STATE_LABEL: &str
 pub const review_workbench::text_keys::STATE_PENDING: &str
 pub const review_workbench::text_keys::STATE_REJECT: &str
+pub const review_workbench::text_keys::STATE_TAB: &str
 pub const review_workbench::text_keys::SUGGESTION_ACTION_HUMAN_REVIEW: &str
 pub const review_workbench::text_keys::SUGGESTION_ACTION_KEEP: &str
 pub const review_workbench::text_keys::SUGGESTION_ACTION_REMOVE: &str
@@ -981,6 +982,7 @@ impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusi
 pub struct review_workbench::ReviewWorkbench
 impl review_workbench::ReviewWorkbench
 pub fn review_workbench::ReviewWorkbench::active_category(&self) -> shared_domain_types::category::CandidateCategory
+pub fn review_workbench::ReviewWorkbench::active_state_tab(&self) -> shared_domain_types::review::ReviewState
 pub fn review_workbench::ReviewWorkbench::apply_suggestions(&mut self) -> review_workbench::Result<review_workbench::CommandOutcome>
 pub fn review_workbench::ReviewWorkbench::apply_suggestions_enabled(&self) -> bool
 pub fn review_workbench::ReviewWorkbench::can_undo_suggestion_apply(&self) -> bool
@@ -1006,9 +1008,11 @@ pub fn review_workbench::ReviewWorkbench::save_session(&self, path: &std::path::
 pub fn review_workbench::ReviewWorkbench::seal(&mut self, db: &mut data_persistence::database::Database) -> review_workbench::Result<review_workbench::ExportSummary>
 pub fn review_workbench::ReviewWorkbench::selected_count(&self) -> usize
 pub fn review_workbench::ReviewWorkbench::set_active_category(&mut self, category: shared_domain_types::category::CandidateCategory)
+pub fn review_workbench::ReviewWorkbench::set_active_state_tab(&mut self, state: shared_domain_types::review::ReviewState)
 pub fn review_workbench::ReviewWorkbench::set_confidence_filter(&mut self, filter: review_workbench::ConfidenceFilter)
 pub fn review_workbench::ReviewWorkbench::set_selected(&mut self, keys: &[review_workbench::CandidateKey], selected: bool) -> usize
 pub fn review_workbench::ReviewWorkbench::state_of(&self, key: &review_workbench::CandidateKey) -> core::option::Option<shared_domain_types::review::ReviewState>
+pub fn review_workbench::ReviewWorkbench::state_tab_count(&self, state: shared_domain_types::review::ReviewState) -> usize
 pub fn review_workbench::ReviewWorkbench::submit(&mut self, change: review_workbench::StateChange) -> review_workbench::Result<review_workbench::CommandOutcome>
 pub fn review_workbench::ReviewWorkbench::submit_for_selected(&mut self, to: shared_domain_types::review::ReviewState) -> review_workbench::Result<review_workbench::CommandOutcome>
 pub fn review_workbench::ReviewWorkbench::suggestion_of(&self, key: &review_workbench::CandidateKey) -> core::option::Option<&review_workbench::CandidateSuggestion>
@@ -1103,6 +1107,54 @@ pub fn review_workbench::StateChange::from(t: T) -> T
 impl<T> typenum::type_operators::Same for review_workbench::StateChange
 pub type review_workbench::StateChange::Output = T
 impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::StateChange where T: ?core::marker::Sized
+#[non_exhaustive] pub struct review_workbench::StateTabView
+pub review_workbench::StateTabView::active: bool
+pub review_workbench::StateTabView::count: usize
+pub review_workbench::StateTabView::label_key: &'static str
+pub review_workbench::StateTabView::state: shared_domain_types::review::ReviewState
+impl core::clone::Clone for review_workbench::StateTabView
+pub fn review_workbench::StateTabView::clone(&self) -> review_workbench::StateTabView
+impl core::cmp::Eq for review_workbench::StateTabView
+impl core::cmp::PartialEq for review_workbench::StateTabView
+pub fn review_workbench::StateTabView::eq(&self, other: &review_workbench::StateTabView) -> bool
+impl core::fmt::Debug for review_workbench::StateTabView
+pub fn review_workbench::StateTabView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for review_workbench::StateTabView
+impl core::marker::Freeze for review_workbench::StateTabView
+impl core::marker::Send for review_workbench::StateTabView
+impl core::marker::Sync for review_workbench::StateTabView
+impl core::marker::Unpin for review_workbench::StateTabView
+impl core::panic::unwind_safe::RefUnwindSafe for review_workbench::StateTabView
+impl core::panic::unwind_safe::UnwindSafe for review_workbench::StateTabView
+impl<Q, K> hashbrown::Equivalent<K> for review_workbench::StateTabView where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn review_workbench::StateTabView::equivalent(&self, key: &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for review_workbench::StateTabView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for review_workbench::StateTabView where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for review_workbench::StateTabView where U: core::convert::From<T>
+pub fn review_workbench::StateTabView::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for review_workbench::StateTabView where U: core::convert::Into<T>
+pub type review_workbench::StateTabView::Error = core::convert::Infallible
+pub fn review_workbench::StateTabView::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for review_workbench::StateTabView where U: core::convert::TryFrom<T>
+pub type review_workbench::StateTabView::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn review_workbench::StateTabView::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for review_workbench::StateTabView where T: core::clone::Clone
+pub type review_workbench::StateTabView::Owned = T
+pub fn review_workbench::StateTabView::clone_into(&self, target: &mut T)
+pub fn review_workbench::StateTabView::to_owned(&self) -> T
+impl<T> core::any::Any for review_workbench::StateTabView where T: 'static + ?core::marker::Sized
+pub fn review_workbench::StateTabView::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for review_workbench::StateTabView where T: ?core::marker::Sized
+pub fn review_workbench::StateTabView::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for review_workbench::StateTabView where T: ?core::marker::Sized
+pub fn review_workbench::StateTabView::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for review_workbench::StateTabView where T: core::clone::Clone
+pub unsafe fn review_workbench::StateTabView::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for review_workbench::StateTabView
+pub fn review_workbench::StateTabView::from(t: T) -> T
+impl<T> typenum::type_operators::Same for review_workbench::StateTabView
+pub type review_workbench::StateTabView::Output = T
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for review_workbench::StateTabView where T: ?core::marker::Sized
 #[non_exhaustive] pub struct review_workbench::SuggestionApplyRequest
 pub review_workbench::SuggestionApplyRequest::count: usize
 pub review_workbench::SuggestionApplyRequest::keep_count: usize
@@ -1250,11 +1302,13 @@ pub review_workbench::WorkbenchView::category_tabs: alloc::vec::Vec<review_workb
 pub review_workbench::WorkbenchView::confidence_filters: alloc::vec::Vec<review_workbench::ConfidenceFilterView>
 pub review_workbench::WorkbenchView::confidence_filters_label_key: &'static str
 pub review_workbench::WorkbenchView::info_panel: core::option::Option<review_workbench::InfoPanelView>
+pub review_workbench::WorkbenchView::map_cards: alloc::vec::Vec<review_workbench::CandidateCardView>
 pub review_workbench::WorkbenchView::map_objects: alloc::vec::Vec<review_workbench::MapObjectView>
 pub review_workbench::WorkbenchView::pending_confirmation: core::option::Option<review_workbench::ConfirmationRequest>
 pub review_workbench::WorkbenchView::pending_suggestion_apply: core::option::Option<review_workbench::SuggestionApplyRequest>
 pub review_workbench::WorkbenchView::sealed: bool
 pub review_workbench::WorkbenchView::selected_count: usize
+pub review_workbench::WorkbenchView::state_tabs: alloc::vec::Vec<review_workbench::StateTabView>
 pub review_workbench::WorkbenchView::title_key: &'static str
 pub review_workbench::WorkbenchView::undo_available: bool
 pub review_workbench::WorkbenchView::undo_suggestions_label_key: &'static str

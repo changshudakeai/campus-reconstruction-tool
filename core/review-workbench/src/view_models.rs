@@ -56,6 +56,8 @@ pub mod text_keys {
     pub const CONFIDENCE_FILTERS_LABEL: &str = "review.confidence_filters_label";
     /// 置信度筛选芯片标签行（含 `{label}`/`{count}` 占位符）
     pub const CONFIDENCE_FILTER_TAB: &str = "review.confidence_filter_tab";
+    /// 三态分组标签行（含 `{label}`/`{count}` 占位符）
+    pub const STATE_TAB: &str = "review.state_tab";
     /// 置信度筛选：全部
     pub const FILTER_ALL: &str = "review.filter_all";
     /// 置信度筛选：高
@@ -246,6 +248,20 @@ pub struct ConfidenceFilterView {
     pub active: bool,
 }
 
+/// 三态分组（待定/保留/剔除；默认待定）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StateTabView {
+    /// 分组对应的三态。
+    pub state: ReviewState,
+    /// 分组显示名文本键。
+    pub label_key: &'static str,
+    /// 当前激活分类内该三态的候选数。
+    pub count: usize,
+    /// 是否为当前激活的分组。
+    pub active: bool,
+}
+
 /// 中间大地图上的一个对象（与卡片同源、双向高亮联动）
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -302,12 +318,17 @@ pub struct WorkbenchView {
     pub category_tabs: Vec<CategoryTabView>,
     /// 左栏卡片列表（当前激活类别）
     pub cards: Vec<CandidateCardView>,
+    /// 地图可见范围卡片（当前类别 ∩ 置信度筛选，不含三态分组过滤；
+    /// 地图始终概览全部三态）。
+    pub map_cards: Vec<CandidateCardView>,
     /// 中间大地图对象（全部类别，地图不分抽屉）
     pub map_objects: Vec<MapObjectView>,
     /// 右栏信息面板（无高亮候选时为 None）
     pub info_panel: Option<InfoPanelView>,
     /// 当前勾选数（"已选 {count} 项"插值用）
     pub selected_count: usize,
+    /// 三态分组标签（待定/保留/剔除，默认待定）
+    pub state_tabs: Vec<StateTabView>,
     /// 等待中的二次确认弹窗（批量剔除时出现，无数量门槛）
     pub pending_confirmation: Option<ConfirmationRequest>,
     /// 置信度筛选区标题文本键

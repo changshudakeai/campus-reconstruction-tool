@@ -348,6 +348,9 @@ export component AppWindow inherits Window {
     in property <[string]> review-confidence-filter-labels;
     in property <[int]> review-confidence-filter-counts;
     in property <[int]> review-confidence-filter-active;
+    in property <[string]> review-state-tab-labels;
+    in property <[int]> review-state-tab-counts;
+    in property <[int]> review-state-tab-active;
     in property <string> review-apply-suggestions-label;
     in property <string> review-undo-suggestions-label;
     in property <bool> review-apply-suggestions-enabled;
@@ -381,6 +384,7 @@ export component AppWindow inherits Window {
     callback review-bulk-state-clicked(state: string);
     callback review-seal-clicked();
     callback review-confidence-filter-clicked(index: int);
+    callback review-state-tab-clicked(index: int);
     callback review-apply-suggestions-clicked();
     callback review-undo-suggestions-clicked();
     callback workspace-export-start-clicked();
@@ -891,6 +895,9 @@ export component AppWindow inherits Window {
                     confidence-filter-labels: root.review-confidence-filter-labels;
                     confidence-filter-counts: root.review-confidence-filter-counts;
                     confidence-filter-active: root.review-confidence-filter-active;
+                    state-tab-labels: root.review-state-tab-labels;
+                    state-tab-counts: root.review-state-tab-counts;
+                    state-tab-active: root.review-state-tab-active;
                     apply-suggestions-label: root.review-apply-suggestions-label;
                     undo-suggestions-label: root.review-undo-suggestions-label;
                     apply-suggestions-enabled: root.review-apply-suggestions-enabled;
@@ -909,6 +916,7 @@ export component AppWindow inherits Window {
                     bulk-state-clicked(state) => { root.review-bulk-state-clicked(state); }
                     seal-clicked => { root.review-seal-clicked(); }
                     confidence-filter-clicked(index) => { root.review-confidence-filter-clicked(index); }
+                    state-tab-clicked(index) => { root.review-state-tab-clicked(index); }
                     apply-suggestions-clicked => { root.review-apply-suggestions-clicked(); }
                     undo-suggestions-clicked => { root.review-undo-suggestions-clicked(); }
                 }

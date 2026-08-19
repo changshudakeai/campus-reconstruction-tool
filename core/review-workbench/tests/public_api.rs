@@ -41,6 +41,7 @@ fn every_emitted_text_key_resolves_in_zh_cn() {
         text_keys::CANCEL_BUTTON,
         text_keys::CONFIDENCE_FILTERS_LABEL,
         text_keys::CONFIDENCE_FILTER_TAB,
+        text_keys::STATE_TAB,
         text_keys::FILTER_ALL,
         text_keys::FILTER_HIGH,
         text_keys::FILTER_MEDIUM,

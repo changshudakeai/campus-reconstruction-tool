@@ -20,6 +20,12 @@ pub(super) fn checkpoint_review(context: &WorkspaceProductionContext) {
     let Some(workbench) = injector.review() else {
         return;
     };
+    if injector.has_sealed_review_states(&plan_id).unwrap_or(true) {
+        // 封账后终态以 review_decisions 为唯一权威，任何呈现层变更（如切换
+        // 三态分组）都不得再写回未封账草稿；重进台的内存工作台不带封账
+        // 标记，因此以 B2 终态为准。
+        return;
+    }
     let draft = ReviewDraft {
         plan_id: plan_id.clone(),
         active_category: workbench.active_category(),

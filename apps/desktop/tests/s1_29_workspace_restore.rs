@@ -280,9 +280,15 @@ fn workspace_restore_acceptance_matrix() {
             harness.reviewable[1].clone().into(),
             "remove".into(),
         );
+        window.invoke_review_state_tab_clicked(1);
         assert_eq!(card_state_key(&window, 0), "keep");
-        assert_eq!(card_state_key(&window, 1), "remove");
-        assert_eq!(card_state_key(&window, 2), "pending");
+        window.invoke_review_state_tab_clicked(2);
+        assert_eq!(card_state_key(&window, 0), "remove");
+        window.invoke_review_state_tab_clicked(0);
+        assert_eq!(window.get_review_cards().row_count(), 3);
+        for index in 0..3 {
+            assert_eq!(card_state_key(&window, index), "pending");
+        }
 
         window.invoke_workspace_step_clicked(4);
         assert_eq!(window.get_workspace_active_step(), 4);
@@ -331,21 +337,23 @@ fn workspace_restore_acceptance_matrix() {
     // 未封账三态恢复（A.4）
     window.invoke_workspace_step_clicked(3);
     assert_eq!(window.get_review_candidate_count(), 6);
+    window.invoke_review_state_tab_clicked(1);
     assert_eq!(
         card_state_key(&window, 0),
         "keep",
         "未封账的保留决定必须恢复"
     );
+    window.invoke_review_state_tab_clicked(2);
     assert_eq!(
-        card_state_key(&window, 1),
+        card_state_key(&window, 0),
         "remove",
         "未封账的剔除决定必须恢复"
     );
-    assert_eq!(
-        card_state_key(&window, 2),
-        "pending",
-        "未封账的待定状态必须保持"
-    );
+    window.invoke_review_state_tab_clicked(0);
+    assert_eq!(window.get_review_cards().row_count(), 3);
+    for index in 0..3 {
+        assert_eq!(card_state_key(&window, index), "pending");
+    }
     // 场景二：数据损坏 → 明确提示 + 回退，不伪造"已确认"
     let harness = build_harness();
     let export_dir_first = harness.directory.path().join("exports-corrupt-first");
@@ -443,6 +451,7 @@ fn workspace_restore_acceptance_matrix() {
     let export_dir_after = harness.directory.path().join("exports-seal-after");
     let (window, _runtime, _center) = launch(&harness, &export_dir_after);
     window.invoke_workspace_step_clicked(3);
+    window.invoke_review_state_tab_clicked(1);
     assert_eq!(
         card_state_key(&window, 0),
         "keep",

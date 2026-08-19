@@ -70,6 +70,9 @@ pub(crate) struct WorkspaceSessionState {
     pub(super) tutorial_skip_all_label: String,
     /// T39：评审候选列表当前页索引（S1 呈现层分页状态；切分类时复位到 0）。
     pub(super) review_page_index: usize,
+    /// T51 三态分组后的地图独立分页：地图始终概览当前分类+筛选的全部三态，
+    /// 与左侧列表（三态分组过滤）使用不同的页码。
+    pub(super) review_map_page_index: usize,
     /// B 工单：边界自动获取当前阶段（None = 无在途获取；S1 只显示阶段与耗时）
     pub(super) boundary_fetch_stage: Option<BoundaryFetchStage>,
     /// 当前阶段内端点尝试序号（1..=total；非端点阶段为 0）

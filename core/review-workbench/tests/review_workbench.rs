@@ -283,6 +283,18 @@ fn three_pane_view_reflects_active_category() {
         4,
         "置信度芯片固定为 全部/高/中/低 四个"
     );
+    assert_eq!(
+        view.state_tabs.len(),
+        3,
+        "三态分组固定为 待定/保留/剔除 三个"
+    );
+    assert!(
+        view.state_tabs
+            .iter()
+            .find(|tab| tab.state == ReviewState::Pending)
+            .is_some_and(|tab| tab.active),
+        "默认激活分组必须是'待定'"
+    );
     assert!(
         view.confidence_filters
             .iter()
@@ -301,6 +313,60 @@ fn three_pane_view_reflects_active_category() {
     let view = workbench.view();
     assert_eq!(view.cards.len(), 1);
     assert_eq!(view.cards[0].title, "游泳池");
+}
+
+#[test]
+fn state_tabs_partition_cards_while_map_cards_stay_unpartitioned() {
+    let (db, plan_id) = fixture();
+    let mut workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
+
+    // 默认待定分组：建筑分类全部 6 个候选都在待定。
+    assert_eq!(workbench.active_state_tab(), ReviewState::Pending);
+    assert_eq!(workbench.state_tab_count(ReviewState::Pending), 6);
+    assert_eq!(workbench.state_tab_count(ReviewState::Keep), 0);
+    assert_eq!(workbench.state_tab_count(ReviewState::Remove), 0);
+    assert_eq!(workbench.view().cards.len(), 6);
+    assert_eq!(workbench.view().map_cards.len(), 6);
+
+    // 逐项评审：改为保留/剔除后，卡片离开待定分组并进入对应分组。
+    workbench
+        .submit(StateChange::single(
+            building_key(&db, &plan_id, 0),
+            ReviewState::Keep,
+        ))
+        .unwrap();
+    workbench
+        .submit(StateChange::single(
+            building_key(&db, &plan_id, 1),
+            ReviewState::Remove,
+        ))
+        .unwrap();
+    assert_eq!(workbench.state_tab_count(ReviewState::Pending), 4);
+    assert_eq!(workbench.state_tab_count(ReviewState::Keep), 1);
+    assert_eq!(workbench.state_tab_count(ReviewState::Remove), 1);
+    let pending_ids: Vec<String> = workbench
+        .view()
+        .cards
+        .iter()
+        .map(|card| card.candidate_id.clone())
+        .collect();
+    assert_eq!(pending_ids.len(), 4, "待定分组只显示尚未裁决的卡片");
+
+    // 地图概览不随分组变化：始终包含当前分类+筛选下的全部三态。
+    assert_eq!(workbench.view().map_cards.len(), 6);
+
+    workbench.set_active_state_tab(ReviewState::Keep);
+    assert_eq!(workbench.view().cards.len(), 1);
+    assert_eq!(
+        workbench.view().cards[0].candidate_id,
+        building_key(&db, &plan_id, 0).candidate_id
+    );
+    workbench.set_active_state_tab(ReviewState::Remove);
+    assert_eq!(workbench.view().cards.len(), 1);
+    assert_eq!(
+        workbench.view().cards[0].candidate_id,
+        building_key(&db, &plan_id, 1).candidate_id
+    );
 }
 
 #[test]

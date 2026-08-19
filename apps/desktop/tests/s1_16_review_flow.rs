@@ -233,8 +233,34 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
     );
     assert_eq!(window.get_review_active_category(), 0);
 
-    // 当前激活类别（建筑）显示 4 张卡，初始全部“待定”。
+    // 三态分组默认“待定”：建筑 4 张卡初始全部待定，保留/剔除为空。
     assert_eq!(window.get_review_cards().row_count(), 4);
+    let state_tab_labels: Vec<String> = window
+        .get_review_state_tab_labels()
+        .iter()
+        .map(|label| label.to_string())
+        .collect();
+    assert!(
+        state_tab_labels[0].contains("待定") && state_tab_labels[0].contains("4"),
+        "{state_tab_labels:?}"
+    );
+    assert!(
+        state_tab_labels[1].contains("保留") && state_tab_labels[1].contains("0"),
+        "{state_tab_labels:?}"
+    );
+    assert!(
+        state_tab_labels[2].contains("剔除") && state_tab_labels[2].contains("0"),
+        "{state_tab_labels:?}"
+    );
+    let state_tab_active: Vec<i32> = (0..3)
+        .map(|index| {
+            window
+                .get_review_state_tab_active()
+                .row_data(index)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(state_tab_active, vec![1, 0, 0], "默认激活分组必须是待定");
     assert_eq!(card_title(&window, 0), "教学楼0");
     assert_eq!(card_title(&window, 2), "教学楼2");
     for index in 0..4 {
@@ -260,9 +286,31 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         "定位到地图按钮文案必须经 B6 注入"
     );
 
-    // 逐项判定：建筑 0 改为保留，卡片立即呈现“保留”。
+    // 逐项判定：建筑 0 改为保留 → 立即从待定消失，进入保留分组。
     window.invoke_review_card_state_clicked(reviewable[0].clone().into(), "keep".into());
-    assert_eq!(window.get_review_cards().row_count(), 4);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        3,
+        "保留后必须离开待定分组"
+    );
+    assert!(
+        (0..window.get_review_cards().row_count()).all(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .candidate_id
+                .as_str()
+                != reviewable[0]
+        }),
+        "已保留候选不得继续留在待定分组"
+    );
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        1,
+        "保留分组应出现该候选"
+    );
     assert_eq!(
         window
             .get_review_cards()
@@ -273,12 +321,24 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         l10n.t("review.keep")
     );
     assert_eq!(card_state_key(&window, 0), "keep");
+    window.invoke_review_state_tab_clicked(0);
 
     // 切换道路标签页：只显示该类别候选，并可将状态改为剔除。
     window.invoke_review_category_clicked(1);
     assert_eq!(window.get_review_active_category(), 1);
     assert_eq!(window.get_review_cards().row_count(), 1);
     window.invoke_review_card_state_clicked(reviewable[4].clone().into(), "remove".into());
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        0,
+        "剔除后必须离开待定分组"
+    );
+    window.invoke_review_state_tab_clicked(2);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        1,
+        "剔除分组应出现该候选"
+    );
     assert_eq!(card_state_key(&window, 0), "remove");
     assert_eq!(
         window
@@ -289,12 +349,22 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
             .as_str(),
         l10n.t("review.reject")
     );
+    window.invoke_review_state_tab_clicked(0);
 
     // 切回建筑：三态判定结果保留在内存会话中。
     window.invoke_review_category_clicked(0);
-    assert_eq!(window.get_review_cards().row_count(), 4);
+    assert_eq!(
+        window.get_review_cards().row_count(),
+        3,
+        "待定分组只显示尚未裁决的候选"
+    );
+    for index in 0..3 {
+        assert_eq!(card_state_key(&window, index), "pending");
+    }
+    window.invoke_review_state_tab_clicked(1);
+    assert_eq!(window.get_review_cards().row_count(), 1);
     assert_eq!(card_state_key(&window, 0), "keep");
-    assert_eq!(card_state_key(&window, 1), "pending");
+    window.invoke_review_state_tab_clicked(0);
 
     // 水域标签页也有可评审候选。
     window.invoke_review_category_clicked(2);
@@ -303,6 +373,7 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
 
     // 点卡片只联动高亮；展开详情卡已移除，候选列表保留完整评审入口。
     window.invoke_review_category_clicked(0);
+    window.invoke_review_state_tab_clicked(1);
     window.invoke_review_card_highlight_clicked(reviewable[0].clone().into());
     assert!(
         window
@@ -313,19 +384,24 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         "高亮候选的卡片必须带 highlighted 标记（地图↔卡片联动）"
     );
 
-    // T38：卡片"定位到地图"→ 高亮同一候选（地图中心跳转由地图页 JS 负责）
+    // T38：卡片"定位到地图"→ 高亮同一候选，并自动切到该候选所在的三态分组。
     window.invoke_review_locate_clicked(reviewable[3].clone().into());
-    let located = window
-        .get_review_cards()
-        .row_data(3)
-        .expect("定位候选卡片必须存在");
+    assert_eq!(
+        window.get_review_state_tab_active().row_data(0).unwrap(),
+        1,
+        "定位待定候选应自动切回待定分组"
+    );
+    let located = (0..window.get_review_cards().row_count())
+        .map(|index| window.get_review_cards().row_data(index).unwrap())
+        .find(|card| card.candidate_id.as_str() == reviewable[3])
+        .expect("定位候选卡片必须存在于其状态分组");
     assert_eq!(located.title.as_str(), "未命名建筑 #way/b3");
     assert!(located.highlighted);
 
     // T51 缺陷修复：多选与地图高亮解耦——多选两张卡后两张卡都带 selected
     // 标记（UI 蓝底跟随 selected），地图联动高亮是独立的 highlighted 标记。
-    window.invoke_review_card_selection_toggled(reviewable[0].clone().into());
     window.invoke_review_card_selection_toggled(reviewable[1].clone().into());
+    window.invoke_review_card_selection_toggled(reviewable[2].clone().into());
     let selected: Vec<bool> = (0..window.get_review_cards().row_count())
         .map(|index| window.get_review_cards().row_data(index).unwrap().selected)
         .collect();
