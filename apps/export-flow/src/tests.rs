@@ -658,3 +658,140 @@ fn wait_for_result(operation: &mut BoundaryExportOperation) -> Result<BoundaryEx
         std::thread::yield_now();
     }
 }
+
+fn wait_for_preview(operation: &mut BlockPreviewOperation) -> Result<PreviewRenderPayload> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some(result) = operation.try_complete() {
+            return result;
+        }
+        assert!(std::time::Instant::now() < deadline, "预览操作未达到终态");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn preview_payload_matches_the_exported_schematic_block_count() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let plan_id = PlanId::generate();
+    let flow = BoundaryExportFlow::new(Arc::new(StdExportFileSystem));
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0006, 39.0000],
+            [116.0006, 39.0004],
+            [116.0000, 39.0004],
+            [116.0000, 39.0000]
+        ]]),
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览启动");
+    let preview = wait_for_preview(&mut preview_operation).expect("预览成功");
+    assert!(preview.block_count > 0);
+    let parsed: serde_json::Value = serde_json::from_str(&preview.json).expect("合法 JSON");
+    let palette = parsed["palette"].as_array().expect("调色板数组");
+    assert!(
+        palette
+            .iter()
+            .any(|block| block == "minecraft:stone_bricks"),
+        "平整场地必须与导出同源使用 stone_bricks"
+    );
+
+    let mut export_operation = flow.start().expect("导出启动");
+    let export = wait_for_result(&mut export_operation).expect("导出成功");
+    let inspection =
+        sponge_export::inspect_schematic(&export.schematic_path).expect(".schem 可解析");
+    assert_eq!(
+        preview.block_count, inspection.non_air_voxels,
+        "预览方块数必须与导出 .schem 的非空气方块数一致"
+    );
+}
+
+#[test]
+fn preview_routes_to_enhanced_generation_like_export() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let plan_id = PlanId::generate();
+    seed_plan_with_sealed_review(&mut db.lock().expect("db"), &plan_id, true);
+
+    let flow = BoundaryExportFlow::new_with_candidate_store(
+        Arc::new(StdExportFileSystem),
+        Arc::clone(&db),
+    );
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0010, 39.0000],
+            [116.0010, 39.0010],
+            [116.0000, 39.0010],
+            [116.0000, 39.0000]
+        ]]),
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览路由到增强生成");
+    let preview = wait_for_preview(&mut preview_operation).expect("增强预览成功");
+    let parsed: serde_json::Value = serde_json::from_str(&preview.json).expect("合法 JSON");
+    let palette = parsed["palette"].as_array().expect("调色板数组");
+    assert!(
+        palette.iter().any(|block| block == "minecraft:bricks"),
+        "保留建筑必须生成墙体方块"
+    );
+
+    let mut export_operation = flow.start().expect("导出路由到增强导出");
+    let export = wait_for_result(&mut export_operation).expect("增强导出成功");
+    let inspection =
+        sponge_export::inspect_schematic(&export.schematic_path).expect(".schem 可解析");
+    assert_eq!(
+        preview.block_count, inspection.non_air_voxels,
+        "增强预览与增强导出的方块数必须一致"
+    );
+}
+
+#[test]
+fn preview_failure_never_blocks_export() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let plan_id = PlanId::generate();
+    let flow = BoundaryExportFlow::new(Arc::new(StdExportFileSystem));
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    // 边界存在但未确认：预览生成失败（NotConfirmed），导出同样在确认后可用。
+    flow.set_boundary(
+        Some(Boundary {
+            r#type: "Polygon".to_owned(),
+            coordinates: serde_json::json!([[
+                [116.4000, 39.9000],
+                [116.4010, 39.9000],
+                [116.4010, 39.9010],
+                [116.4000, 39.9010],
+                [116.4000, 39.9000]
+            ]]),
+        }),
+        false,
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览操作可提交");
+    let preview_error = wait_for_preview(&mut preview_operation).expect_err("预览如实失败");
+    assert!(matches!(preview_error, Error::Boundary(_)));
+
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.4000, 39.9000],
+            [116.4010, 39.9000],
+            [116.4010, 39.9010],
+            [116.4000, 39.9010],
+            [116.4000, 39.9000]
+        ]]),
+    );
+    let mut export_operation = flow.start().expect("预览失败后仍可导出");
+    assert!(
+        wait_for_result(&mut export_operation).is_ok(),
+        "预览失败绝不阻塞导出流程"
+    );
+}
