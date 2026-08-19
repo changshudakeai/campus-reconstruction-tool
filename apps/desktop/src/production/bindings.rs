@@ -842,6 +842,17 @@ impl ProductionEntries {
 
         let weak = window.as_weak();
         let shared = Rc::clone(entries);
+        window.on_workspace_export_preview_locate_clicked(move |index| {
+            if let Some(window) = weak.upgrade() {
+                let processing = shared.borrow_mut().locate_preview(&window, index as usize);
+                if processing {
+                    ProductionEntries::start_preview_polling(&shared, &window);
+                }
+            }
+        });
+
+        let weak = window.as_weak();
+        let shared = Rc::clone(entries);
         window.on_workspace_tutorial_dismiss_clicked(move || {
             if let Some(window) = weak.upgrade() {
                 shared

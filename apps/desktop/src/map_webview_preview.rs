@@ -7,7 +7,7 @@ use std::cell::Cell;
 
 use slint::Weak;
 
-use crate::map_webview::{request_show, PendingShow};
+use crate::map_webview::{request_show, PendingShow, ShowOutcome};
 
 thread_local! {
     /// 契约测试探针：只记录页面种类，不真实创建 WebView2 子窗口（软件后端
@@ -22,11 +22,11 @@ thread_local! {
 pub(crate) fn show_block_preview(
     window_weak: Weak<crate::AppWindow>,
     initial_payload: Option<String>,
-) {
+) -> ShowOutcome {
     request_show(PendingShow::BlockPreview {
         window: window_weak,
         initial_payload,
-    });
+    })
 }
 
 /// 当前记录的 WebView 页面种类（稳定字符串形态，供契约测试观测）。

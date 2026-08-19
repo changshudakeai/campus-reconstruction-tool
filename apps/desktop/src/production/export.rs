@@ -31,9 +31,18 @@ pub(crate) struct ExportProductionAdapter {
     pub(crate) preview_has_content: bool,
     /// 是否正在生成预览（生成按钮禁用）。
     pub(crate) preview_generating: bool,
+    /// 已保留候选卡片（第五步抽屉；S1 只呈现 A2 返回的只读摘要）。
+    pub(crate) preview_candidates: Vec<export_flow::KeptCandidateCard>,
+    /// 卡片定位在预览尚未生成时挂起的候选 ID（生成完成后自动定位）。
+    pub(crate) pending_locate: Option<String>,
 }
 
 impl ExportProductionAdapter {
+    /// 刷新第五步抽屉的已保留候选卡片（A2 只读；失败时保持为空，不阻塞导出）。
+    fn refresh_preview_candidates(&mut self) {
+        self.preview_candidates = self.flow.kept_candidate_cards().unwrap_or_default();
+    }
+
     fn page_with_status(&self, title_key: &str, subtitle: impl Into<String>) -> ExportPageState {
         let injector = self.context.injector();
         let l10n = injector.borrow();
@@ -50,6 +59,25 @@ impl ExportProductionAdapter {
             preview_controls_hint: l10n.l10n().t("export.preview_controls_hint"),
             preview_has_content: self.preview_has_content,
             preview_generating: self.preview_generating,
+            preview_candidate_ids: self
+                .preview_candidates
+                .iter()
+                .map(|card| card.candidate_id.clone())
+                .collect(),
+            preview_candidate_titles: self
+                .preview_candidates
+                .iter()
+                .map(|card| card.display_title.clone())
+                .collect(),
+            preview_candidate_categories: self
+                .preview_candidates
+                .iter()
+                .map(|card| {
+                    l10n.l10n()
+                        .t(export_category_label_key(card.category))
+                        .to_owned()
+                })
+                .collect(),
         }
     }
 
@@ -152,6 +180,41 @@ impl ExportProductionAdapter {
         Presentation::failed(self.page_with_status("export.confirm_title", self.export_subtitle()))
             .with_notification(notification)
     }
+
+    /// “生成 3D 预览”共用入口：已有在途操作时只呈现进度；否则提交一次
+    /// 预览生成意图（挂起定位时使用“完成后自动定位”状态文案）。
+    fn begin_preview(&mut self) -> Presentation<ExportPageState> {
+        if let Some(operation) = &self.preview_operation {
+            let progress = operation.progress_view();
+            return Presentation::processing(
+                self.page_with_status("export.confirm_title", self.export_subtitle()),
+                Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+            )
+            .with_navigation(NavigationDecision::Show(Screen::Workspace));
+        }
+        match self.flow.start_preview() {
+            Ok(operation) => {
+                let progress = operation.progress_view();
+                self.preview_operation = Some(operation);
+                self.preview_generating = true;
+                {
+                    let injector = self.context.injector();
+                    let l10n = injector.borrow();
+                    self.preview_status = if self.pending_locate.is_some() {
+                        l10n.l10n().t("export.preview_locate_pending")
+                    } else {
+                        l10n.l10n().t("export.preview_generating")
+                    };
+                }
+                Presentation::processing(
+                    self.page_with_status("export.confirm_title", self.export_subtitle()),
+                    Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                )
+            }
+            Err(error) => self.preview_failure_presentation(&error),
+        }
+        .with_navigation(NavigationDecision::Show(Screen::Workspace))
+    }
 }
 
 impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportProductionAdapter {
@@ -160,6 +223,7 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
         record_entry_call(6);
         match request {
             ExportPresentationRequest::Open => {
+                self.refresh_preview_candidates();
                 let mut presentation = if let Some(operation) = &self.preview_operation {
                     let progress = operation.progress_view();
                     Presentation::processing(
@@ -189,32 +253,28 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
             }
             .with_navigation(NavigationDecision::Show(Screen::Workspace)),
             ExportPresentationRequest::GeneratePreview => {
-                if let Some(operation) = &self.preview_operation {
-                    let progress = operation.progress_view();
-                    return Presentation::processing(
+                self.refresh_preview_candidates();
+                self.begin_preview()
+            }
+            ExportPresentationRequest::LocateCandidate { index } => {
+                self.refresh_preview_candidates();
+                let Some(card) = self.preview_candidates.get(index).cloned() else {
+                    return Presentation::ready(
                         self.page_with_status("export.confirm_title", self.export_subtitle()),
-                        Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
+                    )
+                    .with_navigation(NavigationDecision::Show(Screen::Workspace));
+                };
+                if self.preview_has_content {
+                    let _ = crate::map_session::command(
+                        crate::map_session::MapCommand::PreviewLocate(card.candidate_id),
+                    );
+                    return Presentation::ready(
+                        self.page_with_status("export.confirm_title", self.export_subtitle()),
                     )
                     .with_navigation(NavigationDecision::Show(Screen::Workspace));
                 }
-                match self.flow.start_preview() {
-                    Ok(operation) => {
-                        let progress = operation.progress_view();
-                        self.preview_operation = Some(operation);
-                        self.preview_generating = true;
-                        {
-                            let injector = self.context.injector();
-                            let l10n = injector.borrow();
-                            self.preview_status = l10n.l10n().t("export.preview_generating");
-                        }
-                        Presentation::processing(
-                            self.page_with_status("export.confirm_title", self.export_subtitle()),
-                            Progress::try_from(progress.percent as u8).unwrap_or(Progress::ZERO),
-                        )
-                    }
-                    Err(error) => self.preview_failure_presentation(&error),
-                }
-                .with_navigation(NavigationDecision::Show(Screen::Workspace))
+                self.pending_locate = Some(card.candidate_id);
+                self.begin_preview()
             }
             ExportPresentationRequest::PreviewPoll => {
                 let Some(operation) = self.preview_operation.as_mut() else {
@@ -230,7 +290,10 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                         Ok(payload) => {
                             self.preview_has_content = true;
                             crate::map_session::remember_preview_payload(payload.json.clone());
-                            let mut presentation = {
+                            if let Some(feature_id) = self.pending_locate.take() {
+                                crate::map_session::remember_preview_locate(feature_id);
+                            }
+                            let presentation = {
                                 let injector = self.context.injector();
                                 let l10n = injector.borrow();
                                 self.preview_status = l10n.l10n().t_with_array(
@@ -242,17 +305,6 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                                     self.export_subtitle(),
                                 ))
                             };
-                            if payload.simplified {
-                                let injector = self.context.injector();
-                                let l10n = injector.borrow();
-                                presentation = presentation.with_notification(
-                                    NotificationFact::new(Notification::warn(
-                                        l10n.l10n().t("app.source_tag"),
-                                        l10n.l10n().t("export.preview_simplified_title"),
-                                        l10n.l10n().t("export.preview_simplified_notice"),
-                                    )),
-                                );
-                            }
                             presentation
                         }
                         Err(error) => self.preview_failure_presentation(&error),

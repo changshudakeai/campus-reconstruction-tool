@@ -2,6 +2,9 @@
 //!
 //! 外层页面只提交“显示意图”和结构化命令。本模块独占 WebView 页种类、
 //! 代际、弹窗遮挡、视野恢复及 JavaScript 协议；功能入口不再拼生命周期。
+// ignore-tidy-filelength: 地图会话是“小入口、大实现”的深适配器：对外只有
+// 显示意图/命令/观测入口，内部集中 ADR-0045 现场、预览负载与定位现场；
+// T52 预览现场与 WebView 生命周期耦合紧密，集中维护比强行拆散更可审计。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -59,6 +62,8 @@ pub(crate) enum MapCommand {
     PreviewReset,
     /// 第五步 3D 预览：按倍率缩放（>1 拉远，<1 拉近）。
     PreviewZoom(f32),
+    /// 第五步 3D 预览：定位到保留候选要素（按预览负载 features 的 id）。
+    PreviewLocate(String),
 }
 
 impl MapCommand {
@@ -78,7 +83,10 @@ impl MapCommand {
             | Self::ReviewHighlight(_)
             | Self::ReviewLocate(_)
             | Self::ReviewMapText(_) => Some(MapScene::Review),
-            Self::CampusSearch { .. } | Self::PreviewReset | Self::PreviewZoom(_) => None,
+            Self::CampusSearch { .. }
+            | Self::PreviewReset
+            | Self::PreviewZoom(_)
+            | Self::PreviewLocate(_) => None,
         }
     }
 }
@@ -183,6 +191,8 @@ thread_local! {
 thread_local! {
     /// 第五步预览负载推送到 WebView 的累计次数（契约测试观测）。
     static PREVIEW_PUSH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// 第五步预览定位命令推送到 WebView 的累计次数（契约测试观测）。
+    static PREVIEW_LOCATE_PUSH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// 预览页最近一次上报的 (fps, 方块数, 可见面四边形数)。
     static PREVIEW_STATS: RefCell<Option<(f32, usize, usize)>> = const { RefCell::new(None) };
     /// 预览页最近一次上报的渲染错误。
@@ -199,6 +209,8 @@ pub(crate) struct MapSessionState {
     boundary_draft: Option<Vec<[f64; 2]>>,
     /// 第五步 3D 预览的最新渲染负载（呈现临时状态；方案切换即清除）。
     preview_payload: Option<String>,
+    /// 等待预览页就绪后执行的定位目标（生成完成/页面重建后补推）。
+    preview_locate: Option<String>,
     available: bool,
     generation: u64,
 }
@@ -216,6 +228,7 @@ impl MapSessionState {
         self.boundary_draft_dirty = false;
         self.boundary_draft = None;
         self.preview_payload = None;
+        self.preview_locate = None;
         self.available = false;
         self.generation = self.generation.wrapping_add(1);
     }
@@ -401,6 +414,10 @@ pub(crate) fn register_handlers(
                 if let Some(payload) = payload {
                     push_preview_payload(&payload);
                 }
+                let locate = SESSION.with(|s| s.borrow().state.preview_locate.clone());
+                if let Some(feature_id) = locate {
+                    push_preview_locate(&feature_id);
+                }
             }
             return;
         }
@@ -568,7 +585,23 @@ fn reconcile() {
         } => crate::map_webview::show_campus_search(window, api_key, security_key),
         MapDisplayIntent::BlockPreview { .. } => {
             let payload = SESSION.with(|s| s.borrow().state.preview_payload.clone());
-            crate::map_webview_preview::show_block_preview(window, payload);
+            let outcome = crate::map_webview_preview::show_block_preview(window, payload);
+            if outcome == crate::map_webview::ShowOutcome::RetainedPreview {
+                // 离屏保留页已就绪：立即补推最新负载与挂起定位
+                // （新建页面由状态回调在 available 后推送）。
+                let (payload, locate) = SESSION.with(|s| {
+                    (
+                        s.borrow().state.preview_payload.clone(),
+                        s.borrow().state.preview_locate.clone(),
+                    )
+                });
+                if let Some(payload) = payload {
+                    push_preview_payload(&payload);
+                }
+                if let Some(locate) = locate {
+                    push_preview_locate(&locate);
+                }
+            }
         }
     }
 }
@@ -620,19 +653,62 @@ pub(crate) fn remember_preview_payload(payload: String) {
             runtime.desired.as_ref().map(|(_, intent)| intent),
             Some(MapDisplayIntent::BlockPreview { .. })
         );
-        desired_preview && !runtime.covered && !runtime.failed && crate::map_webview::is_visible()
+        desired_preview
+            && !runtime.covered
+            && !runtime.failed
+            && (crate::map_webview::is_visible()
+                || crate::map_webview_preview::webview_creation_disabled())
     });
     if should_push {
         push_preview_payload(&payload);
     }
 }
 
+/// 记下等待预览页就绪后执行的定位目标（卡片定位在预览生成完成后触发；
+/// 页面尚在创建/重建时由状态回调补推，保证定位不丢失）。
+pub(crate) fn remember_preview_locate(feature_id: String) {
+    let should_push = SESSION.with(|session| {
+        let mut runtime = session.borrow_mut();
+        runtime.state.preview_locate = Some(feature_id.clone());
+        let desired_preview = matches!(
+            runtime.desired.as_ref().map(|(_, intent)| intent),
+            Some(MapDisplayIntent::BlockPreview { .. })
+        );
+        desired_preview
+            && !runtime.covered
+            && !runtime.failed
+            && (crate::map_webview::is_visible()
+                || crate::map_webview_preview::webview_creation_disabled())
+            && runtime.state.preview_payload.is_some()
+    });
+    if should_push {
+        push_preview_locate(&feature_id);
+    }
+}
+
 fn push_preview_payload(payload: &str) {
     PREVIEW_PUSH_COUNT.with(|counter| counter.set(counter.get() + 1));
+    if crate::map_webview_preview::webview_creation_disabled() {
+        // 契约测试探针：只记录负载推送意图，不真实执行 WebView 脚本。
+        return;
+    }
     // 队列安全：脚本早于页面解析到达时先把负载写进占位变量，viewer.js
     // 就绪后消费；已就绪则直接装载。
     let script = format!(
         "(function(p){{if(window.loadPreviewData){{window.loadPreviewData(p);}}else{{window.__previewPending=p;}}}})({payload});"
+    );
+    crate::map_webview::evaluate_script(&script);
+}
+
+fn push_preview_locate(feature_id: &str) {
+    PREVIEW_LOCATE_PUSH_COUNT.with(|counter| counter.set(counter.get() + 1));
+    if crate::map_webview_preview::webview_creation_disabled() {
+        // 契约测试探针：只记录定位意图下发，不真实执行 WebView 脚本。
+        return;
+    }
+    let script = format!(
+        "(function(id){{if(window.locatePreviewFeature){{window.locatePreviewFeature(id);}}}})({});",
+        serde_json::to_string(feature_id).unwrap_or_else(|_| "\"\"".into())
     );
     crate::map_webview::evaluate_script(&script);
 }
@@ -649,10 +725,17 @@ pub fn preview_push_count() -> usize {
     PREVIEW_PUSH_COUNT.with(|counter| counter.get())
 }
 
+/// 契约测试观测：预览定位命令推送次数。
+#[doc(hidden)]
+pub fn preview_locate_push_count() -> usize {
+    PREVIEW_LOCATE_PUSH_COUNT.with(|counter| counter.get())
+}
+
 /// 契约测试观测：清零预览推送计数。
 #[doc(hidden)]
 pub fn reset_preview_push_count() {
     PREVIEW_PUSH_COUNT.with(|counter| counter.set(0));
+    PREVIEW_LOCATE_PUSH_COUNT.with(|counter| counter.set(0));
 }
 
 /// 记录预览页回传的统计/错误（帧率证据 + 渲染故障观测，供日志与契约测试）。
@@ -768,7 +851,7 @@ pub(crate) fn command(command: MapCommand) -> MapCommandResult {
     let campus_command = matches!(command, MapCommand::CampusSearch { .. });
     let preview_command = matches!(
         command,
-        MapCommand::PreviewReset | MapCommand::PreviewZoom(_)
+        MapCommand::PreviewReset | MapCommand::PreviewZoom(_) | MapCommand::PreviewLocate(_)
     );
     let review_command = matches!(
         command,
@@ -786,7 +869,9 @@ pub(crate) fn command(command: MapCommand) -> MapCommandResult {
         match runtime.desired.as_ref().map(|(_, intent)| intent) {
             Some(MapDisplayIntent::CampusSearch { .. }) => campus_command,
             Some(MapDisplayIntent::BlockPreview { .. }) => {
-                preview_command && crate::map_webview::is_visible()
+                preview_command
+                    && (crate::map_webview::is_visible()
+                        || crate::map_webview_preview::webview_creation_disabled())
             }
             Some(intent) => {
                 intent.scene() == expected_scene
@@ -857,19 +942,27 @@ pub(crate) fn command(command: MapCommand) -> MapCommandResult {
             let delta = delta.clamp(0.05, 20.0);
             format!("(window.__previewReady ? window.zoomPreview({delta}) : void 0);")
         }
+        MapCommand::PreviewLocate(feature_id) => {
+            // 统一走 push_preview_locate：计数 + 契约探针 + 页面脚本推送。
+            push_preview_locate(&feature_id);
+            String::new()
+        }
     };
     if review_command {
         crate::map_webview::note_review_push(&script);
     }
-    crate::map_webview::evaluate_script(&script);
+    if !script.is_empty() {
+        crate::map_webview::evaluate_script(&script);
+    }
     MapCommandResult::Allowed
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        MapCommand, MapCommandResult, MapDestination, MapScene, MapSessionState, MapTransition,
-        MapViewport,
+        command, preview_locate_push_count, reset_preview_push_count, MapCommand, MapCommandResult,
+        MapDestination, MapDisplayIntent, MapScene, MapSessionState, MapTransition, MapViewport,
+        SESSION,
     };
 
     fn viewport(lon: f64, lat: f64, zoom: f64) -> MapViewport {
@@ -966,5 +1059,44 @@ mod tests {
 
         assert!(!session.accepts_event(old));
         assert!(session.accepts_event(current));
+    }
+
+    #[test]
+    fn preview_locate_command_reaches_webview_under_creation_probe() {
+        use crate::map_webview_preview::set_webview_creation_probe;
+        use slint::Weak;
+
+        set_webview_creation_probe(true);
+        reset_preview_push_count();
+        SESSION.with(|session| {
+            let mut runtime = session.borrow_mut();
+            runtime.desired = Some((
+                Weak::<crate::AppWindow>::default(),
+                MapDisplayIntent::BlockPreview {
+                    plan_id: "plan-a".to_owned(),
+                },
+            ));
+            runtime.state.preview_payload = Some("{}".to_owned());
+            runtime.state.preview_locate = None;
+        });
+
+        assert_eq!(
+            command(MapCommand::PreviewLocate("way/1".to_owned())),
+            MapCommandResult::Allowed,
+            "第五步预览页定位命令必须放行"
+        );
+        assert_eq!(
+            preview_locate_push_count(),
+            1,
+            "定位命令必须下发一次到预览页"
+        );
+
+        SESSION.with(|session| {
+            let mut runtime = session.borrow_mut();
+            runtime.desired = None;
+            runtime.state.preview_payload = None;
+            runtime.state.preview_locate = None;
+        });
+        set_webview_creation_probe(false);
     }
 }

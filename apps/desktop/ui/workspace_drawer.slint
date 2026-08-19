@@ -88,11 +88,18 @@ export component WorkspaceDrawer inherits Rectangle {
     in property <string> export-preview-controls-hint;
     in property <bool> export-preview-has-content;
     in property <bool> export-preview-generating;
+    // T52：已保留候选卡片（呈现层：标题/类别/定位按钮，点击只转发索引）
+    in property <string> export-preview-candidates-label;
+    in property <[string]> export-preview-candidate-ids;
+    in property <[string]> export-preview-candidate-titles;
+    in property <[string]> export-preview-candidate-categories;
+    in property <string> export-preview-locate-label;
     callback export-start-clicked();
     callback export-preview-generate-clicked();
     callback export-preview-reset-clicked();
     callback export-preview-zoom-in-clicked();
     callback export-preview-zoom-out-clicked();
+    callback export-preview-locate-clicked(index: int);
 
     background: Theme.surface;
     border-color: Theme.separator;
@@ -301,6 +308,41 @@ export component WorkspaceDrawer inherits Rectangle {
                     font-size: 12px;
                     color: Theme.text-secondary;
                     wrap: word-wrap;
+                }
+                // 已保留候选卡片：点击“定位到 3D 预览”跳转到对应预览处。
+                if root.export-preview-candidate-titles.length > 0: VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: root.export-preview-candidates-label;
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                    }
+                    for candidate[i] in root.export-preview-candidate-titles: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: root.export-preview-candidate-titles[i];
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: root.export-preview-candidate-categories[i];
+                                font-size: 12px;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                            Button {
+                                text: root.export-preview-locate-label;
+                                enabled: !root.export-preview-generating;
+                                clicked => { root.export-preview-locate-clicked(i); }
+                            }
+                        }
+                    }
                 }
                 if root.export-preview-has-content: VerticalLayout {
                     spacing: 6px;

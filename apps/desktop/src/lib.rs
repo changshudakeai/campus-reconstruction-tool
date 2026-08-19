@@ -25,8 +25,8 @@ pub use map_session::{
     review_pushed_scripts, set_map_visible_probe, set_review_push_probe_visible, shutdown,
 };
 pub use map_session::{
-    preview_payload, preview_push_count, preview_render_error, preview_stats,
-    reset_preview_push_count,
+    preview_locate_push_count, preview_payload, preview_push_count, preview_render_error,
+    preview_stats, reset_preview_push_count,
 };
 pub use map_webview_preview::{current_page_kind_name, set_webview_creation_probe};
 pub use presentation::{

@@ -446,7 +446,7 @@ pub enum WorkspaceRequest {
 }
 
 /// S1 导出页面只提交“显示确认”或“一次开始导出”意图；完整业务链由 F9 接管。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportPresentationRequest {
     /// 进入导出步骤，显示可导出的确认状态。
     Open,
@@ -460,6 +460,9 @@ pub enum ExportPresentationRequest {
     PreviewPoll,
     /// 离开导出上下文，丢弃旧页面的结果交付。
     Abandon,
+    /// 第五步抽屉“定位到 3D 预览”：按卡片索引定位；预览未生成时触发生成，
+    /// 完成后自动定位（用户主动点击定位即明确的生成意图）。
+    LocateCandidate { index: usize },
 }
 
 /// S1 采集页只提交一次完整用户意图（开始采集/查看采集报告/轮询/离开）；
@@ -880,6 +883,12 @@ pub struct ExportPageState {
     pub preview_has_content: bool,
     /// 是否正在生成预览（生成按钮禁用）。
     pub preview_generating: bool,
+    /// 已保留候选卡片：候选 ID 列表（顺序与标题/类别一致，供定位回调）。
+    pub preview_candidate_ids: Vec<String>,
+    /// 已保留候选卡片：展示标题列表。
+    pub preview_candidate_titles: Vec<String>,
+    /// 已保留候选卡片：类别显示名列表（经 zh-CN.json 注入）。
+    pub preview_candidate_categories: Vec<String>,
 }
 
 impl WindowPageState for ExportPageState {
@@ -899,6 +908,14 @@ impl WindowPageState for ExportPageState {
             .set_workspace_export_preview_controls_hint(self.preview_controls_hint.clone().into());
         window.set_workspace_export_preview_has_content(self.preview_has_content);
         window.set_workspace_export_preview_generating(self.preview_generating);
+        window
+            .set_workspace_export_preview_candidate_ids(string_model(&self.preview_candidate_ids));
+        window.set_workspace_export_preview_candidate_titles(string_model(
+            &self.preview_candidate_titles,
+        ));
+        window.set_workspace_export_preview_candidate_categories(string_model(
+            &self.preview_candidate_categories,
+        ));
     }
 }
 

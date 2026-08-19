@@ -239,6 +239,8 @@ impl ProductionEntries {
                 preview_status: String::new(),
                 preview_has_content: false,
                 preview_generating: false,
+                preview_candidates: Vec::new(),
+                pending_locate: None,
             }),
             notification: NotificationPresentationEntry::new(NotificationProductionAdapter {
                 center: Arc::clone(&center),

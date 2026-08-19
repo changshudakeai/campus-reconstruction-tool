@@ -217,6 +217,12 @@ export component AppWindow inherits Window {
     in property <string> workspace-export-preview-controls-hint;
     in property <bool> workspace-export-preview-has-content;
     in property <bool> workspace-export-preview-generating;
+    // T52：已保留候选卡片（呈现层：标题/类别/定位）
+    in property <string> workspace-export-preview-candidates-label;
+    in property <[string]> workspace-export-preview-candidate-ids;
+    in property <[string]> workspace-export-preview-candidate-titles;
+    in property <[string]> workspace-export-preview-candidate-categories;
+    in property <string> workspace-export-preview-locate-label;
     // T34: 左侧抽屉（做法 A：展开时地图右移让位；收起时恢复原宽）
     in-out property <bool> workspace-drawer-open: false;
     in property <length> workspace-drawer-width: 300px;
@@ -401,6 +407,7 @@ export component AppWindow inherits Window {
     callback workspace-export-preview-reset-clicked();
     callback workspace-export-preview-zoom-in-clicked();
     callback workspace-export-preview-zoom-out-clicked();
+    callback workspace-export-preview-locate-clicked(index: int);
 
     // ── B7 错误模态弹窗（弹窗铁律 ADR-0021，内容由 ShellPresenter 填充）──
     in-out property <bool> error-dialog-visible;
@@ -999,11 +1006,17 @@ export component AppWindow inherits Window {
                     export-preview-controls-hint: root.workspace-export-preview-controls-hint;
                     export-preview-has-content: root.workspace-export-preview-has-content;
                     export-preview-generating: root.workspace-export-preview-generating;
+                    export-preview-candidates-label: root.workspace-export-preview-candidates-label;
+                    export-preview-candidate-ids: root.workspace-export-preview-candidate-ids;
+                    export-preview-candidate-titles: root.workspace-export-preview-candidate-titles;
+                    export-preview-candidate-categories: root.workspace-export-preview-candidate-categories;
+                    export-preview-locate-label: root.workspace-export-preview-locate-label;
                     export-start-clicked => { root.workspace-export-start-clicked(); }
                     export-preview-generate-clicked => { root.workspace-export-preview-generate-clicked(); }
                     export-preview-reset-clicked => { root.workspace-export-preview-reset-clicked(); }
                     export-preview-zoom-in-clicked => { root.workspace-export-preview-zoom-in-clicked(); }
                     export-preview-zoom-out-clicked => { root.workspace-export-preview-zoom-out-clicked(); }
+                    export-preview-locate-clicked(index) => { root.workspace-export-preview-locate-clicked(index); }
                 }
 
                 // 地图不可用时只显示明确阻断反馈；不提供无底图的伪造画布。
