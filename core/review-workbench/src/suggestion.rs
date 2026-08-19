@@ -18,6 +18,18 @@
 //! [`compute`] 内部按稳定候选标识排序后再做成对分析，同一份输入必然产生
 //! 同一份建议；本模块不产生随机数、不依赖当前系统时间。
 //!
+//! ## 置信度分档（T51）
+//!
+//! 置信度不是数值评分，而是对既有建议规则的确定性派生分档：
+//!
+//! - **高** = 建议保留（名称清晰、形状完整、无异常，R11）；
+//! - **中** = 存在不确定信号、需人工确认（未命名、自动修复、隔离理由、
+//!   本次未找到、标签稀疏、缺少来源）；
+//! - **低** = 需重点关注（重复投影、重复嫌疑、重叠、形状可疑）。
+//!
+//! 卡片仍显示原有的动作标签与一句话理由；置信度只用于筛选芯片、排序与
+//! 一键应用建议，不改变三态语义。
+//!
 //! ## 与 ReviewState 的关系（验收 5）
 //!
 //! 生成建议只读候选数据，绝不修改 `ReviewState`。只有用户在 UI 上点击
@@ -28,6 +40,7 @@ use data_persistence::{CandidateNameSource, CandidateShape};
 use shared_domain_types::CandidateCategory;
 
 use crate::candidate::{Candidate, CandidateKey};
+use crate::confidence::ConfidenceTier;
 use crate::view_models::text_keys;
 
 /// 建议类别（验收 1：至少覆盖"未命名 / 需要关注 / 无需处理"）。
@@ -52,54 +65,6 @@ pub enum SuggestionAction {
     Remove,
 }
 
-/// 建议筛选器（在六类标签之外，验收 3；可与类别组合）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SuggestFilter {
-    /// 需要关注：建议类别为"需要关注"。
-    NeedsAttention,
-    /// 未命名：无可用名称的候选。
-    Unnamed,
-    /// 建议保留：建议动作为保留。
-    SuggestKeep,
-    /// 建议人工确认：建议动作为人工确认。
-    SuggestHumanReview,
-    /// 建议剔除：建议动作为剔除。
-    SuggestRemove,
-}
-
-impl SuggestFilter {
-    /// 全部筛选器（固定顺序，UI 标签行与筛选索引以此为序）。
-    pub const ALL: [SuggestFilter; 5] = [
-        Self::NeedsAttention,
-        Self::Unnamed,
-        Self::SuggestKeep,
-        Self::SuggestHumanReview,
-        Self::SuggestRemove,
-    ];
-
-    /// 该候选是否命中此筛选器。
-    pub fn matches(&self, suggestion: &CandidateSuggestion) -> bool {
-        match self {
-            Self::NeedsAttention => suggestion.category == SuggestionCategory::NeedsAttention,
-            Self::Unnamed => suggestion.category == SuggestionCategory::Unnamed,
-            Self::SuggestKeep => suggestion.action == SuggestionAction::Keep,
-            Self::SuggestHumanReview => suggestion.action == SuggestionAction::HumanReview,
-            Self::SuggestRemove => suggestion.action == SuggestionAction::Remove,
-        }
-    }
-
-    /// 筛选器显示名文本键。
-    pub fn label_key(&self) -> &'static str {
-        match self {
-            Self::NeedsAttention => text_keys::FILTER_NEEDS_ATTENTION,
-            Self::Unnamed => text_keys::FILTER_UNNAMED,
-            Self::SuggestKeep => text_keys::FILTER_SUGGEST_KEEP,
-            Self::SuggestHumanReview => text_keys::FILTER_HUMAN_REVIEW,
-            Self::SuggestRemove => text_keys::FILTER_SUGGEST_REMOVE,
-        }
-    }
-}
-
 /// 一条可解释建议：类别 + 动作 + 一句话可读理由（文本键与插值参数）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateSuggestion {
@@ -114,6 +79,33 @@ pub struct CandidateSuggestion {
     pub reason_args: serde_json::Value,
     /// 无参数的理由摘要标签键（确认框"主要理由分布"聚合用）。
     pub summary_key: &'static str,
+}
+
+impl CandidateSuggestion {
+    /// 由建议动作/类别/理由确定性映射出置信度分档（T51）。
+    ///
+    /// - 建议保留 → 高；
+    /// - 建议保留 → 高；
+    /// - 建议剔除（重复投影）→ 低；
+    /// - 建议人工确认按理由细分：重叠/重复嫌疑/形状可疑 → 低（需重点关注），
+    ///   其余不确定信号（未命名、自动修复、隔离理由、本次未找到、标签稀疏、
+    ///   缺少来源）→ 中。
+    pub fn confidence_tier(&self) -> ConfidenceTier {
+        match self.action {
+            SuggestionAction::Keep => ConfidenceTier::High,
+            SuggestionAction::Remove => ConfidenceTier::Low,
+            SuggestionAction::HumanReview => match self.category {
+                SuggestionCategory::NoActionNeeded => ConfidenceTier::High,
+                SuggestionCategory::NeedsAttention => match self.reason_key {
+                    text_keys::SUGGESTION_REASON_OVERLAP
+                    | text_keys::SUGGESTION_REASON_DUPLICATE_SUSPECT
+                    | text_keys::SUGGESTION_REASON_SUSPICIOUS_SHAPE => ConfidenceTier::Low,
+                    _ => ConfidenceTier::Medium,
+                },
+                SuggestionCategory::Unnamed => ConfidenceTier::Medium,
+            },
+        }
+    }
 }
 
 /// 确认框"主要理由分布"中的一行：摘要标签 + 数量。
@@ -562,6 +554,7 @@ pub(crate) fn apply_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::confidence::ConfidenceFilter;
     use data_persistence::{CandidateNameSource, CandidateValidation};
     use shared_domain_types::ReviewState;
 
@@ -889,5 +882,117 @@ mod tests {
             .reason_lines
             .iter()
             .any(|line| line.summary_key == text_keys::SUGGESTION_SUMMARY_SUSPICIOUS_SHAPE));
+    }
+
+    #[test]
+    fn confidence_tier_is_derived_deterministically_from_rules() {
+        let suggest = |candidate: &Candidate| rule_for(candidate, None, None, None);
+
+        // 高：建议保留。
+        let keep = building(
+            "overpass:way/20:outer",
+            "教学楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "school".to_owned())],
+        );
+        assert_eq!(suggest(&keep).confidence_tier(), ConfidenceTier::High);
+
+        // 中：未命名（信息不全，需人工补名确认）。
+        let unnamed = building(
+            "overpass:way/21:outer",
+            "way/21",
+            CandidateNameSource::Unnamed,
+            polygon(distinct_ring(0.0)),
+            Vec::new(),
+        );
+        assert_eq!(suggest(&unnamed).confidence_tier(), ConfidenceTier::Medium);
+
+        // 中：自动修复过（B14 唯一修复，外观不变）。
+        let mut repaired = building(
+            "overpass:way/22:outer",
+            "实验楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "lab".to_owned())],
+        );
+        repaired.automatically_repaired = true;
+        assert_eq!(suggest(&repaired).confidence_tier(), ConfidenceTier::Medium);
+
+        // 低：重复投影（建议剔除）。
+        let duplicate = building(
+            "overpass:way/23:outer",
+            "体育馆",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "yes".to_owned())],
+        );
+        let tier = rule_for(&duplicate, Some("体育馆"), None, None).confidence_tier();
+        assert_eq!(tier, ConfidenceTier::Low);
+
+        // 低：形状可疑（点/线建筑不是完整建筑轮廓，需重点关注）。
+        let suspicious = building(
+            "overpass:way/24:outer",
+            "岗亭",
+            CandidateNameSource::Osm,
+            CandidateShape::point(serde_json::json!([121.9, 31.9])),
+            vec![("building".to_owned(), "yes".to_owned())],
+        );
+        assert_eq!(suggest(&suspicious).confidence_tier(), ConfidenceTier::Low);
+
+        // 中：标签稀疏。
+        let sparse = building(
+            "overpass:way/25:outer",
+            "教学楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            Vec::new(),
+        );
+        assert_eq!(suggest(&sparse).confidence_tier(), ConfidenceTier::Medium);
+
+        // 中：缺少来源。
+        let mut no_source = building(
+            "overpass:way/26:outer",
+            "教学楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "school".to_owned())],
+        );
+        no_source.source = String::new();
+        assert_eq!(
+            suggest(&no_source).confidence_tier(),
+            ConfidenceTier::Medium
+        );
+
+        // 中：本次采集未找到。
+        let mut missing_latest = building(
+            "overpass:way/27:outer",
+            "教学楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "school".to_owned())],
+        );
+        missing_latest.missing_in_latest_batch = true;
+        assert_eq!(
+            suggest(&missing_latest).confidence_tier(),
+            ConfidenceTier::Medium
+        );
+    }
+
+    #[test]
+    fn confidence_filter_matches_derived_tier() {
+        let mut high = building(
+            "overpass:way/28:outer",
+            "教学楼",
+            CandidateNameSource::Osm,
+            polygon(distinct_ring(0.0)),
+            vec![("building".to_owned(), "school".to_owned())],
+        );
+        high.suggestion = Some(rule_for(&high, None, None, None));
+        let suggestion = high.suggestion.as_ref().unwrap();
+        assert!(ConfidenceFilter::All.matches(suggestion));
+        assert!(ConfidenceFilter::High.matches(suggestion));
+        assert!(!ConfidenceFilter::Medium.matches(suggestion));
+        assert!(!ConfidenceFilter::Low.matches(suggestion));
     }
 }

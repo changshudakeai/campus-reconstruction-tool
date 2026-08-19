@@ -1,8 +1,13 @@
 // F5 评审页（M3）+ T38 抽屉化：地图为主区 + 左侧评审抽屉。
 // 仅呈现 F5 WorkbenchView 返回的页面状态并转发用户操作。
-// 三态判定、批量确认、暂停/恢复、封账全部由 F5 评审工作台入口完成；
+// 三态判定、批量确认、封账全部由 F5 评审工作台入口完成；
 // 地图标注/定位/联动高亮由评审入口经 map_webview 桥接（本组件零业务逻辑）。
-import { Button, CheckBox, ScrollView } from "std-widgets.slint";
+//
+// T51：筛选芯片改为 全部/高/中/低 四档；候选卡片上方固定批量操作行
+// （全选＝当前页 + 已选数量 + 批量三态，批量剔除始终确认）；分页行常显；
+// 删除暂停/继续按钮（离开自动保存、返回自动恢复）；选中底色与地图联动高亮
+// 解耦（选中=蓝底，地图高亮=描边）。
+import { Button, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 // 300px 抽屉专用类别入口：标准 Button 的平台内边距会挤压“植被 (1095)”等
@@ -37,6 +42,116 @@ component ReviewCategoryButton inherits Rectangle {
     }
 }
 
+/// 批量行紧凑按钮：300px 抽屉内把“全选 + 已选数量 + 三个批量按钮”压进
+/// 固定一行（T51），避免标准 Button 内边距把批量行挤出视口。
+component ReviewBatchButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled;
+    callback clicked();
+
+    height: 24px;
+    background: Theme.surface;
+    border-color: Theme.separator;
+    border-width: 1px;
+    border-radius: 4px;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        font-size: 11px;
+        color: Theme.text-primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// T51 自绘复选框：std fluent CheckBox 的 `checked` 在用户点击后会由组件内部
+/// 改写，外部属性绑定不再驱动勾选视觉；这里改用普通属性绑定驱动的自绘
+/// 复选框，保证"全选/卡片勾选"视觉始终跟随状态。
+component ReviewCardCheckbox inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled;
+    callback toggled();
+
+    width: 18px;
+    height: 18px;
+    opacity: root.enabled ? 1.0 : 0.45;
+    background: root.checked ? Theme.map-highlight : Theme.surface;
+    border-color: root.checked ? Theme.map-highlight : Theme.text-secondary;
+    border-width: 1px;
+    border-radius: 2px;
+
+    Text {
+        text: root.checked ? "✓" : "";
+        font-size: 13px;
+        color: Theme.text-inverse;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.toggled(); }
+    }
+}
+
+/// 固定批量行里的"全选（只选当前页）"复选框：同上，自绘以跟随外部状态。
+component ReviewSelectAllCheckbox inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    in property <bool> enabled;
+    callback toggled();
+
+    height: 24px;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    HorizontalLayout {
+        spacing: 4px;
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            background: root.checked ? Theme.map-highlight : Theme.surface;
+            border-color: root.checked ? Theme.map-highlight : Theme.text-secondary;
+            border-width: 1px;
+            border-radius: 2px;
+            Text {
+                text: root.checked ? "✓" : "";
+                font-size: 13px;
+                color: Theme.text-inverse;
+                width: parent.width;
+                height: parent.height;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: root.label;
+            font-size: 11px;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.toggled(); }
+    }
+}
+
 /// 评审抽屉上一张候选卡片的完整呈现数据（由 Rust 侧经 B6 文本键注入）。
 export struct ReviewCandidateData {
     /// 稳定候选 ID（三态判定、复选、定位与高亮操作回传）。
@@ -49,9 +164,9 @@ export struct ReviewCandidateData {
     state-label: string,
     /// 当前三态标识（pending/keep/remove）。
     state-key: string,
-    /// 复选状态。
+    /// 复选状态（多选：选中卡片蓝底）。
     selected: bool,
-    /// 与地图对象联动高亮（点击地图对象/卡片共用同一份高亮）。
+    /// 与地图对象联动高亮（点击地图对象/卡片共用同一份高亮；独立描边样式）。
     highlighted: bool,
     /// 建议动作显示名（如"建议保留"；无建议时为空串）。
     suggestion-action-label: string,
@@ -59,8 +174,8 @@ export struct ReviewCandidateData {
     suggestion-reason: string,
 }
 
-/// 左侧评审抽屉：类别标签 + 可滚动候选列表 +
-/// 三态/批量/暂停/封账（操作行固定于抽屉底部，T33 大量候选下仍可达）。
+/// 左侧评审抽屉：类别标签 + 置信度筛选 + 固定批量行 + 可滚动候选列表 +
+/// 常显分页 + 一键应用建议 + 封账（T51 布局）。
 export component ReviewDrawer inherits Rectangle {
     in property <string> title;
     in property <string> empty-text;
@@ -69,34 +184,33 @@ export component ReviewDrawer inherits Rectangle {
     in property <[int]> category-counts;
     in property <int> active-category;
     in property <[ReviewCandidateData]> cards;
-    // T39 分页（Slint 无虚拟化）：当前页切片 + 页码/翻页按钮。
+    // T39 分页（Slint 无虚拟化）：当前页切片 + 页码/翻页按钮（T51 常显，含 1/1）。
     in property <int> page-size;
     in property <int> page-index;
     in property <int> page-total;
     in property <string> page-label;
     in property <string> page-prev-label;
     in property <string> page-next-label;
+    // 固定批量行：全选（只选当前页）+ 已选数量 + 批量三态。
     in property <string> selected-count-label;
-    in property <bool> bulk-buttons-visible;
+    in property <bool> all-page-selected;
+    in property <bool> batch-buttons-enabled;
     in property <string> set-keep-label;
     in property <string> set-reject-label;
     in property <string> set-pending-label;
     in property <string> select-all-label;
-    in property <string> deselect-all-label;
     in property <string> card-pending-label;
     in property <string> card-keep-label;
     in property <string> card-reject-label;
     in property <string> locate-label;
     in property <string> legend;
-    in property <string> pause-label;
-    in property <string> resume-label;
     in property <string> seal-label;
     in property <bool> sealed;
-    // 轻量建议辅助：筛选区标题、五个筛选器（标签含计数）、激活标记。
-    in property <string> suggestion-filters-label;
-    in property <[string]> suggestion-filter-labels;
-    in property <[int]> suggestion-filter-counts;
-    in property <[int]> suggestion-filter-active;
+    // 置信度筛选：全部/高/中/低（单选，标签含计数）。
+    in property <string> confidence-filters-label;
+    in property <[string]> confidence-filter-labels;
+    in property <[int]> confidence-filter-counts;
+    in property <[int]> confidence-filter-active;
     // 一键应用建议 / 撤销上一批。
     in property <string> apply-suggestions-label;
     in property <string> undo-suggestions-label;
@@ -117,13 +231,10 @@ export component ReviewDrawer inherits Rectangle {
     callback card-state-clicked(candidate-id: string, state: string);
     callback card-selection-toggled(candidate-id: string);
     callback locate-clicked(candidate-id: string);
-    callback select-all-clicked();
-    callback deselect-all-clicked();
+    callback select-all-toggled();
     callback bulk-state-clicked(state: string);
-    callback pause-clicked();
-    callback resume-clicked();
     callback seal-clicked();
-    callback suggestion-filter-clicked(index: int);
+    callback confidence-filter-clicked(index: int);
     callback apply-suggestions-clicked();
     callback undo-suggestions-clicked();
 
@@ -200,51 +311,36 @@ export component ReviewDrawer inherits Rectangle {
                 }
             }
 
-            // 建议筛选（验收 3：需要关注/未命名/建议保留/建议人工确认/建议剔除；
-            // 多选，与上方六类标签组合）。标签含计数，由 Rust 侧拼装；
-            // 紧凑高度避免挤压下方候选滚动区（T33 大量候选下操作栏可达）。
-            VerticalLayout {
+            // T51 置信度筛选：全部/高/中/低 四个芯片（单选，与六类标签组合）。
+            HorizontalLayout {
                 spacing: 2px;
-                HorizontalLayout {
-                    spacing: 2px;
-                    ReviewCategoryButton {
-                        label: root.suggestion-filter-labels[0];
-                        active: root.suggestion-filter-active[0] == 1;
-                        horizontal-stretch: 1;
-                        height: 22px;
-                        clicked => { root.suggestion-filter-clicked(0); }
-                    }
-                    ReviewCategoryButton {
-                        label: root.suggestion-filter-labels[1];
-                        active: root.suggestion-filter-active[1] == 1;
-                        horizontal-stretch: 1;
-                        height: 22px;
-                        clicked => { root.suggestion-filter-clicked(1); }
-                    }
-                    ReviewCategoryButton {
-                        label: root.suggestion-filter-labels[2];
-                        active: root.suggestion-filter-active[2] == 1;
-                        horizontal-stretch: 1;
-                        height: 22px;
-                        clicked => { root.suggestion-filter-clicked(2); }
-                    }
+                ReviewCategoryButton {
+                    label: root.confidence-filter-labels[0];
+                    active: root.confidence-filter-active[0] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.confidence-filter-clicked(0); }
                 }
-                HorizontalLayout {
-                    spacing: 2px;
-                    ReviewCategoryButton {
-                        label: root.suggestion-filter-labels[3];
-                        active: root.suggestion-filter-active[3] == 1;
-                        horizontal-stretch: 1;
-                        height: 22px;
-                        clicked => { root.suggestion-filter-clicked(3); }
-                    }
-                    ReviewCategoryButton {
-                        label: root.suggestion-filter-labels[4];
-                        active: root.suggestion-filter-active[4] == 1;
-                        horizontal-stretch: 1;
-                        height: 22px;
-                        clicked => { root.suggestion-filter-clicked(4); }
-                    }
+                ReviewCategoryButton {
+                    label: root.confidence-filter-labels[1];
+                    active: root.confidence-filter-active[1] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.confidence-filter-clicked(1); }
+                }
+                ReviewCategoryButton {
+                    label: root.confidence-filter-labels[2];
+                    active: root.confidence-filter-active[2] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.confidence-filter-clicked(2); }
+                }
+                ReviewCategoryButton {
+                    label: root.confidence-filter-labels[3];
+                    active: root.confidence-filter-active[3] == 1;
+                    horizontal-stretch: 1;
+                    height: 22px;
+                    clicked => { review-cards-scroll.viewport-y = 0px; root.confidence-filter-clicked(3); }
                 }
             }
 
@@ -254,6 +350,43 @@ export component ReviewDrawer inherits Rectangle {
                 font-size: 11px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
+            }
+
+            // T51 固定批量行（在候选卡片上方，不随滚动消失）：
+            // 全选复选框（只选当前页）+ 已选数量 + 改为保留/剔除/待定。
+            HorizontalLayout {
+                spacing: 4px;
+                ReviewSelectAllCheckbox {
+                    label: root.select-all-label;
+                    checked: root.all-page-selected;
+                    enabled: !root.sealed;
+                    toggled => { root.select-all-toggled(); }
+                }
+                Text {
+                    text: root.selected-count-label;
+                    font-size: 11px;
+                    color: Theme.text-secondary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                ReviewBatchButton {
+                    label: root.set-keep-label;
+                    enabled: root.batch-buttons-enabled && !root.sealed;
+                    horizontal-stretch: 1;
+                    clicked => { root.bulk-state-clicked("keep"); }
+                }
+                ReviewBatchButton {
+                    label: root.set-reject-label;
+                    enabled: root.batch-buttons-enabled && !root.sealed;
+                    horizontal-stretch: 1;
+                    clicked => { root.bulk-state-clicked("remove"); }
+                }
+                ReviewBatchButton {
+                    label: root.set-pending-label;
+                    enabled: root.batch-buttons-enabled && !root.sealed;
+                    horizontal-stretch: 1;
+                    clicked => { root.bulk-state-clicked("pending"); }
+                }
             }
 
             // 候选卡片：可滚动（滚轮由 ScrollView 原生处理；键盘经 FocusScope
@@ -291,9 +424,11 @@ export component ReviewDrawer inherits Rectangle {
                         spacing: 8px;
                         for card in root.cards:
                             Rectangle {
-                                background: card.highlighted ? Theme.highlight : transparent;
-                                border-color: card.highlighted ? Theme.separator : transparent;
-                                border-width: 1px;
+                                // T51 缺陷修复：选中底色跟随多选状态；地图联动高亮
+                                // 保留独立描边样式，两者解耦。
+                                background: card.selected ? Theme.highlight : transparent;
+                                border-color: card.highlighted ? Theme.map-highlight : transparent;
+                                border-width: card.highlighted ? 2px : 1px;
                                 border-radius: 6px;
                                 TouchArea {
                                     clicked => {
@@ -306,7 +441,7 @@ export component ReviewDrawer inherits Rectangle {
                                     spacing: 4px;
                                     HorizontalLayout {
                                         spacing: 6px;
-                                        CheckBox {
+                                        ReviewCardCheckbox {
                                             checked: card.selected;
                                             enabled: !root.sealed;
                                             toggled => { root.card-selection-toggled(card.candidate-id); }
@@ -366,14 +501,8 @@ export component ReviewDrawer inherits Rectangle {
                 }
             }
 
-            Text {
-                text: root.selected-count-label;
-                color: Theme.text-secondary;
-            }
-
-            // T39 分页：每页 60 张候选卡（50–100 内）；翻页时才重建当前页切片，
-            // 避免 Slint 一次实例化千级卡片控件导致交互冻结。
-            if root.page-total > 1: HorizontalLayout {
+            // T51 分页行常显（含 1/1）：筛选后分页保持可用，不再因只剩一页消失。
+            HorizontalLayout {
                 spacing: 6px;
                 Button {
                     text: root.page-prev-label;
@@ -394,44 +523,13 @@ export component ReviewDrawer inherits Rectangle {
                 }
             }
 
-            // 批量操作：勾选 >=2 时浮现（ADR-0016 交互规则）。
-            if root.bulk-buttons-visible: HorizontalLayout {
-                spacing: 6px;
-                Button {
-                    text: root.select-all-label;
-                    enabled: !root.sealed;
-                    clicked => { root.select-all-clicked(); }
-                }
-                Button {
-                    text: root.deselect-all-label;
-                    enabled: !root.sealed;
-                    clicked => { root.deselect-all-clicked(); }
-                }
-            }
-            if root.bulk-buttons-visible: HorizontalLayout {
-                spacing: 6px;
-                Button {
-                    text: root.set-keep-label;
-                    enabled: !root.sealed;
-                    clicked => { root.bulk-state-clicked("keep"); }
-                }
-                Button {
-                    text: root.set-reject-label;
-                    enabled: !root.sealed;
-                    clicked => { root.bulk-state-clicked("remove"); }
-                }
-                Button {
-                    text: root.set-pending-label;
-                    enabled: !root.sealed;
-                    clicked => { root.bulk-state-clicked("pending"); }
-                }
-            }
-
-            // 一键应用建议（当前筛选范围；确认后执行）与撤销上一批。
+            // T51 一键应用建议：只把高置信转为保留并先弹确认；主操作，用主题色
+            // 标注防止错过。撤销上一批保留为次要按钮。
             HorizontalLayout {
                 spacing: 6px;
                 Button {
                     text: root.apply-suggestions-label;
+                    primary: true;
                     enabled: root.apply-suggestions-enabled && !root.sealed;
                     clicked => { root.apply-suggestions-clicked(); }
                 }
@@ -442,19 +540,9 @@ export component ReviewDrawer inherits Rectangle {
                 }
             }
 
-            // 暂停/恢复会话与封账（固定于抽屉底部，T33 大量候选下可达）。
+            // 封账（固定于抽屉底部，T33 大量候选下可达；T51 删除暂停/继续按钮）。
             HorizontalLayout {
                 spacing: 6px;
-                Button {
-                    text: root.pause-label;
-                    enabled: !root.sealed;
-                    clicked => { root.pause-clicked(); }
-                }
-                Button {
-                    text: root.resume-label;
-                    enabled: !root.sealed;
-                    clicked => { root.resume-clicked(); }
-                }
                 Button {
                     text: root.seal-label;
                     primary: true;

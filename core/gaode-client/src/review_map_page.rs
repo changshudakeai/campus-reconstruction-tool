@@ -278,10 +278,20 @@ const REVIEW_SCRIPT: &str = r#"
       var centroid = null;
       stage = 'centroid_build';
       if (c.kind === 'point') {
-        centroid = [c.coordinates[0], c.coordinates[1]];
+        // 兼容两种点坐标形态：平铺 [lon, lat] 与单元素嵌套 [[lon, lat]]
+        // （B2 规范化几何把点存成单元素数组；后者此前会被当成 center 直接
+        // 传入 CircleMarker，导致整批点标注失败，地图在植被/其他分类挂掉）。
+        var point = Array.isArray(c.coordinates) && Array.isArray(c.coordinates[0])
+          ? c.coordinates[0]
+          : c.coordinates;
+        if (!Array.isArray(point) || point.length < 2) {
+          postReviewMapFailure(stage);
+          return;
+        }
+        centroid = [point[0], point[1]];
         stage = 'overlay_construct';
         overlay = new AMap.CircleMarker({
-          center: c.coordinates,
+          center: point,
           radius: 8,
           strokeColor: baseColor,
           strokeWeight: 2,
@@ -797,6 +807,9 @@ mod tests {
         assert!(html.contains("new AMap.Polygon"));
         assert!(html.contains("new AMap.CircleMarker"));
         assert!(html.contains("new AMap.Polyline"));
+        // T51：点坐标兼容平铺 [lon, lat] 与单元素嵌套 [[lon, lat]]，
+        // 避免植被/其他分类的点候选整批绘制失败导致地图挂掉。
+        assert!(html.contains("Array.isArray(c.coordinates[0])"));
     }
 
     #[test]

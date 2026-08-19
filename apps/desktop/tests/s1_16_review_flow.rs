@@ -321,4 +321,31 @@ fn review_page_groups_reviewable_candidates_by_six_categories_and_judges_tri_sta
         .expect("定位候选卡片必须存在");
     assert_eq!(located.title.as_str(), "未命名建筑 #way/b3");
     assert!(located.highlighted);
+
+    // T51 缺陷修复：多选与地图高亮解耦——多选两张卡后两张卡都带 selected
+    // 标记（UI 蓝底跟随 selected），地图联动高亮是独立的 highlighted 标记。
+    window.invoke_review_card_selection_toggled(reviewable[0].clone().into());
+    window.invoke_review_card_selection_toggled(reviewable[1].clone().into());
+    let selected: Vec<bool> = (0..window.get_review_cards().row_count())
+        .map(|index| window.get_review_cards().row_data(index).unwrap().selected)
+        .collect();
+    assert_eq!(
+        selected.iter().filter(|selected| **selected).count(),
+        2,
+        "多选必须让所有已选卡片都带 selected 标记：{selected:?}"
+    );
+    let highlighted_after_select: Vec<bool> = (0..window.get_review_cards().row_count())
+        .map(|index| {
+            window
+                .get_review_cards()
+                .row_data(index)
+                .unwrap()
+                .highlighted
+        })
+        .collect();
+    assert_eq!(
+        highlighted_after_select.iter().filter(|h| **h).count(),
+        1,
+        "地图联动高亮独立于多选，不得随复选变化"
+    );
 }

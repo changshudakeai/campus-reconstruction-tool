@@ -420,7 +420,8 @@ impl ProductionEntries {
         self.submit_review(window, ReviewRequest::Open);
     }
 
-    /// 转发一次评审操作；批量剔除 >=5 项时记录待二次确认。
+    /// 转发一次评审操作；批量剔除（无数量门槛）与一键应用建议需二次确认时
+    /// 记录待确认类型。
     fn submit_review(&mut self, window: &AppWindow, request: ReviewRequest) {
         self.supersede_diagnostic(window);
         let apply_requested = matches!(request, ReviewRequest::ApplySuggestions);
@@ -480,22 +481,18 @@ impl ProductionEntries {
         self.submit_review(window, ReviewRequest::ToggleSelected { candidate_id });
     }
 
-    pub(crate) fn review_select_all(&mut self, window: &AppWindow) {
-        self.submit_review(window, ReviewRequest::SelectAllActive);
-    }
-
-    pub(crate) fn review_deselect_all(&mut self, window: &AppWindow) {
-        self.submit_review(window, ReviewRequest::DeselectAllActive);
+    pub(crate) fn review_toggle_select_all_page(&mut self, window: &AppWindow) {
+        self.submit_review(window, ReviewRequest::ToggleSelectAllPage);
     }
 
     pub(crate) fn review_bulk_state(&mut self, window: &AppWindow, state: String) {
         self.submit_review(window, ReviewRequest::SetBulk { state });
     }
 
-    pub(crate) fn review_toggle_suggestion_filter(&mut self, window: &AppWindow, index: i32) {
+    pub(crate) fn review_set_confidence_filter(&mut self, window: &AppWindow, index: i32) {
         self.submit_review(
             window,
-            ReviewRequest::ToggleSuggestionFilter {
+            ReviewRequest::SetConfidenceFilter {
                 index: index as usize,
             },
         );
@@ -507,14 +504,6 @@ impl ProductionEntries {
 
     pub(crate) fn review_undo_suggestions(&mut self, window: &AppWindow) {
         self.submit_review(window, ReviewRequest::UndoSuggestionApply);
-    }
-
-    pub(crate) fn review_pause(&mut self, window: &AppWindow) {
-        self.submit_review(window, ReviewRequest::Pause);
-    }
-
-    pub(crate) fn review_resume(&mut self, window: &AppWindow) {
-        self.submit_review(window, ReviewRequest::Resume);
     }
 
     pub(crate) fn review_seal(&mut self, window: &AppWindow) {

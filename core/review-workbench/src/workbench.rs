@@ -14,15 +14,16 @@ use std::path::Path;
 
 use crate::candidate::{Candidate, CandidateKey};
 use crate::command::{CommandOutcome, ConfirmationRequest, StateChange};
+use crate::confidence::{ConfidenceFilter, ConfidenceTier};
 use crate::error::{Error, Result};
 use crate::session::{SessionEntry, SessionSnapshot};
 use crate::suggestion::{
-    apply_request, AppliedSuggestionBatch, SuggestFilter, SuggestionApplyRequest, SuggestionEngine,
+    apply_request, AppliedSuggestionBatch, SuggestionApplyRequest, SuggestionEngine,
 };
 use crate::view_models::{
     category_text_key, state_text_key, suggestion_action_text_key, suggestion_category_text_key,
-    text_keys, CandidateCardView, CategoryTabView, ExportSummary, InfoPanelView, MapObjectView,
-    SuggestionCardView, SuggestionFilterView, WorkbenchView,
+    text_keys, CandidateCardView, CategoryTabView, ConfidenceFilterView, ExportSummary,
+    InfoPanelView, MapObjectView, SuggestionCardView, WorkbenchView,
 };
 
 /// 类别抽屉的固定展示顺序（ADR-0016 左栏标签页）
@@ -34,6 +35,20 @@ const CATEGORY_ORDER: [CandidateCategory; 6] = [
     CandidateCategory::Sports,
     CandidateCategory::Other,
 ];
+
+/// 置信度排序键：高→中→低（无建议兜底排最后），同档按稳定候选 ID 升序
+/// 保证确定性（T51）。
+fn confidence_order(a: &&Candidate, b: &&Candidate) -> std::cmp::Ordering {
+    fn rank(candidate: &Candidate) -> u8 {
+        match candidate.suggestion.as_ref().map(|s| s.confidence_tier()) {
+            Some(ConfidenceTier::High) => 0,
+            Some(ConfidenceTier::Medium) => 1,
+            Some(ConfidenceTier::Low) => 2,
+            None => 3,
+        }
+    }
+    rank(a).cmp(&rank(b)).then_with(|| a.key.cmp(&b.key))
+}
 
 /// 评审工作台（纯内存状态机；读入与封账之外不接触数据库）
 #[derive(Debug, Clone)]
@@ -50,17 +65,17 @@ pub struct ReviewWorkbench {
     pending_suggestion_apply: Option<SuggestionApplyPlan>,
     /// 最近一批已应用建议（撤销与追溯记录；封账后不可撤销）
     undo: Option<AppliedSuggestionBatch>,
-    /// 当前激活的建议筛选器（多选，与类别组合）
-    suggestion_filters: Vec<SuggestFilter>,
+    /// 当前激活的置信度筛选芯片（单选，默认"全部"）
+    confidence_filter: ConfidenceFilter,
     sealed: bool,
 }
 
 /// 一键应用建议的待确认计划：按当前筛选范围预生成的两批状态变更。
 #[derive(Debug, Clone)]
 struct SuggestionApplyPlan {
-    /// 建议保留的候选
+    /// 高置信、将改为保留的候选
     keep: Vec<CandidateKey>,
-    /// 建议剔除的候选
+    /// 建议剔除的候选（T51 起恒为空：一键应用不再剔除任何候选）
     remove: Vec<CandidateKey>,
     /// 确认弹窗数据（对象数量 + 主要理由分布）
     request: SuggestionApplyRequest,
@@ -102,7 +117,7 @@ impl ReviewWorkbench {
             pending_confirmation: None,
             pending_suggestion_apply: None,
             undo: None,
-            suggestion_filters: Vec::new(),
+            confidence_filter: ConfidenceFilter::All,
             sealed: false,
         };
         // 轻量建议：进台时按候选数据确定性生成；只读，不改变 ReviewState。
@@ -161,23 +176,22 @@ impl ReviewWorkbench {
         pairs
     }
 
-    /// 建议筛选器是否已激活。
-    pub fn suggestion_filter_active(&self, filter: SuggestFilter) -> bool {
-        self.suggestion_filters.contains(&filter)
+    /// 当前激活的置信度筛选芯片（默认"全部"）。
+    pub fn confidence_filter(&self) -> ConfidenceFilter {
+        self.confidence_filter
     }
 
-    /// 当前激活的建议筛选器（固定顺序）。
-    pub fn active_suggestion_filters(&self) -> Vec<SuggestFilter> {
-        SuggestFilter::ALL
-            .into_iter()
-            .filter(|filter| self.suggestion_filter_active(*filter))
-            .collect()
+    /// 切换置信度筛选芯片（单选，T51）。
+    pub fn set_confidence_filter(&mut self, filter: ConfidenceFilter) {
+        self.confidence_filter = filter;
     }
 
-    /// 命中某筛选器的候选总数（跨类别）。
-    pub fn suggestion_filter_count(&self, filter: SuggestFilter) -> usize {
+    /// 命中某置信度筛选的候选总数（T51：按当前激活的六类分类统计，
+    /// 不跨类别；"全部"为该分类候选总数）。
+    pub fn confidence_filter_count(&self, filter: ConfidenceFilter) -> usize {
         self.candidates
             .iter()
+            .filter(|candidate| candidate.category == self.active_category)
             .filter(|c| {
                 c.suggestion
                     .as_ref()
@@ -186,22 +200,18 @@ impl ReviewWorkbench {
             .count()
     }
 
-    /// 切换建议筛选器（多选，与类别组合）。
-    pub fn toggle_suggestion_filter(&mut self, filter: SuggestFilter) {
-        if let Some(position) = self.suggestion_filters.iter().position(|f| *f == filter) {
-            self.suggestion_filters.remove(position);
-        } else {
-            self.suggestion_filters.push(filter);
-        }
-    }
-
-    /// 一键应用是否可用：未封账，且当前筛选范围内存在可执行（保留/剔除）建议。
+    /// 一键应用是否可用：未封账，且存在尚未保留的高置信候选（跨类别）。
     pub fn apply_suggestions_enabled(&self) -> bool {
-        if self.sealed || self.active_suggestion_filters().is_empty() {
+        if self.sealed {
             return false;
         }
-        let (keep, remove) = self.actionable_scope();
-        !keep.is_empty() || !remove.is_empty()
+        self.candidates.iter().any(|candidate| {
+            candidate.state != shared_domain_types::ReviewState::Keep
+                && candidate
+                    .suggestion
+                    .as_ref()
+                    .is_some_and(|suggestion| suggestion.confidence_tier() == ConfidenceTier::High)
+        })
     }
 
     /// 是否存在可撤销的上一批（封账后不可撤销）。
@@ -214,53 +224,42 @@ impl ReviewWorkbench {
         self.undo.as_ref()
     }
 
-    /// 当前筛选范围内的可执行建议：当前类别 ∩ 激活筛选器（至少一个激活）。
-    fn actionable_scope(&self) -> (Vec<CandidateKey>, Vec<CandidateKey>) {
-        let filters = self.active_suggestion_filters();
-        if filters.is_empty() {
-            return (Vec::new(), Vec::new());
-        }
-        let mut keep = Vec::new();
-        let mut remove = Vec::new();
-        for candidate in &self.candidates {
-            if candidate.category != self.active_category {
-                continue;
-            }
-            let Some(suggestion) = candidate.suggestion.as_ref() else {
-                continue;
-            };
-            if !filters.iter().any(|filter| filter.matches(suggestion)) {
-                continue;
-            }
-            match suggestion.action {
-                crate::suggestion::SuggestionAction::Keep => keep.push(candidate.key.clone()),
-                crate::suggestion::SuggestionAction::Remove => remove.push(candidate.key.clone()),
-                crate::suggestion::SuggestionAction::HumanReview => {}
-            }
-        }
-        keep.sort();
-        remove.sort();
-        (keep, remove)
+    /// 一键应用目标：全部尚未保留的高置信候选（跨类别，按稳定候选 ID 排序）。
+    /// T51：只转保留，不剔除任何候选。
+    fn high_confidence_keep_targets(&self) -> Vec<CandidateKey> {
+        let mut targets: Vec<CandidateKey> =
+            self.candidates
+                .iter()
+                .filter(|candidate| candidate.state != shared_domain_types::ReviewState::Keep)
+                .filter(|candidate| {
+                    candidate.suggestion.as_ref().is_some_and(|suggestion| {
+                        suggestion.confidence_tier() == ConfidenceTier::High
+                    })
+                })
+                .map(|candidate| candidate.key.clone())
+                .collect();
+        targets.sort();
+        targets
     }
 
-    /// 一键应用建议（验收 4）：对当前筛选范围生成保留/剔除批次并请求确认；
-    /// 生成建议本身不改变任何 `ReviewState`（验收 5）。
+    /// 一键应用建议（T51）：把全部尚未保留的高置信候选改为保留并请求确认；
+    /// 不剔除任何候选。生成建议本身不改变任何 `ReviewState`（验收 5）。
     pub fn apply_suggestions(&mut self) -> Result<CommandOutcome> {
         self.ensure_not_sealed()?;
-        let (keep, remove) = self.actionable_scope();
-        if keep.is_empty() && remove.is_empty() {
+        let keep = self.high_confidence_keep_targets();
+        if keep.is_empty() {
             return Ok(CommandOutcome::Applied { changed: 0 });
         }
-        let request = apply_request(&keep, &remove, &self.candidates);
+        let request = apply_request(&keep, &[], &self.candidates);
         self.pending_suggestion_apply = Some(SuggestionApplyPlan {
             keep,
-            remove,
+            remove: Vec::new(),
             request: request.clone(),
         });
         Ok(CommandOutcome::NeedsSuggestionConfirmation(request))
     }
 
-    /// 确认弹窗点了"确认"：复用既有批量状态变更机制执行保留/剔除两批，
+    /// 确认弹窗点了"确认"：复用既有批量状态变更机制执行保留批，
     /// 记录批次与理由供撤销与追溯；取消路径见
     /// [`Self::cancel_suggestion_apply`]。
     pub fn confirm_suggestion_apply(&mut self) -> Result<CommandOutcome> {
@@ -329,7 +328,7 @@ impl ReviewWorkbench {
 
     /// 提交一次状态变更操作。
     ///
-    /// 批量剔除 ≥5 项被拦下并返回 [`CommandOutcome::NeedsConfirmation`]
+    /// 多目标批量剔除被拦下并返回 [`CommandOutcome::NeedsConfirmation`]
     /// （操作暂存，等 [`confirm_pending`](Self::confirm_pending) /
     /// [`cancel_pending`](Self::cancel_pending)）；其余情况立即执行，
     /// 纯内存无卡顿。点错状态直接再提交另一个状态即可（状态即后悔药）。
@@ -368,8 +367,10 @@ impl ReviewWorkbench {
             .ok_or(Error::NoPendingConfirmation)
     }
 
-    /// 便捷入口：把当前勾选的全部候选改为目标三态
-    ///（批量改保留/待定直接执行；批量剔除 ≥5 项走确认闸）
+    /// 便捷入口：把当前勾选的全部候选改为目标三态。
+    ///
+    /// T51：批量改保留/待定直接执行；批量剔除无数量门槛，一律先弹一次
+    /// 二次确认。
     pub fn submit_for_selected(&mut self, to: ReviewState) -> Result<CommandOutcome> {
         let targets: Vec<CandidateKey> = self
             .candidates
@@ -377,7 +378,16 @@ impl ReviewWorkbench {
             .filter(|c| c.selected)
             .map(|c| c.key.clone())
             .collect();
-        self.submit(StateChange::batch(targets, to))
+        if targets.is_empty() {
+            return Ok(CommandOutcome::Applied { changed: 0 });
+        }
+        if to.is_remove() {
+            let request = ConfirmationRequest::batch_remove(targets.len());
+            self.pending_confirmation = Some(StateChange::batch(targets, to));
+            return Ok(CommandOutcome::NeedsConfirmation(request));
+        }
+        let changed = self.apply(&StateChange::batch(targets, to));
+        Ok(CommandOutcome::Applied { changed })
     }
 
     /// 执行状态变更，返回实际改变状态的候选数
@@ -401,7 +411,7 @@ impl ReviewWorkbench {
         Ok(())
     }
 
-    // ── 勾选与全选浮现（ADR-0016）─────────────────────────
+    // ── 勾选与批量行（ADR-0016，T51 修订）─────────────────
 
     /// 切换某候选的复选框，返回新勾选状态
     pub fn toggle_selected(&mut self, key: &CandidateKey) -> Result<bool> {
@@ -414,34 +424,24 @@ impl ReviewWorkbench {
         Ok(candidate.selected)
     }
 
-    /// 点“全选”：当前激活类别的所有卡片勾选。
-    pub fn select_all_in_active_category(&mut self) {
-        let category = self.active_category;
-        for candidate in &mut self.candidates {
-            if candidate.category == category {
-                candidate.selected = true;
+    /// 把给定候选的勾选状态统一设为 `selected`（页面级全选由呈现层按当前页
+    /// 切片调用；对不存在的候选标识安静跳过），返回实际改变的候选数。
+    pub fn set_selected(&mut self, keys: &[CandidateKey], selected: bool) -> usize {
+        let mut changed = 0;
+        for key in keys {
+            if let Some(candidate) = self.candidates.iter_mut().find(|c| &c.key == key) {
+                if candidate.selected != selected {
+                    candidate.selected = selected;
+                    changed += 1;
+                }
             }
         }
-    }
-
-    /// 点“取消全选”：当前激活类别的所有卡片取消勾选。
-    pub fn deselect_all_in_active_category(&mut self) {
-        let category = self.active_category;
-        for candidate in &mut self.candidates {
-            if candidate.category == category {
-                candidate.selected = false;
-            }
-        }
+        changed
     }
 
     /// 当前勾选数（跨类别）
     pub fn selected_count(&self) -> usize {
         self.candidates.iter().filter(|c| c.selected).count()
-    }
-
-    /// 勾选 ≥2 个时自动浮现“全选/取消全选”按钮（ADR-0016 交互规则）。
-    pub fn bulk_buttons_visible(&self) -> bool {
-        self.selected_count() >= 2
     }
 
     // ── 类别抽屉与高亮联动（ADR-0016）────────────────────
@@ -663,20 +663,22 @@ impl ReviewWorkbench {
             })
             .collect();
 
-        // 卡片列表 = 当前类别 ∩ 激活建议筛选器（无激活筛选器时显示全部）。
-        let active_filters = self.active_suggestion_filters();
-        let cards = self
+        // 卡片列表 = 当前类别 ∩ 当前置信度筛选；按 高→中→低 排序
+        // （同档按稳定候选 ID，保证确定性；T51）。
+        let filter = self.confidence_filter;
+        let mut visible_cards: Vec<&Candidate> = self
             .candidates
             .iter()
             .filter(|c| {
                 c.category == self.active_category
-                    && (active_filters.is_empty()
-                        || c.suggestion.as_ref().is_some_and(|suggestion| {
-                            active_filters
-                                .iter()
-                                .any(|filter| filter.matches(suggestion))
-                        }))
+                    && c.suggestion
+                        .as_ref()
+                        .is_some_and(|suggestion| filter.matches(suggestion))
             })
+            .collect();
+        visible_cards.sort_by(confidence_order);
+        let cards: Vec<CandidateCardView> = visible_cards
+            .into_iter()
             .map(|c| {
                 let suggestion = c.suggestion.as_ref().map(|s| SuggestionCardView {
                     category_key: suggestion_category_text_key(s.category),
@@ -697,9 +699,12 @@ impl ReviewWorkbench {
             })
             .collect();
 
-        let map_objects = self
-            .candidates
-            .iter()
+        // 地图对象按 高→中→低 排序：JS 按接收顺序标注，高置信候选优先上屏
+        // （T51：地图标注/加载与列表同序）。
+        let mut ordered_objects: Vec<&Candidate> = self.candidates.iter().collect();
+        ordered_objects.sort_by(confidence_order);
+        let map_objects = ordered_objects
+            .into_iter()
             .map(|c| MapObjectView {
                 candidate_id: c.key.candidate_id.clone(),
                 category: c.category,
@@ -736,19 +741,18 @@ impl ReviewWorkbench {
             map_objects,
             info_panel,
             selected_count: self.selected_count(),
-            bulk_buttons_visible: self.bulk_buttons_visible(),
             pending_confirmation: self
                 .pending_confirmation
                 .as_ref()
                 .map(|change| ConfirmationRequest::batch_remove(change.targets.len())),
-            suggestion_filters_label_key: text_keys::SUGGESTION_FILTERS_LABEL,
-            suggestion_filters: SuggestFilter::ALL
+            confidence_filters_label_key: text_keys::CONFIDENCE_FILTERS_LABEL,
+            confidence_filters: ConfidenceFilter::ALL
                 .into_iter()
-                .map(|filter| SuggestionFilterView {
+                .map(|filter| ConfidenceFilterView {
                     filter,
                     label_key: filter.label_key(),
-                    count: self.suggestion_filter_count(filter),
-                    active: self.suggestion_filter_active(filter),
+                    count: self.confidence_filter_count(filter),
+                    active: self.confidence_filter == filter,
                 })
                 .collect(),
             apply_suggestions_label_key: text_keys::APPLY_SUGGESTIONS,

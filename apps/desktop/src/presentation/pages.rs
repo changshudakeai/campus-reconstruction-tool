@@ -659,7 +659,7 @@ pub struct ReviewPageState {
     pub category_counts: Vec<i32>,
     /// 当前激活类别索引。
     pub active_category: i32,
-    /// 当前类别候选卡片（T39 分页：只含当前页切片，页大小 50–100）。
+    /// 当前类别候选卡片（T39/T51 分页：只含当前页切片，每页 20）。
     pub cards: Vec<ReviewCandidateData>,
     /// 每页候选卡片数（分页常量；Slint 无虚拟化，避免一次实例化千级控件）。
     pub page_size: i32,
@@ -675,14 +675,15 @@ pub struct ReviewPageState {
     pub page_next_label: String,
     /// 已选数量文案。
     pub selected_count_label: String,
-    /// 勾选 >=2 时显示批量操作按钮。
-    pub bulk_buttons_visible: bool,
+    /// 当前页全部卡片是否已勾选（固定批量行的"全选"复选框状态）。
+    pub all_page_selected: bool,
+    /// 批量三态按钮是否可用（至少勾选 1 项且未封账）。
+    pub batch_buttons_enabled: bool,
     /// 批量按钮文案。
     pub set_keep_label: String,
     pub set_reject_label: String,
     pub set_pending_label: String,
     pub select_all_label: String,
-    pub deselect_all_label: String,
     /// 单卡三态按钮文案。
     pub card_pending_label: String,
     pub card_keep_label: String,
@@ -707,25 +708,23 @@ pub struct ReviewPageState {
     pub detail_source: String,
     /// 详情状态行。
     pub detail_state_label: String,
-    /// 暂停/恢复/封账按钮文案。
-    pub pause_label: String,
-    pub resume_label: String,
+    /// 封账按钮文案。
     pub seal_label: String,
     /// 是否已封账（评审入口禁用信号）。
     pub sealed: bool,
-    /// 建议筛选区标题。
-    pub suggestion_filters_label: String,
-    /// 建议筛选器标签（固定顺序，与 F5 `SuggestFilter::ALL` 一致）。
-    pub suggestion_filter_labels: Vec<String>,
-    /// 每个建议筛选器的候选总数。
-    pub suggestion_filter_counts: Vec<i32>,
-    /// 每个建议筛选器是否激活（1=激活，0=未激活）。
-    pub suggestion_filter_active: Vec<i32>,
+    /// 置信度筛选区标题。
+    pub confidence_filters_label: String,
+    /// 置信度筛选芯片标签（固定顺序，与 F5 `ConfidenceFilter::ALL` 一致）。
+    pub confidence_filter_labels: Vec<String>,
+    /// 每个置信度筛选芯片的候选总数。
+    pub confidence_filter_counts: Vec<i32>,
+    /// 每个置信度筛选芯片是否激活（1=激活，0=未激活）。
+    pub confidence_filter_active: Vec<i32>,
     /// "应用建议"按钮文案。
     pub apply_suggestions_label: String,
     /// "撤销上一批"按钮文案。
     pub undo_suggestions_label: String,
-    /// 一键应用是否可用（未封账且当前筛选范围内有可执行建议）。
+    /// 一键应用是否可用（未封账且存在可转为保留的高置信候选）。
     pub apply_suggestions_enabled: bool,
     /// 是否存在可撤销的上一批（封账后不可撤销）。
     pub undo_available: bool,
@@ -745,13 +744,16 @@ impl WindowPageState for ReviewPageState {
         window
             .set_review_category_counts(ModelRc::new(VecModel::from(self.category_counts.clone())));
         window.set_review_active_category(self.active_category);
-        // T39：三态/高亮/复选变更走单卡更新（set_row_data），不得整表重建；
-        // 仅当行身份变化（切分类/翻页）时才整体替换模型。
+        // T39/T51：三态/高亮/复选变更走单卡更新（set_row_data），不得整表重建；
+        // 仅当行身份集合完全一致时才走单卡更新，否则（切分类/翻页/筛选）整体
+        // 替换模型——修复"筛选后卡片不按对应筛选刷新"的同长度异集合路径。
         let current = window.get_review_cards();
         let same_identity = current.row_count() == self.cards.len()
-            && current
-                .row_data(0)
-                .is_some_and(|first| first.candidate_id == self.cards[0].candidate_id);
+            && (0..self.cards.len()).all(|index| {
+                current
+                    .row_data(index)
+                    .is_some_and(|row| row.candidate_id == self.cards[index].candidate_id)
+            });
         if same_identity && !self.cards.is_empty() {
             for (index, card) in self.cards.iter().enumerate() {
                 if current.row_data(index).as_ref() != Some(card) {
@@ -768,12 +770,12 @@ impl WindowPageState for ReviewPageState {
         window.set_review_page_prev_label(self.page_prev_label.clone().into());
         window.set_review_page_next_label(self.page_next_label.clone().into());
         window.set_review_selected_count_label(self.selected_count_label.clone().into());
-        window.set_review_bulk_buttons_visible(self.bulk_buttons_visible);
+        window.set_review_all_page_selected(self.all_page_selected);
+        window.set_review_batch_buttons_enabled(self.batch_buttons_enabled);
         window.set_review_set_keep_label(self.set_keep_label.clone().into());
         window.set_review_set_reject_label(self.set_reject_label.clone().into());
         window.set_review_set_pending_label(self.set_pending_label.clone().into());
         window.set_review_select_all_label(self.select_all_label.clone().into());
-        window.set_review_deselect_all_label(self.deselect_all_label.clone().into());
         window.set_review_card_pending_label(self.card_pending_label.clone().into());
         window.set_review_card_keep_label(self.card_keep_label.clone().into());
         window.set_review_card_reject_label(self.card_reject_label.clone().into());
@@ -787,17 +789,15 @@ impl WindowPageState for ReviewPageState {
         window.set_review_detail_source_label(self.detail_source_label.clone().into());
         window.set_review_detail_source(self.detail_source.clone().into());
         window.set_review_detail_state_label(self.detail_state_label.clone().into());
-        window.set_review_pause_label(self.pause_label.clone().into());
-        window.set_review_resume_label(self.resume_label.clone().into());
         window.set_review_seal_label(self.seal_label.clone().into());
         window.set_review_sealed(self.sealed);
-        window.set_review_suggestion_filters_label(self.suggestion_filters_label.clone().into());
-        window.set_review_suggestion_filter_labels(string_model(&self.suggestion_filter_labels));
-        window.set_review_suggestion_filter_counts(ModelRc::new(VecModel::from(
-            self.suggestion_filter_counts.clone(),
+        window.set_review_confidence_filters_label(self.confidence_filters_label.clone().into());
+        window.set_review_confidence_filter_labels(string_model(&self.confidence_filter_labels));
+        window.set_review_confidence_filter_counts(ModelRc::new(VecModel::from(
+            self.confidence_filter_counts.clone(),
         )));
-        window.set_review_suggestion_filter_active(ModelRc::new(VecModel::from(
-            self.suggestion_filter_active.clone(),
+        window.set_review_confidence_filter_active(ModelRc::new(VecModel::from(
+            self.confidence_filter_active.clone(),
         )));
         window.set_review_apply_suggestions_label(self.apply_suggestions_label.clone().into());
         window.set_review_undo_suggestions_label(self.undo_suggestions_label.clone().into());
@@ -835,19 +835,17 @@ pub enum ReviewRequest {
     MapFailed { message: String },
     /// 切换单卡复选。
     ToggleSelected { candidate_id: String },
-    /// 全选当前类别。
-    SelectAllActive,
-    /// 取消全选当前类别。
-    DeselectAllActive,
+    /// 固定批量行的"全选"复选框：只选择/取消当前页切片。
+    ToggleSelectAllPage,
     /// 批量改为目标三态（state: pending/keep/remove）。
     SetBulk { state: String },
     /// 二次确认弹窗点了“确认”（批量剔除 >=5 项）。
     ConfirmPending,
     /// 二次确认弹窗点了“取消”。
     CancelPending,
-    /// 切换建议筛选器（index 对应 F5 `SuggestFilter::ALL` 顺序）。
-    ToggleSuggestionFilter { index: usize },
-    /// 一键应用建议：对当前筛选范围生成保留/剔除批次并请求确认。
+    /// 切换置信度筛选芯片（index 对应 F5 `ConfidenceFilter::ALL` 顺序）。
+    SetConfidenceFilter { index: usize },
+    /// 一键应用建议：把尚未保留的高置信候选改为保留并请求确认（T51 不剔除）。
     ApplySuggestions,
     /// 建议应用确认弹窗点了“确认”。
     ConfirmSuggestionApply,
@@ -855,10 +853,6 @@ pub enum ReviewRequest {
     CancelSuggestionApply,
     /// 撤销上一批建议应用（封账前最近一批）。
     UndoSuggestionApply,
-    /// 暂停：会话状态写入临时文件。
-    Pause,
-    /// 恢复：从临时文件恢复会话状态。
-    Resume,
     /// 封账：终态批量写回 B2。
     Seal,
 }

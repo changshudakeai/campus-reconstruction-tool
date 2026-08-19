@@ -323,7 +323,7 @@ export component AppWindow inherits Window {
     in property <[int]> review-category-counts;
     in property <int> review-active-category;
     in property <[ReviewCandidateData]> review-cards;
-    // T39 分页：当前页切片 + 页码/翻页按钮（Slint 无虚拟化，50–100/页）。
+    // T39/T51 分页：当前页切片 + 页码/翻页按钮（T51 页码行常显，含 1/1）。
     in property <int> review-page-size;
     in property <int> review-page-index;
     in property <int> review-page-total;
@@ -331,25 +331,23 @@ export component AppWindow inherits Window {
     in property <string> review-page-prev-label;
     in property <string> review-page-next-label;
     in property <string> review-selected-count-label;
-    in property <bool> review-bulk-buttons-visible;
+    in property <bool> review-all-page-selected;
+    in property <bool> review-batch-buttons-enabled;
     in property <string> review-set-keep-label;
     in property <string> review-set-reject-label;
     in property <string> review-set-pending-label;
     in property <string> review-select-all-label;
-    in property <string> review-deselect-all-label;
     in property <string> review-card-pending-label;
     in property <string> review-card-keep-label;
     in property <string> review-card-reject-label;
-    in property <string> review-pause-label;
-    in property <string> review-resume-label;
     in property <string> review-seal-label;
     in property <bool> review-sealed;
-    // 轻量建议辅助：筛选区标题、五个筛选器（标签含计数、激活标记）、
+    // T51 置信度筛选：全部/高/中/低 四个芯片（标签含计数、激活标记）、
     // 一键应用建议与撤销上一批。
-    in property <string> review-suggestion-filters-label;
-    in property <[string]> review-suggestion-filter-labels;
-    in property <[int]> review-suggestion-filter-counts;
-    in property <[int]> review-suggestion-filter-active;
+    in property <string> review-confidence-filters-label;
+    in property <[string]> review-confidence-filter-labels;
+    in property <[int]> review-confidence-filter-counts;
+    in property <[int]> review-confidence-filter-active;
     in property <string> review-apply-suggestions-label;
     in property <string> review-undo-suggestions-label;
     in property <bool> review-apply-suggestions-enabled;
@@ -379,13 +377,10 @@ export component AppWindow inherits Window {
     callback review-card-state-clicked(candidate-id: string, state: string);
     callback review-card-selection-toggled(candidate-id: string);
     callback review-locate-clicked(candidate-id: string);
-    callback review-select-all-clicked();
-    callback review-deselect-all-clicked();
+    callback review-select-all-toggled();
     callback review-bulk-state-clicked(state: string);
-    callback review-pause-clicked();
-    callback review-resume-clicked();
     callback review-seal-clicked();
-    callback review-suggestion-filter-clicked(index: int);
+    callback review-confidence-filter-clicked(index: int);
     callback review-apply-suggestions-clicked();
     callback review-undo-suggestions-clicked();
     callback workspace-export-start-clicked();
@@ -879,25 +874,23 @@ export component AppWindow inherits Window {
                     page-prev-label: root.review-page-prev-label;
                     page-next-label: root.review-page-next-label;
                     selected-count-label: root.review-selected-count-label;
-                    bulk-buttons-visible: root.review-bulk-buttons-visible;
+                    all-page-selected: root.review-all-page-selected;
+                    batch-buttons-enabled: root.review-batch-buttons-enabled;
                     set-keep-label: root.review-set-keep-label;
                     set-reject-label: root.review-set-reject-label;
                     set-pending-label: root.review-set-pending-label;
                     select-all-label: root.review-select-all-label;
-                    deselect-all-label: root.review-deselect-all-label;
                     card-pending-label: root.review-card-pending-label;
                     card-keep-label: root.review-card-keep-label;
                     card-reject-label: root.review-card-reject-label;
                     locate-label: root.review-locate-label;
                     legend: root.review-legend;
-                    pause-label: root.review-pause-label;
-                    resume-label: root.review-resume-label;
                     seal-label: root.review-seal-label;
                     sealed: root.review-sealed;
-                    suggestion-filters-label: root.review-suggestion-filters-label;
-                    suggestion-filter-labels: root.review-suggestion-filter-labels;
-                    suggestion-filter-counts: root.review-suggestion-filter-counts;
-                    suggestion-filter-active: root.review-suggestion-filter-active;
+                    confidence-filters-label: root.review-confidence-filters-label;
+                    confidence-filter-labels: root.review-confidence-filter-labels;
+                    confidence-filter-counts: root.review-confidence-filter-counts;
+                    confidence-filter-active: root.review-confidence-filter-active;
                     apply-suggestions-label: root.review-apply-suggestions-label;
                     undo-suggestions-label: root.review-undo-suggestions-label;
                     apply-suggestions-enabled: root.review-apply-suggestions-enabled;
@@ -912,13 +905,10 @@ export component AppWindow inherits Window {
                     card-state-clicked(candidate-id, state) => { root.review-card-state-clicked(candidate-id, state); }
                     card-selection-toggled(candidate-id) => { root.review-card-selection-toggled(candidate-id); }
                     locate-clicked(candidate-id) => { root.review-locate-clicked(candidate-id); }
-                    select-all-clicked => { root.review-select-all-clicked(); }
-                    deselect-all-clicked => { root.review-deselect-all-clicked(); }
+                    select-all-toggled => { root.review-select-all-toggled(); }
                     bulk-state-clicked(state) => { root.review-bulk-state-clicked(state); }
-                    pause-clicked => { root.review-pause-clicked(); }
-                    resume-clicked => { root.review-resume-clicked(); }
                     seal-clicked => { root.review-seal-clicked(); }
-                    suggestion-filter-clicked(index) => { root.review-suggestion-filter-clicked(index); }
+                    confidence-filter-clicked(index) => { root.review-confidence-filter-clicked(index); }
                     apply-suggestions-clicked => { root.review-apply-suggestions-clicked(); }
                     undo-suggestions-clicked => { root.review-undo-suggestions-clicked(); }
                 }
