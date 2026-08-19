@@ -42,6 +42,7 @@ pub(crate) enum MapPageKind {
     Review,
     /// 校区在线搜索页（D-3）
     CampusSearch,
+    BlockPreview,
 }
 
 /// Slint 布局槽位上报的地图矩形（逻辑像素）。
@@ -55,7 +56,7 @@ struct MapSlotRect {
 
 /// T36：一次待执行的 show 请求（retiring 未清空或在途创建时暂存，后到覆盖先到）。
 #[derive(Clone)]
-enum PendingShow {
+pub(crate) enum PendingShow {
     Boundary {
         window: Weak<crate::AppWindow>,
         api_key: String,
@@ -83,6 +84,10 @@ enum PendingShow {
         map_text_visible: bool,
         initial_viewport: Option<gaode_client::MapViewport>,
     },
+    BlockPreview {
+        window: Weak<crate::AppWindow>,
+        initial_payload: Option<String>,
+    },
 }
 
 impl PendingShow {
@@ -92,6 +97,7 @@ impl PendingShow {
             PendingShow::CampusSearch { .. } => MapPageKind::CampusSearch,
             PendingShow::Orientation { .. } => MapPageKind::Orientation,
             PendingShow::Review { .. } => MapPageKind::Review,
+            PendingShow::BlockPreview { .. } => MapPageKind::BlockPreview,
         }
     }
 
@@ -105,9 +111,9 @@ impl PendingShow {
     /// 由 JS 定时上屏（发生在创建超时之外），继续保留 10s 兜底会把慢速
     /// 注入/慢网络的评审地图误杀。页面自身 5s SDK 超时与 onerror 仍上报。
     fn has_load_timeout(&self) -> bool {
-        !matches!(
-            self,
-            PendingShow::Review { .. } | PendingShow::CampusSearch { .. }
+        matches!(
+            self.page_kind(),
+            MapPageKind::Boundary | MapPageKind::Orientation
         )
     }
 }
@@ -462,6 +468,11 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             }
             gaode_client::build_review_map_page_html(&config)
         }
+        PendingShow::BlockPreview {
+            initial_payload, ..
+        } => Ok(crate::block_preview::build_page_html(
+            initial_payload.as_deref(),
+        )),
     }
 }
 
@@ -529,6 +540,9 @@ fn pump_creation() {
                 })
             }
             Ok(html) => {
+                if crate::map_webview_preview::webview_creation_disabled() {
+                    return None;
+                }
                 state.creation_in_flight = true;
                 let generation = state.generation;
                 let window = request_window(&request);
@@ -588,7 +602,8 @@ fn request_window(request: &PendingShow) -> Weak<crate::AppWindow> {
         PendingShow::Boundary { window, .. }
         | PendingShow::CampusSearch { window, .. }
         | PendingShow::Orientation { window, .. }
-        | PendingShow::Review { window, .. } => window.clone(),
+        | PendingShow::Review { window, .. }
+        | PendingShow::BlockPreview { window, .. } => window.clone(),
     }
 }
 
@@ -706,7 +721,10 @@ fn spawn_creation(
 fn creation_activation_script(page_kind: MapPageKind) -> Option<&'static str> {
     match page_kind {
         MapPageKind::Orientation => Some("activateOrientationWhenReady();"),
-        MapPageKind::Boundary | MapPageKind::CampusSearch | MapPageKind::Review => None,
+        MapPageKind::Boundary
+        | MapPageKind::CampusSearch
+        | MapPageKind::Review
+        | MapPageKind::BlockPreview => None,
     }
 }
 
@@ -767,7 +785,7 @@ fn finish_creation(
 }
 
 /// 记录待执行请求并尝试放行（T36 统一 show 入口）。
-fn request_show(request: PendingShow) {
+pub(crate) fn request_show(request: PendingShow) {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
         // 显示意图的幂等与方案身份由 map_session 判定。适配器不能只凭页面
@@ -791,6 +809,10 @@ fn request_show(request: PendingShow) {
                 state.last_page_kind = Some(MapPageKind::Review);
                 state.campus_search_mode = false;
                 state.review_map_text_visible = *map_text_visible;
+            }
+            PendingShow::BlockPreview { .. } => {
+                state.last_page_kind = Some(MapPageKind::BlockPreview);
+                state.campus_search_mode = false;
             }
         }
         // 异页已显示：先隐藏（延迟销毁），再排队重建。
@@ -954,7 +976,7 @@ pub(crate) fn mark_map_failed() {
 }
 
 /// 当前记录的地图页面种类（测试与弹窗恢复决策用）。
-fn page_kind() -> Option<MapPageKind> {
+pub(crate) fn page_kind() -> Option<MapPageKind> {
     STATE.with(|s| s.borrow().last_page_kind)
 }
 

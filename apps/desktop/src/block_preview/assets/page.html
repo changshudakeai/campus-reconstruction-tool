@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #f4f6f8;
+      touch-action: none;
+    }
+    #preview-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+  <script>
+    // 渲染器就绪前的数据暂存与指令占位。本页没有任何用户可见文案：
+    // 按钮与提示全部由 Slint 抽屉经 zh-CN.json 注入（ADR-0005）。
+    window.__previewReady = false;
+    window.__previewFps = 0;
+    window.__previewError = null;
+    if (window.__previewPending === undefined) {
+      window.__previewPending = __INITIAL_PAYLOAD__;
+    }
+    window.loadPreviewData = function (payload) {
+      window.__previewPending = payload;
+    };
+    window.resetPreviewView = function () { /* 渲染器就绪后由 viewer.js 覆盖 */ };
+    window.zoomPreview = function () { /* 渲染器就绪后由 viewer.js 覆盖 */ };
+  </script>
+  <script>__THREE_JS__</script>
+  <script>__VIEWER_JS__</script>
+</head>
+<body>
+  <canvas id="preview-canvas"></canvas>
+</body>
+</html>

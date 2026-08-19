@@ -55,6 +55,10 @@ pub(crate) enum MapCommand {
         request_id: u64,
         query: String,
     },
+    /// 第五步 3D 预览：复位视角到自动取景。
+    PreviewReset,
+    /// 第五步 3D 预览：按倍率缩放（>1 拉远，<1 拉近）。
+    PreviewZoom(f32),
 }
 
 impl MapCommand {
@@ -74,7 +78,7 @@ impl MapCommand {
             | Self::ReviewHighlight(_)
             | Self::ReviewLocate(_)
             | Self::ReviewMapText(_) => Some(MapScene::Review),
-            Self::CampusSearch { .. } => None,
+            Self::CampusSearch { .. } | Self::PreviewReset | Self::PreviewZoom(_) => None,
         }
     }
 }
@@ -123,6 +127,8 @@ pub(crate) enum MapDisplayIntent {
         api_key: String,
         security_key: String,
     },
+    /// 第五步 3D 方块预览（T52）：本地 Three.js 页，无需地图凭据。
+    BlockPreview { plan_id: String },
 }
 
 impl MapDisplayIntent {
@@ -131,7 +137,7 @@ impl MapDisplayIntent {
             Self::Boundary { .. } => Some(MapScene::Boundary),
             Self::Orientation { .. } => Some(MapScene::Orientation),
             Self::Review { .. } => Some(MapScene::Review),
-            Self::CampusSearch { .. } => None,
+            Self::CampusSearch { .. } | Self::BlockPreview { .. } => None,
         }
     }
 
@@ -139,7 +145,8 @@ impl MapDisplayIntent {
         match self {
             Self::Boundary { plan_id, .. }
             | Self::Orientation { plan_id, .. }
-            | Self::Review { plan_id, .. } => Some(plan_id),
+            | Self::Review { plan_id, .. }
+            | Self::BlockPreview { plan_id } => Some(plan_id),
             Self::CampusSearch { .. } => None,
         }
     }
@@ -152,6 +159,8 @@ pub(crate) enum MapEvent {
         message: gaode_client::IpcMessage,
     },
     CampusSearch(String),
+    /// 第五步 3D 预览页回传的原始 IPC（preview_stats / preview_error / preview_loaded）。
+    Preview(String),
 }
 
 pub(crate) type MapEventHandler = Rc<dyn Fn(MapEvent)>;
@@ -171,6 +180,15 @@ thread_local! {
     static SESSION: RefCell<MapSessionRuntime> = RefCell::new(MapSessionRuntime::default());
 }
 
+thread_local! {
+    /// 第五步预览负载推送到 WebView 的累计次数（契约测试观测）。
+    static PREVIEW_PUSH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// 预览页最近一次上报的 (fps, 方块数, 可见面四边形数)。
+    static PREVIEW_STATS: RefCell<Option<(f32, usize, usize)>> = const { RefCell::new(None) };
+    /// 预览页最近一次上报的渲染错误。
+    static PREVIEW_RENDER_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
 /// 不含 WebView 句柄的连续会话状态；真实适配器只消费它决定好的现场。
 #[derive(Debug, Default)]
 pub(crate) struct MapSessionState {
@@ -179,6 +197,8 @@ pub(crate) struct MapSessionState {
     review_viewport: Option<MapViewport>,
     boundary_draft_dirty: bool,
     boundary_draft: Option<Vec<[f64; 2]>>,
+    /// 第五步 3D 预览的最新渲染负载（呈现临时状态；方案切换即清除）。
+    preview_payload: Option<String>,
     available: bool,
     generation: u64,
 }
@@ -195,6 +215,7 @@ impl MapSessionState {
         self.review_viewport = None;
         self.boundary_draft_dirty = false;
         self.boundary_draft = None;
+        self.preview_payload = None;
         self.available = false;
         self.generation = self.generation.wrapping_add(1);
     }
@@ -273,7 +294,8 @@ fn scene_for_page(page: crate::map_webview::MapPageKind) -> Option<MapScene> {
         crate::map_webview::MapPageKind::Boundary => Some(MapScene::Boundary),
         crate::map_webview::MapPageKind::Orientation => Some(MapScene::Orientation),
         crate::map_webview::MapPageKind::Review => Some(MapScene::Review),
-        crate::map_webview::MapPageKind::CampusSearch => None,
+        crate::map_webview::MapPageKind::CampusSearch
+        | crate::map_webview::MapPageKind::BlockPreview => None,
     }
 }
 
@@ -288,6 +310,13 @@ pub(crate) fn register_handlers(
         runtime.availability_handler = Some(availability_handler);
     });
     crate::map_webview::register_ipc_handler(Rc::new(|page, body| {
+        if page == crate::map_webview::MapPageKind::BlockPreview {
+            let handler = SESSION.with(|s| s.borrow().event_handler.clone());
+            if let Some(handler) = handler {
+                handler(MapEvent::Preview(body.to_owned()));
+            }
+            return;
+        }
         if page == crate::map_webview::MapPageKind::CampusSearch {
             let handler = SESSION.with(|s| s.borrow().event_handler.clone());
             if let Some(handler) = handler {
@@ -366,6 +395,15 @@ pub(crate) fn register_handlers(
         }
     }));
     crate::map_webview::register_status_handler(Rc::new(|page, available| {
+        if page == crate::map_webview::MapPageKind::BlockPreview {
+            if available {
+                let payload = SESSION.with(|s| s.borrow().state.preview_payload.clone());
+                if let Some(payload) = payload {
+                    push_preview_payload(&payload);
+                }
+            }
+            return;
+        }
         let Some(scene) = scene_for_page(page) else {
             return;
         };
@@ -385,6 +423,20 @@ pub(crate) fn register_handlers(
 pub(crate) fn dispatch_contract_ipc(raw: String) {
     let event = SESSION.with(|session| {
         let runtime = session.borrow();
+        if matches!(
+            runtime.desired.as_ref().map(|(_, intent)| intent),
+            Some(MapDisplayIntent::BlockPreview { .. })
+        ) {
+            // 预览页自身只回传 preview_* 消息；契约测试直接注入的地图 IPC
+            // （如 confirm_boundary）仍按边界场景路由，不得被预览分支吞掉。
+            return match gaode_client::parse_ipc_message(&raw) {
+                Ok(message) => Some(MapEvent::Workspace {
+                    scene: MapScene::Boundary,
+                    message,
+                }),
+                Err(_) => Some(MapEvent::Preview(raw)),
+            };
+        }
         match runtime.desired.as_ref().map(|(_, intent)| intent) {
             Some(MapDisplayIntent::CampusSearch { .. }) => Some(MapEvent::CampusSearch(raw)),
             desired => {
@@ -514,6 +566,10 @@ fn reconcile() {
             api_key,
             security_key,
         } => crate::map_webview::show_campus_search(window, api_key, security_key),
+        MapDisplayIntent::BlockPreview { .. } => {
+            let payload = SESSION.with(|s| s.borrow().state.preview_payload.clone());
+            crate::map_webview_preview::show_block_preview(window, payload);
+        }
     }
 }
 
@@ -550,6 +606,98 @@ pub(crate) fn mark_failed() {
 
 pub(crate) fn available() -> bool {
     SESSION.with(|s| s.borrow().state.available)
+}
+
+/// 记下最新一次预览渲染负载（第五步页面临时状态）。
+///
+/// 数据落会话后，若预览页当前可见则立即推送；页面尚在创建时由状态回调
+/// 在就绪后补推；重建（弹窗恢复/回到第五步）时按会话负载重新内嵌。
+pub(crate) fn remember_preview_payload(payload: String) {
+    let should_push = SESSION.with(|session| {
+        let mut runtime = session.borrow_mut();
+        runtime.state.preview_payload = Some(payload.clone());
+        let desired_preview = matches!(
+            runtime.desired.as_ref().map(|(_, intent)| intent),
+            Some(MapDisplayIntent::BlockPreview { .. })
+        );
+        desired_preview && !runtime.covered && !runtime.failed && crate::map_webview::is_visible()
+    });
+    if should_push {
+        push_preview_payload(&payload);
+    }
+}
+
+fn push_preview_payload(payload: &str) {
+    PREVIEW_PUSH_COUNT.with(|counter| counter.set(counter.get() + 1));
+    // 队列安全：脚本早于页面解析到达时先把负载写进占位变量，viewer.js
+    // 就绪后消费；已就绪则直接装载。
+    let script = format!(
+        "(function(p){{if(window.loadPreviewData){{window.loadPreviewData(p);}}else{{window.__previewPending=p;}}}})({payload});"
+    );
+    crate::map_webview::evaluate_script(&script);
+}
+
+/// 契约测试观测：会话当前记住的预览负载（可能很大，仅测试使用）。
+#[doc(hidden)]
+pub fn preview_payload() -> Option<String> {
+    SESSION.with(|s| s.borrow().state.preview_payload.clone())
+}
+
+/// 契约测试观测：预览负载推送次数。
+#[doc(hidden)]
+pub fn preview_push_count() -> usize {
+    PREVIEW_PUSH_COUNT.with(|counter| counter.get())
+}
+
+/// 契约测试观测：清零预览推送计数。
+#[doc(hidden)]
+pub fn reset_preview_push_count() {
+    PREVIEW_PUSH_COUNT.with(|counter| counter.set(0));
+}
+
+/// 记录预览页回传的统计/错误（帧率证据 + 渲染故障观测，供日志与契约测试）。
+pub(crate) fn record_preview_ipc(raw: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+    match value.get("type").and_then(|kind| kind.as_str()) {
+        Some("preview_stats") => {
+            let fps = value
+                .pointer("/payload/fps")
+                .and_then(|fps| fps.as_f64())
+                .unwrap_or(0.0) as f32;
+            let blocks = value
+                .pointer("/payload/blocks")
+                .and_then(|blocks| blocks.as_u64())
+                .unwrap_or(0) as usize;
+            let quads = value
+                .pointer("/payload/quads")
+                .and_then(|quads| quads.as_u64())
+                .unwrap_or(0) as usize;
+            PREVIEW_STATS.with(|stats| *stats.borrow_mut() = Some((fps, blocks, quads)));
+        }
+        Some("preview_error") => {
+            let message = value
+                .pointer("/payload/message")
+                .and_then(|message| message.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            PREVIEW_RENDER_ERROR.with(|error| *error.borrow_mut() = Some(message));
+        }
+        _ => {}
+    }
+}
+
+/// 契约测试/验收观测：预览页最近上报的帧率与体量统计。
+#[doc(hidden)]
+pub fn preview_stats() -> Option<(f32, usize, usize)> {
+    PREVIEW_STATS.with(|stats| *stats.borrow())
+}
+
+/// 契约测试/验收观测：预览页最近上报的渲染错误。
+#[doc(hidden)]
+pub fn preview_render_error() -> Option<String> {
+    PREVIEW_RENDER_ERROR.with(|error| error.borrow().clone())
 }
 
 pub(crate) fn campus_search_ready() -> bool {
@@ -618,6 +766,10 @@ pub fn review_map_text_visible() -> bool {
 pub(crate) fn command(command: MapCommand) -> MapCommandResult {
     let expected_scene = command.scene();
     let campus_command = matches!(command, MapCommand::CampusSearch { .. });
+    let preview_command = matches!(
+        command,
+        MapCommand::PreviewReset | MapCommand::PreviewZoom(_)
+    );
     let review_command = matches!(
         command,
         MapCommand::ReviewReplace(_)
@@ -633,6 +785,9 @@ pub(crate) fn command(command: MapCommand) -> MapCommandResult {
         }
         match runtime.desired.as_ref().map(|(_, intent)| intent) {
             Some(MapDisplayIntent::CampusSearch { .. }) => campus_command,
+            Some(MapDisplayIntent::BlockPreview { .. }) => {
+                preview_command && crate::map_webview::is_visible()
+            }
             Some(intent) => {
                 intent.scene() == expected_scene
                     && runtime.state.command_allowed(&command) == MapCommandResult::Allowed
@@ -694,6 +849,13 @@ pub(crate) fn command(command: MapCommand) -> MapCommandResult {
             format!(
                 "(function(){{if (typeof searchCampus !== 'function') return;searchCampus({request_id},{query});}})();"
             )
+        }
+        MapCommand::PreviewReset => {
+            "(window.__previewReady ? window.resetPreviewView() : void 0);".to_owned()
+        }
+        MapCommand::PreviewZoom(delta) => {
+            let delta = delta.clamp(0.05, 20.0);
+            format!("(window.__previewReady ? window.zoomPreview({delta}) : void 0);")
         }
     };
     if review_command {
