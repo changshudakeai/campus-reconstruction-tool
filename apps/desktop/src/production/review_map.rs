@@ -90,12 +90,31 @@ pub(super) fn visible_review_set_for(
     }
 }
 
+/// 点坐标规范化：B2 规范化几何把点存成单元素嵌套数组 `[[lon, lat]]`，
+/// 地图 JS 的 point 分支需要平铺 `[lon, lat]`。这里在呈现层出站边界统一
+/// 展开，避免植被/其他分类的点候选整批绘制失败导致地图挂掉
+/// （不改投影/采集语义）。
+fn point_payload_coordinates(coordinates: &serde_json::Value) -> serde_json::Value {
+    match coordinates {
+        serde_json::Value::Array(outer) if outer.len() == 1 => match outer.first() {
+            Some(serde_json::Value::Array(inner)) => serde_json::Value::Array(inner.clone()),
+            _ => coordinates.clone(),
+        },
+        _ => coordinates.clone(),
+    }
+}
+
 /// 评审地图对象 → JS 载荷（与 B3 回推协议同构）。
 pub(super) fn map_object_json(object: &review_workbench::MapObjectView) -> serde_json::Value {
+    let coordinates = if object.shape_kind == "point" {
+        point_payload_coordinates(&object.shape_coordinates)
+    } else {
+        object.shape_coordinates.clone()
+    };
     serde_json::json!({
         "candidate_id": object.candidate_id,
         "kind": object.shape_kind,
-        "coordinates": object.shape_coordinates,
+        "coordinates": coordinates,
         "state": object.state.to_identifier(),
     })
 }
@@ -267,6 +286,31 @@ impl ReviewProductionAdapter {
                 anchor,
                 map_text_label,
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_coordinates_are_flattened_before_map_payload() {
+        assert_eq!(
+            point_payload_coordinates(&serde_json::json!([[121.4, 31.2]])),
+            serde_json::json!([121.4, 31.2])
+        );
+        assert_eq!(
+            point_payload_coordinates(&serde_json::json!([121.4, 31.2])),
+            serde_json::json!([121.4, 31.2])
+        );
+    }
+
+    #[test]
+    fn line_coordinates_are_kept_as_is() {
+        assert_eq!(
+            point_payload_coordinates(&serde_json::json!([[121.4, 31.2], [121.5, 31.2]])),
+            serde_json::json!([[121.4, 31.2], [121.5, 31.2]])
         );
     }
 }
