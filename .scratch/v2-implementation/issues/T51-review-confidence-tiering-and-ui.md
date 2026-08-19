@@ -1,6 +1,6 @@
 # T51 — 评审工作台：置信度分档与评审流程/UI 优化
 
-**Status:** ready-for-agent（2026-08-18，产品负责人访谈确认）
+**Status:** completed（2026-08-19，产品负责人真机验收通过，已并入 main）
 
 **What to build:** 把评审台的筛选/排序改为“置信度”分档（高/中/低），理顺
 “应用建议 → 人工批量 → 封账”的操作顺序，修复筛选刷新、分页消失与滚动卡顿，
@@ -55,6 +55,26 @@
   筛选/排序/批量契约测试。
 - [ ] 定向门禁：`cargo test -p review-workbench` + `cargo test -p desktop-shell` +
   Clippy + fmt + tidy（按 T41 分级；如改 public-api 快照按 B1 模式更新）。
+
+## 验收与交付（2026-08-19）
+
+- 真机验收通过（Windows，`SLINT_BACKEND=software`，真实方案“华东师范大学
+  普陀校区/新方案 1”，1668 个候选）；产品负责人验收中发现的三项问题已修复：
+  芯片计数改为按当前六类分类统计；植被/其他点候选坐标形态导致地图挂掉已修复；
+  置信度分档重校准（未命名/自动修复移入“中”）。
+- 分支 `feat/t51-review-confidence-tiering`，5 个提交，PR #24，
+  merge commit `5ed9752`。
+- 定向门禁：`cargo test -p review-workbench` 48 项全过；
+  `cargo test -p gaode-client` 92 项全过；
+  `cargo test -p desktop-shell -- --skip fetch_stability` 全过
+  （s1_30 fetch_stability 为既有环境性失败按约定跳过）；
+  `clippy -p review-workbench/gaode-client/desktop-shell --all-targets`、
+  `fmt --all --check`、`xtask tidy` 全过。
+- 真机截图/录屏与像素级颜色证据：`worktrees/t51-review-confidence-tiering/
+  .scratch/archive/t51-walkthrough/README.md`（不入库）。
+- 注意：GitHub Actions 近期对本仓库的所有运行（含 main 基线 90c28cc）均在
+  数秒内失败且无步骤日志（基础设施级故障），CI 结论不可用；合并以本地分级
+  门禁与真机验收为准。
 
 ## 升级门禁触发项
 
