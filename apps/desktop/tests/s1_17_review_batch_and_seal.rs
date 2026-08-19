@@ -291,7 +291,7 @@ fn run_suggestion_contract(
     enter_review(window, plan_id);
     assert_eq!(window.get_review_candidate_count(), 6);
 
-    // 四个置信度芯片 + 计数（全部 6 / 高 2 / 中 1 / 低 3）。
+    // 四个置信度芯片 + 计数（建筑分类内：全部 6 / 高 2 / 中 2 / 低 2）。
     let labels: Vec<String> = window
         .get_review_confidence_filter_labels()
         .iter()
@@ -311,16 +311,16 @@ fn run_suggestion_contract(
         "芯片 1 不符：{labels:?}"
     );
     assert!(
-        labels[2].contains("中") && labels[2].contains("1"),
+        labels[2].contains("中") && labels[2].contains("2"),
         "芯片 2 不符：{labels:?}"
     );
     assert!(
-        labels[3].contains("低") && labels[3].contains("3"),
+        labels[3].contains("低") && labels[3].contains("2"),
         "芯片 3 不符：{labels:?}"
     );
 
     // 默认"全部"：建筑 6 张卡初始全部待定，且按 高→中→低 排序
-    // （高=重复对前序 b0/b1，中=b5 点形状，低=b3 后序/b2 未命名/b4 修复）。
+    // （高=重复对前序 b0/b1，中=b2 未命名/b4 修复，低=b3 后序/b5 点形状）。
     assert_eq!(window.get_review_cards().row_count(), 6);
     for index in 0..6 {
         assert_eq!(card_state_key(window, index), "pending");
@@ -328,10 +328,10 @@ fn run_suggestion_contract(
     let expected_order = vec![
         reviewable[0].clone(),
         reviewable[1].clone(),
-        reviewable[5].clone(),
-        reviewable[3].clone(),
         reviewable[2].clone(),
         reviewable[4].clone(),
+        reviewable[3].clone(),
+        reviewable[5].clone(),
     ];
     let order: Vec<String> = (0..window.get_review_cards().row_count())
         .map(|index| {
@@ -373,9 +373,9 @@ fn run_suggestion_contract(
         "高置信筛选下的每张卡都必须带可读理由：{suggestions:?}"
     );
 
-    // 切换"低"：卡片刷新为 3 张，分页仍可用（1/1 也常显）。
+    // 切换"低"：卡片刷新为 2 张，分页仍可用（1/1 也常显）。
     window.invoke_review_confidence_filter_clicked(3);
-    assert_eq!(window.get_review_cards().row_count(), 3);
+    assert_eq!(window.get_review_cards().row_count(), 2);
     assert_eq!(window.get_review_page_total(), 1);
     assert!(window.get_review_page_label().contains("1/1"));
 

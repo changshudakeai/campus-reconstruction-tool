@@ -23,9 +23,9 @@
 //! 置信度不是数值评分，而是对既有建议规则的确定性派生分档：
 //!
 //! - **高** = 建议保留（名称清晰、形状完整、无异常，R11）；
-//! - **中** = 存在不确定信号、需人工确认（隔离理由、本次未找到、形状可疑、
-//!   标签稀疏、缺少来源）；
-//! - **低** = 未命名、重复投影、重复嫌疑、重叠、自动修复过等需关注。
+//! - **中** = 存在不确定信号、需人工确认（未命名、自动修复、隔离理由、
+//!   本次未找到、标签稀疏、缺少来源）；
+//! - **低** = 需重点关注（重复投影、重复嫌疑、重叠、形状可疑）。
 //!
 //! 卡片仍显示原有的动作标签与一句话理由；置信度只用于筛选芯片、排序与
 //! 一键应用建议，不改变三态语义。
@@ -85,23 +85,24 @@ impl CandidateSuggestion {
     /// 由建议动作/类别/理由确定性映射出置信度分档（T51）。
     ///
     /// - 建议保留 → 高；
+    /// - 建议保留 → 高；
     /// - 建议剔除（重复投影）→ 低；
-    /// - 建议人工确认按理由细分：未命名/自动修复/重叠/重复嫌疑 → 低，
-    ///   其余不确定信号（隔离理由、本次未找到、形状可疑、标签稀疏、
+    /// - 建议人工确认按理由细分：重叠/重复嫌疑/形状可疑 → 低（需重点关注），
+    ///   其余不确定信号（未命名、自动修复、隔离理由、本次未找到、标签稀疏、
     ///   缺少来源）→ 中。
     pub fn confidence_tier(&self) -> ConfidenceTier {
         match self.action {
             SuggestionAction::Keep => ConfidenceTier::High,
             SuggestionAction::Remove => ConfidenceTier::Low,
             SuggestionAction::HumanReview => match self.category {
-                SuggestionCategory::Unnamed => ConfidenceTier::Low,
+                SuggestionCategory::NoActionNeeded => ConfidenceTier::High,
                 SuggestionCategory::NeedsAttention => match self.reason_key {
-                    text_keys::SUGGESTION_REASON_REPAIRED
-                    | text_keys::SUGGESTION_REASON_OVERLAP
-                    | text_keys::SUGGESTION_REASON_DUPLICATE_SUSPECT => ConfidenceTier::Low,
+                    text_keys::SUGGESTION_REASON_OVERLAP
+                    | text_keys::SUGGESTION_REASON_DUPLICATE_SUSPECT
+                    | text_keys::SUGGESTION_REASON_SUSPICIOUS_SHAPE => ConfidenceTier::Low,
                     _ => ConfidenceTier::Medium,
                 },
-                SuggestionCategory::NoActionNeeded => ConfidenceTier::High,
+                SuggestionCategory::Unnamed => ConfidenceTier::Medium,
             },
         }
     }
@@ -897,7 +898,7 @@ mod tests {
         );
         assert_eq!(suggest(&keep).confidence_tier(), ConfidenceTier::High);
 
-        // 低：未命名。
+        // 中：未命名（信息不全，需人工补名确认）。
         let unnamed = building(
             "overpass:way/21:outer",
             "way/21",
@@ -905,9 +906,9 @@ mod tests {
             polygon(distinct_ring(0.0)),
             Vec::new(),
         );
-        assert_eq!(suggest(&unnamed).confidence_tier(), ConfidenceTier::Low);
+        assert_eq!(suggest(&unnamed).confidence_tier(), ConfidenceTier::Medium);
 
-        // 低：自动修复过。
+        // 中：自动修复过（B14 唯一修复，外观不变）。
         let mut repaired = building(
             "overpass:way/22:outer",
             "实验楼",
@@ -916,7 +917,7 @@ mod tests {
             vec![("building".to_owned(), "lab".to_owned())],
         );
         repaired.automatically_repaired = true;
-        assert_eq!(suggest(&repaired).confidence_tier(), ConfidenceTier::Low);
+        assert_eq!(suggest(&repaired).confidence_tier(), ConfidenceTier::Medium);
 
         // 低：重复投影（建议剔除）。
         let duplicate = building(
@@ -929,7 +930,7 @@ mod tests {
         let tier = rule_for(&duplicate, Some("体育馆"), None, None).confidence_tier();
         assert_eq!(tier, ConfidenceTier::Low);
 
-        // 中：形状可疑。
+        // 低：形状可疑（点/线建筑不是完整建筑轮廓，需重点关注）。
         let suspicious = building(
             "overpass:way/24:outer",
             "岗亭",
@@ -937,10 +938,7 @@ mod tests {
             CandidateShape::point(serde_json::json!([121.9, 31.9])),
             vec![("building".to_owned(), "yes".to_owned())],
         );
-        assert_eq!(
-            suggest(&suspicious).confidence_tier(),
-            ConfidenceTier::Medium
-        );
+        assert_eq!(suggest(&suspicious).confidence_tier(), ConfidenceTier::Low);
 
         // 中：标签稀疏。
         let sparse = building(

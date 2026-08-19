@@ -17,11 +17,11 @@ use shared_domain_types::{CandidateCategory, PlanId, ReviewState};
 ///
 /// - b1 教学楼甲（干净）→ 建议保留（高）
 /// - b2 教学楼乙（干净、独立位置）→ 建议保留（高）
-/// - b3 教学楼甲（与 b1 同来源实体 + 同几何 = 重复投影）→ 建议剔除
-/// - b4 未命名建筑 → 建议人工确认（未命名，低）
-/// - b5 实验楼（几何自动修复）→ 建议人工确认（形状经修复，低）
-/// - b6 实验楼乙（建筑点形状可疑）→ 建议人工确认（形状可疑，中）
-/// - r1 道路（未命名）→ 建议人工确认（未命名，低）
+/// - b3 教学楼甲（与 b1 同来源实体 + 同几何 = 重复投影）→ 建议剔除（低）
+/// - b4 未命名建筑 → 建议人工确认（未命名，中）
+/// - b5 实验楼（几何自动修复）→ 建议人工确认（形状经修复，中）
+/// - b6 实验楼乙（建筑点形状可疑）→ 建议人工确认（形状可疑，低）
+/// - r1 道路（未命名）→ 建议人工确认（未命名，中）
 /// - w1 游泳池（干净水体）→ 建议保留（高）
 fn suggestion_fixture() -> (Database, PlanId) {
     let mut db = Database::open_in_memory().expect("内存库");
@@ -222,7 +222,7 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
         let suggestion = &by_id[&key.candidate_id];
         assert_eq!(suggestion.category, SuggestionCategory::Unnamed);
         assert_eq!(suggestion.action, SuggestionAction::HumanReview);
-        assert_eq!(suggestion.confidence_tier(), ConfidenceTier::Low);
+        assert_eq!(suggestion.confidence_tier(), ConfidenceTier::Medium);
     }
     let duplicate_pair = [
         suggestion_key(&db, &plan_id, "way/b1", "outer"),
@@ -256,11 +256,11 @@ fn suggestion_rules_cover_all_required_categories_with_readable_reasons() {
     let repaired = &by_id[&repaired_key.candidate_id];
     assert_eq!(repaired.category, SuggestionCategory::NeedsAttention);
     assert_eq!(repaired.action, SuggestionAction::HumanReview);
-    assert_eq!(repaired.confidence_tier(), ConfidenceTier::Low);
+    assert_eq!(repaired.confidence_tier(), ConfidenceTier::Medium);
     let medium_key = suggestion_key(&db, &plan_id, "way/b6", "outer");
     let medium = &by_id[&medium_key.candidate_id];
     assert_eq!(medium.action, SuggestionAction::HumanReview);
-    assert_eq!(medium.confidence_tier(), ConfidenceTier::Medium);
+    assert_eq!(medium.confidence_tier(), ConfidenceTier::Low);
     for key in [
         suggestion_key(&db, &plan_id, "way/b2", "outer"),
         suggestion_key(&db, &plan_id, "way/w1", "outer"),
@@ -281,13 +281,14 @@ fn confidence_filters_count_tiers_and_combine_with_category() {
     let (db, plan_id) = suggestion_fixture();
     let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
 
-    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::All), 8);
-    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::High), 3);
+    // T51：芯片计数按当前激活分类统计（建筑：高 2 / 中 2 / 低 2）。
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::All), 6);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::High), 2);
     assert_eq!(
         workbench.confidence_filter_count(ConfidenceFilter::Medium),
-        1
+        2
     );
-    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::Low), 4);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::Low), 2);
 
     let view = workbench.view();
     assert_eq!(view.confidence_filters.len(), 4);
@@ -296,7 +297,7 @@ fn confidence_filters_count_tiers_and_combine_with_category() {
         .iter()
         .find(|tab| tab.filter == ConfidenceFilter::High)
         .expect("高置信芯片存在");
-    assert_eq!(high_tab.count, 3);
+    assert_eq!(high_tab.count, 2);
     assert!(!high_tab.active);
 
     let mut workbench = workbench;
@@ -315,6 +316,16 @@ fn confidence_filters_count_tiers_and_combine_with_category() {
         .suggestion
         .as_ref()
         .is_some_and(|s| s.action_key == "review.suggestion_action_keep")));
+
+    // 切到水域分类：芯片计数随之变为该分类内的高/中/低分布。
+    workbench.set_active_category(CandidateCategory::Water);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::All), 1);
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::High), 1);
+    assert_eq!(
+        workbench.confidence_filter_count(ConfidenceFilter::Medium),
+        0
+    );
+    assert_eq!(workbench.confidence_filter_count(ConfidenceFilter::Low), 0);
 }
 
 #[test]
@@ -542,15 +553,15 @@ fn cards_and_map_objects_are_sorted_high_to_low() {
     let workbench = ReviewWorkbench::load(&db, &plan_id).unwrap();
     let view = workbench.view();
 
-    // 建筑类别（默认激活）：高（重复对中的前序 b1、b2）→ 中 b6 →
-    // 低（被建议剔除的 b1 后序投影、未命名 b4、修复 b5）。
+    // 建筑类别（默认激活）：高（重复对中的前序 b1、b2）→ 中（未命名 b4、
+    // 修复 b5）→ 低（被建议剔除的 b1 后序投影、点形状可疑 b6）。
     let expected_building_order = vec![
         suggestion_key(&db, &plan_id, "way/b1", "duplicate").candidate_id,
         suggestion_key(&db, &plan_id, "way/b2", "outer").candidate_id,
-        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
-        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/b4", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/b5", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
     ];
     let card_ids: Vec<String> = view
         .cards
@@ -562,16 +573,17 @@ fn cards_and_map_objects_are_sorted_high_to_low() {
         "卡片必须按 高→中→低 排序，同档按稳定候选 ID"
     );
 
-    // 地图对象（跨类别）：高 b1 前序投影/b2/w1 → 中 b6 → 低（b1 后序、b4、b5、r1）。
+    // 地图对象（跨类别）：高 b1 前序投影/b2/w1 → 中（b4、b5、r1）→
+    // 低（b1 后序、b6）。
     let expected_map_order = vec![
         suggestion_key(&db, &plan_id, "way/b1", "duplicate").candidate_id,
         suggestion_key(&db, &plan_id, "way/b2", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/w1", "outer").candidate_id,
-        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
-        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/b4", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/b5", "outer").candidate_id,
         suggestion_key(&db, &plan_id, "way/r1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b1", "outer").candidate_id,
+        suggestion_key(&db, &plan_id, "way/b6", "outer").candidate_id,
     ];
     let object_ids: Vec<String> = view
         .map_objects

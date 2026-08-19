@@ -24,7 +24,7 @@ use shared_domain_types::{Boundary, CampusId, CandidateCategory};
 use slint::Model;
 
 /// 种子：30 栋建筑 = 高 10（有名称 + 完整面环 + 标签）/
-/// 中 10（有名称 + 点形状可疑）/ 低 10（未命名）。
+/// 中 10（未命名完整面环）/ 低 10（有名称 + 点形状可疑）。
 fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
     let mut observations = Vec::new();
     for index in 0..10 {
@@ -41,7 +41,7 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
             plan_id,
             CandidateCategory::Building,
             format!("way/m{index}"),
-            serde_json::json!({ "tags": { "name": format!("中置信楼{index}"), "building": "yes" } }),
+            serde_json::json!({ "tags": { "building": "yes" } }),
             "overpass",
         ));
     }
@@ -50,7 +50,7 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
             plan_id,
             CandidateCategory::Building,
             format!("way/l{index}"),
-            serde_json::json!({ "tags": { "building": "yes" } }),
+            serde_json::json!({ "tags": { "name": format!("低置信楼{index}"), "building": "yes" } }),
             "overpass",
         ));
     }
@@ -66,7 +66,7 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
                 .unwrap_or(&observation.entity_id),
             vec![("building".to_owned(), "yes".to_owned())],
         );
-        let shape = if (10..20).contains(&index) {
+        let shape = if (20..30).contains(&index) {
             CandidateShape::point(serde_json::json!([121.4 + index as f64 * 0.1, 31.2]))
         } else {
             CandidateShape::polygon(serde_json::json!([
@@ -77,10 +77,10 @@ fn seed_candidates(database: &mut Database, plan_id: &str) -> Vec<String> {
                 [121.4 + index as f64 * 0.2, 31.2]
             ]))
         };
-        let name_source = if index < 20 {
-            CandidateNameSource::Osm
-        } else {
+        let name_source = if (10..20).contains(&index) {
             CandidateNameSource::Unnamed
+        } else {
+            CandidateNameSource::Osm
         };
         drafts.push(
             CandidateProjectionDraft::reviewable(

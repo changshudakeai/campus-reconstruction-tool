@@ -186,10 +186,12 @@ impl ReviewWorkbench {
         self.confidence_filter = filter;
     }
 
-    /// 命中某置信度筛选的候选总数（跨类别；"全部"为候选总数）。
+    /// 命中某置信度筛选的候选总数（T51：按当前激活的六类分类统计，
+    /// 不跨类别；"全部"为该分类候选总数）。
     pub fn confidence_filter_count(&self, filter: ConfidenceFilter) -> usize {
         self.candidates
             .iter()
+            .filter(|candidate| candidate.category == self.active_category)
             .filter(|c| {
                 c.suggestion
                     .as_ref()
