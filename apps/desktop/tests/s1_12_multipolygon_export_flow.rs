@@ -51,6 +51,7 @@ fn displayed_dimensions(subtitle: &str) -> [usize; 3] {
 
 #[test]
 fn desktop_multipolygon_confirmation_reaches_f9_and_publishes_pair() {
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

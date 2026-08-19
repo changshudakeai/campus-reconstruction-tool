@@ -38,6 +38,7 @@ fn pump_until_succeeded(window: &AppWindow, deadline: Duration) {
 #[test]
 fn confirmed_boundary_unlocks_direct_export_without_orientation_or_collection() {
     let l10n = Localization::new(Language::ZhCn).expect("加载 zh-CN 资源");
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("创建公开 AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

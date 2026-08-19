@@ -36,6 +36,7 @@ fn pump_until_terminal(window: &AppWindow) {
 
 #[test]
 fn switching_and_reopening_a_plan_exports_its_latest_confirmed_boundary() {
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

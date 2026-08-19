@@ -407,6 +407,14 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     let mut export_entry = ExportPresentationEntry::new(TestAdapter::returning(
         Presentation::ready(ExportPageState {
             workspace: workspace("导出"),
+            preview_generate_label: "生成 3D 预览".into(),
+            preview_status: String::new(),
+            preview_reset_label: "复位视角".into(),
+            preview_zoom_in_label: "放大".into(),
+            preview_zoom_out_label: "缩小".into(),
+            preview_controls_hint: "拖动旋转 · 滚轮缩放".into(),
+            preview_has_content: false,
+            preview_generating: false,
         }),
     ));
     export_entry.show(&window, &center, ());

@@ -62,6 +62,7 @@ fn build_workspace() -> VertexEditWorkspace {
     let directory = tempfile::tempdir().expect("temporary directory");
     let database_path = directory.path().join("vertex-edit-contract.db");
     let export_dir = directory.path().join("exports");
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

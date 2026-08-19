@@ -178,6 +178,7 @@ struct TestApp {
 impl TestApp {
     fn new(file_system: Arc<dyn ExportFileSystem>, mode: Arc<Mutex<FailureMode>>) -> Self {
         let l10n = Localization::new(Language::ZhCn).expect("load zh-CN resources");
+        desktop_shell::set_webview_creation_probe(true);
         let window = AppWindow::new().expect("create AppWindow");
         let center = NotificationCenter::init(PresenterRegistry::new());
         center

@@ -193,6 +193,7 @@ impl TestApp {
         file_system: Arc<BlockingFileSystem>,
         collection_source: Arc<dyn DataSource + Send + Sync>,
     ) -> Self {
+        desktop_shell::set_webview_creation_probe(true);
         let window = AppWindow::new().expect("create AppWindow");
         let center = NotificationCenter::init(PresenterRegistry::new());
         center

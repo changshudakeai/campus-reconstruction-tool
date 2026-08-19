@@ -182,6 +182,7 @@ struct TestApp {
 
 impl TestApp {
     fn new() -> Self {
+        desktop_shell::set_webview_creation_probe(true);
         let window = AppWindow::new().expect("创建 AppWindow");
         let center = NotificationCenter::init(PresenterRegistry::new());
         center
