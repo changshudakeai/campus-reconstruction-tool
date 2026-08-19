@@ -1,17 +1,27 @@
 /*
- * T52 第五步 3D 方块预览渲染器。
+ * T52 第五步 3D 方块预览渲染器（分块并行版）。
  *
  * 数据由 Rust 侧 F9 从与导出同源的 B18 BlockModel 序列化而来：
- *   {v, palette, bounds, count, simplified, runs: [[paletteIndex,x0,x1,y,z],...]}
- * 渲染器只做呈现：隐藏面剔除 + 同色面贪婪合并 + 轨道旋转/缩放/复位。
- * 本文件与 three.min.js（MIT）一起随 desktop-shell 打包，不联网加载资源，
- * 不包含任何用户可见文案（按钮与提示全部在 Slint 侧经 zh-CN.json 注入）。
+ *   {v, palette, bounds, count, runs, features}
+ * 渲染流程：
+ *   1. 主线程把 RLE 游程按 64^3 分块切片；
+ *   2. Web Worker 池并行填充块体素网格并做隐藏面剔除 + 同面贪婪合并；
+ *   3. 主线程逐块组装 BufferGeometry，使用社区纹理图集（Pixel Perfection
+ *      Legacy）与 Lambert 光照，块边界面不做跨块剔除；
+ *   4. 保留候选定位：`locatePreviewFeature(id)` 飞行取景 + 高亮包围盒。
+ *
+ * 本文件与 three.min.js（MIT）、worker.js、atlas.png 一起随 desktop-shell
+ * 打包，不联网加载资源，不包含任何用户可见文案（ADR-0005）。
  */
 (function () {
   "use strict";
 
+  var CHUNK = 64;
+  var WORKER_COUNT = 4;
+
   // 初始化前到达的数据暂存（HTML 内嵌负载或早到的 evaluate_script 推送）。
-  var pendingPayload = window.__previewPending === undefined ? null : window.__previewPending;
+  var pendingPayload =
+    window.__previewPending === undefined ? null : window.__previewPending;
   window.__previewError = null;
   window.__previewReady = false;
   window.__previewFps = 0;
@@ -19,12 +29,13 @@
   function report(type, payload) {
     try {
       if (window.ipc && window.ipc.postMessage) {
-        window.ipc.postMessage(JSON.stringify({
-          type: type,
-          payload: payload || null
-        }));
+        window.ipc.postMessage(
+          JSON.stringify({ type: type, payload: payload || null })
+        );
       }
-    } catch (_) { /* IPC 失败不影响渲染 */ }
+    } catch (_) {
+      /* IPC 失败不影响渲染 */
+    }
   }
 
   function fail(message) {
@@ -37,67 +48,15 @@
     return;
   }
 
-  // ── 方块类型 → 基础色（平色 + 按面烘焙明暗；不引入 Mojang 版权贴图） ──
-  var BLOCK_COLORS = {
-    "minecraft:stone_bricks": [0.62, 0.62, 0.64],
-    "minecraft:bricks": [0.60, 0.36, 0.29],
-    "minecraft:glass_pane": [0.75, 0.90, 1.00],
-    "minecraft:glass": [0.75, 0.90, 1.00],
-    "minecraft:oak_planks": [0.72, 0.58, 0.37],
-    "minecraft:dark_oak_slab": [0.29, 0.22, 0.16],
-    "minecraft:dark_oak_door": [0.24, 0.17, 0.12],
-    "minecraft:smooth_sandstone": [0.89, 0.85, 0.69],
-    "minecraft:smooth_stone": [0.62, 0.62, 0.62],
-    "minecraft:stone": [0.55, 0.55, 0.55],
-    "minecraft:stone_slab": [0.62, 0.62, 0.62],
-    "minecraft:white_concrete": [0.92, 0.92, 0.92],
-    "minecraft:light_gray_concrete": [0.78, 0.78, 0.78],
-    "minecraft:spruce_planks": [0.55, 0.42, 0.29],
-    "minecraft:spruce_door": [0.42, 0.31, 0.20],
-    "minecraft:water": [0.25, 0.46, 0.89],
-    "minecraft:oak_log": [0.48, 0.35, 0.21],
-    "minecraft:oak_leaves": [0.30, 0.55, 0.23],
-    "minecraft:grass_block": [0.44, 0.75, 0.31],
-    "minecraft:dirt": [0.61, 0.42, 0.26],
-    "minecraft:red_concrete": [0.69, 0.18, 0.15],
-    "minecraft:rail": [0.55, 0.50, 0.48]
-  };
-
-  var TRANSPARENT_IDS = {
-    "minecraft:water": true,
-    "minecraft:glass": true,
-    "minecraft:glass_pane": true
-  };
-
-  function colorFor(blockId) {
-    var color = BLOCK_COLORS[blockId];
-    if (color) {
-      return color;
-    }
-    // 未知方块：确定性灰度兜底（同一 ID 恒同色）
-    var hash = 0;
-    for (var i = 0; i < blockId.length; i++) {
-      hash = (hash * 31 + blockId.charCodeAt(i)) | 0;
-    }
-    var base = 0.45 + ((hash >>> 0) % 40) / 100;
-    return [base, base, base + 0.04];
-  }
-
-  // ── 六方向可见面（明暗按面烘焙，无灯光依赖） ──
-  var FACES = [
-    { n: [1, 0, 0], shade: 0.60, u: 2, v: 1, c: 0, sign: 1 },
-    { n: [-1, 0, 0], shade: 0.60, u: 2, v: 1, c: 0, sign: -1 },
-    { n: [0, 1, 0], shade: 1.00, u: 0, v: 2, c: 1, sign: 1 },
-    { n: [0, -1, 0], shade: 0.46, u: 0, v: 2, c: 1, sign: -1 },
-    { n: [0, 0, 1], shade: 0.80, u: 0, v: 1, c: 2, sign: 1 },
-    { n: [0, 0, -1], shade: 0.80, u: 0, v: 1, c: 2, sign: -1 }
-  ];
-
   var renderer = null;
   var scene = null;
   var camera = null;
   var canvas = null;
   var modelGroup = null;
+  var atlasTexture = null;
+  var atlasReady = false;
+  var textureMap = window.__PREVIEW_TEXTURE_MAP || {};
+  var materialByClass = [null, null, null];
   var orbit = {
     theta: Math.PI * 0.25,
     phi: 1.05,
@@ -113,12 +72,20 @@
     fps: 0,
     blocks: 0,
     quads: 0,
+    chunks: 0,
     lastReportAt: 0
   };
 
-  function cellIndex(x, y, z, dims) {
-    return x + z * dims[0] + y * dims[0] * dims[2];
-  }
+  var workers = [];
+  var chunkQueue = [];
+  var chunkIndex = 0;
+  var idleWorkers = 0;
+  var buildPending = 0;
+  var buildDone = false;
+  var highlight = null;
+  var pendingLocate = null;
+  var activeFly = null;
+  var currentSliced = null;
 
   function resize() {
     if (!renderer || !camera || !canvas) {
@@ -135,6 +102,9 @@
   }
 
   function updateCamera() {
+    if (!camera) {
+      return;
+    }
     var sinPhi = Math.sin(orbit.phi);
     camera.position.set(
       orbit.target[0] + orbit.radius * sinPhi * Math.sin(orbit.theta),
@@ -145,8 +115,6 @@
   }
 
   function fitToBounds(bounds) {
-    // 网格使用包围盒本地坐标（x - min_x 等），旋转中心也必须在本地坐标系：
-    // 本地中心 = 各轴跨度的一半，而不是绝对坐标中心。
     var center = [
       (bounds[3] - bounds[0]) / 2,
       (bounds[4] - bounds[1]) / 2,
@@ -165,114 +133,6 @@
     updateCamera();
   }
 
-  function emitQuad(target, face, component, u0, v0, u1, v1, color, shade) {
-    var base = target.count;
-    var corners = [
-      [u0, v0],
-      [u1, v0],
-      [u1, v1],
-      [u0, v1]
-    ];
-    for (var i = 0; i < corners.length; i++) {
-      component[face.u] = corners[i][0];
-      component[face.v] = corners[i][1];
-      target.positions.push(component[0], component[1], component[2]);
-      target.colors.push(color[0] * shade, color[1] * shade, color[2] * shade);
-    }
-    target.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    target.count += 4;
-  }
-
-  function buildGeometry(grid, dims, palette) {
-    var opaque = { positions: [], colors: [], indices: [], count: 0 };
-    var transparent = { positions: [], colors: [], indices: [], count: 0 };
-    var component = [0, 0, 0];
-
-    for (var f = 0; f < FACES.length; f++) {
-      var face = FACES[f];
-      var dimU = dims[face.u];
-      var dimV = dims[face.v];
-      var dimC = dims[face.c];
-      var vis = new Uint8Array(dimU * dimV);
-      var ids = new Uint32Array(dimU * dimV);
-      var done = new Uint8Array(dimU * dimV);
-
-      for (var w = 0; w < dimC; w++) {
-        var plane = face.sign > 0 ? w + 1 : w;
-        if (plane < 0 || plane > dimC) {
-          continue;
-        }
-        component[face.c] = w;
-        for (var v = 0; v < dimV; v++) {
-          for (var u = 0; u < dimU; u++) {
-            component[face.u] = u;
-            component[face.v] = v;
-            var present = grid[cellIndex(component[0], component[1], component[2], dims)] !== 0;
-            var visible = false;
-            if (present) {
-              var neighbor = w + face.sign;
-              if (neighbor < 0 || neighbor >= dimC) {
-                visible = true;
-              } else {
-                component[face.c] = neighbor;
-                visible = grid[cellIndex(component[0], component[1], component[2], dims)] === 0;
-                component[face.c] = w;
-              }
-            }
-            var offset = u + v * dimU;
-            vis[offset] = visible ? 1 : 0;
-            ids[offset] = present ? grid[cellIndex(component[0], component[1], component[2], dims)] : 0;
-          }
-        }
-
-        done.fill(0);
-        component[face.c] = plane;
-        for (var row = 0; row < dimV; row++) {
-          for (var col = 0; col < dimU; col++) {
-            var offset = col + row * dimU;
-            if (!vis[offset] || done[offset]) {
-              continue;
-            }
-            var blockId = ids[offset];
-            var uEnd = col;
-            while (uEnd + 1 < dimU &&
-              !done[uEnd + 1 + row * dimU] &&
-              vis[uEnd + 1 + row * dimU] &&
-              ids[uEnd + 1 + row * dimU] === blockId) {
-              uEnd++;
-            }
-            var vEnd = row;
-            var extend = true;
-            while (extend && vEnd + 1 < dimV) {
-              for (var uu = col; uu <= uEnd; uu++) {
-                var probe = uu + (vEnd + 1) * dimU;
-                if (done[probe] || !vis[probe] || ids[probe] !== blockId) {
-                  extend = false;
-                  break;
-                }
-              }
-              if (extend) {
-                vEnd++;
-              }
-            }
-            for (var uu = col; uu <= uEnd; uu++) {
-              for (var vv = row; vv <= vEnd; vv++) {
-                done[uu + vv * dimU] = 1;
-              }
-            }
-            var paletteIndex = blockId - 1;
-            var blockName = palette[paletteIndex] || "";
-            var color = colorFor(blockName);
-            var target = TRANSPARENT_IDS[blockName] ? transparent : opaque;
-            emitQuad(target, face, component, col, row, uEnd + 1, vEnd + 1, color, face.shade);
-            stats.quads++;
-          }
-        }
-      }
-    }
-    return { opaque: opaque, transparent: transparent };
-  }
-
   function disposeModel() {
     if (modelGroup) {
       scene.remove(modelGroup);
@@ -280,32 +140,375 @@
         if (object.geometry) {
           object.geometry.dispose();
         }
-        if (object.material) {
-          object.material.dispose();
-        }
       });
       modelGroup = null;
     }
+    if (highlight) {
+      scene.remove(highlight);
+      if (highlight.geometry) {
+        highlight.geometry.dispose();
+      }
+      highlight = null;
+    }
+    terminateWorkers();
+    chunkQueue = [];
+    chunkIndex = 0;
+    buildPending = 0;
+    buildDone = false;
+    stats.quads = 0;
+    stats.chunks = 0;
   }
 
-  function addGeometry(group, built, material) {
-    if (built.indices.length === 0) {
+  function terminateWorkers() {
+    for (var i = 0; i < workers.length; i++) {
+      try {
+        workers[i].terminate();
+      } catch (_) {
+        /* 已终止 */
+      }
+    }
+    workers = [];
+    idleWorkers = 0;
+  }
+
+  function cellIndex(x, y, z, dims) {
+    return x + z * dims[0] + y * dims[0] * dims[2];
+  }
+
+  function chunkKey(cx, cy, cz, chunkDims) {
+    return cx + cy * chunkDims[0] + cz * chunkDims[0] * chunkDims[1];
+  }
+
+  // 把 RLE 游程按 64^3 分块切片（run 沿 x 水平，只可能在 x 上跨块）。
+  function sliceRuns(runs, bounds, chunkDims) {
+    var sliced = new Map();
+    for (var i = 0; i < runs.length; i++) {
+      var run = runs[i];
+      var x0 = run[1] - bounds[0];
+      var x1 = run[2] - bounds[0];
+      var y = run[3] - bounds[1];
+      var z = run[4] - bounds[2];
+      var cx0 = Math.floor(x0 / CHUNK);
+      var cx1 = Math.floor(x1 / CHUNK);
+      var cy = Math.floor(y / CHUNK);
+      var cz = Math.floor(z / CHUNK);
+      for (var cx = cx0; cx <= cx1; cx++) {
+        var key = chunkKey(cx, cy, cz, chunkDims);
+        var pieces = sliced.get(key);
+        if (!pieces) {
+          pieces = [];
+          sliced.set(key, pieces);
+        }
+        var pieceStart = Math.max(x0, cx * CHUNK);
+        var pieceEnd = Math.min(x1, (cx + 1) * CHUNK - 1);
+        pieces.push([
+          run[0],
+          pieceStart + bounds[0],
+          pieceEnd + bounds[0],
+          run[3],
+          run[4]
+        ]);
+      }
+    }
+    return sliced;
+  }
+
+  function makeMaterials() {
+    var base = {
+      map: atlasTexture,
+      side: THREE.FrontSide
+    };
+    materialByClass[0] = new THREE.MeshLambertMaterial(base);
+    materialByClass[1] = new THREE.MeshLambertMaterial({
+      map: atlasTexture,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.65,
+      depthWrite: false
+    });
+    materialByClass[2] = new THREE.MeshLambertMaterial({
+      map: atlasTexture,
+      side: THREE.DoubleSide,
+      alphaTest: 0.5
+    });
+  }
+
+  function addChunkMesh(key, classes) {
+    for (var i = 0; i < classes.length; i++) {
+      var data = classes[i];
+      if (!data.indices || data.indices.length === 0) {
+        continue;
+      }
+      var geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(data.positions, 3)
+      );
+      geometry.setAttribute("uv", new THREE.BufferAttribute(data.uvs, 2));
+      geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      var mesh = new THREE.Mesh(geometry, materialByClass[i]);
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      modelGroup.add(mesh);
+    }
+    stats.chunks++;
+    stats.quads += classes.reduce(function (sum, data) {
+      return sum + data.count;
+    }, 0);
+  }
+
+  function startBuild(payload) {
+    if (!atlasReady) {
+      pendingPayload = payload;
       return;
     }
-    var geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(Float32Array.from(built.positions), 3)
-    );
-    geometry.setAttribute(
-      "color",
-      new THREE.Float32BufferAttribute(Float32Array.from(built.colors), 3)
-    );
-    geometry.setIndex(built.indices);
-    var mesh = new THREE.Mesh(geometry, material);
-    mesh.matrixAutoUpdate = false;
-    mesh.updateMatrix();
-    group.add(mesh);
+    disposeModel();
+    var bounds = payload.bounds || [0, 0, 0, 0, 0, 0];
+    window.__lastBounds = bounds;
+    var dims = [
+      Math.max(1, bounds[3] - bounds[0] + 1),
+      Math.max(1, bounds[4] - bounds[1] + 1),
+      Math.max(1, bounds[5] - bounds[2] + 1)
+    ];
+    var chunkDims = [
+      Math.ceil(dims[0] / CHUNK),
+      Math.ceil(dims[1] / CHUNK),
+      Math.ceil(dims[2] / CHUNK)
+    ];
+    var sliced = sliceRuns(payload.runs, bounds, chunkDims);
+    currentSliced = sliced;
+    var chunkOrigins = new Map();
+    sliced.forEach(function (_, key) {
+      var cy = Math.floor(key / (chunkDims[0] * chunkDims[1]));
+      var rest = key - cy * chunkDims[0] * chunkDims[1];
+      var cz = Math.floor(rest / chunkDims[0]);
+      var cx = rest - cz * chunkDims[0];
+      chunkOrigins.set(key, [cx, cy, cz]);
+    });
+    // 队列按 y 升序（地面层先出现），再按 x/z 字典序保证确定性。
+    chunkQueue = Array.from(sliced.keys()).sort(function (a, b) {
+      var oa = chunkOrigins.get(a);
+      var ob = chunkOrigins.get(b);
+      return oa[1] - ob[1] || oa[0] - ob[0] || oa[2] - ob[2];
+    });
+    chunkIndex = 0;
+    buildPending = chunkQueue.length;
+    buildDone = false;
+
+    modelGroup = new THREE.Group();
+    modelGroup.matrixAutoUpdate = false;
+    modelGroup.updateMatrix();
+    scene.add(modelGroup);
+    stats.blocks = payload.count || 0;
+    stats.quads = 0;
+    stats.chunks = 0;
+
+    var workerCount = Math.max(1, Math.min(WORKER_COUNT, buildPending || 1));
+    if (!window.__PREVIEW_WORKER_SRC__) {
+      fail("分块 Worker 源码缺失");
+      return;
+    }
+    try {
+      var blob = new Blob([window.__PREVIEW_WORKER_SRC__], {
+        type: "application/javascript"
+      });
+      var workerUrl = URL.createObjectURL(blob);
+      for (var i = 0; i < workerCount; i++) {
+        var worker = new Worker(workerUrl);
+        worker.onmessage = handleWorkerMessage;
+        worker.onerror = function (event) {
+          fail("分块 Worker 出错：" + (event && event.message ? event.message : "未知错误"));
+        };
+        workers.push(worker);
+      }
+    } catch (error) {
+      fail("Web Worker 初始化失败：" + (error && error.message ? error.message : error));
+      return;
+    }
+
+    fitToBounds(bounds);
+    idleWorkers = workers.length;
+    assignWork();
+  }
+
+  function assignWork() {
+    while (idleWorkers > 0 && chunkIndex < chunkQueue.length) {
+      var key = chunkQueue[chunkIndex++];
+      var spec = makeChunkSpec(key);
+      if (!spec) {
+        buildPending--;
+        if (buildPending === 0) {
+          finishBuild();
+        }
+        continue;
+      }
+      var worker = workers[workers.length - idleWorkers];
+      idleWorkers--;
+      worker.postMessage({ type: "build", key: key, spec: spec });
+    }
+  }
+
+  function makeChunkSpec(key) {
+    var bounds = window.__lastBounds;
+    var dims = [
+      bounds[3] - bounds[0] + 1,
+      bounds[4] - bounds[1] + 1,
+      bounds[5] - bounds[2] + 1
+    ];
+    var chunkDims = [
+      Math.ceil(dims[0] / CHUNK),
+      Math.ceil(dims[1] / CHUNK),
+      Math.ceil(dims[2] / CHUNK)
+    ];
+    var cy = Math.floor(key / (chunkDims[0] * chunkDims[1]));
+    var rest = key - cy * chunkDims[0] * chunkDims[1];
+    var cz = Math.floor(rest / chunkDims[0]);
+    var cx = rest - cz * chunkDims[0];
+    var origin = [cx * CHUNK, cy * CHUNK, cz * CHUNK];
+    var size = [
+      Math.min(CHUNK, dims[0] - origin[0]),
+      Math.min(CHUNK, dims[1] - origin[1]),
+      Math.min(CHUNK, dims[2] - origin[2])
+    ];
+    return {
+      origin: origin,
+      size: size,
+      palette: window.__lastPalette || [],
+      textureMap: textureMap,
+      runs: currentSliced ? currentSliced.get(key) || [] : []
+    };
+  }
+
+  function handleWorkerMessage(event) {
+    var message = event.data;
+    if (!message) {
+      return;
+    }
+    if (message.type === "chunk_ready") {
+      idleWorkers++;
+      addChunkMesh(message.key, message.classes);
+      buildPending--;
+      if (buildPending === 0) {
+        finishBuild();
+      }
+      assignWork();
+    }
+  }
+
+  function finishBuild() {
+    buildDone = true;
+    terminateWorkers();
+    report("preview_loaded", {
+      blocks: stats.blocks,
+      quads: stats.quads,
+      chunks: stats.chunks
+    });
+    if (pendingLocate) {
+      var featureId = pendingLocate;
+      pendingLocate = null;
+      locatePreviewFeature(featureId);
+    }
+  }
+
+  function flyTo(bounds, durationMs) {
+    var center = [
+      (bounds[3] + bounds[0]) / 2,
+      (bounds[4] + bounds[1]) / 2,
+      (bounds[5] + bounds[2]) / 2
+    ];
+    var spanX = bounds[3] - bounds[0] + 1;
+    var spanY = bounds[4] - bounds[1] + 1;
+    var spanZ = bounds[5] - bounds[2] + 1;
+    var diagonal = Math.sqrt(spanX * spanX + spanY * spanY + spanZ * spanZ);
+    var targetRadius = Math.max(3, diagonal * 2.0);
+    var from = {
+      theta: orbit.theta,
+      phi: orbit.phi,
+      radius: orbit.radius,
+      target: orbit.target.slice()
+    };
+    var to = {
+      theta: Math.PI * 0.25,
+      phi: 1.05,
+      radius: targetRadius,
+      target: center
+    };
+    activeFly = {
+      from: from,
+      to: to,
+      start: performance.now(),
+      duration: Math.max(200, durationMs || 600)
+    };
+  }
+
+  function updateFly() {
+    if (!activeFly) {
+      return;
+    }
+    var elapsed = performance.now() - activeFly.start;
+    var t = Math.min(1, elapsed / activeFly.duration);
+    var eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    var from = activeFly.from;
+    var to = activeFly.to;
+    orbit.theta = from.theta + (to.theta - from.theta) * eased;
+    orbit.phi = from.phi + (to.phi - from.phi) * eased;
+    orbit.radius = from.radius + (to.radius - from.radius) * eased;
+    orbit.target = [
+      from.target[0] + (to.target[0] - from.target[0]) * eased,
+      from.target[1] + (to.target[1] - from.target[1]) * eased,
+      from.target[2] + (to.target[2] - from.target[2]) * eased
+    ];
+    updateCamera();
+    if (t >= 1) {
+      activeFly = null;
+    }
+  }
+
+  function setHighlight(bounds) {
+    if (highlight) {
+      scene.remove(highlight);
+      if (highlight.geometry) {
+        highlight.geometry.dispose();
+      }
+      if (highlight.material) {
+        highlight.material.dispose();
+      }
+      highlight = null;
+    }
+    if (!bounds) {
+      return;
+    }
+    var min = new THREE.Vector3(bounds[0], bounds[1], bounds[2]);
+    var max = new THREE.Vector3(bounds[3], bounds[4], bounds[5]);
+    var box = new THREE.Box3(min, max);
+    var boxHelper = new THREE.Box3Helper(box, 0xff3b30);
+    boxHelper.matrixAutoUpdate = false;
+    boxHelper.updateMatrix();
+    scene.add(boxHelper);
+    highlight = boxHelper;
+  }
+
+  function locatePreviewFeature(featureId) {
+    if (!featureId || !window.__lastFeatures) {
+      return;
+    }
+    var feature = null;
+    for (var i = 0; i < window.__lastFeatures.length; i++) {
+      if (window.__lastFeatures[i].id === featureId) {
+        feature = window.__lastFeatures[i];
+        break;
+      }
+    }
+    if (!feature || !feature.bounds) {
+      return;
+    }
+    if (!buildDone) {
+      // 构建中：先记录，全部块完成后再飞行（保证精细检查时建筑完整）。
+      pendingLocate = featureId;
+      return;
+    }
+    setHighlight(feature.bounds);
+    flyTo(feature.bounds, 600);
   }
 
   function loadPreviewData(payload) {
@@ -314,68 +517,16 @@
       fail("预览数据格式无效");
       return;
     }
-    var bounds = payload.bounds || [0, 0, 0, 0, 0, 0];
-    window.__lastBounds = bounds;
-    var dims = [
-      Math.max(1, bounds[3] - bounds[0] + 1),
-      Math.max(1, bounds[4] - bounds[1] + 1),
-      Math.max(1, bounds[5] - bounds[2] + 1)
-    ];
-    var total = dims[0] * dims[1] * dims[2];
-    // 体素值 = 调色板索引 + 1；调色板远小于 65536，恒可用 Uint16（内存减半）。
-    var grid = payload.palette.length > 0xFFFF ? new Uint32Array(total) : new Uint16Array(total);
-
-    var runs = payload.runs;
-    var blocks = 0;
-    for (var i = 0; i < runs.length; i++) {
-      var run = runs[i];
-      var paletteIndex = run[0] + 1; // 0 留给空气
-      var x0 = run[1] - bounds[0];
-      var x1 = run[2] - bounds[0];
-      var y = run[3] - bounds[1];
-      var z = run[4] - bounds[2];
-      for (var x = x0; x <= x1; x++) {
-        grid[cellIndex(x, y, z, dims)] = paletteIndex;
-        blocks++;
-      }
-    }
-
-    disposeModel();
-    modelGroup = new THREE.Group();
-    modelGroup.matrixAutoUpdate = false;
-    modelGroup.updateMatrix();
-    scene.add(modelGroup);
-
-    stats.blocks = blocks;
-    stats.quads = 0;
-    var built = buildGeometry(grid, dims, payload.palette);
-    addGeometry(
-      modelGroup,
-      built.opaque,
-      // 合并面不依赖绕序：双面渲染避免错误剔除，明暗已按面烘焙。
-      new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })
-    );
-    addGeometry(
-      modelGroup,
-      built.transparent,
-      new THREE.MeshBasicMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.65,
-        depthWrite: false
-      })
-    );
-    fitToBounds(bounds);
-    report("preview_loaded", {
-      blocks: blocks,
-      quads: stats.quads,
-      simplified: !!payload.simplified
-    });
+    window.__lastFeatures = payload.features || [];
+    window.__lastPalette = payload.palette;
+    pendingLocate = null;
+    startBuild(payload);
   }
 
   function resetPreviewView() {
     if (window.__lastBounds) {
+      activeFly = null;
+      setHighlight(null);
       fitToBounds(window.__lastBounds);
     }
   }
@@ -414,7 +565,9 @@
     drag = null;
     try {
       canvas.releasePointerCapture(event.pointerId);
-    } catch (_) { /* 已释放 */ }
+    } catch (_) {
+      /* 已释放 */
+    }
   }
 
   function wheel(event) {
@@ -427,7 +580,7 @@
     requestAnimationFrame(animationFrame);
     stats.frames++;
     if (now - stats.lastFpsAt >= 1000) {
-      stats.fps = Math.round(stats.frames * 1000 / (now - stats.lastFpsAt));
+      stats.fps = Math.round((stats.frames * 1000) / (now - stats.lastFpsAt));
       stats.frames = 0;
       stats.lastFpsAt = now;
       window.__previewFps = stats.fps;
@@ -437,12 +590,35 @@
       report("preview_stats", {
         fps: stats.fps,
         blocks: stats.blocks,
-        quads: stats.quads
+        quads: stats.quads,
+        chunks: stats.chunks,
+        build_done: buildDone
       });
     }
+    updateFly();
     if (renderer && scene && camera) {
       renderer.render(scene, camera);
     }
+  }
+
+  function loadAtlas(callback) {
+    var image = new Image();
+    image.onload = function () {
+      atlasTexture = new THREE.CanvasTexture(image);
+      atlasTexture.flipY = false;
+      atlasTexture.magFilter = THREE.NearestFilter;
+      atlasTexture.minFilter = THREE.NearestFilter;
+      atlasTexture.generateMipmaps = false;
+      atlasTexture.needsUpdate = true;
+      atlasReady = true;
+      makeMaterials();
+      callback();
+    };
+    image.onerror = function () {
+      fail("纹理图集加载失败");
+      callback();
+    };
+    image.src = window.__PREVIEW_ATLAS_DATA__;
   }
 
   function start() {
@@ -463,6 +639,10 @@
     camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
     camera.position.set(40, 40, 40);
     camera.lookAt(0, 0, 0);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xbfc8d0, 0.75));
+    var sun = new THREE.DirectionalLight(0xffffff, 0.8);
+    sun.position.set(80, 140, 60);
+    scene.add(sun);
 
     canvas.addEventListener("pointerdown", pointerDown);
     canvas.addEventListener("pointermove", pointerMove);
@@ -475,13 +655,17 @@
     window.__previewReady = true;
     requestAnimationFrame(animationFrame);
 
-    if (pendingPayload !== null && pendingPayload !== undefined) {
-      try {
-        loadPreviewData(pendingPayload);
-      } catch (error) {
-        fail("预览数据装载失败：" + String(error && error.message ? error.message : error));
+    loadAtlas(function () {
+      if (pendingPayload !== null && pendingPayload !== undefined) {
+        var payload = pendingPayload;
+        pendingPayload = null;
+        try {
+          loadPreviewData(payload);
+        } catch (error) {
+          fail("预览数据装载失败：" + String(error && error.message ? error.message : error));
+        }
       }
-    }
+    });
   }
 
   // 对外接口（Rust 侧经 evaluate_script 调用；早于本脚本解析时由 page.html
@@ -495,6 +679,12 @@
   };
   window.resetPreviewView = resetPreviewView;
   window.zoomPreview = zoomPreview;
+  window.locatePreviewFeature = function (featureId) {
+    if (!window.__previewReady) {
+      return;
+    }
+    locatePreviewFeature(featureId);
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start);

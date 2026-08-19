@@ -25,6 +25,11 @@
     window.__previewReady = false;
     window.__previewFps = 0;
     window.__previewError = null;
+    // T52：社区纹理图集（Pixel Perfection Legacy，CC BY 4.0）、面映射与
+    // 分块网格化 Worker 源码；全部内嵌，不联网加载资源。
+    window.__PREVIEW_TEXTURE_MAP__ = __TEXTURE_MAP__;
+    window.__PREVIEW_ATLAS_DATA__ = "data:image/png;base64,__ATLAS_BASE64__";
+    window.__PREVIEW_WORKER_SRC__ = __WORKER_JS__;
     if (window.__previewPending === undefined) {
       window.__previewPending = __INITIAL_PAYLOAD__;
     }
