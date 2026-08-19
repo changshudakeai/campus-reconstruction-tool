@@ -30,6 +30,7 @@ use crate::boundary_export::{
 };
 use crate::data::ExportStage;
 use crate::error::{BoundaryError, Error, Result, VersionError};
+use crate::preview::PreviewFeature;
 use crate::progress::ProgressTracker;
 
 /// 增强导出与增强预览共用的一次完整“边界 + 保留候选 → 校园模型”生成结果。
@@ -41,6 +42,8 @@ pub(crate) struct EnhancedGeneration {
     pub(crate) source: ManifestOrientationSource,
     pub(crate) model: BlockModel,
     pub(crate) dimensions: [usize; 3],
+    /// 保留候选的预览定位要素（与最终模型坐标一致；导出流程不消费）。
+    pub(crate) features: Vec<crate::preview::PreviewFeature>,
 }
 
 /// 校验边界/候选资格并按保留候选生成完整初始校园模型（B5 → B18）。
@@ -106,6 +109,7 @@ pub(crate) fn generate_enhanced_model(
 
     let plan_key = request.context.plan.plan_id.to_string();
     let mut generated = 0usize;
+    let mut features = Vec::with_capacity(request.kept_candidate_ids.len());
     for candidate_id in &request.kept_candidate_ids {
         let projection = reader
             .kept_projection(&plan_key, candidate_id)?
@@ -130,6 +134,26 @@ pub(crate) fn generate_enhanced_model(
         let offset_x = (candidate_bounds.min_x - bounds.min_block_x).max(0);
         let offset_z = (candidate_bounds.min_z - bounds.min_block_z).max(0);
         merge_models(&mut model, &candidate_model, offset_x, offset_z);
+        let candidate_y = candidate_model
+            .bounding_box()
+            .map(|bbox| (bbox.min_y, bbox.max_y))
+            .unwrap_or((0, 0));
+        features.push(PreviewFeature {
+            candidate_id: projection.candidate_id.clone(),
+            display_title: projection.display_title.clone(),
+            category: serde_json::to_string(&projection.category)
+                .unwrap_or_else(|_| "Other".to_owned())
+                .trim_matches('"')
+                .to_owned(),
+            bounds: [
+                candidate_bounds.min_x,
+                candidate_y.0,
+                candidate_bounds.min_z,
+                candidate_bounds.min_x + candidate_bounds.width_blocks as i32 - 1,
+                candidate_y.1,
+                candidate_bounds.min_z + candidate_bounds.length_blocks as i32 - 1,
+            ],
+        });
         generated += 1;
         let percent = 20 + (generated * 45 / request.kept_candidate_ids.len().max(1));
         progress.report_percent(percent as u32);
@@ -151,12 +175,26 @@ pub(crate) fn generate_enhanced_model(
             ]
         })
         .unwrap_or([footprint.width_blocks, 1, footprint.length_blocks]);
+    // 要素包围盒转到模型本地坐标（与前端网格坐标一致，供定位/高亮）。
+    if let Some(bbox) = model.bounding_box() {
+        for feature in &mut features {
+            feature.bounds = [
+                feature.bounds[0] - bbox.min_x,
+                feature.bounds[1] - bbox.min_y,
+                feature.bounds[2] - bbox.min_z,
+                feature.bounds[3] - bbox.min_x,
+                feature.bounds[4] - bbox.min_y,
+                feature.bounds[5] - bbox.min_z,
+            ];
+        }
+    }
     Ok(EnhancedGeneration {
         contract,
         degree,
         source,
         model,
         dimensions,
+        features,
     })
 }
 

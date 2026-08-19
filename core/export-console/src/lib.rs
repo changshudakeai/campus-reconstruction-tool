@@ -63,8 +63,8 @@ pub use error::{
 };
 pub use pipeline::{adapt_to_voxel_model, export_schematic};
 pub use preview::{
-    serialize_preview, BlockPreviewInput, BlockPreviewOperation, BlockPreviewPort,
-    PreviewRenderPayload, PREVIEW_GRID_CELL_LIMIT, PREVIEW_SIMPLIFIED_NOTICE_THRESHOLD,
+    serialize_preview, BlockPreviewInput, BlockPreviewOperation, BlockPreviewPort, PreviewFeature,
+    PreviewRenderPayload, PREVIEW_GRID_CELL_LIMIT,
 };
 pub use progress::ProgressTracker;
 pub use seal_gate::{MockSealGate, SealGate};

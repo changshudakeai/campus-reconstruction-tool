@@ -5,21 +5,26 @@
 //! 预览是第五步的呈现能力：生成失败只影响预览，绝不阻塞或改变导出流程
 //! （ADR-0045：预览只是呈现层）。
 //!
-//! 数据格式（版本 1，紧凑 JSON，水平方向 RLE 游程）：
+//! 数据格式（版本 2，紧凑 JSON，水平方向 RLE 游程 + 保留候选要素）：
 //! ```json
 //! {
-//!   "v": 1,
+//!   "v": 2,
 //!   "palette": ["minecraft:air", "minecraft:stone_bricks"],
 //!   "bounds": [min_x, min_y, min_z, max_x, max_y, max_z],
 //!   "count": 123,
-//!   "simplified": false,
-//!   "runs": [[palette_index, x_start, x_end, y, z], ...]
+//!   "runs": [[palette_index, x_start, x_end, y, z], ...],
+//!   "features": [
+//!     {"id":"c1","title":"教学楼","category":"Building","bounds":[0,0,0,20,14,30]}
+//!   ]
 //! }
 //! ```
 //! 调色板 0 号位固定 `minecraft:air`（与 B4 `VoxelModel` 的空位约定一致），
 //! 其余按 B18 的确定性字典序排列；坐标为方案局部坐标，前端按包围盒平移。
 //! 同 `(y, z)` 上相邻同方块沿 x 轴合并成一条游程——无损压缩地面/墙体等
 //! 长条内容，超大校园也能轻量传输，且展开后与导出 `.schem` 逐块一致。
+//! `features` 携带增强导出中每个保留候选的定位要素（ID/名称/类别/包围盒，
+//! 与候选在最终模型中的位置一致），供第五步抽屉卡片定位与精细检查；
+//! 边界直出预览无候选时为 `[]`。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -38,9 +43,6 @@ use crate::error::{Error, PreviewError, Result};
 use crate::progress::ProgressTracker;
 use crate::views::ExportProgressView;
 
-/// 超过该包围盒格数的预览在结果中标记 `simplified`（前端合并渲染，方块数据不变）。
-pub const PREVIEW_SIMPLIFIED_NOTICE_THRESHOLD: usize = 2_000_000;
-
 /// 超过该包围盒格数的预览明确失败（`PreviewError::TooLarge`），避免 WebView 卡死。
 /// 一格一个方块：格数是渲染网格内存与剔除时间的真实上限。真实校区（如约
 /// 1064×863 边界 + 数十格高建筑）的包围盒可达数千万格，Uint16 体素网格与
@@ -48,27 +50,40 @@ pub const PREVIEW_SIMPLIFIED_NOTICE_THRESHOLD: usize = 2_000_000;
 /// 安全上界，超过即明确拒绝而非卡死。
 pub const PREVIEW_GRID_CELL_LIMIT: usize = 64_000_000;
 
-/// 一次预览生成的最终渲染负载：紧凑 JSON + 方块数 + 是否启用简化提示。
+/// 单个保留候选的预览定位要素（随渲染负载下发，供前端定位/高亮/精细检查）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewFeature {
+    /// B2 候选投影的稳定标识。
+    pub candidate_id: String,
+    /// 展示标题（来源名称）。
+    pub display_title: String,
+    /// 六类别枚举名（`Building`/`Road`/`Water`/`Vegetation`/`Sports`/`Other`）。
+    pub category: String,
+    /// 候选在最终模型中的包围盒（方案局部坐标，含端点）。
+    pub bounds: [i32; 6],
+}
+
+/// 一次预览生成的最终渲染负载：紧凑 JSON + 方块数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewRenderPayload {
     /// 供 WebView Three.js 消费的紧凑 JSON（见模块文档）。
     pub json: String,
     /// 本次负载包含的非空气方块数。
     pub block_count: usize,
-    /// 超大方案：前端已可启用简化渲染（合并相邻同色面），需要提示用户。
-    pub simplified: bool,
 }
 
 /// B18 `BlockModel` → 预览渲染数据（方块 ID + 坐标，水平 RLE 游程）。
-pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload> {
+pub fn serialize_preview(
+    model: &BlockModel,
+    features: &[PreviewFeature],
+) -> Result<PreviewRenderPayload> {
     const AIR: &str = "minecraft:air";
 
     let Some(bounds) = model.bounding_box() else {
         return Ok(PreviewRenderPayload {
-            json: r#"{"v":1,"palette":["minecraft:air"],"bounds":[0,0,0,0,0,0],"count":0,"simplified":false,"runs":[]}"#
+            json: r#"{"v":2,"palette":["minecraft:air"],"bounds":[0,0,0,0,0,0],"count":0,"runs":[],"features":[]}"#
                 .to_owned(),
             block_count: 0,
-            simplified: false,
         });
     };
     let grid_cells =
@@ -80,7 +95,6 @@ pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload> {
         }));
     }
     let block_count = model.block_count();
-    let simplified = grid_cells > PREVIEW_SIMPLIFIED_NOTICE_THRESHOLD as u64;
 
     // 空气固定 0 号位，其余按 B18 确定性字典序（与 adapt_to_voxel_model 一致）。
     let mut palette: Vec<String> = vec![AIR.to_owned()];
@@ -123,8 +137,8 @@ pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload> {
         ));
     }
 
-    let mut json = String::with_capacity(runs.len().saturating_mul(24).saturating_add(512));
-    json.push_str(r#"{"v":1,"palette":["#);
+    let mut json = String::with_capacity(runs.len().saturating_mul(24).saturating_add(1024));
+    json.push_str(r#"{"v":2,"palette":["#);
     for (index, block_id) in palette.iter().enumerate() {
         if index > 0 {
             json.push(',');
@@ -140,8 +154,6 @@ pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload> {
     }
     json.push_str("],\"count\":");
     json.push_str(&block_count.to_string());
-    json.push_str(",\"simplified\":");
-    json.push_str(if simplified { "true" } else { "false" });
     json.push_str(",\"runs\":[");
     for (position, (index, x_start, x_end, y, z)) in runs.iter().enumerate() {
         if position > 0 {
@@ -159,13 +171,29 @@ pub fn serialize_preview(model: &BlockModel) -> Result<PreviewRenderPayload> {
         json.push_str(&z.to_string());
         json.push(']');
     }
+    json.push_str("],\"features\":[");
+    for (position, feature) in features.iter().enumerate() {
+        if position > 0 {
+            json.push(',');
+        }
+        json.push_str("{\"id\":");
+        push_json_string(&mut json, &feature.candidate_id);
+        json.push_str(",\"title\":");
+        push_json_string(&mut json, &feature.display_title);
+        json.push_str(",\"category\":");
+        push_json_string(&mut json, &feature.category);
+        json.push_str(",\"bounds\":[");
+        for (index, value) in feature.bounds.iter().enumerate() {
+            if index > 0 {
+                json.push(',');
+            }
+            json.push_str(&value.to_string());
+        }
+        json.push_str("]}");
+    }
     json.push_str("]}");
 
-    Ok(PreviewRenderPayload {
-        json,
-        block_count,
-        simplified,
-    })
+    Ok(PreviewRenderPayload { json, block_count })
 }
 
 fn palette_index(indices: &[(&str, usize)], block_id: &str) -> usize {
@@ -229,7 +257,7 @@ impl BlockPreviewUseCase {
                 progress.report_percent(5);
                 let ground = generate_ground_model(material_table, &request)?;
                 progress.report_percent(60);
-                let payload = serialize_preview(&ground.model)?;
+                let payload = serialize_preview(&ground.model, &[])?;
                 progress.report_percent(95);
                 progress.finish();
                 Ok(payload)
@@ -240,7 +268,7 @@ impl BlockPreviewUseCase {
                 progress.report_percent(5);
                 let generated =
                     generate_enhanced_model(material_table, &request, reader, progress)?;
-                let payload = serialize_preview(&generated.model)?;
+                let payload = serialize_preview(&generated.model, &generated.features)?;
                 progress.report_percent(95);
                 progress.finish();
                 Ok(payload)
@@ -412,13 +440,13 @@ mod tests {
         model.set_block(BlockPosition::new(11, 5, 20), "minecraft:bricks");
         model.set_block(BlockPosition::new(12, 5, 20), "minecraft:glass_pane");
 
-        let payload = serialize_preview(&model).expect("序列化成功");
+        let payload = serialize_preview(&model, &[]).expect("序列化成功");
         let parsed: serde_json::Value = serde_json::from_str(&payload.json).expect("合法 JSON");
-        assert_eq!(parsed["v"], 1);
+        assert_eq!(parsed["v"], 2);
         assert_eq!(parsed["palette"][0], "minecraft:air", "空气必须固定 0 号位");
         assert_eq!(parsed["count"], 3);
         assert_eq!(payload.block_count, 3);
-        assert!(!payload.simplified);
+        assert_eq!(parsed["features"].as_array().expect("要素数组").len(), 0);
         // 坐标保持方案局部坐标（不预先平移）
         let runs = parsed["runs"].as_array().expect("游程数组");
         assert_eq!(runs.len(), 2, "相邻同方块必须合并为一条游程");
@@ -435,9 +463,9 @@ mod tests {
     #[test]
     fn too_large_model_fails_with_typed_preview_error() {
         let mut model = BlockModel::new();
-        assert!(serialize_preview(&model).is_ok());
+        assert!(serialize_preview(&model, &[]).is_ok());
         model.set_block(BlockPosition::new(0, 0, 0), "minecraft:stone");
-        assert!(serialize_preview(&model).is_ok());
+        assert!(serialize_preview(&model, &[]).is_ok());
 
         let error = Error::Preview(PreviewError::TooLarge {
             cells: PREVIEW_GRID_CELL_LIMIT as u64 + 1,
@@ -458,7 +486,7 @@ mod tests {
         model.set_block(BlockPosition::new(0, 1, 0), "minecraft:water");
         model.set_block(BlockPosition::new(3, 2, 1), "minecraft:oak_leaves");
 
-        let payload = serialize_preview(&model).expect("序列化成功");
+        let payload = serialize_preview(&model, &[]).expect("序列化成功");
         let parsed: serde_json::Value = serde_json::from_str(&payload.json).expect("合法 JSON");
         let palette: Vec<String> = parsed["palette"]
             .as_array()
@@ -513,5 +541,28 @@ mod tests {
             expanded, expected,
             "预览展开后的方块必须与最终 .schem 的体素逐块一致"
         );
+    }
+
+    #[test]
+    fn payload_carries_kept_candidate_features_for_locate_and_highlight() {
+        let mut model = BlockModel::new();
+        model.set_block(BlockPosition::new(4, 0, 3), "minecraft:bricks");
+        model.set_block(BlockPosition::new(5, 0, 3), "minecraft:bricks");
+        let features = vec![PreviewFeature {
+            candidate_id: "way/42".to_owned(),
+            display_title: "图书馆".to_owned(),
+            category: "Building".to_owned(),
+            bounds: [4, 0, 3, 5, 0, 3],
+        }];
+
+        let payload = serialize_preview(&model, &features).expect("序列化成功");
+        let parsed: serde_json::Value = serde_json::from_str(&payload.json).expect("合法 JSON");
+        let list = parsed["features"].as_array().expect("要素数组");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"], "way/42");
+        assert_eq!(list[0]["title"], "图书馆");
+        assert_eq!(list[0]["category"], "Building");
+        assert_eq!(list[0]["bounds"][0], 4);
+        assert_eq!(list[0]["bounds"][5], 3);
     }
 }
