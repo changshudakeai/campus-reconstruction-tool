@@ -1,83 +1,150 @@
-# MCRebuild V2 —— 校园复刻工具
+# MCRebuild —— 校园复刻工具（V2）
 
-MCRebuild V2 是一款面向 Minecraft 校园复刻场景的 Windows 桌面工具。项目希望把真实校园的地图数据转化为可检查、可调整，并最终可导入 Minecraft 的 Sponge `.schem` 文件。
-
-V2 是对 v1.x 的彻底重写，核心目标是：**轻便、高效、好维护，并让产品决策和代码实现都可追溯**。
+MCRebuild V2 是一款 Windows 桌面工具，帮你把自己学校的真实校园“复刻”进 Minecraft：
+搜索并选中真实校区 → 圈定方案边界 →（可选）采集并评审校园里的建筑、道路、水体、
+植被 → 在应用里预览整校园方块模型 → 导出为 Minecraft 可直接导入的 `.schem` 文件。
 
 > [!IMPORTANT]
-> 当前版本为 **`2.0.0`（正式版候选，2026-08-17）**。当前产品真相见 [`docs/product-baseline.md`](docs/product-baseline.md)，施工与发布状态见 [`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`](.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md)，项目总结与经验教训见 [`project_summary.md`](project_summary.md)。历史 PRD、旧索引、旧工单和交接不得覆盖这三个入口。
+> 当前版本 **V2.1.0（2026-08-20）**。产品行为基线见
+> [`docs/product-baseline.md`](docs/product-baseline.md)；施工与发布状态见
+> [`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`](.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md)；
+> V2.1 收口证据见
+> [`docs/developer-guide/v2.1-release-closeout-evidence.md`](docs/developer-guide/v2.1-release-closeout-evidence.md)。
 
-## 产品流程
+## 目录
 
-```text
-首次设置
-  → 选择校区（上方搜索、下方最近使用记录）
-  → 创建或打开复刻方案
-  → 确认方案边界（唯一必填项）
-  → 设置自定义朝向（可选；未设置时默认地图正北）
-  → 候选采集（可选）
-  → 候选评审（可选）
-  → 生成并导出 .schem
+- [它能做什么](#它能做什么)
+- [快速开始（5 分钟上手）](#快速开始5-分钟上手)
+- [首次设置：高德 Key 与 Minecraft 版本](#首次设置高德-key-与-minecraft-版本)
+- [五步工作区使用教程](#五步工作区使用教程)
+- [常见问题](#常见问题)
+- [给开发者](#给开发者)
+- [版本历史](#版本历史)
+
+## 它能做什么
+
+- 高德地图上搜索并选择真实校区，以该校为“校区”管理复刻方案；
+- 从 OSM 自动获取校区边界，支持顶点拖拽微调与人工圈画兜底；
+- 按六类（建筑/道路/水体/植被/体育/其他）采集校园对象，自动命名、检测重复与重叠；
+- 评审台按“置信度”分档（高/中/低）帮你快速决定每个候选：保留、剔除或待定，
+  支持一键应用建议与批量操作；
+- 导出前先看**整校园 3D 方块预览**（与最终导出的 `.schem` 完全一致），可旋转/缩放；
+- 一键导出 Minecraft 可导入的 Sponge `.schem` 文件（附用料清单 manifest）。
+
+## 快速开始（5 分钟上手）
+
+1. 运行应用，完成首次设置：选择语言、目标 Minecraft 版本，并填写高德 Key（见下节）；
+2. 在“校区”页搜索你的学校，点搜索结果进入该校的方案列表；
+3. 新建一个方案（输入方案名即可）；
+4. 进入方案后，第一步“圈边界”：等待 OSM 自动获取边界，必要时拖动顶点微调，
+   点“确认边界”；
+5. 顶部切到第五步“导出”，点“开始导出”——一份 `.schem` 就生成在默认导出目录了。
+
+边界是**唯一必填项**；朝向、采集、评审都可以跳过，不会阻塞导出。
+
+## 首次设置：高德 Key 与 Minecraft 版本
+
+- **语言**：界面语言（当前提供中文）。
+- **Minecraft 版本**：生成方块用料与目标版本绑定，请选择你将要导入的世界版本。
+- **高德 Key**：校区搜索、边界、朝向和评审都依赖在线高德地图，需要：
+  1. 到高德开放平台（lbs.amap.com）创建“Web端（JS API）”应用；
+  2. 复制 **Key** 与**安全密钥（securityJsCode）**；
+  3. 在设置页粘贴并点“测试连通性”。
+
+没有有效 Key 时，依赖地图的功能不可用；已保存的边界、评审与导出不受影响。
+
+## 五步工作区使用教程
+
+方案打开后，顶部是“边界、朝向、采集、评审、导出”五个步骤。它们不是五个强制关卡，
+只有第一步边界是必填。
+
+### ① 圈边界
+
+边界是唯一必填项，确认后导出入口立即可用。
+
+- 进入本步会自动从 OSM 获取校区边界（左侧抽屉显示获取进度）；
+- 边界出现后可直接拖动顶点微调，也可用“撤销 / 清空 / 重新获取”；
+- 获取失败或数据缺失时，可切到“人工圈画”：点击地图逐点圈出边界；
+- 确认前请检查边界确实圈住了目标校园——导出的范围以它为准。
+
+### ② 定朝向（可选）
+
+- 不设置时默认“地图正北”；
+- 想旋转整个校园（比如让正门朝南），用“两点画线”或直接输入角度；
+- 修改已确认的朝向会提示影响范围，确认后生效。
+
+### ③ 候选采集（可选）
+
+- 点“开始采集”，应用会在边界内按六类寻找校园对象（建筑/道路/水体/植被/体育/其他）；
+- 采集过程显示进度，可取消；重新采集会显示“新增 / 有变化 / 本次未找到 / 未变化”
+  摘要；
+- 采集失败只影响本次候选，不影响已确认的边界与导出资格。
+
+### ④ 候选评审（可选）
+
+评审台帮助你在导出前决定哪些候选进入校园内容：
+
+- 候选按**置信度**分档：高（名称清晰、形状完整，建议保留）、中（存在不确定信号，
+  需人工确认）、低（未命名 / 重复嫌疑 / 重叠等，需关注）；
+- 用顶部“置信度筛选”（全部 / 高 / 中 / 低）过滤，候选与地图按 高 → 中 → 低 排序；
+- **一键应用建议**：把全部高置信候选改为“保留”（不会剔除任何候选），确认弹窗会
+  显示将变更数量与理由分布；
+- 每条候选三态：**保留**（唯一进入导出）/ **剔除**（排除）/ **待定**（暂不决定）；
+  批量改状态时，全选只勾当前页，批量剔除会先确认一次；
+- 点“封账完成评审”后决定不可再改，导出即按封账结果生成。
+
+### ⑤ 导出与 3D 预览
+
+- **3D 预览**：进入本步不会自动生成；点“生成 3D 预览”后，整校园以真实方块呈现
+  （建筑 / 道路 / 水面 / 植被），拖动旋转、滚轮缩放、可复位视角，还能把已保留候选
+  “定位到 3D 预览”。预览数据与最终导出的 `.schem` 完全一致；
+- **开始导出**：确认导出（会明示封账后果与待定项数量）后进入后台导出，进度可跟踪；
+- 完成后得到 `.schem` 与用料清单（manifest），同一区域继续显示 3D 预览与导出结果；
+- 预览失败不影响导出：会有明确错误提示，导出照常进行。
+
+## 常见问题
+
+- **为什么导出的文件只有地基？** 未采集候选时，导出生成边界覆盖范围内的平整场地；
+  采集并保留候选后，才生成包含建筑等内容的初始校园。
+- **导出的 .schem 怎么用？** 这是 Sponge 格式的 Minecraft 结构文件，可用
+  WorldEdit / FAWE 等工具在存档中粘贴（`//schem load` + `//paste`）。
+- **高德 Key 填了但地图还是不可用？** 确认 Key 与安全密钥都来自“Web端（JS API）”
+  应用，且已通过“测试连通性”；地图功能需要联网。
+- **删错了方案？** 方案删除后进回收站，30 天内可恢复；同名恢复会自动加“（恢复 N）”。
+- **评审封账后想改怎么办？** 封账后决定不可再改；想调整只能重新采集、重新评审。
+
+## 给开发者
+
+### 环境要求
+
+- Windows 10/11；
+- WebView2 Runtime；
+- Rust `1.96.0`（由 `rust-toolchain.toml` 固定）；
+- 在线地图功能需要网络，以及有效的高德 JS API Key 与 `securityJsCode`。
+
+### 启动开发版
+
+```powershell
+cargo run -p desktop-shell --bin campus-tool-dev
 ```
 
-项目中的数据层级为：
+首次启动后可在设置页填写高德 Key。没有有效 Key 时，依赖在线地图的边界与朝向功能
+不可用，但不影响不依赖地图的本地模块测试。
 
-```text
-应用（全局设置：语言、Minecraft 版本）
- └─ 校区（共享知识：校区名称、位置锚点等）
-     ├─ 方案 A（方案边界、可选朝向、候选与评审数据）
-     └─ 方案 B
-```
-
-## 当前完成情况
-
-## 当前状态（v2.0.0，2026-08-17 发布）
-
-全部主线 M1–M5 与 A–H 工单已完成并验收；`main` 已推送并打 `v2.0.0` tag。
-产品真相见 [`docs/product-baseline.md`](docs/product-baseline.md)；架构决策见
-`docs/adr/`（0001–0045）；施工与发布状态见
-`.scratch/v2-implementation/v0.1-end-to-end-mainline-plan.md`；项目总结与
-经验教训见 [`project_summary.md`](project_summary.md)。
-
-门禁：workspace 测试 / `cargo fmt --check` / `cargo clippy -D warnings` /
-`cargo machete` 全部通过。发布便携包：`dist/MCRebuild-V2.0.0-portable.zip`。
-
-## 核心能力
-
-### 地图与 GIS 数据
-
-- 使用高德 JS API + Wry/WebView2 在 Slint 桌面窗口中嵌入在线地图；
-- 从 OSM 获取校区边界，完成 GCJ-02/WGS-84 坐标处理；
-- 支持边界自动候选、顶点调整和人工绘制兜底；
-- 将真实坐标转换为 Minecraft 平面坐标并保留方案级隔离。
-
-### 数据处理流水线
-
-- 以可插拔数据源采集原始对象，并将原始观测持久化到 SQLite；原始证据与可评审候选分层，禁止把 POI 点位伪造成建筑轮廓；
-- 通过集中标签映射把对象互斥归入六类；
-- 检测重新采集时的新增、变化与未变化对象；
-- 对空类别和“其他”占比异常执行安静审计；
-- 以三态人工评审结果作为最终生成输入。
-
-### Minecraft 生成与导出
-
-- 按建筑、道路、水体、植被、体育和其他对象生成方块模型；
-- 用料配置与目标 Minecraft 版本绑定，遇到不存在的方块时明确失败；
-- 输出 Sponge `.schem`，支持覆盖写入、内容校验和失败回滚。
-
-## 技术栈
+### 技术栈
 
 | 层次 | 技术 |
 |---|---|
 | 桌面 UI | Rust、Slint |
 | 地图嵌入 | Wry、WebView2、高德 JS API |
+| 3D 预览 | WebView + Three.js（隐藏面剔除、分块 Worker） |
 | 地理数据 | OSM、GCJ-02/WGS-84 坐标转换、`geo` |
 | 本地数据 | SQLite |
 | Minecraft 输出 | Sponge `.schem`、NBT、gzip |
 | 工程组织 | Cargo Workspace、模块化单体、`xtask` |
 | 质量门禁 | rustfmt、Clippy、cargo-machete、cargo-deny、GitHub Actions |
 
-## 架构
+### 架构
 
 项目采用模块化单体：最终交付一个桌面程序，但业务能力在内部以独立 crate 隔离。
 
@@ -99,9 +166,11 @@ xtask                          规模约束、架构依赖检查和开发自动�
 - UI 文案全部从语言资源注入，不在 Rust 或 Slint 中硬编码；
 - 外部依赖版本在根 `Cargo.toml` 单点管理。
 
-架构依据见 [ADR-0001](docs/adr/0001-modular-monolith-architecture.md)、[ADR-0017](docs/adr/0017-modular-architecture-and-crate-catalog.md) 和 [模块边界研究](docs/research/module-boundary-enforcement.md)。
+架构依据见 [ADR-0001](docs/adr/0001-modular-monolith-architecture.md)、
+[ADR-0017](docs/adr/0017-modular-architecture-and-crate-catalog.md) 和
+[模块边界研究](docs/research/module-boundary-enforcement.md)。
 
-## AI Agent 协作方式
+### AI Agent 协作方式
 
 本项目采用 ADR 驱动、Agent 辅助的开发流程：
 
@@ -122,34 +191,16 @@ xtask                          规模约束、架构依赖检查和开发自动�
 - [`docs/module-decisions.md`](docs/module-decisions.md)：按模块汇总已确认需求；
 - [`docs/research/`](docs/research/)：保存地图集成、桌面架构、数据流水线与边界执法等研究报告。
 
-## 本地运行
+### 验证与质量门禁
 
-### 环境要求
-
-- Windows 10/11；
-- WebView2 Runtime；
-- Rust `1.96.0`（由 `rust-toolchain.toml` 固定）；
-- 在线地图功能需要网络，以及有效的高德 JS API Key 和 `securityJsCode`。
-
-### 启动开发版
-
-```powershell
-cargo run -p desktop-shell --bin campus-tool-dev
-```
-
-首次启动后可在设置页填写高德 Key。没有有效 Key 时，依赖在线地图的边界与朝向功能不可用，但不影响不依赖地图的本地模块测试。
-
-## 验证与质量门禁
-
-Windows 本地验证按“开发循环定向验证 → 工单按风险扩圈 → PR/版本一次完整兜底”
-分级执行；不得在每个小改动后机械重复全套。`cargo xtask timings` 只在依赖图、
-crate 拓扑、构建配置或明确的编译性能风险变化时本地运行，版本候选再统一运行。
-详细触发矩阵见 [`AGENTS.md`](AGENTS.md) 和
+Windows 本地验证按“开发循环定向验证 → 工单按风险扩圈 → PR/版本一次完整兜底”分级
+执行；不得在每个小改动后机械重复全套。`cargo xtask timings` 只在依赖图、crate 拓扑、
+构建配置或明确的编译性能风险变化时本地运行，版本候选再统一运行。详细触发矩阵见
+[`AGENTS.md`](AGENTS.md) 和
 [`docs/developer-guide/enforcement.md`](docs/developer-guide/enforcement.md)。
 
-需要完整收口时，通过自动缓存治理入口按顺序运行；它会隔离各 worktree 的
-target 并自动回收旧缓存，详见
-[`docs/developer-guide/cargo-cache-discipline.md`](docs/developer-guide/cargo-cache-discipline.md)：
+需要完整收口时，通过自动缓存治理入口按顺序运行（会隔离各 worktree 的 target 并自动
+回收旧缓存，见 [`docs/developer-guide/cargo-cache-discipline.md`](docs/developer-guide/cargo-cache-discipline.md)）：
 
 ```powershell
 .\scripts\cargo-managed.ps1 -- machete
@@ -161,16 +212,17 @@ target 并自动回收旧缓存，详见
 .\scripts\cargo-managed.ps1 -- xtask timings
 ```
 
-GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask`、`timings`、`machete` 和 `dependencies`，最后由 `conclusion` 聚合为唯一 required check。
+GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask`、`timings`、
+`machete` 和 `dependencies`，最后由 `conclusion` 聚合为唯一 required check。
 
-## 已知限制与下一步
+### 已知限制与下一步
 
 - 生成规则精细效果（真实候选的精细化生成）未实现，另行决策；
 - Overture 离线补充包未实现（在线 OSM/Overpass 为主）；
-- v2.0.0 不包含单栋建筑精修；
+- “提升导出 3D 精度”（更高清纹理 / 更精细逐块渲染）已列为后续升级项；
 - 朝向可选、默认地图正北（ADR-0041）；边界是唯一必填项。
 
-## 目录结构
+### 目录结构
 
 ```text
 .
@@ -189,7 +241,7 @@ GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask
 架构规划与已立户 crate 清单以 `Cargo.toml` members 与 `docs/module-decisions.md` 为准；
 未立户的规划模块不视为已实现（ADR-0017）。
 
-## ADR 索引
+### ADR 索引
 
 | 编号 | 决定 |
 |---|---|
@@ -207,7 +259,7 @@ GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask
 | [ADR-0012](docs/adr/0012-optional-collection-minimal-export.md) | 可选采集与最小导出路径 |
 | [ADR-0013](docs/adr/0013-pluggable-data-sources-with-recommendation.md) | 可插拔数据源与推荐策略 |
 | [ADR-0014](docs/adr/0014-preview-through-desktop-shortcut.md) | 开发版桌面快捷方式 |
-| [ADR-0015](docs/adr/0015-version-naming-and-scope.md) | 版本命名及 v2.0.0 范围 |
+| [ADR-0015](docs/adr/0015-version-naming-and-scope.md) | 版本命名及范围 |
 | [ADR-0016](docs/adr/0016-review-process-design.md) | 评审流程与无卡顿交互 |
 | [ADR-0017](docs/adr/0017-modular-architecture-and-crate-catalog.md) | 模块目录与模块化硬规则 |
 | [ADR-0018](docs/adr/0018-plan-list-page-design.md) | 方案列表页设计 |
@@ -238,3 +290,12 @@ GitHub Actions 运行 7 类并行检查：`rustfmt`、`clippy`、`test`、`xtask
 | [ADR-0043](docs/adr/0043-enhanced-export-application-flow.md) | 增强导出由独立应用流程完整负责 |
 | [ADR-0044](docs/adr/0044-global-navigation-and-top-toolbar.md) | 全局返回历史栈与顶部工具栏布局 |
 | [ADR-0045](docs/adr/0045-one-continuous-map-session.md) | 一个方案只使用一段连续地图会话 |
+
+## 版本历史
+
+- **V2.1.0（2026-08-20）**：评审台置信度分档（高/中/低）与一键应用建议；第五步整校园
+  3D 方块预览；采集步地图误导提示修复；V2.1 版本收口（完整门禁与证据归档见
+  `docs/developer-guide/v2.1-release-closeout-evidence.md`）。
+- **V2.0.0（2026-08-17）**：正式版——五步工作区、OSM 边界、六类候选采集、三态评审、
+  增强导出与 `.schem` 交付。
+- **V1.x**：v1.0.0 / v1.0.1（历史版本，GitHub Release 可下载）。
