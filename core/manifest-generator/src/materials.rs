@@ -190,6 +190,7 @@ const MINECRAFT_26_1_2_ALLOWED_BLOCKS: &[&str] = &[
     "minecraft:light_gray_concrete",
     "minecraft:oak_leaves",
     "minecraft:oak_log",
+    "minecraft:oak_fence",
     "minecraft:oak_planks",
     "minecraft:rail",
     "minecraft:red_concrete",

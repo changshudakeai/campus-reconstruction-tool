@@ -147,6 +147,19 @@ pub fn generate_other_rail(
     fill_flat_rect(MaterialRole::OtherRail, length, 1, mat)
 }
 
+/// "其他"·barrier 家族（校门/栅栏/障碍物）：一根 2 格高的门柱。
+///
+/// 真实数据以点候选为主（如 `barrier=gate`）；柱状表达与既有“最简可用版”
+/// 一致，不引入复杂门框模型（ADR-0011 家族规则逐步补齐）。
+pub fn generate_other_barrier(mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError> {
+    let block = mat.block_for(MaterialRole::OtherBarrier)?;
+    let mut model = BlockModel::new();
+    for y in 0..2 {
+        model.set_block(BlockPosition::new(0, y, 0), &block);
+    }
+    Ok(model)
+}
+
 /// "其他"类入口：按标签家族路由；无规则的家族如实报错，禁止静默丢弃。
 pub fn generate_other(
     candidate: &OtherCandidate,
@@ -154,6 +167,9 @@ pub fn generate_other(
 ) -> Result<BlockModel, GenerationError> {
     if candidate.has_tag("railway") {
         return generate_other_rail(10, mat);
+    }
+    if candidate.has_tag("barrier") {
+        return generate_other_barrier(mat);
     }
     let families: Vec<&str> = candidate.tags.keys().map(String::as_str).collect();
     Err(GenerationError::UnsupportedTagFamily(families.join(",")))
@@ -353,6 +369,17 @@ mod tests {
             .insert("railway".to_string(), "rail".to_string());
         let model = generate_other(&candidate, &adapter()).unwrap();
         assert!(model.contains_block_id("minecraft:rail"));
+    }
+
+    #[test]
+    fn other_barrier_family_generates_fence_post() {
+        let mut candidate = OtherCandidate::new("gate-1");
+        candidate.tags.insert("barrier".to_string(), "gate".to_string());
+        candidate.tags.insert("name".to_string(), "Gate 2".to_string());
+        let model = generate_other(&candidate, &adapter()).unwrap();
+        assert!(model.contains_block_id("minecraft:oak_fence"));
+        let bounds = model.bounding_box().expect("门柱非空");
+        assert_eq!(bounds.height(), 2, "门柱应占 2 格高");
     }
 
     #[test]
