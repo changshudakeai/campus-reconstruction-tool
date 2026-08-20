@@ -244,7 +244,8 @@ const ORIENTATION_SCRIPT: &str = r#"
       }, 500);
     } else {
       // T31：非朝向模式由主脚本 initWithAnchor 发送 map_ready，Rust 侧直连 OSM
-      setStatus('正在从 OSM 自动获取边界...', '');
+      // 状态面板不再伪称“正在获取边界”：获取只属于步骤①（Rust 侧按当前
+      // 步骤决定是否发起），采集/导出等让位显示的地图不应显示误导提示。
       if (window.ipc && window.ipc.postMessage) {
         window.ipc.postMessage(JSON.stringify({ type: 'map_ready' }));
       }
@@ -339,6 +340,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
   }}
   #status-panel.error {{ border-left: 4px solid #e74c3c; }}
   #status-panel.success {{ border-left: 4px solid #2ecc71; }}
+  #status-panel:empty {{ display: none; }}
   #osm-attribution {{
     position: absolute; bottom: 4px; left: 8px; z-index: 999;
     font-size: 10px; color: #666;
@@ -381,7 +383,7 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
 </script>
 </head>
 <body>
-<div id="status-panel">正在初始化...</div>
+<div id="status-panel"></div>
 <div id="map-container"></div>
 <div id="osm-attribution">© OpenStreetMap contributors</div>
 <script src="{cdn_url}"></script>
@@ -492,7 +494,6 @@ pub fn build_boundary_edit_page_html(config: &BoundaryEditPageConfig) -> Result<
       if (typeof window.onMapReadyForMode === 'function') {{
         window.onMapReadyForMode();
       }} else {{
-        setStatus('正在从 OSM 自动获取边界...', '');
         if (window.ipc && window.ipc.postMessage) {{
           window.ipc.postMessage(JSON.stringify({{ type: 'map_ready' }}));
         }}
@@ -932,6 +933,35 @@ mod tests {
         assert!(!html.contains("fetchWithTimeout"));
         assert!(!html.contains("OSM_FETCH_TIMEOUT_MS"));
         assert!(!html.contains("overpass.kumi.systems"));
+    }
+
+    #[test]
+    fn html_never_claims_osm_boundary_fetch_in_status_panel() {
+        // 边界获取只属于步骤①，由 Rust 侧按当前步骤决定是否发起；采集/导出
+        // 等让位显示的地图不得显示“正在从 OSM 获取边界”之类的误导提示。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(
+            !html.contains("正在从 OSM 自动获取边界"),
+            "地图状态面板不得伪称 OSM 边界获取"
+        );
+        assert!(
+            !html.contains("正在初始化"),
+            "地图状态面板不得残留初始化占位文案"
+        );
+    }
+
+    #[test]
+    fn html_hides_empty_status_panel_until_real_status() {
+        // 状态面板初始为空且空态隐藏：真实状态（边界绘制成功/失败/人工圈画
+        // 提示）出现时才显示，避免让位显示的地图左上角挂一个空提示框。
+        let config = BoundaryEditPageConfig::new("abc123", "xyz789").with_anchor(116.4, 39.9);
+        let html = build_boundary_edit_page_html(&config).unwrap();
+        assert!(html.contains("<div id=\"status-panel\"></div>"));
+        assert!(
+            html.contains("#status-panel:empty { display: none; }"),
+            "空状态面板必须隐藏"
+        );
     }
 
     #[test]
