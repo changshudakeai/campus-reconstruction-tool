@@ -150,6 +150,7 @@ impl ExportProductionAdapter {
         &mut self,
         error: &ExportError,
     ) -> Presentation<ExportPageState> {
+        log::error!("T52 预览生成失败（不影响导出）: {error}");
         self.preview_generating = false;
         let (body, notification) = {
             let injector = self.context.injector();
@@ -287,8 +288,13 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                     self.preview_operation = None;
                     self.preview_generating = false;
                     match result {
-                        Ok(payload) => {
-                            self.preview_has_content = true;
+                    Ok(payload) => {
+                        log::info!(
+                            "T52 预览生成成功：blocks={}，payload_bytes={}",
+                            payload.block_count,
+                            payload.json.len()
+                        );
+                        self.preview_has_content = true;
                             crate::map_session::remember_preview_payload(payload.json.clone());
                             if let Some(feature_id) = self.pending_locate.take() {
                                 crate::map_session::remember_preview_locate(feature_id);

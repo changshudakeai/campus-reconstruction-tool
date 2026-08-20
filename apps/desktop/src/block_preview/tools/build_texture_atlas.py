@@ -64,6 +64,11 @@ BLOCK_FACES: dict[str, dict[str, str]] = {
         "bottom": "oak_log_top",
         "side": "oak_log",
     },
+    "minecraft:oak_fence": {
+        "top": "oak_fence_top",
+        "bottom": "oak_fence_top",
+        "side": "oak_fence",
+    },
     "minecraft:oak_leaves": {"all": "oak_leaves"},
     "minecraft:grass_block": {
         "top": "grass_block_top",
