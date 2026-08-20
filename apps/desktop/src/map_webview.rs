@@ -150,6 +150,8 @@ struct WebViewState {
     /// T52：离屏保留的 3D 预览页（切到其他步骤/模态时隐藏而非销毁，
     /// 避免 WebView2 快速重建失败与整页重建闪烁）。
     retained_preview: Option<wry::WebView>,
+    /// 离屏保留预览页创建时的代际（取回时恢复，使预览页 IPC 与当前代匹配）。
+    retained_preview_generation: Option<u64>,
     /// 上次显示的地图页面种类（弹窗恢复按此步骤重建）
     last_page_kind: Option<MapPageKind>,
     /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
@@ -179,6 +181,7 @@ thread_local! {
             creation_html: None,
             creation_retries: 0,
             retained_preview: None,
+            retained_preview_generation: None,
             last_page_kind: None,
             campus_search_mode: false,
             review_map_text_visible: false,
@@ -905,7 +908,13 @@ pub(crate) fn request_show(request: PendingShow) -> ShowOutcome {
             state.webview = Some(preview);
             state.last_page_kind = Some(MapPageKind::BlockPreview);
             state.campus_search_mode = false;
-            state.generation = state.generation.wrapping_add(1);
+            // 恢复预览页创建时的代际：该 WebView 的 IPC 仍携带旧代，必须让
+            // 当前代与之一致，否则 preview_loaded/stats/error 全部被代际过滤。
+            if let Some(retained_generation) = state.retained_preview_generation.take() {
+                state.generation = retained_generation;
+            } else {
+                state.generation = state.generation.wrapping_add(1);
+            }
             return ShowOutcome::RetainedPreview;
         }
 
@@ -921,6 +930,7 @@ pub(crate) fn request_show(request: PendingShow) -> ShowOutcome {
                 };
                 let _ = preview.set_bounds(hidden);
                 state.retained_preview = Some(preview);
+                state.retained_preview_generation = Some(state.generation);
                 log::debug!("map_webview: 预览页转入离屏保留（显示 {page_kind:?}）");
             }
             state.resize_timer = None;
@@ -1056,7 +1066,7 @@ pub(crate) fn show_review_with_viewport(
 /// 事件循环仍存活、COM 仍健康时先同步关闭控制器（含待退休 WebView），
 /// 使退出时 TLS 析构为空操作。不得在事件循环停止后再调用本函数。
 pub(crate) fn shutdown() {
-    let (webview, retiring, retained_preview) = STATE.with(|s| {
+    let (webview, retiring, retained_preview, retained_preview_generation) = STATE.with(|s| {
         let mut state = s.borrow_mut();
         state.resize_timer = None;
         state.load_timer = None;
@@ -1065,19 +1075,27 @@ pub(crate) fn shutdown() {
         state.creation_html = None;
         state.creation_retries = 0;
         state.pending_show = None;
+        let retained_preview_generation = state.retained_preview_generation.take();
         let webview = state.webview.take();
         let retiring = std::mem::take(&mut state.retiring);
         let retained_preview = state.retained_preview.take();
-        (webview, retiring, retained_preview)
+        (
+            webview,
+            retiring,
+            retained_preview,
+            retained_preview_generation,
+        )
     });
     log::debug!(
-        "map_webview: shutdown() 同步释放 {} 个活跃 + {} 个待退休 + {} 个离屏保留 WebView",
+        "map_webview: shutdown() 同步释放 {} 个活跃 + {} 个待退休 + {} 个离屏保留 WebView（保留代 {:?}）",
         usize::from(webview.is_some()),
         retiring.len(),
-        usize::from(retained_preview.is_some())
+        usize::from(retained_preview.is_some()),
+        retained_preview_generation
     );
     drop(webview);
     drop(retained_preview);
+    let _ = retained_preview_generation;
     for retired in retiring {
         drop(retired);
     }
@@ -1096,7 +1114,8 @@ pub(crate) fn shutdown() {
 pub(crate) fn hide() {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        state.generation += 1;
+        let hide_generation = state.generation;
+        state.generation = state.generation.wrapping_add(1);
         state.creation_in_flight = false;
         state.pending_show = None;
         if let Some(webview) = state.webview.take() {
@@ -1109,6 +1128,7 @@ pub(crate) fn hide() {
                 };
                 let _ = webview.set_bounds(hidden);
                 state.retained_preview = Some(webview);
+                state.retained_preview_generation = Some(hide_generation);
             } else {
                 state.retiring.push(webview);
             }
