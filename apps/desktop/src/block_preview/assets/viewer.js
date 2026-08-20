@@ -201,13 +201,9 @@
         }
         var pieceStart = Math.max(x0, cx * CHUNK);
         var pieceEnd = Math.min(x1, (cx + 1) * CHUNK - 1);
-        pieces.push([
-          run[0],
-          pieceStart + bounds[0],
-          pieceEnd + bounds[0],
-          run[3],
-          run[4]
-        ]);
+        // 统一为本地坐标（bounds 平移后），与 Worker 的块原点同坐标系；
+        // 若混用绝对/本地坐标，非零 bounds 会造成整体偏移。
+        pieces.push([run[0], pieceStart, pieceEnd, y, z]);
       }
     }
     return sliced;

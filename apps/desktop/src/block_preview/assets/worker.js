@@ -50,7 +50,7 @@ function tileUv(tile) {
   return [u0, v0, u1, v1];
 }
 
-function emitQuad(target, face, component, u0, v0, u1, v1) {
+function emitQuad(target, face, component, u0, v0, u1, v1, origin) {
   var base = target.count;
   var corners = [
     [u0, v0],
@@ -61,7 +61,12 @@ function emitQuad(target, face, component, u0, v0, u1, v1) {
   for (var i = 0; i < corners.length; i++) {
     component[face.u] = corners[i][0];
     component[face.v] = corners[i][1];
-    target.positions.push(component[0], component[1], component[2]);
+    // 顶点必须落在统一本地坐标（块原点偏移），否则所有块会重叠在原点。
+    target.positions.push(
+      component[0] + origin[0],
+      component[1] + origin[1],
+      component[2] + origin[2]
+    );
     target.uvs.push(corners[i][0], corners[i][1]);
   }
   target.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -182,7 +187,11 @@ function buildChunk(spec) {
           }
           var uv = tileUv(tile);
           var target = output[materialClass(blockId)];
-          emitQuad(target, face, component, uv[0], uv[1], uv[2], uv[3]);
+          emitQuad(target, face, component, uv[0], uv[1], uv[2], uv[3], [
+            ox,
+            oy,
+            oz
+          ]);
         }
       }
     }
