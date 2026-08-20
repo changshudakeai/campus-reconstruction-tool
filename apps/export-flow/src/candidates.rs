@@ -65,6 +65,24 @@ impl ExportCandidateStore {
             .map(|projection| projection.candidate_id)
             .collect())
     }
+
+    /// 封账后保留候选的只读卡片信息（ID/名称/类别；S1 只呈现，不持有几何）。
+    pub(crate) fn kept_candidate_cards(
+        &self,
+        plan_id: &str,
+    ) -> Result<Vec<crate::KeptCandidateCard>, Error> {
+        let db = self.db.lock().map_err(lock_error)?;
+        Ok(db
+            .list_kept_candidate_projections(plan_id)
+            .map_err(read_error)?
+            .into_iter()
+            .map(|projection| crate::KeptCandidateCard {
+                candidate_id: projection.candidate_id,
+                display_title: projection.display.title,
+                category: projection.category,
+            })
+            .collect())
+    }
 }
 
 impl CandidateExportReader for ExportCandidateStore {

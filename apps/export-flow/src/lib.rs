@@ -8,14 +8,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use data_persistence::Database;
+pub use export_console::{
+    BlockPreviewOperation, BlockPreviewPort, BoundaryExportOperation, BoundaryExportResult, Error,
+    ExportFileKind, ExportFileSystem, ExportProgressView, PreviewRenderPayload, Result,
+    StdExportFileSystem,
+};
 use export_console::{
     BoundaryError, BoundaryExportInput, BoundaryExportPort, BoundaryExportRequest,
     EnhancedExportInput, EnhancedExportPort, EnhancedExportRequest, ExportArtifactTargets,
     ExportPlanContext, ExportPlanState,
-};
-pub use export_console::{
-    BoundaryExportOperation, BoundaryExportResult, Error, ExportFileKind, ExportFileSystem,
-    ExportProgressView, Result, StdExportFileSystem,
 };
 use global_settings::SettingsManager;
 use project_management::PlanContextView;
@@ -256,12 +257,26 @@ pub struct EnhancedExportHint {
     pub remove_count: usize,
 }
 
+/// 第五步抽屉“已保留候选”卡片的只读呈现数据（S1 不持有业务几何；
+/// 定位/高亮用的包围盒由预览负载 `features` 随 F9 结果下发）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptCandidateCard {
+    /// B2 候选投影的稳定标识。
+    pub candidate_id: String,
+    /// 展示标题（来源名称）。
+    pub display_title: String,
+    /// 六类别。
+    pub category: CandidateCategory,
+}
+
 /// Complete F9 boundary-only export entry. The implementation is intentionally outside S1.
 #[derive(Clone)]
 pub struct BoundaryExportFlow {
     input: ExportInputStore,
     port: BoundaryExportPort,
     enhanced_port: Option<EnhancedExportPort>,
+    preview_port: BlockPreviewPort,
+    enhanced_preview_port: Option<BlockPreviewPort>,
     candidate_store: Option<Arc<ExportCandidateStore>>,
 }
 
@@ -270,10 +285,13 @@ impl BoundaryExportFlow {
         let input = ExportInputStore::default();
         let port =
             BoundaryExportPort::new_boundary_only_v26_1_2(Arc::new(input.clone()), file_system);
+        let preview_port = BlockPreviewPort::new_boundary_v26_1_2(Arc::new(input.clone()));
         Self {
             input,
             port,
             enhanced_port: None,
+            preview_port,
+            enhanced_preview_port: None,
             candidate_store: None,
         }
     }
@@ -297,10 +315,17 @@ impl BoundaryExportFlow {
             Arc::clone(&candidate_store) as Arc<dyn export_console::CandidateExportReader>,
             file_system,
         );
+        let preview_port = BlockPreviewPort::new_boundary_v26_1_2(Arc::new(input.clone()));
+        let enhanced_preview_port = BlockPreviewPort::new_enhanced_v26_1_2(
+            Arc::new(input.clone()),
+            Arc::clone(&candidate_store) as Arc<dyn export_console::CandidateExportReader>,
+        );
         Self {
             input,
             port: boundary_port,
             enhanced_port: Some(enhanced_port),
+            preview_port,
+            enhanced_preview_port: Some(enhanced_preview_port),
             candidate_store: Some(candidate_store),
         }
     }
@@ -327,6 +352,29 @@ impl BoundaryExportFlow {
         self.port.start()
     }
 
+    /// S1 只调用一次预览生成意图；路由与 [`Self::start`] 完全一致：
+    /// 存在已封账保留候选 → 增强预览；否则边界直出预览。预览结果只供
+    /// 呈现，与导出互相独立（预览失败绝不阻塞导出）。
+    pub fn start_preview(&self) -> Result<BlockPreviewOperation> {
+        if let (Some(enhanced_port), Some(store)) = (
+            self.enhanced_preview_port.as_ref(),
+            self.candidate_store.as_ref(),
+        ) {
+            let enhanced_available = {
+                let Some(plan_id) = self.input.active_plan_id() else {
+                    return self.preview_port.start();
+                };
+                store
+                    .seal_summary(&plan_id)
+                    .map(|summary| summary.keep_total > 0)?
+            };
+            if enhanced_available {
+                return enhanced_port.start();
+            }
+        }
+        self.preview_port.start()
+    }
+
     /// 增强导出的独立完整操作入口（直接可测；生产仍经 [`Self::start`] 路由）。
     pub fn start_enhanced(&self) -> Result<BoundaryExportOperation> {
         let enhanced_port = self
@@ -344,6 +392,10 @@ impl BoundaryExportFlow {
         self.port.expire_active();
         if let Some(enhanced_port) = &self.enhanced_port {
             enhanced_port.expire_active();
+        }
+        self.preview_port.expire_active();
+        if let Some(preview_port) = &self.enhanced_preview_port {
+            preview_port.expire_active();
         }
         self.input.set_plan(context);
     }
@@ -406,6 +458,10 @@ impl BoundaryExportFlow {
         if let Some(enhanced_port) = &self.enhanced_port {
             enhanced_port.expire_active();
         }
+        self.preview_port.expire_active();
+        if let Some(preview_port) = &self.enhanced_preview_port {
+            preview_port.expire_active();
+        }
     }
 
     /// 导出页呈现提示：存在已封账保留候选时返回增强内容（S1 只显示）。
@@ -426,6 +482,17 @@ impl BoundaryExportFlow {
             pending_count: summary.pending_count,
             remove_count: summary.remove_count,
         }))
+    }
+
+    /// 第五步抽屉只读候选卡片列表（无候选或未配置候选存储时为空）。
+    pub fn kept_candidate_cards(&self) -> Result<Vec<KeptCandidateCard>> {
+        let Some(store) = &self.candidate_store else {
+            return Ok(Vec::new());
+        };
+        let Some(plan_id) = self.input.active_plan_id() else {
+            return Ok(Vec::new());
+        };
+        store.kept_candidate_cards(&plan_id)
     }
 }
 

@@ -47,6 +47,8 @@ pub enum MaterialRole {
     SportsLine,
     /// 其他：铁轨。
     OtherRail,
+    /// 其他：栅栏/门禁（barrier 家族）。
+    OtherBarrier,
 }
 
 /// 角色 → 方块 ID 的集中映射。
@@ -58,7 +60,8 @@ fn block_id_for_role(role: MaterialRole, table: &MaterialTable) -> String {
     let school = &table.building_presets.school;
     match role {
         // 边界直出复用 B17 学校预设的地基方块，保持版本绑定与既有用料表一致。
-        MaterialRole::FoundationGround => school.foundation.clone(),
+        // 校区底座表层统一为草方块（产品验收：底座表面应为草皮，不用砖纹）。
+        MaterialRole::FoundationGround => "minecraft:grass_block".to_string(),
         MaterialRole::BuildingFoundation => school.foundation.clone(),
         MaterialRole::BuildingWall => school.wall.clone(),
         MaterialRole::BuildingWindow => school.window.clone(),
@@ -73,6 +76,7 @@ fn block_id_for_role(role: MaterialRole, table: &MaterialTable) -> String {
         MaterialRole::SportsCourt => "minecraft:red_concrete".to_string(),
         MaterialRole::SportsLine => "minecraft:white_concrete".to_string(),
         MaterialRole::OtherRail => "minecraft:rail".to_string(),
+        MaterialRole::OtherBarrier => "minecraft:oak_fence".to_string(),
     }
 }
 
@@ -136,6 +140,7 @@ mod tests {
             MaterialRole::SportsCourt,
             MaterialRole::SportsLine,
             MaterialRole::OtherRail,
+            MaterialRole::OtherBarrier,
         ];
         for role in roles {
             assert!(adapter.block_for(role).is_ok(), "角色 {role:?} 应可解析");

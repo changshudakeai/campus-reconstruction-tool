@@ -53,6 +53,7 @@ fn displayed_dimensions(subtitle: &str) -> [usize; 3] {
 #[test]
 fn manual_canvas_boundary_exports_latest_confirmed_revision() {
     let l10n = Localization::new(Language::ZhCn).expect("load zh-CN resources");
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

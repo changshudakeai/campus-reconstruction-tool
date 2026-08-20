@@ -20,10 +20,10 @@ pub use building::{build_model, estimate_height, normalize_roof_shape, BuildingC
 pub use materials::{MaterialError, MaterialRole, MaterialsAdapter};
 pub use model::{Block, BlockModel, BlockPosition, BoundingBox};
 pub use rules::{
-    generate_flat_ground, generate_other, generate_other_rail, generate_road,
-    generate_sports_court, generate_vegetation, generate_water, AreaInput, BuildingGenerator,
-    GenerationError, Generator, OtherCandidate, OtherGenerator, RoadGenerator, SportsGenerator,
-    VegetationGenerator, WaterGenerator,
+    generate_flat_ground, generate_flat_ground_with_polygon, generate_other, generate_other_rail,
+    generate_road, generate_sports_court, generate_vegetation, generate_water, AreaInput,
+    BuildingGenerator, GenerationError, Generator, OtherCandidate, OtherGenerator, RoadGenerator,
+    SportsGenerator, VegetationGenerator, WaterGenerator,
 };
 
 /// 生成引擎门面：持有版本绑定的用料适配器，按类别派发生成规则。
@@ -73,6 +73,22 @@ impl GenerationEngine {
         })?;
         generate_flat_ground(width, length, &self.adapter)
     }
+
+    /// 按真实边界多边形生成平整场地（模型本地块坐标；空多边形 = 铺满外接矩形）。
+    pub fn generate_flat_ground_with_polygon(
+        &self,
+        width_blocks: usize,
+        length_blocks: usize,
+        polygons: &[Vec<(i32, i32)>],
+    ) -> Result<BlockModel, GenerationError> {
+        let width = i32::try_from(width_blocks).map_err(|_| {
+            GenerationError::InvalidParameter("平整场地宽度超出生成引擎范围".to_owned())
+        })?;
+        let length = i32::try_from(length_blocks).map_err(|_| {
+            GenerationError::InvalidParameter("平整场地长度超出生成引擎范围".to_owned())
+        })?;
+        generate_flat_ground_with_polygon(width, length, polygons, &self.adapter)
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +117,6 @@ mod tests {
         let engine = GenerationEngine::new(manifest_generator::MaterialTable::v1_20_4_school());
         let model = engine.generate_flat_ground(3, 2).unwrap();
         assert_eq!(model.block_count(), 6);
-        assert!(model.contains_block_id("minecraft:stone_bricks"));
+        assert!(model.contains_block_id("minecraft:grass_block"));
     }
 }

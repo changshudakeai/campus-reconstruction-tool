@@ -109,6 +109,8 @@ pub struct BoundaryProjector {
     sin: f64,
     cos: f64,
     projection: BoundaryProjection,
+    /// 边界外环投影到块坐标系后的多边形（模型本地坐标，原点为外接范围最小块）。
+    polygons: Vec<Vec<(i32, i32)>>,
 }
 
 impl BoundaryProjector {
@@ -162,6 +164,7 @@ impl BoundaryProjector {
         let mut converter = CoordinateConverter::default();
         converter.set_center(center);
         let mut projected = Vec::new();
+        let mut rings = Vec::with_capacity(points.len());
         for points in &points {
             let vertices = points
                 .iter()
@@ -186,20 +189,64 @@ impl BoundaryProjector {
                     .join("; ");
                 return Err(BoundaryFootprintError::InvalidGeometry(detail));
             }
-            projected.extend(vertices.into_iter().map(|vertex| {
-                Vertex::new(
-                    vertex.x * cos - vertex.y * sin,
-                    vertex.x * sin + vertex.y * cos,
-                )
-            }));
+            let rotated = vertices
+                .into_iter()
+                .map(|vertex| {
+                    Vertex::new(
+                        vertex.x * cos - vertex.y * sin,
+                        vertex.x * sin + vertex.y * cos,
+                    )
+                })
+                .collect::<Vec<_>>();
+            projected.extend(rotated.iter().copied());
+            rings.push(rotated);
         }
 
         let projection = projected_bounds_to_blocks(&projected)?;
+        let width = projection.width_blocks as i64;
+        let length = projection.length_blocks as i64;
+        let min_x = i64::from(projection.min_block_x);
+        let min_z = i64::from(projection.min_block_z);
+        let polygons = rings
+            .into_iter()
+            .map(|ring| {
+                let ring_min_x = ring.iter().map(|v| v.x).fold(f64::INFINITY, f64::min);
+                let ring_max_x = ring.iter().map(|v| v.x).fold(f64::NEG_INFINITY, f64::max);
+                let ring_min_neg_y = ring.iter().map(|v| -v.y).fold(f64::INFINITY, f64::min);
+                let ring_max_neg_y = ring.iter().map(|v| -v.y).fold(f64::NEG_INFINITY, f64::max);
+                ring.into_iter()
+                    .map(|vertex| {
+                        let x_block = if (vertex.x - ring_min_x).abs() < 1e-9 {
+                            vertex.x.floor()
+                        } else if (vertex.x - ring_max_x).abs() < 1e-9 {
+                            vertex.x.ceil()
+                        } else {
+                            (vertex.x + 0.5).floor()
+                        };
+                        let neg_y = -vertex.y;
+                        let z_block = if (neg_y - ring_min_neg_y).abs() < 1e-9 {
+                            neg_y.floor()
+                        } else if (neg_y - ring_max_neg_y).abs() < 1e-9 {
+                            neg_y.ceil()
+                        } else {
+                            (neg_y + 0.5).floor()
+                        };
+                        (
+                            // 环最小边 floor、最大边 ceil、中间顶点四舍五入：
+                            // 既包含最外圈边界格，又不把最小边裁掉一格。
+                            (x_block as i64 - min_x).clamp(0, width) as i32,
+                            (z_block as i64 - min_z).clamp(0, length) as i32,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         Ok(Self {
             center,
             sin,
             cos,
             projection,
+            polygons,
         })
     }
 
@@ -211,6 +258,14 @@ impl BoundaryProjector {
     /// 边界在块坐标系中的外接范围视图。
     pub fn bounds(&self) -> BoundaryProjection {
         self.projection
+    }
+
+    /// 边界外环在块坐标系中的多边形（模型本地坐标：原点 = 外接范围最小块）。
+    ///
+    /// B18 用它把平整场地裁剪成真实边界形状，而不是铺满外接矩形；
+    /// 坐标与 `bounds()` 的 min_block 同源，可直接用于 0..w / 0..l 网格。
+    pub fn boundary_polygons_local(&self) -> &[Vec<(i32, i32)>] {
+        &self.polygons
     }
 
     /// 把候选多边形（GeoJSON coordinates）投影到与边界同一块坐标系。
@@ -408,6 +463,32 @@ mod tests {
         let footprint = boundary_footprint(&square()).unwrap();
         assert!(footprint.width_blocks > 1);
         assert!(footprint.length_blocks > 1);
+    }
+
+    #[test]
+    fn local_polygons_match_the_projection_footprint() {
+        let projector = BoundaryProjector::for_boundary_with_orientation(
+            &square(),
+            Orientation::new(0.0).unwrap(),
+        )
+        .unwrap();
+        let polygons = projector.boundary_polygons_local();
+        assert_eq!(polygons.len(), 1, "单外环边界只有一个多边形");
+        let ring = &polygons[0];
+        assert!(ring.len() >= 4, "矩形外环至少四个顶点");
+        let min_x = ring.iter().map(|p| p.0).min().unwrap();
+        let max_x = ring.iter().map(|p| p.0).max().unwrap();
+        let min_z = ring.iter().map(|p| p.1).min().unwrap();
+        let max_z = ring.iter().map(|p| p.1).max().unwrap();
+        let bounds = projector.bounds();
+        assert_eq!(min_x, 0);
+        assert_eq!(min_z, 0);
+        assert!(max_x + 1 >= bounds.width_blocks as i32 - 1);
+        assert!(max_z + 1 >= bounds.length_blocks as i32 - 1);
+        assert!(
+            max_x as usize <= bounds.width_blocks && max_z as usize <= bounds.length_blocks,
+            "多边形顶点允许到网格外缘（=width/length），不得越界"
+        );
     }
 
     #[test]

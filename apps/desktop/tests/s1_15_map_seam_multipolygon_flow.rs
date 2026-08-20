@@ -176,6 +176,7 @@ fn real_map_page_drawer_bridge_reaches_f9() {
     let html = build_boundary_edit_page_html(&config).expect("build real map page");
 
     // 2. 装配桌面应用（临时库 + 导出目录）。
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

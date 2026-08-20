@@ -143,6 +143,11 @@ impl BlockModel {
     pub fn contains_block_id(&self, block_id: &str) -> bool {
         self.blocks.values().any(|id| id == block_id)
     }
+
+    /// 指定位置是否存在方块（预览/测试按坐标抽查用）。
+    pub fn contains_block_at(&self, position: BlockPosition) -> bool {
+        self.blocks.contains_key(&position)
+    }
 }
 
 impl Default for BlockModel {

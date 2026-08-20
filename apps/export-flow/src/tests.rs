@@ -334,6 +334,17 @@ fn start_routes_to_enhanced_export_when_sealed_keep_candidates_exist() {
     assert_eq!(hint.pending_count, 1);
     assert_eq!(hint.remove_count, 1);
 
+    let cards = flow.kept_candidate_cards().expect("只读候选卡片可读");
+    assert_eq!(cards.len(), 2, "只读卡片必须只包含保留候选");
+    assert!(cards.iter().all(|card| {
+        card.category == CandidateCategory::Building
+            && (card.display_title == "教学楼A" || card.display_title == "教学楼B")
+    }));
+    assert_eq!(
+        cards[0].candidate_id, kept[0],
+        "卡片标识必须与增强导出的保留候选一致"
+    );
+
     let mut operation = flow.start().expect("Start 路由到增强导出");
     let result = wait_for_result(&mut operation).expect("增强导出成功");
     assert!(result.schematic_path.is_file());
@@ -657,4 +668,160 @@ fn wait_for_result(operation: &mut BoundaryExportOperation) -> Result<BoundaryEx
         assert!(std::time::Instant::now() < deadline, "导出操作未达到终态");
         std::thread::yield_now();
     }
+}
+
+fn wait_for_preview(operation: &mut BlockPreviewOperation) -> Result<PreviewRenderPayload> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some(result) = operation.try_complete() {
+            return result;
+        }
+        assert!(std::time::Instant::now() < deadline, "预览操作未达到终态");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn preview_payload_matches_the_exported_schematic_block_count() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let plan_id = PlanId::generate();
+    let flow = BoundaryExportFlow::new(Arc::new(StdExportFileSystem));
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0006, 39.0000],
+            [116.0006, 39.0004],
+            [116.0000, 39.0004],
+            [116.0000, 39.0000]
+        ]]),
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览启动");
+    let preview = wait_for_preview(&mut preview_operation).expect("预览成功");
+    assert!(preview.block_count > 0);
+    let parsed: serde_json::Value = serde_json::from_str(&preview.json).expect("合法 JSON");
+    let palette = parsed["palette"].as_array().expect("调色板数组");
+    assert!(
+        palette.iter().any(|block| block == "minecraft:grass_block"),
+        "平整场地必须与导出同源使用草方块"
+    );
+
+    let mut export_operation = flow.start().expect("导出启动");
+    let export = wait_for_result(&mut export_operation).expect("导出成功");
+    let inspection =
+        sponge_export::inspect_schematic(&export.schematic_path).expect(".schem 可解析");
+    assert_eq!(
+        preview.block_count, inspection.non_air_voxels,
+        "预览方块数必须与导出 .schem 的非空气方块数一致"
+    );
+}
+
+#[test]
+fn preview_routes_to_enhanced_generation_like_export() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let db = Arc::new(Mutex::new(Database::open_in_memory().expect("内存库")));
+    let plan_id = PlanId::generate();
+    seed_plan_with_sealed_review(&mut db.lock().expect("db"), &plan_id, true);
+
+    let flow = BoundaryExportFlow::new_with_candidate_store(
+        Arc::new(StdExportFileSystem),
+        Arc::clone(&db),
+    );
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.0000, 39.0000],
+            [116.0010, 39.0000],
+            [116.0010, 39.0010],
+            [116.0000, 39.0010],
+            [116.0000, 39.0000]
+        ]]),
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览路由到增强生成");
+    let preview = wait_for_preview(&mut preview_operation).expect("增强预览成功");
+    let parsed: serde_json::Value = serde_json::from_str(&preview.json).expect("合法 JSON");
+    let palette = parsed["palette"].as_array().expect("调色板数组");
+    assert!(
+        palette.iter().any(|block| block == "minecraft:bricks"),
+        "保留建筑必须生成墙体方块"
+    );
+    let features = parsed["features"].as_array().expect("要素数组");
+    assert_eq!(features.len(), 2, "增强预览必须携带全部保留候选要素");
+    assert!(
+        features.iter().all(|feature| {
+            feature["category"] == "Building"
+                && feature["bounds"].as_array().expect("包围盒数组").len() == 6
+        }),
+        "要素必须携带类别与 6 元包围盒"
+    );
+    let cards = flow.kept_candidate_cards().expect("只读候选卡片");
+    assert_eq!(
+        cards
+            .iter()
+            .map(|card| card.candidate_id.clone())
+            .collect::<Vec<_>>(),
+        features
+            .iter()
+            .map(|feature| feature["id"].as_str().expect("要素 id").to_owned())
+            .collect::<Vec<_>>(),
+        "预览要素标识必须与 A2 只读候选卡片一一对应"
+    );
+
+    let mut export_operation = flow.start().expect("导出路由到增强导出");
+    let export = wait_for_result(&mut export_operation).expect("增强导出成功");
+    let inspection =
+        sponge_export::inspect_schematic(&export.schematic_path).expect(".schem 可解析");
+    assert_eq!(
+        preview.block_count, inspection.non_air_voxels,
+        "增强预览与增强导出的方块数必须一致"
+    );
+}
+
+#[test]
+fn preview_failure_never_blocks_export() {
+    let directory = tempfile::tempdir().expect("导出目录");
+    let plan_id = PlanId::generate();
+    let flow = BoundaryExportFlow::new(Arc::new(StdExportFileSystem));
+    flow.sync_settings(&settings_with_export_dir(directory.path()));
+    flow.set_plan(&confirmed_plan_context(&plan_id));
+    // 边界存在但未确认：预览生成失败（NotConfirmed），导出同样在确认后可用。
+    flow.set_boundary(
+        Some(Boundary {
+            r#type: "Polygon".to_owned(),
+            coordinates: serde_json::json!([[
+                [116.4000, 39.9000],
+                [116.4010, 39.9000],
+                [116.4010, 39.9010],
+                [116.4000, 39.9010],
+                [116.4000, 39.9000]
+            ]]),
+        }),
+        false,
+    );
+
+    let mut preview_operation = flow.start_preview().expect("预览操作可提交");
+    let preview_error = wait_for_preview(&mut preview_operation).expect_err("预览如实失败");
+    assert!(matches!(preview_error, Error::Boundary(_)));
+
+    flow.confirm_boundary(
+        "Polygon",
+        serde_json::json!([[
+            [116.4000, 39.9000],
+            [116.4010, 39.9000],
+            [116.4010, 39.9010],
+            [116.4000, 39.9010],
+            [116.4000, 39.9000]
+        ]]),
+    );
+    let mut export_operation = flow.start().expect("预览失败后仍可导出");
+    assert!(
+        wait_for_result(&mut export_operation).is_ok(),
+        "预览失败绝不阻塞导出流程"
+    );
 }

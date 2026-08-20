@@ -2,6 +2,8 @@
 //!
 //! 每个适配器一次调用一个功能模块接口；组合根只持有各呈现入口、绑定 UI 回调和
 //! 转发功能入口已经决定好的页面事件，不在 S1 读取或推演后续业务状态。
+// ignore-tidy-filelength: 生产入口聚合是组合根（小入口、大聚合）；T52 预览
+// 入口与导出/评审/采集入口同处维护，拆分后跨模块引用反而增加审计成本。
 //!
 //! 机械接线（UI 回调绑定、弹窗调度、轮询定时器）在 `bindings`；导航策略
 //! （历史栈/返回/离开/确认/取消路由）在 `navigation`。两者均为组合根模块
@@ -31,6 +33,7 @@ mod collection;
 mod export;
 mod navigation;
 mod notification;
+mod preview_entry;
 mod review;
 mod review_draft;
 mod review_map;
@@ -157,6 +160,7 @@ pub(crate) struct ProductionEntries {
     pending_confirmation: Option<PendingConfirmation>,
     pending_input: Option<PendingInput>,
     export_poll_timer: slint::Timer,
+    preview_poll_timer: slint::Timer,
     collection_poll_timer: slint::Timer,
     boundary_fetch_poll_timer: slint::Timer,
     campus_search_ipc: std::sync::mpsc::Sender<String>,
@@ -233,6 +237,12 @@ impl ProductionEntries {
                 context: workspace.clone(),
                 flow: export_flow,
                 operation: None,
+                preview_operation: None,
+                preview_status: String::new(),
+                preview_has_content: false,
+                preview_generating: false,
+                preview_candidates: Vec::new(),
+                pending_locate: None,
             }),
             notification: NotificationPresentationEntry::new(NotificationProductionAdapter {
                 center: Arc::clone(&center),
@@ -247,6 +257,7 @@ impl ProductionEntries {
             pending_confirmation: None,
             pending_input: None,
             export_poll_timer: slint::Timer::default(),
+            preview_poll_timer: slint::Timer::default(),
             collection_poll_timer: slint::Timer::default(),
             boundary_fetch_poll_timer: slint::Timer::default(),
             campus_search_ipc,
@@ -739,6 +750,10 @@ impl ProductionEntries {
                 let _ = self.campus_search_ipc.send(raw);
                 return;
             }
+            crate::map_session::MapEvent::Preview(raw) => {
+                self.handle_preview_ipc(&raw);
+                return;
+            }
             crate::map_session::MapEvent::Workspace { scene, message } => (scene, message),
         };
         if scene == crate::map_session::MapScene::Review {
@@ -866,6 +881,7 @@ impl ProductionEntries {
                     // 旧 worker 的结果不得交给新页面（ADR-0042 §6）。
                     crate::map_session::discard_boundary_draft();
                     self.export_poll_timer.stop();
+                    self.preview_poll_timer.stop();
                     self.collection_poll_timer.stop();
                     self.boundary_fetch_poll_timer.stop();
                     self.export

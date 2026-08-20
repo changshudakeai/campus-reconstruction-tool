@@ -3,6 +3,9 @@
 //! 本模块只负责原生子窗口、延迟销毁、串行创建与代际过滤；显示意图、
 //! 方案身份、弹窗遮挡、视野和结构化命令均由 `map_session` 持有。
 //! 嵌入链路保持为 `slint::spawn_local → winit_window → build_as_child`。
+// ignore-tidy-filelength: WebView 适配器是“小入口、大实现”的深适配器：
+// 串行创建/代际/延迟销毁/失败重试/预览离屏保留必须共享同一状态机，
+// 集中维护比拆分后跨模块共享私有 STATE 更可审计（T52 预览保留与重试）。
 //!
 //! WebView2 IPC 回调栈内同步 drop 会触发 COM 重入崩溃，因此 `hide` 先把
 //! 活跃实例移到 `retiring`，下一事件循环拍再释放；新实例只在退休队列清空
@@ -42,6 +45,7 @@ pub(crate) enum MapPageKind {
     Review,
     /// 校区在线搜索页（D-3）
     CampusSearch,
+    BlockPreview,
 }
 
 /// Slint 布局槽位上报的地图矩形（逻辑像素）。
@@ -55,7 +59,7 @@ struct MapSlotRect {
 
 /// T36：一次待执行的 show 请求（retiring 未清空或在途创建时暂存，后到覆盖先到）。
 #[derive(Clone)]
-enum PendingShow {
+pub(crate) enum PendingShow {
     Boundary {
         window: Weak<crate::AppWindow>,
         api_key: String,
@@ -83,6 +87,10 @@ enum PendingShow {
         map_text_visible: bool,
         initial_viewport: Option<gaode_client::MapViewport>,
     },
+    BlockPreview {
+        window: Weak<crate::AppWindow>,
+        initial_payload: Option<String>,
+    },
 }
 
 impl PendingShow {
@@ -92,6 +100,7 @@ impl PendingShow {
             PendingShow::CampusSearch { .. } => MapPageKind::CampusSearch,
             PendingShow::Orientation { .. } => MapPageKind::Orientation,
             PendingShow::Review { .. } => MapPageKind::Review,
+            PendingShow::BlockPreview { .. } => MapPageKind::BlockPreview,
         }
     }
 
@@ -105,9 +114,9 @@ impl PendingShow {
     /// 由 JS 定时上屏（发生在创建超时之外），继续保留 10s 兜底会把慢速
     /// 注入/慢网络的评审地图误杀。页面自身 5s SDK 超时与 onerror 仍上报。
     fn has_load_timeout(&self) -> bool {
-        !matches!(
-            self,
-            PendingShow::Review { .. } | PendingShow::CampusSearch { .. }
+        matches!(
+            self.page_kind(),
+            MapPageKind::Boundary | MapPageKind::Orientation
         )
     }
 }
@@ -132,6 +141,17 @@ struct WebViewState {
     ipc_handler: Option<IpcHandler>,
     /// 功能入口注册的地图加载状态处理器
     status_handler: Option<MapStatusHandler>,
+    /// T52：预览页创建失败后的退避重试计时器（仅 BlockPreview 页启用）。
+    retry_timer: Option<slint::Timer>,
+    /// 当前创建请求的 HTML 快照（失败重试复用同一份页面与负载）。
+    creation_html: Option<String>,
+    /// 当前创建请求已重试次数（成功或新请求时清零）。
+    creation_retries: u32,
+    /// T52：离屏保留的 3D 预览页（切到其他步骤/模态时隐藏而非销毁，
+    /// 避免 WebView2 快速重建失败与整页重建闪烁）。
+    retained_preview: Option<wry::WebView>,
+    /// 离屏保留预览页创建时的代际（取回时恢复，使预览页 IPC 与当前代匹配）。
+    retained_preview_generation: Option<u64>,
     /// 上次显示的地图页面种类（弹窗恢复按此步骤重建）
     last_page_kind: Option<MapPageKind>,
     /// 当前 WebView 是否处于"校区搜索页"模式（D-3：区别于边界地图页）
@@ -157,6 +177,11 @@ thread_local! {
             load_timer: None,
             ipc_handler: None,
             status_handler: None,
+            retry_timer: None,
+            creation_html: None,
+            creation_retries: 0,
+            retained_preview: None,
+            retained_preview_generation: None,
             last_page_kind: None,
             campus_search_mode: false,
             review_map_text_visible: false,
@@ -462,6 +487,11 @@ fn build_html_for(request: &PendingShow) -> Result<String, gaode_client::Error> 
             }
             gaode_client::build_review_map_page_html(&config)
         }
+        PendingShow::BlockPreview {
+            initial_payload, ..
+        } => Ok(crate::block_preview::build_page_html(
+            initial_payload.as_deref(),
+        )),
     }
 }
 
@@ -529,7 +559,12 @@ fn pump_creation() {
                 })
             }
             Ok(html) => {
+                if crate::map_webview_preview::webview_creation_disabled() {
+                    return None;
+                }
                 state.creation_in_flight = true;
+                state.creation_html = Some(html.clone());
+                state.creation_retries = 0;
                 let generation = state.generation;
                 let window = request_window(&request);
                 if reports_status && request.has_load_timeout() {
@@ -588,7 +623,8 @@ fn request_window(request: &PendingShow) -> Weak<crate::AppWindow> {
         PendingShow::Boundary { window, .. }
         | PendingShow::CampusSearch { window, .. }
         | PendingShow::Orientation { window, .. }
-        | PendingShow::Review { window, .. } => window.clone(),
+        | PendingShow::Review { window, .. }
+        | PendingShow::BlockPreview { window, .. } => window.clone(),
     }
 }
 
@@ -706,7 +742,10 @@ fn spawn_creation(
 fn creation_activation_script(page_kind: MapPageKind) -> Option<&'static str> {
     match page_kind {
         MapPageKind::Orientation => Some("activateOrientationWhenReady();"),
-        MapPageKind::Boundary | MapPageKind::CampusSearch | MapPageKind::Review => None,
+        MapPageKind::Boundary
+        | MapPageKind::CampusSearch
+        | MapPageKind::Review
+        | MapPageKind::BlockPreview => None,
     }
 }
 
@@ -719,7 +758,7 @@ fn finish_creation(
 ) {
     enum Outcome {
         Active,
-        Failed,
+        Failed { retry_allowed: bool, retries: u32 },
         Stale,
     }
     let outcome = STATE.with(|s| {
@@ -741,11 +780,26 @@ fn finish_creation(
             Ok(webview) => {
                 log::debug!("map_webview: WebView 创建成功（gen={generation}）");
                 state.webview = Some(webview);
+                state.creation_html = None;
+                state.creation_retries = 0;
+                state.retry_timer = None;
                 Outcome::Active
             }
             Err(error) => {
                 log::warn!("map_webview: WebView 创建失败（gen={generation}）: {error}");
-                Outcome::Failed
+                // T52：预览页是本地 HTML，创建失败多为 WebView2 快速重建时的
+                // 瞬时参数错误；退避重试（300/600/1200ms），其余页面照旧上报。
+                let retry_allowed =
+                    page_kind == MapPageKind::BlockPreview && state.creation_retries < 3;
+                let retries = state.creation_retries;
+                state.creation_retries = state.creation_retries.saturating_add(1);
+                if !retry_allowed {
+                    state.creation_html = None;
+                }
+                Outcome::Failed {
+                    retry_allowed,
+                    retries,
+                }
             }
         }
     });
@@ -760,16 +814,130 @@ fn finish_creation(
                 evaluate_script(script);
             }
         }
-        Outcome::Failed => notify_status(generation, page_kind, false),
+        Outcome::Failed {
+            retry_allowed,
+            retries,
+        } => {
+            if retry_allowed {
+                schedule_creation_retry(generation, window_weak, page_kind, retries);
+            } else {
+                notify_status(generation, page_kind, false);
+            }
+        }
         Outcome::Stale => {}
     }
     pump_creation();
 }
 
+/// 预览页创建失败后的退避重试：300ms * 2^attempt（上限 1200ms），复用同一
+/// 份 HTML 与代际；新显示意图或成功创建会取消/覆盖。
+fn schedule_creation_retry(
+    generation: u64,
+    window_weak: Weak<crate::AppWindow>,
+    page_kind: MapPageKind,
+    retries: u32,
+) {
+    let delay = Duration::from_millis(300u64.saturating_mul(1u64 << retries.min(3)));
+    log::info!(
+        "map_webview: 预览页创建失败，{delay:?} 后重试（gen={generation}, 第 {} 次）",
+        retries + 1
+    );
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::SingleShot, delay, move || {
+        let retry_html = STATE.with(|s| {
+            let mut state = s.borrow_mut();
+            if generation != state.generation || state.creation_in_flight {
+                return None;
+            }
+            let html = state.creation_html.clone()?;
+            state.creation_in_flight = true;
+            state.retry_timer = None;
+            Some(html)
+        });
+        if let Some(html) = retry_html {
+            log::info!("map_webview: 执行预览页创建重试（gen={generation}）");
+            spawn_creation(html, generation, window_weak.clone(), page_kind, true);
+        }
+    });
+    STATE.with(|s| s.borrow_mut().retry_timer = Some(timer));
+}
+
+/// 显示请求的处理结果：预览页从离屏保留直接取回（零重建）或正常排队创建。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShowOutcome {
+    Normal,
+    RetainedPreview,
+}
+
 /// 记录待执行请求并尝试放行（T36 统一 show 入口）。
-fn request_show(request: PendingShow) {
-    STATE.with(|s| {
+///
+/// T52：3D 预览页是本地 HTML，切到其他步骤时改为离屏保留（`set_bounds`
+/// 零尺寸）而非销毁；回到第五步直接取回，避免 WebView2 快速重建失败与
+/// 整页重建卡顿。离屏预览不参与地图槽位布局，也不影响其他页面创建。
+pub(crate) fn request_show(request: PendingShow) -> ShowOutcome {
+    let window_weak = request_window(&request);
+    let outcome = STATE.with(|s| {
         let mut state = s.borrow_mut();
+        // 新显示意图取代任何在途失败重试（旧代回调会自行过期）。
+        state.retry_timer = None;
+        let page_kind = request.page_kind();
+        let preview_request = page_kind == MapPageKind::BlockPreview;
+
+        // 目标为预览页且存在离屏保留：取回（零重建）。
+        if preview_request && state.retained_preview.is_some() {
+            if state.webview.is_some() {
+                if let Some(webview) = state.webview.take() {
+                    state.retiring.push(webview);
+                }
+                state.resize_timer = None;
+                state.last_slot_scale = None;
+                state.campus_search_mode = false;
+                schedule_drop(&mut state);
+            }
+            let preview = state
+                .retained_preview
+                .take()
+                .expect("retained_preview 已在分支开头判 Some");
+            if let Some(app_window) = request_window(&request).upgrade() {
+                let scale = app_window.window().scale_factor();
+                let bounds = compute_slot_bounds(map_slot(&app_window), scale);
+                if let Err(error) = preview.set_bounds(bounds) {
+                    log::warn!("map_webview: 预览页恢复 bounds 失败: {error}");
+                }
+            }
+            state.webview = Some(preview);
+            state.last_page_kind = Some(MapPageKind::BlockPreview);
+            state.campus_search_mode = false;
+            // 恢复预览页创建时的代际：该 WebView 的 IPC 仍携带旧代，必须让
+            // 当前代与之一致，否则 preview_loaded/stats/error 全部被代际过滤。
+            if let Some(retained_generation) = state.retained_preview_generation.take() {
+                state.generation = retained_generation;
+            } else {
+                state.generation = state.generation.wrapping_add(1);
+            }
+            return ShowOutcome::RetainedPreview;
+        }
+
+        // 正在显示预览页而要显示其他页：先离屏保留（隐藏而非销毁）。
+        if !preview_request
+            && state.webview.is_some()
+            && state.last_page_kind == Some(MapPageKind::BlockPreview)
+        {
+            if let Some(preview) = state.webview.take() {
+                let hidden = wry::Rect {
+                    position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(0, 0)),
+                    size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(0, 0)),
+                };
+                let _ = preview.set_bounds(hidden);
+                state.retained_preview = Some(preview);
+                state.retained_preview_generation = Some(state.generation);
+                log::debug!("map_webview: 预览页转入离屏保留（显示 {page_kind:?}）");
+            }
+            state.resize_timer = None;
+            state.last_slot_scale = None;
+            state.campus_search_mode = false;
+        }
+
         // 显示意图的幂等与方案身份由 map_session 判定。适配器不能只凭页面
         // 种类短路，否则同类页面的新方案、锚点或配置会沿用旧现场。
         match &request {
@@ -792,6 +960,10 @@ fn request_show(request: PendingShow) {
                 state.campus_search_mode = false;
                 state.review_map_text_visible = *map_text_visible;
             }
+            PendingShow::BlockPreview { .. } => {
+                state.last_page_kind = Some(MapPageKind::BlockPreview);
+                state.campus_search_mode = false;
+            }
         }
         // 异页已显示：先隐藏（延迟销毁），再排队重建。
         if state.webview.is_some() {
@@ -803,10 +975,15 @@ fn request_show(request: PendingShow) {
             state.campus_search_mode = false;
             schedule_drop(&mut state);
         }
-        state.generation += 1;
+        state.generation = state.generation.wrapping_add(1);
         state.pending_show = Some(request);
+        ShowOutcome::Normal
     });
+    if outcome == ShowOutcome::RetainedPreview {
+        start_resize_timer(window_weak);
+    }
     pump_creation();
+    outcome
 }
 
 pub(crate) fn show_boundary_with_viewport(
@@ -889,22 +1066,36 @@ pub(crate) fn show_review_with_viewport(
 /// 事件循环仍存活、COM 仍健康时先同步关闭控制器（含待退休 WebView），
 /// 使退出时 TLS 析构为空操作。不得在事件循环停止后再调用本函数。
 pub(crate) fn shutdown() {
-    let (webview, retiring) = STATE.with(|s| {
+    let (webview, retiring, retained_preview, retained_preview_generation) = STATE.with(|s| {
         let mut state = s.borrow_mut();
         state.resize_timer = None;
         state.load_timer = None;
         state.creation_in_flight = false;
+        state.retry_timer = None;
+        state.creation_html = None;
+        state.creation_retries = 0;
         state.pending_show = None;
+        let retained_preview_generation = state.retained_preview_generation.take();
         let webview = state.webview.take();
         let retiring = std::mem::take(&mut state.retiring);
-        (webview, retiring)
+        let retained_preview = state.retained_preview.take();
+        (
+            webview,
+            retiring,
+            retained_preview,
+            retained_preview_generation,
+        )
     });
     log::debug!(
-        "map_webview: shutdown() 同步释放 {} 个活跃 + {} 个待退休 WebView",
+        "map_webview: shutdown() 同步释放 {} 个活跃 + {} 个待退休 + {} 个离屏保留 WebView（保留代 {:?}）",
         usize::from(webview.is_some()),
-        retiring.len()
+        retiring.len(),
+        usize::from(retained_preview.is_some()),
+        retained_preview_generation
     );
     drop(webview);
+    drop(retained_preview);
+    let _ = retained_preview_generation;
     for retired in retiring {
         drop(retired);
     }
@@ -923,16 +1114,32 @@ pub(crate) fn shutdown() {
 pub(crate) fn hide() {
     STATE.with(|s| {
         let mut state = s.borrow_mut();
-        state.generation += 1;
+        let hide_generation = state.generation;
+        state.generation = state.generation.wrapping_add(1);
         state.creation_in_flight = false;
         state.pending_show = None;
         if let Some(webview) = state.webview.take() {
-            state.retiring.push(webview);
+            if state.last_page_kind == Some(MapPageKind::BlockPreview) {
+                // T52：预览页隐藏为离屏保留（模态遮挡/离开场景），
+                // 恢复现场时零重建取回。
+                let hidden = wry::Rect {
+                    position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(0, 0)),
+                    size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(0, 0)),
+                };
+                let _ = webview.set_bounds(hidden);
+                state.retained_preview = Some(webview);
+                state.retained_preview_generation = Some(hide_generation);
+            } else {
+                state.retiring.push(webview);
+            }
         }
         state.resize_timer = None; // drop 即停止轮询
         state.last_slot_scale = None;
         state.campus_search_mode = false;
         state.load_timer = None;
+        state.retry_timer = None;
+        state.creation_html = None;
+        state.creation_retries = 0;
         schedule_drop(&mut state);
     });
     MAP_VISIBLE_PROBE.with(|s| s.set(false));
@@ -948,13 +1155,16 @@ pub(crate) fn mark_map_failed() {
             state.creation_in_flight = false;
             state.pending_show = None;
             state.load_timer = None;
+            state.retry_timer = None;
+            state.creation_html = None;
+            state.creation_retries = 0;
         }
     });
     pump_creation();
 }
 
 /// 当前记录的地图页面种类（测试与弹窗恢复决策用）。
-fn page_kind() -> Option<MapPageKind> {
+pub(crate) fn page_kind() -> Option<MapPageKind> {
     STATE.with(|s| s.borrow().last_page_kind)
 }
 

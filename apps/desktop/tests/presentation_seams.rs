@@ -1,4 +1,6 @@
 //! S1 工单 02 正式验收：完整状态、生产装配与 B7 故障操作路径。
+// ignore-tidy-filelength: 测试 seam 逐页枚举是“一页一段”的对照表；T52 新增
+// 预览字段后随最新主线评审状态一起集中维护，拆分会破坏逐页对照顺序。
 
 use data_persistence::CampusCrudApi;
 use std::sync::{Arc, Condvar, Mutex};
@@ -407,6 +409,18 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
     let mut export_entry = ExportPresentationEntry::new(TestAdapter::returning(
         Presentation::ready(ExportPageState {
             workspace: workspace("导出"),
+            preview_generate_label: "生成 3D 预览".into(),
+            preview_status: String::new(),
+            preview_reset_label: "复位视角".into(),
+            preview_zoom_in_label: "放大".into(),
+            preview_zoom_out_label: "缩小".into(),
+            preview_controls_hint: "拖动旋转 · 滚轮缩放".into(),
+            preview_locate_label: "定位到 3D 预览".into(),
+            preview_has_content: false,
+            preview_generating: false,
+            preview_candidate_ids: Vec::new(),
+            preview_candidate_titles: Vec::new(),
+            preview_candidate_categories: Vec::new(),
         }),
     ));
     export_entry.show(&window, &center, ());

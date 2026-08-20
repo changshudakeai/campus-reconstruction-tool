@@ -152,6 +152,7 @@ fn s1_31_edited_boundary_persists_and_restores_without_refetch() {
             original_square()
         });
 
+        desktop_shell::set_webview_creation_probe(true);
         let window = AppWindow::new().expect("create AppWindow");
         let center = NotificationCenter::init(PresenterRegistry::new());
         center

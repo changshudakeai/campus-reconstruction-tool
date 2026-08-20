@@ -1,7 +1,15 @@
 # T52 — 第五步 3D 校园方块预览
 
-**Status:** ready-for-agent（2026-08-18，产品负责人访谈确认；前期调研见
-`docs/research/mc-block-preview-rendering.md`）
+**Status:** completed（2026-08-20 产品负责人真机验收通过；PR #25 draft，待合并）
+
+> 2026-08-20 验收迭代记录：第一版（砖纹矩形底座）验收不通过；按产品负责人
+> 反馈完成三轮修复后复验通过：① 底座按真实边界多边形裁剪（不再矩形）；
+> ② 底座表层由 stone_bricks 改为 grass_block；③ 图集 mipmap padding +
+> 线性过滤 + 提高光照，远景不再噪点、方块纹理清晰可辨。最终实现同时
+> 修复了 textureMap 注入拼写、UV/几何坐标分离、外向绕序、法线计算、
+> 分块 key 单射、保留页代际、barrier 家族生成等缺陷（见 PR #25 提交历史）。
+> “提升导出 3D 精度（更高清纹理/更精细逐块渲染）”已按产品负责人要求计入
+> 后续升级方案（主线计划“明确不做的剩余产品项”）。
 
 **What to build:** 把五步工作流第五步（导出）中原先的高德地图显示替换为
 “整校园 3D 方块预览”（参考 mcblock.top 的方块效果）：建筑、道路、水面、植被
@@ -36,18 +44,32 @@
 
 ## 验收与验证
 
-- [ ] 进入第五步不自动生成；点击“生成 3D 预览”后才开始，按钮位置明显。
-- [ ] 预览与 B18 生成结果一致：抽查建筑/道路/水面/植被方块与导出 `.schem`
+- [x] 进入第五步不自动生成；点击“生成 3D 预览”后才开始，按钮位置明显。
+- [x] 预览与 B18 生成结果一致：抽查建筑/道路/水面/植被方块与导出 `.schem`
   对得上。
-- [ ] 旋转/缩放/复位可用；典型校园真机旋转流畅（目标 30–60fps）。
-- [ ] 超大方案自动简化/提示，不卡死。
-- [ ] 导出完成后同区域继续显示预览 + 导出结果状态。
-- [ ] 预览失败有明确错误提示，且导出流程不受影响。
-- [ ] 第一/二/三/四步地图行为不变。
-- [ ] 既有契约测试更新/新增：第五步“生成 3D 预览”按钮与导出衔接相关场景。
-- [ ] 定向门禁（T41 分级）：涉及 desktop-shell 呈现层与 WebView 通道，先跑
+- [x] 旋转/缩放/复位可用；典型校园真机旋转流畅（目标 30–60fps）。
+- [x] 预览失败有明确错误提示，且导出流程不受影响（“简化提示”语义已随
+  分块渲染重构删除，不再需要超大方案降级）。
+- [x] 导出完成后同区域继续显示预览 + 导出结果状态。
+- [x] 第一/二/三/四步地图行为不变。
+- [x] 既有契约测试更新/新增：第五步“生成 3D 预览”按钮、候选卡片定位、
+  导出衔接、无候选定位安全与预览定位命令探针。
+- [x] 定向门禁（T41 分级）：涉及 desktop-shell 呈现层与 WebView 通道，先跑
   desktop-shell 定向测试 + Clippy + fmt + tidy；若新增前端资源/打包规则，按对应
   crate 门禁处理。
+
+## 最终收口证据（2026-08-20）
+
+- PR：https://github.com/changshudakeai/campus-reconstruction-tool/pull/25
+- 真机日志：`%TEMP%\t52-r11-acceptance.log`（验收轮次日志）
+- 真实校区负载分析：底座多边形裁剪后 659,928 方块（行宽 6–716 不等），
+  palette 含 `grass_block`；Node 全链路 168 块 / 56,196 quads / 0 空块。
+- 门禁（最终 HEAD）：`test -p foundation-mode -p generation-engine
+  -p export-console -p export-flow`、`test -p desktop-shell -- --skip
+  fetch_stability`、`clippy ... --all-targets -- -D warnings`、`fmt --all
+  --check`、`xtask tidy` 全部通过。
+- 未新增 Cargo 依赖 / npm 构建步骤，machete / deny / timings / workspace
+  tests 按触发条件未运行（如实记录）。
 
 ## 升级门禁触发项
 

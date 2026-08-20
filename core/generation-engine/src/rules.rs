@@ -82,7 +82,79 @@ pub fn generate_flat_ground(
     l: i32,
     mat: &MaterialsAdapter,
 ) -> Result<BlockModel, GenerationError> {
-    fill_flat_rect(MaterialRole::FoundationGround, w, l, mat)
+    generate_flat_ground_with_polygon(w, l, &[], mat)
+}
+
+/// 按真实边界多边形裁剪的平整场地（模型本地块坐标，原点为外接范围最小块）。
+///
+/// `polygons` 为空时等价于铺满整个外接矩形（测试与兼容路径）；
+/// 非空时逐格做点在多边形内判断，底座形状与确认边界一致，而不是正方形。
+pub fn generate_flat_ground_with_polygon(
+    w: i32,
+    l: i32,
+    polygons: &[Vec<(i32, i32)>],
+    mat: &MaterialsAdapter,
+) -> Result<BlockModel, GenerationError> {
+    if w <= 0 || l <= 0 {
+        return Err(GenerationError::InvalidParameter(format!(
+            "矩形尺寸必须为正：{w}x{l}"
+        )));
+    }
+    let block = mat.block_for(MaterialRole::FoundationGround)?;
+    let mut model = BlockModel::new();
+    if polygons.is_empty() {
+        for x in 0..w {
+            for z in 0..l {
+                model.set_block(BlockPosition::new(x, 0, z), &block);
+            }
+        }
+        return Ok(model);
+    }
+    // 逐格射线法（含多边形外接框粗筛）：底座不再铺满外接矩形。
+    let boxes: Vec<(i32, i32, i32, i32)> = polygons
+        .iter()
+        .map(|ring| {
+            let min_x = ring.iter().map(|p| p.0).min().unwrap_or(0);
+            let max_x = ring.iter().map(|p| p.0).max().unwrap_or(0);
+            let min_z = ring.iter().map(|p| p.1).min().unwrap_or(0);
+            let max_z = ring.iter().map(|p| p.1).max().unwrap_or(0);
+            (min_x, max_x, min_z, max_z)
+        })
+        .collect();
+    for x in 0..w {
+        for z in 0..l {
+            let inside = polygons.iter().zip(&boxes).any(|(ring, bbox)| {
+                x >= bbox.0
+                    && x <= bbox.1
+                    && z >= bbox.2
+                    && z <= bbox.3
+                    && point_in_ring(x, z, ring)
+            });
+            if inside {
+                model.set_block(BlockPosition::new(x, 0, z), &block);
+            }
+        }
+    }
+    Ok(model)
+}
+
+/// 射线法点在多边形内判断（整数块坐标；含边界上的点按内计）。
+fn point_in_ring(x: i32, z: i32, ring: &[(i32, i32)]) -> bool {
+    let mut inside = false;
+    let mut previous = ring.len() - 1;
+    for current in 0..ring.len() {
+        let (x0, z0) = ring[previous];
+        let (x1, z1) = ring[current];
+        if (z0 > z) != (z1 > z) {
+            let intersect_x =
+                f64::from(x1 - x0) * f64::from(z - z0) / f64::from(z1 - z0) + f64::from(x0);
+            if f64::from(x) < intersect_x {
+                inside = !inside;
+            }
+        }
+        previous = current;
+    }
+    inside
 }
 
 /// 道路：初始铺面。
@@ -147,6 +219,19 @@ pub fn generate_other_rail(
     fill_flat_rect(MaterialRole::OtherRail, length, 1, mat)
 }
 
+/// "其他"·barrier 家族（校门/栅栏/障碍物）：一根 2 格高的门柱。
+///
+/// 真实数据以点候选为主（如 `barrier=gate`）；柱状表达与既有“最简可用版”
+/// 一致，不引入复杂门框模型（ADR-0011 家族规则逐步补齐）。
+pub fn generate_other_barrier(mat: &MaterialsAdapter) -> Result<BlockModel, GenerationError> {
+    let block = mat.block_for(MaterialRole::OtherBarrier)?;
+    let mut model = BlockModel::new();
+    for y in 0..2 {
+        model.set_block(BlockPosition::new(0, y, 0), &block);
+    }
+    Ok(model)
+}
+
 /// "其他"类入口：按标签家族路由；无规则的家族如实报错，禁止静默丢弃。
 pub fn generate_other(
     candidate: &OtherCandidate,
@@ -154,6 +239,9 @@ pub fn generate_other(
 ) -> Result<BlockModel, GenerationError> {
     if candidate.has_tag("railway") {
         return generate_other_rail(10, mat);
+    }
+    if candidate.has_tag("barrier") {
+        return generate_other_barrier(mat);
     }
     let families: Vec<&str> = candidate.tags.keys().map(String::as_str).collect();
     Err(GenerationError::UnsupportedTagFamily(families.join(",")))
@@ -328,7 +416,39 @@ mod tests {
         assert_eq!(bounds.width(), 4);
         assert_eq!(bounds.length(), 3);
         assert_eq!(bounds.height(), 1);
-        assert!(model.contains_block_id("minecraft:stone_bricks"));
+        assert!(
+            model.contains_block_id("minecraft:grass_block"),
+            "底座表层必须是草方块"
+        );
+    }
+
+    #[test]
+    fn boundary_polygon_clips_ground_shape_instead_of_filling_bbox() {
+        let adapter = adapter();
+        // 三角形：只覆盖 bbox 左上三角形区域，右下半格必须为空。
+        let triangle = vec![vec![(0, 0), (4, 0), (0, 4)]];
+        let model = generate_flat_ground_with_polygon(5, 5, &triangle, &adapter).unwrap();
+        assert!(
+            model.contains_block_id("minecraft:grass_block"),
+            "底座表层必须为草方块"
+        );
+        assert!(
+            !model.contains_block_id("minecraft:stone_bricks"),
+            "底座不得再用砖"
+        );
+        assert!(
+            model.contains_block_at(BlockPosition::new(0, 0, 0)),
+            "左上角在多边形内"
+        );
+        assert!(
+            !model.contains_block_at(BlockPosition::new(4, 0, 4)),
+            "右下角在多边形外"
+        );
+        let bounds = model.bounding_box().expect("裁剪后仍有方块");
+        assert!(
+            bounds.width() < 5 || bounds.length() < 5,
+            "底座必须比外接矩形小"
+        );
     }
 
     #[test]
@@ -353,6 +473,21 @@ mod tests {
             .insert("railway".to_string(), "rail".to_string());
         let model = generate_other(&candidate, &adapter()).unwrap();
         assert!(model.contains_block_id("minecraft:rail"));
+    }
+
+    #[test]
+    fn other_barrier_family_generates_fence_post() {
+        let mut candidate = OtherCandidate::new("gate-1");
+        candidate
+            .tags
+            .insert("barrier".to_string(), "gate".to_string());
+        candidate
+            .tags
+            .insert("name".to_string(), "Gate 2".to_string());
+        let model = generate_other(&candidate, &adapter()).unwrap();
+        assert!(model.contains_block_id("minecraft:oak_fence"));
+        let bounds = model.bounding_box().expect("门柱非空");
+        assert_eq!(bounds.height(), 2, "门柱应占 2 格高");
     }
 
     #[test]

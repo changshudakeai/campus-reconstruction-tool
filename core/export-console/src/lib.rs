@@ -41,6 +41,7 @@ mod data;
 mod enhanced;
 mod error;
 mod pipeline;
+mod preview;
 mod progress;
 mod seal_gate;
 mod views;
@@ -57,10 +58,14 @@ pub use enhanced::{
     EnhancedExportRequest, KeptCandidateProjection,
 };
 pub use error::{
-    ArtifactKind, ArtifactRecoveryError, ArtifactWriteError, BoundaryError, Error, Result,
-    VersionError,
+    ArtifactKind, ArtifactRecoveryError, ArtifactWriteError, BoundaryError, Error, PreviewError,
+    Result, VersionError,
 };
 pub use pipeline::{adapt_to_voxel_model, export_schematic};
+pub use preview::{
+    serialize_preview, BlockPreviewInput, BlockPreviewOperation, BlockPreviewPort, PreviewFeature,
+    PreviewRenderPayload, PREVIEW_GRID_CELL_LIMIT,
+};
 pub use progress::ProgressTracker;
 pub use seal_gate::{MockSealGate, SealGate};
 pub use views::{

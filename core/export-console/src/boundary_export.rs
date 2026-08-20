@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use chrono::Utc;
-use foundation_mode::boundary_footprint_with_orientation;
+use foundation_mode::{BoundaryFootprint, BoundaryProjector};
 use generation_engine::{BlockModel, GenerationEngine};
 use manifest_generator::{
     CandidateFacts, FoundationManifest, ManifestGenerator, ManifestOrientation,
@@ -236,6 +236,82 @@ pub(crate) fn version_contract(
     Ok(contract)
 }
 
+/// 边界直出与预览共用的一次完整“边界 → 平整场地模型”生成结果。
+///
+/// 预览与导出消费同一个函数：预览看到的方块与最终 `.schem` 来自同一段
+/// B5 → B18 代码，不存在第二套预览模型（T52 数据来源决策）。
+pub(crate) struct GroundGeneration {
+    pub(crate) contract: ExportVersionContract,
+    pub(crate) degree: f32,
+    pub(crate) source: ManifestOrientationSource,
+    pub(crate) footprint: BoundaryFootprint,
+    pub(crate) model: BlockModel,
+}
+
+/// 校验边界资格、版本契约与用料表，并按实际朝向生成最小平整场地（B5 → B18）。
+///
+/// 不写任何文件：`.schem` 落盘与 3D 预览序列化都从同一个 [`BlockModel`] 派生。
+pub(crate) fn generate_ground_model(
+    material_table: &MaterialTable,
+    request: &BoundaryExportRequest,
+) -> Result<GroundGeneration> {
+    let boundary = request
+        .state
+        .boundary
+        .as_ref()
+        .ok_or(Error::Boundary(BoundaryError::Missing))?;
+    if !request.state.boundary_confirmed {
+        return Err(Error::Boundary(BoundaryError::NotConfirmed));
+    }
+    let contract = version_contract(
+        request.context.plan.minecraft_version.as_str(),
+        material_table,
+    )?;
+    material_table
+        .validate_configured_blocks()
+        .map_err(|error| {
+            Error::Version(VersionError::InvalidMaterialTable {
+                version: material_table.minecraft_version.to_string(),
+                detail: error.to_string(),
+            })
+        })?;
+
+    // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
+    let (orientation, degree, source) = match request.state.orientation {
+        Some(orientation) => (
+            orientation,
+            orientation.degree(),
+            ManifestOrientationSource::Custom,
+        ),
+        None => (
+            Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
+            0.0,
+            ManifestOrientationSource::MapNorth,
+        ),
+    };
+
+    // B5：验证每个 Polygon/MultiPolygon 外环，按实际朝向建立投影上下文，
+    // 并输出真实边界多边形（块坐标）供 B18 把底座裁剪成边界形状。
+    let projector = BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
+        .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
+    let footprint = projector.footprint();
+
+    // B18：空候选时按边界多边形生成一层最小平整场地（不再铺满外接矩形）。
+    let engine = GenerationEngine::new(material_table.clone());
+    let model = engine.generate_flat_ground_with_polygon(
+        footprint.width_blocks,
+        footprint.length_blocks,
+        projector.boundary_polygons_local(),
+    )?;
+    Ok(GroundGeneration {
+        contract,
+        degree,
+        source,
+        footprint,
+        model,
+    })
+}
+
 /// F9 内部完整导出用例；不向 S1 暴露 B18/B17/B4 的分段接口。
 pub(crate) struct BoundaryExportUseCase {
     material_table: MaterialTable,
@@ -278,55 +354,16 @@ impl BoundaryExportUseCase {
         staged_schematic: &Path,
         staged_manifest: &Path,
     ) -> Result<BoundaryExportResult> {
-        let boundary = request
-            .state
-            .boundary
-            .as_ref()
-            .ok_or(Error::Boundary(BoundaryError::Missing))?;
-        if !request.state.boundary_confirmed {
-            return Err(Error::Boundary(BoundaryError::NotConfirmed));
-        }
-        let contract = version_contract(
-            request.context.plan.minecraft_version.as_str(),
-            &self.material_table,
-        )?;
-        self.material_table
-            .validate_configured_blocks()
-            .map_err(|error| {
-                Error::Version(VersionError::InvalidMaterialTable {
-                    version: self.material_table.minecraft_version.to_string(),
-                    detail: error.to_string(),
-                })
-            })?;
         validate_targets(
             &request.targets.schematic_path,
             &request.targets.manifest_path,
             self.file_system.as_ref(),
         )?;
 
-        // 默认值判定只在完整 F9 用例发生，S1 仅传入 Option<Orientation>。
-        let (orientation, degree, source) = match request.state.orientation {
-            Some(orientation) => (
-                orientation,
-                orientation.degree(),
-                ManifestOrientationSource::Custom,
-            ),
-            None => (
-                Orientation::new(0.0).expect("地图正北是合法的完整用例默认值"),
-                0.0,
-                ManifestOrientationSource::MapNorth,
-            ),
-        };
-
-        // B5：验证每个 Polygon/MultiPolygon 外环，并按实际朝向计算完整覆盖范围。
-        let footprint = boundary_footprint_with_orientation(boundary, orientation)
-            .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
-
-        // B18：空候选时生成边界覆盖范围内的一层最小平整场地。
+        // B5 → B18：与 3D 预览共用同一段生成代码。
         progress.set_stage(ExportStage::Generating);
         progress.report_percent(5);
-        let engine = GenerationEngine::new(self.material_table.clone());
-        let model = engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
+        let ground = generate_ground_model(&self.material_table, request)?;
         progress.report_percent(35);
 
         // B17：不伪造候选投影、评审决定或保留候选，manifest 如实记录全为零。
@@ -334,7 +371,7 @@ impl BoundaryExportUseCase {
             request.context.plan.campus_name.clone(),
             request.context.plan.plan_id,
             request.context.plan.plan_name.clone(),
-            contract.version,
+            ground.contract.version,
         );
         let manifest = ManifestGenerator::new()
             .generate_manifest_with_facts(
@@ -342,7 +379,10 @@ impl BoundaryExportUseCase {
                 &[],
                 uuid::Uuid::new_v4().to_string(),
                 Utc::now().to_rfc3339(),
-                Some(ManifestOrientation { degree, source }),
+                Some(ManifestOrientation {
+                    degree: ground.degree,
+                    source: ground.source,
+                }),
                 CandidateFacts::default(),
             )
             .map_err(|error| Error::ManifestWrite(error.to_string()))?;
@@ -358,9 +398,13 @@ impl BoundaryExportUseCase {
             },
             PublicationPayload {
                 manifest: &manifest,
-                model: &model,
-                contract,
-                schematic_dimensions: [footprint.width_blocks, 1, footprint.length_blocks],
+                model: &ground.model,
+                contract: ground.contract,
+                schematic_dimensions: [
+                    ground.footprint.width_blocks,
+                    1,
+                    ground.footprint.length_blocks,
+                ],
             },
             progress,
         )

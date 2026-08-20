@@ -448,6 +448,7 @@ fn two_plan_workspace(boundary_source: BoundaryFetchSource) -> TwoPlanWorkspace 
     let directory = tempfile::tempdir().expect("temporary directory");
     let database_path = directory.path().join("two-plan-workspace-cache.db");
     let export_dir = directory.path().join("exports");
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("create AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center

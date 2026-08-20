@@ -2,6 +2,8 @@
 //!
 //! 页面状态只描述“一次请求后应显示什么”：适配器返回完整状态，`super` 的呈现
 //! 机制负责渲染。状态不持有正式业务数据，也不协调功能模块内部步骤。
+// ignore-tidy-filelength: 呈现层状态/请求是“一页一状态”的集中定义点；
+// T52 预览字段与评审/导出/采集状态同处维护，拆分反而不利于 seam 对照。
 
 use slint::{Model, ModelRc, VecModel};
 
@@ -446,7 +448,7 @@ pub enum WorkspaceRequest {
 }
 
 /// S1 导出页面只提交“显示确认”或“一次开始导出”意图；完整业务链由 F9 接管。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExportPresentationRequest {
     /// 进入导出步骤，显示可导出的确认状态。
     Open,
@@ -454,8 +456,15 @@ pub enum ExportPresentationRequest {
     Start,
     /// S1 内部观察 F9 已提交操作的真实进度或终态。
     Poll,
+    /// 用户点击一次“生成 3D 预览”按钮（预览与导出互相独立，T52）。
+    GeneratePreview,
+    /// S1 内部观察预览后台生成的真实进度或终态。
+    PreviewPoll,
     /// 离开导出上下文，丢弃旧页面的结果交付。
     Abandon,
+    /// 第五步抽屉“定位到 3D 预览”：按卡片索引定位；预览未生成时触发生成，
+    /// 完成后自动定位（用户主动点击定位即明确的生成意图）。
+    LocateCandidate { index: usize },
 }
 
 /// S1 采集页只提交一次完整用户意图（开始采集/查看采集报告/轮询/离开）；
@@ -582,21 +591,6 @@ impl WindowPageState for WorkspacePageState {
     fn render(&self, window: &AppWindow) {
         self.render_with_step(window, self.active_step);
     }
-}
-macro_rules! workspace_page_state {
-    ($name:ident, $step:expr, $doc:literal) => {
-        #[doc = $doc]
-        #[derive(Clone)]
-        pub struct $name {
-            pub workspace: WorkspacePageState,
-        }
-
-        impl WindowPageState for $name {
-            fn render(&self, window: &AppWindow) {
-                self.workspace.render_with_step(window, $step);
-            }
-        }
-    };
 }
 
 /// 采集步骤的完整可观察状态。
@@ -871,7 +865,64 @@ pub enum ReviewRequest {
     /// 封账：终态批量写回 B2。
     Seal,
 }
-workspace_page_state!(ExportPageState, 4, "导出入口的当前完整占位页状态。");
+/// 导出入口的当前完整页面状态（含第五步 3D 预览呈现字段，T52）。
+#[derive(Clone)]
+pub struct ExportPageState {
+    pub workspace: WorkspacePageState,
+    /// “生成 3D 预览”按钮文案。
+    pub preview_generate_label: String,
+    /// 预览状态文案（未生成提示 / 生成中 / 已生成 / 失败原因）。
+    pub preview_status: String,
+    /// “复位视角”按钮文案。
+    pub preview_reset_label: String,
+    /// “放大”按钮文案。
+    pub preview_zoom_in_label: String,
+    /// “缩小”按钮文案。
+    pub preview_zoom_out_label: String,
+    /// 旋转/缩放操作提示文案。
+    pub preview_controls_hint: String,
+    /// 候选卡片“定位到 3D 预览”按钮文案。
+    pub preview_locate_label: String,
+    /// 是否已有可交互的预览内容（复位/缩放可用）。
+    pub preview_has_content: bool,
+    /// 是否正在生成预览（生成按钮禁用）。
+    pub preview_generating: bool,
+    /// 已保留候选卡片：候选 ID 列表（顺序与标题/类别一致，供定位回调）。
+    pub preview_candidate_ids: Vec<String>,
+    /// 已保留候选卡片：展示标题列表。
+    pub preview_candidate_titles: Vec<String>,
+    /// 已保留候选卡片：类别显示名列表（经 zh-CN.json 注入）。
+    pub preview_candidate_categories: Vec<String>,
+}
+
+impl WindowPageState for ExportPageState {
+    fn render(&self, window: &AppWindow) {
+        self.workspace.render_with_step(window, 4);
+        window.set_workspace_export_preview_generate_label(
+            self.preview_generate_label.clone().into(),
+        );
+        window.set_workspace_export_preview_status(self.preview_status.clone().into());
+        window.set_workspace_export_preview_reset_label(self.preview_reset_label.clone().into());
+        window
+            .set_workspace_export_preview_zoom_in_label(self.preview_zoom_in_label.clone().into());
+        window.set_workspace_export_preview_zoom_out_label(
+            self.preview_zoom_out_label.clone().into(),
+        );
+        window
+            .set_workspace_export_preview_controls_hint(self.preview_controls_hint.clone().into());
+        window.set_workspace_export_preview_locate_label(self.preview_locate_label.clone().into());
+        window.set_workspace_export_preview_has_content(self.preview_has_content);
+        window.set_workspace_export_preview_generating(self.preview_generating);
+        window
+            .set_workspace_export_preview_candidate_ids(string_model(&self.preview_candidate_ids));
+        window.set_workspace_export_preview_candidate_titles(string_model(
+            &self.preview_candidate_titles,
+        ));
+        window.set_workspace_export_preview_candidate_categories(string_model(
+            &self.preview_candidate_categories,
+        ));
+    }
+}
 
 /// 通知入口一次返回的完整公告栏状态。
 #[derive(Clone)]

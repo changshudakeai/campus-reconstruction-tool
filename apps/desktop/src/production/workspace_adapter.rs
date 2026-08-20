@@ -94,6 +94,17 @@ impl WorkspaceProductionAdapter {
         )
     }
 
+    /// 第五步显示本地 3D 方块预览页（T52）：无需高德密钥，未生成时为空页。
+    /// 边界/朝向/评审的连续地图现场保留在地图会话里，切回其他步骤恢复。
+    fn present_block_preview(&self) {
+        crate::map_session::present(
+            self.context.window.clone(),
+            crate::map_session::MapDisplayIntent::BlockPreview {
+                plan_id: self.map_plan_id(),
+            },
+        );
+    }
+
     fn open_plan(&mut self, plan_id: &str) -> Presentation<WorkspacePageState> {
         let parsed = match PlanId::parse(plan_id) {
             Ok(parsed) => parsed,
@@ -363,15 +374,24 @@ impl WorkspaceProductionAdapter {
             return Presentation::ready(self.context.page())
                 .with_navigation(NavigationDecision::Show(Screen::Workspace));
         }
-        if matches!(step, 2 | 4) {
+        if step == 2 {
             // 从评审步返回（或地图页为评审/朝向页）时重建边界页，保证
-            // 采集/导出步骤的让位地图始终是边界页。
+            // 采集步骤的让位地图始终是边界页。
             if let Some((keys, anchor)) = self.context.map_credentials() {
                 if !keys.0.is_empty() && self.present_boundary_map(keys, anchor) {
                     self.context.session.borrow_mut().map_available = false;
                     self.context.mark_map_loading();
                 }
             }
+        } else if step == 4 {
+            // 第五步把地图显示替换为 3D 预览页；预览页不依赖高德地图，
+            // 不进入“地图加载中”状态，也不改变边界/朝向/评审现场。
+            {
+                let mut session = self.context.session.borrow_mut();
+                session.map_available = true;
+                session.map_processing = false;
+            }
+            self.present_block_preview();
         }
         self.context.session.borrow_mut().active_step = step;
         self.context.checkpoint_workspace_session();

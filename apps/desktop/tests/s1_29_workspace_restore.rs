@@ -183,6 +183,7 @@ fn launch(
     harness: &RestartHarness,
     export_dir: &Path,
 ) -> (AppWindow, ApplicationRuntime, Arc<NotificationCenter>) {
+    desktop_shell::set_webview_creation_probe(true);
     let window = AppWindow::new().expect("创建 AppWindow");
     let center = NotificationCenter::init(PresenterRegistry::new());
     center
