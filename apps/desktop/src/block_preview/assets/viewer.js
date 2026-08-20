@@ -605,9 +605,10 @@
     image.onload = function () {
       atlasTexture = new THREE.CanvasTexture(image);
       atlasTexture.flipY = true;
-      atlasTexture.magFilter = THREE.NearestFilter;
-      atlasTexture.minFilter = THREE.NearestFilter;
-      atlasTexture.generateMipmaps = false;
+      // 线性过滤 + mipmap：远景不再闪烁/噪点（图集已带 1px padding）。
+      atlasTexture.magFilter = THREE.LinearFilter;
+      atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+      atlasTexture.generateMipmaps = true;
       atlasTexture.needsUpdate = true;
       atlasReady = true;
       makeMaterials();
@@ -638,8 +639,8 @@
     camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
     camera.position.set(40, 40, 40);
     camera.lookAt(0, 0, 0);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xbfc8d0, 0.75));
-    var sun = new THREE.DirectionalLight(0xffffff, 0.8);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xc8d2dc, 0.9));
+    var sun = new THREE.DirectionalLight(0xffffff, 0.95);
     sun.position.set(80, 140, 60);
     scene.add(sun);
 

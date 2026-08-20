@@ -9,7 +9,8 @@
 "use strict";
 
 var CHUNK = 64;
-var ATLAS = 512;
+var ATLAS = 504;
+var STRIDE = 18;
 var TILE = 16;
 
 var FACES = [
@@ -42,11 +43,12 @@ function materialClass(blockId) {
 }
 
 function tileUv(tile) {
-  // 图集 512x512，nearest 采样，像素中心 UV；v 按图像行倒转。
-  var u0 = (tile[0] * TILE + 0.5) / ATLAS;
-  var u1 = (tile[0] * TILE + TILE - 0.5) / ATLAS;
-  var v0 = 1.0 - (tile[1] * TILE + TILE - 0.5) / ATLAS;
-  var v1 = 1.0 - (tile[1] * TILE + 0.5) / ATLAS;
+  // 图集 504x504（图块 18x18 = 16x16 内容 + 1px padding），像素中心 UV；
+  // padding 是复制边缘像素，mipmap 下采样不会串色；v 按图像行倒转。
+  var u0 = (tile[0] * STRIDE + 1 + 0.5) / ATLAS;
+  var u1 = (tile[0] * STRIDE + 1 + TILE - 0.5) / ATLAS;
+  var v0 = 1.0 - (tile[1] * STRIDE + 1 + TILE - 0.5) / ATLAS;
+  var v1 = 1.0 - (tile[1] * STRIDE + 1 + 0.5) / ATLAS;
   return [u0, v0, u1, v1];
 }
 

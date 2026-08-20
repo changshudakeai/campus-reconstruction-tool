@@ -83,7 +83,10 @@ BLOCK_FACES: dict[str, dict[str, str]] = {
 }
 
 TILE = 16
-GRID = 32  # 32x32 个 16x16 图块 -> 512x512 图集
+PAD = 1  # 每边 1px 边缘复制 padding（mipmap 安全，避免跨图块串色）
+STRIDE = TILE + PAD * 2
+GRID = 28  # 28x28 个 18x18 图块 -> 504x504 图集（容纳 69+ 图块）
+ATLAS = GRID * STRIDE
 
 
 def main() -> None:
@@ -94,7 +97,7 @@ def main() -> None:
     out_dir = Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    atlas = Image.new("RGBA", (GRID * TILE, GRID * TILE), (0, 0, 0, 0))
+    atlas = Image.new("RGBA", (ATLAS, ATLAS), (0, 0, 0, 0))
     texture_map: dict[str, dict[str, list[int]]] = {}
     slot = 0
     missing: list[str] = []
@@ -115,7 +118,19 @@ def main() -> None:
                 tile = tile.convert("RGBA").resize((TILE, TILE), Image.NEAREST)
             col = slot % GRID
             row = slot // GRID
-            atlas.paste(tile, (col * TILE, row * TILE))
+            padded = Image.new("RGBA", (STRIDE, STRIDE), (0, 0, 0, 0))
+            padded.paste(tile, (PAD, PAD))
+            # 复制边缘像素到 padding 区，mipmap 下采样时不混入相邻图块。
+            for edge in range(PAD):
+                padded.paste(tile.crop((0, 0, TILE, 1)), (PAD, edge))
+                padded.paste(tile.crop((0, TILE - 1, TILE, TILE)), (PAD, STRIDE - 1 - edge))
+                padded.paste(tile.crop((0, 0, 1, TILE)), (edge, PAD))
+                padded.paste(tile.crop((TILE - 1, 0, TILE, TILE)), (STRIDE - 1 - edge, PAD))
+            padded.paste(tile.crop((0, 0, 1, 1)), (0, 0))
+            padded.paste(tile.crop((TILE - 1, 0, TILE, 1)), (STRIDE - 1, 0))
+            padded.paste(tile.crop((0, TILE - 1, 1, TILE)), (0, STRIDE - 1))
+            padded.paste(tile.crop((TILE - 1, TILE - 1, TILE, TILE)), (STRIDE - 1, STRIDE - 1))
+            atlas.paste(padded, (col * STRIDE, row * STRIDE))
             face_map[face] = [col, row]
             slot += 1
         if face_map:
@@ -128,7 +143,7 @@ def main() -> None:
         json.dumps(texture_map, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(f"atlas: {atlas_path} ({atlas.size[0]}x{atlas.size[1]}, {slot} tiles)")
+    print(f"atlas: {atlas_path} ({atlas.size[0]}x{atlas.size[1]}, {slot} tiles, stride={STRIDE})")
     print(f"map:   {map_path} ({len(texture_map)} blocks)")
     if missing:
         print("missing:", "\n".join(missing), file=sys.stderr)
