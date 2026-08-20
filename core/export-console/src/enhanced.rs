@@ -133,11 +133,9 @@ pub(crate) fn generate_enhanced_model(
         let candidate_model = generate_candidate_model(&projection, candidate_bounds, &engine)?;
         let offset_x = (candidate_bounds.min_x - bounds.min_block_x).max(0);
         let offset_z = (candidate_bounds.min_z - bounds.min_block_z).max(0);
+        let feature_bounds =
+            feature_bounds_after_merge(&candidate_model, offset_x, offset_z, candidate_bounds);
         merge_models(&mut model, &candidate_model, offset_x, offset_z);
-        let candidate_y = candidate_model
-            .bounding_box()
-            .map(|bbox| (bbox.min_y, bbox.max_y))
-            .unwrap_or((0, 0));
         features.push(PreviewFeature {
             candidate_id: projection.candidate_id.clone(),
             display_title: projection.display_title.clone(),
@@ -145,14 +143,7 @@ pub(crate) fn generate_enhanced_model(
                 .unwrap_or_else(|_| "Other".to_owned())
                 .trim_matches('"')
                 .to_owned(),
-            bounds: [
-                candidate_bounds.min_x,
-                candidate_y.0,
-                candidate_bounds.min_z,
-                candidate_bounds.min_x + candidate_bounds.width_blocks as i32 - 1,
-                candidate_y.1,
-                candidate_bounds.min_z + candidate_bounds.length_blocks as i32 - 1,
-            ],
+            bounds: feature_bounds,
         });
         generated += 1;
         let percent = 20 + (generated * 45 / request.kept_candidate_ids.len().max(1));
@@ -175,19 +166,6 @@ pub(crate) fn generate_enhanced_model(
             ]
         })
         .unwrap_or([footprint.width_blocks, 1, footprint.length_blocks]);
-    // 要素包围盒转到模型本地坐标（与前端网格坐标一致，供定位/高亮）。
-    if let Some(bbox) = model.bounding_box() {
-        for feature in &mut features {
-            feature.bounds = [
-                feature.bounds[0] - bbox.min_x,
-                feature.bounds[1] - bbox.min_y,
-                feature.bounds[2] - bbox.min_z,
-                feature.bounds[3] - bbox.min_x,
-                feature.bounds[4] - bbox.min_y,
-                feature.bounds[5] - bbox.min_z,
-            ];
-        }
-    }
     Ok(EnhancedGeneration {
         contract,
         degree,
@@ -569,5 +547,61 @@ pub(crate) fn category_identifier(category: CandidateCategory) -> &'static str {
         CandidateCategory::Sports => "Sports",
         CandidateCategory::Other => "Other",
         _ => "Other",
+    }
+}
+
+/// 候选模型合并后的实际包围盒；预览定位必须与 `merge_models` 使用完全相同的
+/// X/Z 偏移，不能继续携带边界中心投影坐标。
+fn feature_bounds_after_merge(
+    candidate: &BlockModel,
+    offset_x: i32,
+    offset_z: i32,
+    projected: CandidateBlockBounds,
+) -> [i32; 6] {
+    if let Some(bounds) = candidate.bounding_box() {
+        return [
+            bounds.min_x + offset_x,
+            bounds.min_y,
+            bounds.min_z + offset_z,
+            bounds.max_x + offset_x,
+            bounds.max_y,
+            bounds.max_z + offset_z,
+        ];
+    }
+    [
+        offset_x,
+        0,
+        offset_z,
+        offset_x + projected.width_blocks.max(1) as i32 - 1,
+        0,
+        offset_z + projected.length_blocks.max(1) as i32 - 1,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_feature_bounds_match_merged_candidate_coordinates() {
+        let mut candidate = BlockModel::new();
+        candidate.set_block(BlockPosition::new(2, 1, 3), "minecraft:bricks");
+        candidate.set_block(BlockPosition::new(4, 5, 6), "minecraft:bricks");
+
+        assert_eq!(
+            feature_bounds_after_merge(
+                &candidate,
+                10,
+                20,
+                CandidateBlockBounds {
+                    min_x: 0,
+                    min_z: 0,
+                    width_blocks: 3,
+                    length_blocks: 4,
+                },
+            ),
+            [12, 1, 23, 14, 5, 26],
+            "定位包围盒必须与 merge_models 后的实际方块坐标一致"
+        );
     }
 }

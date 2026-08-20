@@ -85,6 +85,74 @@ mod tests {
     }
 
     #[test]
+    fn viewer_reads_the_injected_texture_map() {
+        let html = build_page_html(None);
+        assert!(
+            html.contains("var textureMap = window.__PREVIEW_TEXTURE_MAP__ || {};"),
+            "查看器必须读取页面实际注入的纹理映射，否则 Worker 会把所有方块面跳过"
+        );
+    }
+
+    #[test]
+    fn worker_keeps_geometry_coordinates_separate_from_texture_uvs() {
+        let worker_js = include_str!("assets/worker.js");
+        assert!(
+            worker_js
+                .contains("function emitQuad(target, face, component, u0, v0, u1, v1, uv, origin)"),
+            "emitQuad 必须分别接收方块几何坐标与纹理 UV"
+        );
+        assert!(
+            worker_js.contains("col, row, uEnd + 1, vEnd + 1, uv"),
+            "贪婪网格必须用游程位置生成几何，不能把 0..1 的纹理 UV 当作顶点位置"
+        );
+    }
+
+    #[test]
+    fn worker_emits_outward_winding_for_opaque_faces() {
+        let worker_js = include_str!("assets/worker.js");
+        assert_eq!(
+            worker_js.matches("flip: true").count(),
+            3,
+            "六个方向中有三个面的基础顶点顺序需要翻转为朝外绕序"
+        );
+        assert!(
+            worker_js.contains("if (face.flip)"),
+            "emitQuad 必须按面方向翻转索引，否则从默认相机可见的正向面会被背面剔除"
+        );
+    }
+
+    #[test]
+    fn viewer_builds_normals_for_lambert_lighting() {
+        let viewer_js = include_str!("assets/viewer.js");
+        assert!(
+            viewer_js.contains("geometry.computeVertexNormals();"),
+            "Lambert 材质需要顶点法线，否则有几何的校园仍会显示为纯黑"
+        );
+    }
+
+    #[test]
+    fn viewer_keeps_image_flip_for_top_origin_atlas_uvs() {
+        let viewer_js = include_str!("assets/viewer.js");
+        assert!(
+            viewer_js.contains("atlasTexture.flipY = true;"),
+            "tileUv 已把图集顶部行换算到高 V 坐标，HTML 图像纹理必须保持 Y 翻转"
+        );
+    }
+
+    #[test]
+    fn viewer_keeps_producer_local_feature_bounds() {
+        let viewer_js = include_str!("assets/viewer.js");
+        assert!(
+            viewer_js.contains("window.__lastFeatures = payload.features || [];"),
+            "A2 已把候选边界转换为模型局部坐标，查看器必须原样消费"
+        );
+        assert!(
+            !viewer_js.contains("function localizeBounds("),
+            "查看器不得再次减模型原点，否则定位会发生双重偏移"
+        );
+    }
+
+    #[test]
     fn base64_encoder_matches_rfc4648_examples() {
         assert_eq!(base64_encode(b""), "");
         assert_eq!(base64_encode(b"f"), "Zg==");

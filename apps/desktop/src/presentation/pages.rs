@@ -881,6 +881,8 @@ pub struct ExportPageState {
     pub preview_zoom_out_label: String,
     /// 旋转/缩放操作提示文案。
     pub preview_controls_hint: String,
+    /// 候选卡片“定位到 3D 预览”按钮文案。
+    pub preview_locate_label: String,
     /// 是否已有可交互的预览内容（复位/缩放可用）。
     pub preview_has_content: bool,
     /// 是否正在生成预览（生成按钮禁用）。
@@ -908,6 +910,7 @@ impl WindowPageState for ExportPageState {
         );
         window
             .set_workspace_export_preview_controls_hint(self.preview_controls_hint.clone().into());
+        window.set_workspace_export_preview_locate_label(self.preview_locate_label.clone().into());
         window.set_workspace_export_preview_has_content(self.preview_has_content);
         window.set_workspace_export_preview_generating(self.preview_generating);
         window

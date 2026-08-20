@@ -57,6 +57,7 @@ impl ExportProductionAdapter {
             preview_zoom_in_label: l10n.l10n().t("export.preview_zoom_in_button"),
             preview_zoom_out_label: l10n.l10n().t("export.preview_zoom_out_button"),
             preview_controls_hint: l10n.l10n().t("export.preview_controls_hint"),
+            preview_locate_label: l10n.l10n().t("export.preview_locate_button"),
             preview_has_content: self.preview_has_content,
             preview_generating: self.preview_generating,
             preview_candidate_ids: self
@@ -288,13 +289,13 @@ impl PresentationAdapter<ExportPresentationRequest, ExportPageState> for ExportP
                     self.preview_operation = None;
                     self.preview_generating = false;
                     match result {
-                    Ok(payload) => {
-                        log::info!(
-                            "T52 预览生成成功：blocks={}，payload_bytes={}",
-                            payload.block_count,
-                            payload.json.len()
-                        );
-                        self.preview_has_content = true;
+                        Ok(payload) => {
+                            log::info!(
+                                "T52 预览生成成功：blocks={}，payload_bytes={}",
+                                payload.block_count,
+                                payload.json.len()
+                            );
+                            self.preview_has_content = true;
                             crate::map_session::remember_preview_payload(payload.json.clone());
                             if let Some(feature_id) = self.pending_locate.take() {
                                 crate::map_session::remember_preview_locate(feature_id);

@@ -13,12 +13,12 @@ var ATLAS = 512;
 var TILE = 16;
 
 var FACES = [
-  { n: [1, 0, 0], u: 2, v: 1, c: 0, sign: 1, face: "side" },
-  { n: [-1, 0, 0], u: 2, v: 1, c: 0, sign: -1, face: "side" },
-  { n: [0, 1, 0], u: 0, v: 2, c: 1, sign: 1, face: "top" },
-  { n: [0, -1, 0], u: 0, v: 2, c: 1, sign: -1, face: "bottom" },
-  { n: [0, 0, 1], u: 0, v: 1, c: 2, sign: 1, face: "side" },
-  { n: [0, 0, -1], u: 0, v: 1, c: 2, sign: -1, face: "side" }
+  { n: [1, 0, 0], u: 2, v: 1, c: 0, sign: 1, face: "side", flip: true },
+  { n: [-1, 0, 0], u: 2, v: 1, c: 0, sign: -1, face: "side", flip: false },
+  { n: [0, 1, 0], u: 0, v: 2, c: 1, sign: 1, face: "top", flip: true },
+  { n: [0, -1, 0], u: 0, v: 2, c: 1, sign: -1, face: "bottom", flip: false },
+  { n: [0, 0, 1], u: 0, v: 1, c: 2, sign: 1, face: "side", flip: false },
+  { n: [0, 0, -1], u: 0, v: 1, c: 2, sign: -1, face: "side", flip: true }
 ];
 
 var TRANSPARENT = {
@@ -50,13 +50,19 @@ function tileUv(tile) {
   return [u0, v0, u1, v1];
 }
 
-function emitQuad(target, face, component, u0, v0, u1, v1, origin) {
+function emitQuad(target, face, component, u0, v0, u1, v1, uv, origin) {
   var base = target.count;
   var corners = [
     [u0, v0],
     [u1, v0],
     [u1, v1],
     [u0, v1]
+  ];
+  var uvCorners = [
+    [uv[0], uv[1]],
+    [uv[2], uv[1]],
+    [uv[2], uv[3]],
+    [uv[0], uv[3]]
   ];
   for (var i = 0; i < corners.length; i++) {
     component[face.u] = corners[i][0];
@@ -67,9 +73,13 @@ function emitQuad(target, face, component, u0, v0, u1, v1, origin) {
       component[1] + origin[1],
       component[2] + origin[2]
     );
-    target.uvs.push(corners[i][0], corners[i][1]);
+    target.uvs.push(uvCorners[i][0], uvCorners[i][1]);
   }
-  target.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  if (face.flip) {
+    target.indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+  } else {
+    target.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
   target.count += 4;
 }
 
@@ -187,11 +197,13 @@ function buildChunk(spec) {
           }
           var uv = tileUv(tile);
           var target = output[materialClass(blockId)];
-          emitQuad(target, face, component, uv[0], uv[1], uv[2], uv[3], [
-            ox,
-            oy,
-            oz
-          ]);
+          emitQuad(
+            target,
+            face,
+            component,
+            col, row, uEnd + 1, vEnd + 1, uv,
+            [ox, oy, oz]
+          );
         }
       }
     }

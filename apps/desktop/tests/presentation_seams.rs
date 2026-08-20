@@ -415,6 +415,7 @@ fn accepted_presentation_seams_are_complete_and_used_by_production() {
             preview_zoom_in_label: "放大".into(),
             preview_zoom_out_label: "缩小".into(),
             preview_controls_hint: "拖动旋转 · 滚轮缩放".into(),
+            preview_locate_label: "定位到 3D 预览".into(),
             preview_has_content: false,
             preview_generating: false,
             preview_candidate_ids: Vec::new(),

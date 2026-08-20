@@ -55,7 +55,7 @@
   var modelGroup = null;
   var atlasTexture = null;
   var atlasReady = false;
-  var textureMap = window.__PREVIEW_TEXTURE_MAP || {};
+  var textureMap = window.__PREVIEW_TEXTURE_MAP__ || {};
   var materialByClass = [null, null, null];
   var orbit = {
     theta: Math.PI * 0.25,
@@ -244,6 +244,7 @@
       );
       geometry.setAttribute("uv", new THREE.BufferAttribute(data.uvs, 2));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      geometry.computeVertexNormals();
       var mesh = new THREE.Mesh(geometry, materialByClass[i]);
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
@@ -603,7 +604,7 @@
     var image = new Image();
     image.onload = function () {
       atlasTexture = new THREE.CanvasTexture(image);
-      atlasTexture.flipY = false;
+      atlasTexture.flipY = true;
       atlasTexture.magFilter = THREE.NearestFilter;
       atlasTexture.minFilter = THREE.NearestFilter;
       atlasTexture.generateMipmaps = false;

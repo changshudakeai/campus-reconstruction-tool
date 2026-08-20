@@ -125,6 +125,13 @@ fn s1_37_step5_block_preview_contract() {
     );
     assert!(preview_payload().is_none(), "进入第五步不得自动生成预览");
     assert_eq!(window.get_workspace_export_preview_status().as_str(), "");
+    assert_eq!(
+        window.get_workspace_export_preview_locate_label().as_str(),
+        Localization::new(Language::ZhCn)
+            .expect("zh-CN")
+            .t("export.preview_locate_button"),
+        "候选定位按钮必须显示本地化文案"
+    );
     assert!(!window.get_workspace_export_preview_has_content());
     assert_eq!(
         window
