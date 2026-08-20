@@ -79,7 +79,10 @@ fn confirmed_boundary_without_orientation_or_candidates_exports_real_artifacts()
     assert_eq!(inspection.data_version, 3955);
     assert_eq!(inspection.dimensions[1], 1, "最小路径只生成一层平整场地");
     assert!(inspection.non_air_voxels > 0);
-    assert!(inspection.palette.contains_key("minecraft:stone_bricks"));
+    assert!(
+        inspection.palette.contains_key("minecraft:grass_block"),
+        "底座表层必须是草方块"
+    );
 
     let manifest = read_manifest(&result.manifest_path);
     assert_eq!(manifest.minecraft_version, "26.1.2");

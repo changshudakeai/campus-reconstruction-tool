@@ -164,8 +164,8 @@ fn s1_37_step5_block_preview_contract() {
             .as_array()
             .expect("调色板数组")
             .iter()
-            .any(|block| block == "minecraft:stone_bricks"),
-        "平整场地预览必须使用与导出同源的 stone_bricks"
+            .any(|block| block == "minecraft:grass_block"),
+        "平整场地预览必须使用与导出同源的草方块"
     );
     let status = window.get_workspace_export_preview_status().to_string();
     assert!(

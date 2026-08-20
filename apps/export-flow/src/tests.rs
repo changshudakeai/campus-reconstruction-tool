@@ -705,10 +705,8 @@ fn preview_payload_matches_the_exported_schematic_block_count() {
     let parsed: serde_json::Value = serde_json::from_str(&preview.json).expect("合法 JSON");
     let palette = parsed["palette"].as_array().expect("调色板数组");
     assert!(
-        palette
-            .iter()
-            .any(|block| block == "minecraft:stone_bricks"),
-        "平整场地必须与导出同源使用 stone_bricks"
+        palette.iter().any(|block| block == "minecraft:grass_block"),
+        "平整场地必须与导出同源使用草方块"
     );
 
     let mut export_operation = flow.start().expect("导出启动");

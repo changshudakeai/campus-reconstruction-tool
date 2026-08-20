@@ -104,7 +104,11 @@ pub(crate) fn generate_enhanced_model(
     progress.set_stage(ExportStage::Generating);
     progress.report_percent(5);
     let engine = GenerationEngine::new(material_table.clone());
-    let mut model = engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
+    let mut model = engine.generate_flat_ground_with_polygon(
+        footprint.width_blocks,
+        footprint.length_blocks,
+        projector.boundary_polygons_local(),
+    )?;
     progress.report_percent(20);
 
     let plan_key = request.context.plan.plan_id.to_string();

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use chrono::Utc;
-use foundation_mode::{boundary_footprint_with_orientation, BoundaryFootprint};
+use foundation_mode::{BoundaryFootprint, BoundaryProjector};
 use generation_engine::{BlockModel, GenerationEngine};
 use manifest_generator::{
     CandidateFacts, FoundationManifest, ManifestGenerator, ManifestOrientation,
@@ -290,13 +290,19 @@ pub(crate) fn generate_ground_model(
         ),
     };
 
-    // B5：验证每个 Polygon/MultiPolygon 外环，并按实际朝向计算完整覆盖范围。
-    let footprint = boundary_footprint_with_orientation(boundary, orientation)
+    // B5：验证每个 Polygon/MultiPolygon 外环，按实际朝向建立投影上下文，
+    // 并输出真实边界多边形（块坐标）供 B18 把底座裁剪成边界形状。
+    let projector = BoundaryProjector::for_boundary_with_orientation(boundary, orientation)
         .map_err(|error| Error::Boundary(BoundaryError::Invalid(error.to_string())))?;
+    let footprint = projector.footprint();
 
-    // B18：空候选时生成边界覆盖范围内的一层最小平整场地。
+    // B18：空候选时按边界多边形生成一层最小平整场地（不再铺满外接矩形）。
     let engine = GenerationEngine::new(material_table.clone());
-    let model = engine.generate_flat_ground(footprint.width_blocks, footprint.length_blocks)?;
+    let model = engine.generate_flat_ground_with_polygon(
+        footprint.width_blocks,
+        footprint.length_blocks,
+        projector.boundary_polygons_local(),
+    )?;
     Ok(GroundGeneration {
         contract,
         degree,
