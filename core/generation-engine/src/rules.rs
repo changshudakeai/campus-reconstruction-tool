@@ -374,8 +374,12 @@ mod tests {
     #[test]
     fn other_barrier_family_generates_fence_post() {
         let mut candidate = OtherCandidate::new("gate-1");
-        candidate.tags.insert("barrier".to_string(), "gate".to_string());
-        candidate.tags.insert("name".to_string(), "Gate 2".to_string());
+        candidate
+            .tags
+            .insert("barrier".to_string(), "gate".to_string());
+        candidate
+            .tags
+            .insert("name".to_string(), "Gate 2".to_string());
         let model = generate_other(&candidate, &adapter()).unwrap();
         assert!(model.contains_block_id("minecraft:oak_fence"));
         let bounds = model.bounding_box().expect("门柱非空");
