@@ -176,7 +176,9 @@
   }
 
   function chunkKey(cx, cy, cz, chunkDims) {
-    return cx + cy * chunkDims[0] + cz * chunkDims[0] * chunkDims[1];
+    // 维度顺序 x（低位）、z（中位）、y（高位）：任一维度为 1 时 key 仍单射，
+    // 避免 y 只有一块（如校园高度 14 格）时解码把 cz 误当 cy。
+    return cx + cz * chunkDims[0] + cy * chunkDims[0] * chunkDims[2];
   }
 
   // 把 RLE 游程按 64^3 分块切片（run 沿 x 水平，只可能在 x 上跨块）。
@@ -275,8 +277,8 @@
     currentSliced = sliced;
     var chunkOrigins = new Map();
     sliced.forEach(function (_, key) {
-      var cy = Math.floor(key / (chunkDims[0] * chunkDims[1]));
-      var rest = key - cy * chunkDims[0] * chunkDims[1];
+      var cy = Math.floor(key / (chunkDims[0] * chunkDims[2]));
+      var rest = key - cy * chunkDims[0] * chunkDims[2];
       var cz = Math.floor(rest / chunkDims[0]);
       var cx = rest - cz * chunkDims[0];
       chunkOrigins.set(key, [cx, cy, cz]);
@@ -356,15 +358,15 @@
       Math.ceil(dims[1] / CHUNK),
       Math.ceil(dims[2] / CHUNK)
     ];
-    var cy = Math.floor(key / (chunkDims[0] * chunkDims[1]));
-    var rest = key - cy * chunkDims[0] * chunkDims[1];
+    var cy = Math.floor(key / (chunkDims[0] * chunkDims[2]));
+    var rest = key - cy * chunkDims[0] * chunkDims[2];
     var cz = Math.floor(rest / chunkDims[0]);
     var cx = rest - cz * chunkDims[0];
     var origin = [cx * CHUNK, cy * CHUNK, cz * CHUNK];
     var size = [
-      Math.min(CHUNK, dims[0] - origin[0]),
-      Math.min(CHUNK, dims[1] - origin[1]),
-      Math.min(CHUNK, dims[2] - origin[2])
+      Math.max(0, Math.min(CHUNK, dims[0] - origin[0])),
+      Math.max(0, Math.min(CHUNK, dims[1] - origin[1])),
+      Math.max(0, Math.min(CHUNK, dims[2] - origin[2]))
     ];
     return {
       origin: origin,
